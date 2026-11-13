@@ -92,3 +92,57 @@ keeps the per-verdict cost honest.
 - [ ] What does the connected mode's equivalent moment look like, for the Hostinger mentor who
       asked for traffic matched to behaviour? Probably the same separation, driven by request
       sequences instead of text.
+
+---
+
+## 🔴 Constraint found after this was drafted: no live account may be named on screen
+
+Research dispatched earlier tonight came back with three findings that together forbid the
+obvious version of the demo above — and the fix makes it better.
+
+**1. Bluesky's own guidance rules out what we were about to do with Jetstream.** The atproto
+blog says Jetstream suits *"demos, proofs of concept"* but **not** *"moderation or anti-abuse
+actions"*, nor cases where it matters *"who said what"* — because **Jetstream events are not
+signed** (https://atproto.com/blog/jetstream). Pointing an abuse detector at named accounts over
+Jetstream is using the tool against its author's written advice, and a judge who knows the
+protocol can say so. The signed firehose (https://docs.bsky.app/docs/advanced-guides/firehose)
+is what you use when identity has to hold.
+
+**2. Calling a named account a propagandist is probably special-category processing.** The EDPB
+holds that **political opinions inferred about a person are Art 9 data whether or not the
+inference is correct** (Guidelines 8/2020), the CJEU covers data revealing sensitive information
+by deduction (C-184/20), and C-252/21 narrows *"manifestly made public"* to an explicit choice by
+that person. Posting publicly is not that choice. Art 9 is the hardest regime in the regulation
+and we would be walking into it live, on stage, in the EU.
+
+**3. There is a defamation precedent, not just a theory.** **Bot Sentinel was sued over labelling
+real people as trollbots** (Broughty v. Bouzy). Botometer flagged verified humans including
+members of Congress. This is the exact failure mode the brief's false-positive question is
+pointing at.
+
+### The fix, and why it is an upgrade
+
+**No live handle, avatar or profile link appears on screen, ever. The verdict attaches to the
+cluster, never to a person.**
+
+- Accounts render as `account A`, `account B`, … The separation moment is about **shape**, not
+  identity — forty pseudonymous cards snapping into one cluster is exactly as visceral as forty
+  named ones.
+- The accusation is about a **coordinated pattern**; the technique label is about the **text**.
+  Neither is a claim about a named individual, which is precisely the mitigation the research
+  names: *aggregate verdicts rather than verdicts about individuals*.
+- Jetstream then sits inside its endorsed use — an unsigned stream feeding a demo of aggregate
+  shape, with no "who said what" riding on it. We say that on the slide.
+- Anything that must name accounts stays on **pre-labelled public research archives**, where the
+  labelling was done by someone else, under their ethics review, and already pseudonymised.
+
+This converts the constraint into the product's signature, and it is the same line as the middle
+column: **a tool whose first commitment is not to accuse the wrong person.** On stage:
+
+> *"We never put a person's name on screen. We show you a pattern and what it is made of. Naming
+> who it is, is your decision, with your own evidence — and that is the difference between a
+> detector and an accusation."*
+
+🔴 **This is now a hard rule for the demo, not a preference.** If the public mode ever displays a
+live handle next to the word "propaganda", we have manufactured the project's worst headline
+ourselves.
