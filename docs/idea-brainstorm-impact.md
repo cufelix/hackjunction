@@ -46,3 +46,24 @@ Changes proposed:
 - What does Hostinger supply as labelled data, and what do their judges care about? Felix at the booth.
 - How does the table demo reset in seconds for ten reviewers, offline from venue Wi-Fi? (Design only, nothing built.)
 - Pending: grokbot's report on pitch structure, harm numbers and small-site-owner complaints.
+
+## Real complaints from owners and visitors (subagent, web, 2026-11-13)
+
+Only pages that opened are listed as verified. Gaps: no forum posts found on fake signups or comment spam; the Hostinger and WordPress forums did not open.
+
+| Source | Who | What (short) |
+|---|---|---|
+| github.com/TecharoHQ/anubis/issues/95 | visitors | JS-off users locked out; older devices broken; image challenge is an accessibility problem; maintainer: "Please just enable JavaScript" |
+| github.com/TecharoHQ/anubis/issues/1248 (Nov 2025) | visitor + FreeBSD ports maintainer | Brave challenged on wiki.freebsd.org, a second machine was not; owner side: crawler load "all maxed out for days on end" |
+| news.ycombinator.com/item?id=44968145 (Aug 2025) | commenters | "legitimate users of non-mainstream browsers are blocked" |
+| lwn.net/SubscriberLink/1028558/6640bdca9c856920/ (Jul 2025) | LWN | comment display suppressed for anonymous users under scraper load; Duke library pilot saw 12 people report problems in one week |
+| lemmy.4d2.org/post/2397977/3181208 | small site owner | "AI went nuts on my website and generated a $155 excessive bandwidth bill" on a low-traffic site |
+
+UNVERIFIED (snippets only): Cloudflare captcha loops even without VPN (forum.palemoon.org/viewtopic.php?p=259369); Hostinger help page says strict privacy extensions can trigger the verification page (hostinger.com/support/?p=16180); an r/Hostinger thread and a LowEndTalk thread about Hostinger robot verification support.
+
+Takeaways:
+- Blocked humans are a small quiet group (12 reports in a week at Duke); owners have no count of how many they lose. "Challenged versus solved" on a dashboard would be new.
+- Owners cannot tell why a visitor was blocked; maintainers ask reporters to define "blocked" and send the error text.
+- Scraper pain hits low-traffic sites (LWN, FreeBSD, a $155 bill).
+- Skeptics say walls work only "because attackers haven't tried yet", so owners want evidence of adaptation, not just friction.
+- Candidate "real human locked out" story with a named, dated source: Anubis issue 1248 or the Duke pilot.
