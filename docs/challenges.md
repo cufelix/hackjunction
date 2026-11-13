@@ -511,14 +511,18 @@ Graph and/or Brain, as many as possible, judged partly on measurable token effic
 
 ## What this changes
 
-The stackable layer is worth more than most main challenges. A realistic bundle for a
-multi-agent / dev-tooling project:
+The stackable layer looks lucrative, but read it correctly: **these are prizes to win, not
+credits handed out for entering.** Codex and Gemini are open to every team at the event,
+which makes them the most contested prizes here. Entering several is cheap — one project
+can be submitted to multiple challenges — so they are cheap lottery tickets, not expected
+income. A realistic bundle for a multi-agent / dev-tooling project:
 
 **Codex ($10 000 credits) + Verda ($10 000 credits) + Gemini (4 000 € + $1 000/person) +
 Modal ($2 000 + $3 000) + Entire (projector) + Aiven (1 000 €)**
 
-Codex and Gemini and Verda cost us close to nothing — we are already coding with agents, we
-already need GPU and we already need a model. Modal and Aiven are an afternoon each if we
+Qualifying for Codex, Gemini and Verda costs us close to nothing — we are already coding with
+agents, we already need GPU and we already need a model. **Winning them is a different
+question**: every team can enter, so assume heavy competition and do not plan around the money. Modal and Aiven are an afternoon each if we
 need hosting anyway. That stack is independent of which main challenge we enter.
 
 Two that need a non-obvious extra step, easy to miss: **Cloudinary** needs its own survey

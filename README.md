@@ -95,7 +95,14 @@ These run across every track and combine with whatever we enter.
 | Best use of Arduino UNO Q, Atech | Arduino, Atech | Hardware kits |
 | MLH swag tier | MLH | Entire, ElevenLabs, Tiger Data, MongoDB, Vultr, Solana — one prize each, no cash |
 
-**Codex + Verda + Gemini alone are worth more than any main challenge, and all three are near-free for a team already coding with agents on GPUs.** That stack is independent of what we build.
+⚠️ **These are prizes you have to win, not credits you get for signing up.** Entering costs
+little — one project can be submitted to several — but Codex and Gemini are *open to every
+team at the event*, so they are the **most contested prizes here**, not free money. Treat
+them as extra lottery tickets bought cheaply, never as expected value.
+
+**What you actually get just for showing up** is separate and much smaller: $50 Exa credits,
+50 000 Context.dev credits, Verda compute credits for every team, a Hostinger VPS if you
+enter theirs, Cala credits, $10 MLH credit for Entire. Useful for building. Not prizes.
 
 ---
 
