@@ -82,3 +82,59 @@ we are unsure about is better **left on the counter (0) than placed in the wrong
       scoring needs a negation guard.
 - [ ] US spelling is stated for bins (`center`); confirm whether `centre` ever appears, and accept
       both regardless.
+
+---
+
+## 🟠 Amendment, 21:52 CET — six is the right number, but not only over colours
+
+Oliver, reading the repo: **`scene.resolve_bin` accepts mapping keys by colour, by shape, or by
+`(colour, shape)`**, and `STARTER_PATHS` says harder finals **may add shape words and negation**.
+So the output space above is the *colour-keyed* case, not the whole space.
+
+The enumeration survives this, and it generalises cleanly, because **the permutation structure is
+what matters, not the colour vocabulary**:
+
+1. **Decide the key first.** Which vocabulary does the sentence use — colour words
+   (red/yellow/blue), shape words (cube/cylinder/prism/triangle), or both?
+2. **Enumerate the 6 permutations over that key.** Three shapes assigned bijectively to three bins
+   is the same 6-element set with a different alphabet. Colour-keyed and shape-keyed is **12
+   candidates total**, still trivially scorable.
+3. **Only if the sentence names a colour *and* a shape for the same bin** do we need the composite
+   `(colour, shape)` form, and then the candidate set is built from the pairs actually mentioned
+   rather than enumerated blind.
+
+The three properties all hold unchanged: no invalid mapping can be emitted, the third pair still
+completes by elimination, and the margin is still the confidence.
+
+⚠️ **Negation is the part enumeration does not fix by itself.** *"Anything but the left bin"* is
+scored wrongly by a proximity count — it will read as support for the very pair it denies. Scoring
+needs an explicit negation flag that **inverts** a pair's contribution, and if the flag fires on a
+sentence we cannot otherwise resolve, that is exactly the case to treat as low-margin.
+
+### Also: a parser already exists in the repo, and it is readable
+
+`oracle.py` contains a rung-2 parser covering all 8 training templates. The oracle is a sim-only
+privileged policy, but **the instruction string is not privileged** — our policy receives it too —
+so that parser is legitimate reference for the training phrasings. It does not solve our problem
+(the finals templates are deliberately different), but it means **the 8 known templates are free**
+and our work is only the robustness layer on top. Enumeration is that layer.
+
+### And the priority order changes, because of the oracle number
+
+Oliver verified in `sim/README.md:77` that the organisers' **oracle — exact privileged poses and
+shapes — reaches only ~84 % on rung 1**, with their own note: *"needs >90 %: triangle grasps (thumb
+vs one finger spins the prism)"*.
+
+**This is hard evidence for what [`challenge-320`](./challenge-320-aaltonomous-humanoid.md) argued
+from the geometry: perception is not the bottleneck, the grasp is.** A perfect vision stack cannot
+beat 84 % on rung 1. So:
+
+1. **Instruction parsing** — rung 2 is `self.mapping = info.get("mapping") or FIXED_MAPPING` with
+   no mapping ever passed, so it silently scores zero on the rung that pays double. Unchanged as
+   the first job.
+2. **Triangle grasp** — promoted, and it is cheaper than it looked: perception **already computes
+   object yaw** (`cv2.minAreaRect`) and marks it *"info only"*. The input to an aligned grasp is
+   already in the pipeline; the planner just ignores it.
+3. **Post-placement verification** — Oliver: none exists. With final-state scoring, checking the
+   bin after a release and correcting a misplacement is free points on a mistake we already made.
+4. **Cleanup phase** — nothing in hand, nothing moving, ~10–15 s before the buzzer.
