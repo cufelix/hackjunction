@@ -32,6 +32,7 @@ a 7-person grand jury. One submission per team. Everything open-sourced under MI
 | [`docs/rules.md`](docs/rules.md) | Eligibility. Pre-existing code. What's safe and what disqualifies |
 | [`docs/challenges.md`](docs/challenges.md) | **All 19 main challenges + all 19 tech challenges.** Per challenge: sponsor, what they actually ask, judging weights, prizes, resources |
 | [`docs/hackerpack.md`](docs/hackerpack.md) | **What we actually get.** All 20 hackerpacks: credits per person and per team, how to claim each one, the hardware on the 5th floor, and the four with extra qualification requirements |
+| [`docs/hostinger-decode-the-noise.md`](docs/hostinger-decode-the-noise.md) | **Our likely challenge, researched deep.** The verbatim brief, what the VPS can actually run, which datasets are reachable this weekend, the baseline numbers, the prior art and the GDPR/ToS limits |
 | [`docs/afterquery-harbor.md`](docs/afterquery-harbor.md) | How AfterQuery's harness really works, verified against Harbor source. The MCP contract, the verifier, and the one-agent-per-trial blocker |
 | [`docs/coordbench-sketch.md`](docs/coordbench-sketch.md) | A design sketch for the AfterQuery challenge: simulated teammates in the MCP sidecar, the reward formula and how it survives exploit-hunting. **Not a decision** |
 | [`docs/spread.md`](docs/spread.md) | The Bahn Express leaderboard challenge, assessed. API, kits, what's legal to exploit, honest hour estimate |
@@ -116,7 +117,8 @@ What each sponsor hands us to build with: [`docs/hackerpack.md`](docs/hackerpack
 
 - [ ] **Do the 2026 rules match the 2024 rules page?** Ask organizers in writing — `participants@hackjunction.com` or Discord. This decides how much we can lean on anything pre-existing.
 - [ ] Can a multi-agent setup inside the MCP sidecar pass AfterQuery's standard-harness rerun? Ask Daksh Raghuwanshi or Ved Vedere on site.
-- [ ] **What are we building?** Not decided.
+- [ ] **What are we building?** Leaning **Hostinger — Decode the Noise**; researched in
+  [`docs/hostinger-decode-the-noise.md`](docs/hostinger-decode-the-noise.md). Not committed yet.
 - [ ] Do MLH prizes need a separate submission on mlh.com? Ask the MLH coach.
 - [ ] Are all submissions really MIT-licensed this year? Secondhand claim, unverified, and it
   matters for anything meant to outlive the weekend.
