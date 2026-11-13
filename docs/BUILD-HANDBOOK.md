@@ -1101,3 +1101,144 @@ organisers' own shipped file rather than through anything we extracted, so it is
 side — but §9.4's rule is about not benefiting from held-out configuration, and deriving stress
 ranges from that comment would benefit from it. **Anything already derived from it should be
 re-derived from `train.yaml` plus our own margins.**
+
+---
+
+## 15. What ran on Felix's laptop, 14 Nov 00:00–00:20 CET
+
+No GPU here, so the simulator never had a chance — but the whole logic layer ran, and it
+settled four of the six questions I had sent to Timi as "needs a running sim". Two of my own
+claims come out wrong, and one of the questions turns out to be weaker than I told him.
+
+### 15.1 The simulator cannot run on this machine, and it is not a configuration problem ✅
+
+`QUICKSTART.md:10-11` requires an **RTX-class GPU with ≥24 GB** and driver ≥580.65.06, and
+states the cameras are ray-traced: *"A100 / H100 have no RT cores: the sim will not render."*
+This laptop has an **Intel Lunar Lake iGPU**, 26 GB free disk and ~6 GB free RAM. Isaac Sim is
+out. The GPU work has to go to a cloud box (Verda €200 / Modal $100 per person are already in
+the hackerpack) or to whoever has an RTX machine.
+
+### 15.2 Everything except the physics is CPU-only ✅
+
+All **12** test files in the repo import no Isaac and no `omni`. `python -m unittest discover`
+with the baseline Dockerfile's own pins ran **93 tests: 79 passed**, 9 skipped, 1 expected
+failure, 2 errors (missing `zmq`, a dep the baseline image does not install, so `head_rgbd`
+cannot load), **2 real failures** — one of which matters, below.
+
+That includes 26 tests on `scene.py` (the scoring), 10 on the classical baseline including its
+perception, 11 on the safety filter, 12 on the policy server, 6 on the layout. **The reason this
+matters:** the instruction parser, the scoring, the shape classifier, the grasp geometry and the
+safety gate are all testable on a laptop. Only physics and rendering need the GPU.
+
+`deploy/replay.py` imports no Isaac either. `--synthetic N` drives the real policy server over
+the websocket with blank images and measures the command-rate gate (`--min-hz`, default 27), and
+`load_obs(log)` replays an `episode_NNN.npz` the runner recorded — so **episodes captured on a
+GPU box can be re-examined on CPU**.
+
+### 15.3 The missing URDF is not a bug ✅ — correction
+
+`baselines/.../baseline.Dockerfile:22` does copy a URDF that a fresh clone does not contain, but
+lines 8-9 of that same file say so: *"Needs third_party/xr_teleoperate (URDF for IK + the
+planner's safety pre-check): scripts/setup_host.sh or cloud/setup_instance.sh clone it."* It is a
+documented setup step. `cloud/setup_instance.sh:24` pins
+`XRTELEOP_REV=817fb00c63cde15e5f24a0f8fa08e1e33ed89d3b` *"only for the G1 URDF"*; a sparse
+`--filter=blob:none` checkout of `assets/g1` is 74 MB and the build then has what it needs.
+**Nothing is blocked.** The lead I passed on as "blocks step 0, every test and every submission"
+was wrong, and I had flagged it as unverified — it is now verified as a non-issue.
+
+### 15.4 The organisers' own visibility test fails, by 0.2 of a pixel ✅
+
+`scene/test_scene.py:224` `test_cubes_and_bins_visible`, whose class docstring states *"With the
+default calibration (URDF head pose), **every object must be in the head image**"*, **fails** on
+the shipped `calibration.yaml`. Four points are outside: the bottom corners (z = 0) of an object
+at the **near-y edge** of the spawn region, `region_y = [0.12, 0.19]`, `region_x = [0.28, 0.62]`.
+
+Measured with `cal.project`: they land at **v = 480.2 in a 480-pixel-high image**. Out by two
+tenths of a pixel. The far corners sit 21 px from the left border and 22 px from the right.
+
+So the honest statement is not "part of the scene is invisible" — it is that **the near edge of
+the object region lies exactly on the bottom image border**. Object *tops* are comfortably in
+frame; the bottom edge of a near object is clipped.
+
+*(inference, and the reason it is worth knowing)* `sim/dr/train.yaml` jitters the head camera
+pose by ±0.01 m and **±1.0°**. At fy ≈ 604, one degree is ≈ 10.5 px. A 0.2 px margin under ±10 px
+of jitter means the near row of the region is clipped on some episodes and clear on others.
+
+**Two things in this handbook depend on an unclipped blob and therefore need a guard:**
+
+1. the **blob-area ratio shape classifier** (§3.2: 1.00 cube / 0.785 cylinder / 0.50 triangle)
+   reads a wrong ratio off a clipped blob;
+2. anything reading the blob's 2D centroid.
+
+**`perception.py` has no border check of any kind** — verified by grep: no `border`, `edge`,
+`clip` or image-shape test anywhere in it. The guard is one line (does the blob touch row 0 /
+row 479 / column 0 / column 639) and the response is to abstain on shape rather than guess, or to
+relocate the object first — the baseline already has a `relocate` path
+(`test_classical.py:134 test_cross_body_object_is_relocated`).
+
+### 15.5 `_yaw` works in metres on the top face, not in pixels — correction ✅
+
+`perception.py:190-196`:
+
+```python
+def _yaw(xy):
+    """Principal direction of the top-face points, folded to [-pi/4, pi/4) (square symmetry). Info only."""
+    (_, _), (_, _), ang = cv2.minAreaRect(xy.astype(np.float32))
+    return float((a + np.pi / 4) % (np.pi / 2) - np.pi / 4)
+```
+
+and the caller is `_yaw(top[:, :2])` (`perception.py:149`), where `top` is the **3D top-face
+points in pelvis coordinates, in metres**, selected by `top_percentile` / `top_band` from the
+depth cloud.
+
+So §3.2 and §14.1 were anchored on the wrong input. `minAreaRect` is **not** run on the pixel
+blob, and the pixel budget I corrected in §14.1 (51–58 px object, ~7 px apex offset after
+foreshortening) **does not apply to the yaw at all**. It applies to the blob-area shape
+classifier, which is a 2D measurement.
+
+This is better for us, not worse: **the apex offset is measurable in metres on the top-face
+cloud** — the h/6 = 7.5 mm centroid-to-rect-centre offset is a metric quantity against a
+52 mm-sided triangle, with no projection error and no pixel quantisation. The prism fix gets
+easier, and item 5 on Timi's list ("is the offset visible on a rendered frame?") becomes a
+question about the depth cloud's density on the top face, not about pixels.
+
+The fold is also decisive: `% (np.pi / 2)` is **square** symmetry. For a triangular prism that is
+simply the wrong modulus (3-fold = 120°, and the grasp cares mod 60°), and the docstring says
+*"Info only."* The baseline's yaw cannot align a prism **by construction**, which is the §3.2
+conclusion reached for a cleaner reason than the one written there.
+
+### 15.6 The bin-rim question is weaker than I sent it — correction ✅
+
+I told Timi the rim false-positive was *"the most concrete verified bug we found"*. It is not.
+`perception.py:170-187` `_reject` runs **after** the 3D reconstruction and rejects a detection
+whose top centre lands inside any bin footprint + `bin_exclusion_margin`, returning
+`in_bin:<name>`. That guard is **not** discarded when depth is valid — unlike the 2D hull mask
+(`keep[:] = 255`) that §9 is about. So there are two guards, not one.
+
+What remains, stated honestly: `height_range: [0.4, 2.0]` is in units of object height, i.e.
+1.8–9 cm, so a 6 cm rim is **not** excluded by height; and `_reject` keys on the bin
+**footprint**, so the exposure is a rim blob whose reconstructed centre falls *outside* the
+footprint + margin — the outer face of the wall. Narrower than "the robot will try to pick up a
+bin", and still worth one rendered frame to settle.
+
+### 15.7 One failure that is probably this laptop, not the code
+
+`deploy/test_deploy.py:134 test_stuck_policy_latency_cap` wanted a stuck policy handled in under
+8.0 s and took **11.12 s** on this machine (8 cores, 24 of 30 GB RAM already in use). Most likely
+host load, not a defect — but it is a **timing** test of the watchdog, so it should be re-run on
+the GPU box before anyone calls it environmental. Noted, not concluded.
+
+### 15.8 What this changes in the build order
+
+Step 0 of §12.3 ("measure the unmodified baseline") still needs a GPU and still comes first for
+anything about *score*. But the four items below now have no GPU dependency and can be done on
+any laptop, in parallel with whoever gets a cloud box running:
+
+- **the instruction → mapping ranker, with the oracle's 288 sentences as the test set** — pure
+  Python, 83 % of the final score, and `_parse_table()` hands us ground truth for free;
+- **the border guard** (§15.4) and the shape classifier it protects;
+- **the prism yaw fix in metric top-face space** (§15.5), testable against `mock_world.Renderer`,
+  which the organisers ship and which `test_classical.py:56` already drives with depth noise and
+  15 % holes;
+- **the scoring arithmetic** against `scene.py`, including the second-object-in-one-bin question
+  (item 6), which is a geometry question `scene.py` can answer without physics.
