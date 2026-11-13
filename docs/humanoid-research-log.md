@@ -188,3 +188,16 @@ Source: baseline files in the starter repo, read directly (460-line planner, gre
 - `scene.resolve_bin` accepts mapping keys by **colour, shape, or (colour, shape)**. That hints the finals may use shape-based or combined instructions, which matches the "harder knobs" in STARTER_PATHS. The baseline `policy.py` only keys on colour (`self.mapping.get(d.color)`).
 - The oracle also implements a **relay hand-over**: an object one arm can grasp but not carry to its bin (cross-body) is put down at a free point near the centre line for the other arm. The baseline's README lists "objects near the centre line need the arm on the wrong side" as a failure, so this is a known fix already written, only on privileged state.
 - The Research bot could not find the 40/25/20/15 judging split anywhere public and says the repo rules rank finals by real-robot score with sim breaking ties. The split is on the official challenge page (pasted by Oliver), which is behind the Junction login. Both are consistent.
+
+## 2026-11-13 ~23:30 | scene.yaml read directly (geometry, the single source of truth)
+
+Source: `aaltonomous/scene/scene.yaml`. Values marked "(default)" in the file are placeholders until measured.
+
+- Bins: outer 21 x 21 cm (**measured on the real boxes 2026-11-13**). **Wall height 6 cm and wall thickness 3 mm are defaults, not measured.** Objects are 4.5 cm tall, so an object has to be **lifted over a 6 cm rim**. Sweeping or pushing objects into a bin cannot work.
+- Side-bin centres sit at r = 0.57 m from the waist, **past the ~0.55 m straight-arm reach**. The file says release in the near, inner part of the side boxes. Centre bin is at r = 0.505 m.
+- Object region: pelvis x 0.26 to 0.35 m, y +-0.17 m, farthest corner r = 0.39 m, kept inside the head camera's view. Min spacing 8 cm, yaw -45 to +45 deg, 3 to 5 objects.
+- Object size 45 mm for every shape, with 2.5 mm fillets. "Cube side = cylinder diameter = triangle ALTITUDE (flat-to-apex)". An equilateral triangle with a 45 mm altitude has about 52 mm sides. So a pinch across flat-to-apex is 45 mm, a pinch across the corners is wider. Which way the thumb meets the triangle (flat side vs apex) depends on object yaw, and the baseline planner ignores yaw. (Inference.)
+- 18 printed objects in total, 2 copies of each of the 9 types.
+- Counter: table top 80 cm above floor, pelvis assumed 79 cm, so counter surface at z = +0.01 in the pelvis frame (default, to be measured).
+- "Not at rest at episode end counts as counter (0 points) unless it is inside a bin." So a bounce or roll at release time can cost the point.
+- Rung 3 lid: sits on bin 'left', 3 mm thick, hole clearance 1 cm default (1.5 cm easy, 3 mm hard).
