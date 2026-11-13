@@ -8,9 +8,9 @@ where a number here disagrees with [`research-junction-2026.md`](./research-junc
 Percentages are the sponsors' own judging weights. Schedule and logistics are in
 [`INFO_HACKATHON.md`](../INFO_HACKATHON.md).
 
-> **Not captured:** the **Tech Challenges** tab (the cross-track sponsor tech prizes — MLH,
-> Verda, Oxylabs etc.). The tab wouldn't switch under automation. It's one click on the
-> platform — worth someone grabbing it, since those stack on top of whatever we pick.
+The **Tech Challenges** are at the bottom of this file — 19 more, all stackable on top of
+whichever main challenge we pick. **Read that section before deciding anything**: it holds
+more stackable money than the main challenges do.
 
 ---
 
@@ -408,3 +408,118 @@ honest* work, not happy-path demos. AfterQuery reruns your eval, Exa types its o
 queries, Hostinger wants your precision and FP rate, AstraZeneca wants a source per claim,
 Stoa wants the drawing location for every answer. Whatever we build, the demo has to survive
 someone else's hands.
+
+---
+
+# Tech Challenges (19) — the stackable layer
+
+These run **across every track**. You enter them alongside your main challenge, with the same
+project. Several explicitly say so ("open challenge", "applies to any track", "you can
+participate alongside any other Junction challenge").
+
+**The MLH email badly undersold this.** That mail listed eight prizes, mostly swag. The
+platform has nineteen, and the real money is in the ones the mail never mentioned: OpenAI,
+Google DeepMind, Verda, Modal, Aiven, Oxylabs. The six "by Major League Hacking" entries
+below are the swag tier; everything else is run by the sponsor directly and pays properly.
+
+## Worth real money
+
+| Challenge | By | Prize |
+|---|---|---|
+| **Best Use of Codex** | OpenAI | **$10 000 / $5 000 / $2 500 API credits** |
+| **Verda Compute Track** | Verda | **$10 000 cloud credits + hoodies** / $2 500 / $2 500 |
+| **Best Use of Gemini API** | Google DeepMind | **4 000 € + $1 000 GCloud per team member** / 2 000 € / 1 000 € |
+| **Best use of Modal** | Modal | **$2 000 cash + $3 000 credits** |
+| **Best agentic usecase of Oxylabs Web API** | Oxylabs | €1 000 Apple voucher + $500 credits per member |
+| **Best Use of Aiven** | Aiven | 1 000 € / 750 € / 500 € |
+| **Best Use of Gemma** | Google DeepMind | €1 000 per team, top 3, unranked |
+| **Best Use of Context.dev** | Context.dev | €750 / €250 / swag |
+| **Best Use of Cloudinary** | Cloudinary | $500 Amazon gift cards **per team member** |
+| **Best Use of Nemotron** | NVIDIA | 1× RTX 5080, to each of the two best teams |
+
+### What each actually requires
+
+**Best Use of Codex (OpenAI)** — explicitly an open challenge, combinable with anything. Use
+Codex *as part of your development process* to build and ship. The bar is demonstrating you
+meaningfully used it, not building a product around it. This is the single cheapest $10 000
+on the board for a team already coding with agents.
+
+**Verda Compute Track** — "pick any challenge at Junction and use Verda products to build
+something you couldn't build on a laptop." Named examples: teaching a humanoid to move,
+training locomotion or manipulation policies. European data centres, 100 % renewable. Free
+for all Junction teams. Note the Aaltonomous Humanoid challenge already runs its GPU compute
+on Verda, so that pairing is pre-blessed.
+
+**Best Use of Gemini API (Google DeepMind)** — open innovation, no predefined problem. Agent,
+dev tool, creative app, anything. Judged on a meaningful, innovative, technically impressive
+use. ⚠️ This is **not** the MLH "Gemini swag kit" prize from the email — it's DeepMind's own,
+and it's worth 4 000 € plus $1 000 per person in cloud credits.
+
+**Best use of Modal** — serve an open model on a GPU, run agent code in Sandboxes, fine-tune,
+or fan out a batch job, in plain Python with no Dockerfiles or Kubernetes. They're after "the
+most ambitious working AI system built on Modal". Directly aimed at the "my model runs on a
+laptop but not behind a URL the judges can open" problem.
+
+**Best agentic usecase of Oxylabs Web API** — use their live search and scraping so the agent
+acts on what's true on the web right now and can show its sources. Enter alongside your main
+challenge.
+
+**Best Use of Aiven** — at least one Aiven service as a meaningful part of the project. Their
+own line: one service used well scores as high as several bolted on. Aiven Runtime can host
+the app or agent.
+
+**Best Use of Nemotron (NVIDIA)** — Nemotron 3.5 Super VL, their newest open model: 120 B
+parameters but only 12 B active per token, reads text, images, documents and video in one
+workflow. Applies to any track. Wants reasoning, tool use, or coordinated workflows.
+
+**Best Use of Context.dev: Fully Structured Web** — ⚠️ hard minimum: at least one Context.dev
+endpoint **in the core flow, not a side feature**, and the data must *visibly drive something
+in the demo*. Submit a GitHub repo and a demo. (Their CTO is also on the grand jury.)
+
+**Best Use of Cloudinary** — images/video for a more engaging experience, using one of the
+four tools at `cld.media/hackathons`. ⚠️ **Requires a separate form**:
+`cld.media/hackathon-survey`. Prize is per team member.
+
+**Best use of CRACI** — switch a GitHub Actions job to `runs-on: craci` and every build
+records what goes into your software, exposes it via their API, and can auto-fix
+vulnerabilities. Explicitly: a project built mainly for another challenge qualifies, as long
+as its CI/CD runs on CRACI. Prizes are LEGO / Red Bull / a lunch invite — low value, but
+close to free if we have CI at all.
+
+**Atech Real World Challenge** — build a physical device for a specific real person using
+Atech modules as the body and AI as the brain. Pro Atech kit for the winners.
+
+**Best use of Arduino UNO Q** — open to all teams, combinable with any challenge. Edge AI on
+device. UNO Q + Plug and Make kit per winning member. (Distinct from the main-track Arduino
+challenge, which additionally requires publishing to Project Hub.)
+
+## The MLH swag tier
+
+All "by Major League Hacking", all single "Best Overall" prize, no cash:
+
+| Challenge | Prize |
+|---|---|
+| Best Use of Entire | Mini portable projector |
+| Best Use of ElevenLabs | Wireless earbuds |
+| Best Use of Tiger Data | Stream Deck Mini |
+| Best Use of MongoDB Atlas | M5Stack IoT kit |
+| Best Use of Vultr | M5Stack mini programmable monitor |
+| Best Use of Solana | Unruggable hardware wallets |
+
+Entire's full ask is in [`research-junction-2026.md`](./research-junction-2026.md) — Sessions,
+Graph and/or Brain, as many as possible, judged partly on measurable token efficiency.
+
+## What this changes
+
+The stackable layer is worth more than most main challenges. A realistic bundle for a
+multi-agent / dev-tooling project:
+
+**Codex ($10 000 credits) + Verda ($10 000 credits) + Gemini (4 000 € + $1 000/person) +
+Modal ($2 000 + $3 000) + Entire (projector) + Aiven (1 000 €)**
+
+Codex and Gemini and Verda cost us close to nothing — we are already coding with agents, we
+already need GPU and we already need a model. Modal and Aiven are an afternoon each if we
+need hosting anyway. That stack is independent of which main challenge we enter.
+
+Two that need a non-obvious extra step, easy to miss: **Cloudinary** needs its own survey
+form, and **CRACI** needs CI actually running on their runner.
