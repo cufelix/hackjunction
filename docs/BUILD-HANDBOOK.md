@@ -136,7 +136,36 @@ pass ~84 % on rung 1. The grasp is the ceiling.
 | **Triangle** | **grasp** — corner contact spins it | wrist yaw aligned to an altitude (§3.2) |
 | **Cylinder** | **rest** — it rolls, and *"not at rest at episode end counts as counter unless it is inside a bin"* | place it **early**, so it has time to settle |
 
-### 3.4 What the baseline already does, so we do not rebuild it
+### 3.4 🔴 Both anchor numbers were measured on the wrong clock
+
+The organisers' own note in `sim/README.md` ("Still open"): the earlier grasp tuning *"ran ~1.8x too
+fast in physics time (wall pacing at RTF ~0.55); re-check grasp parameters on the sim clock."*
+
+**So the baseline's 76–82 % and the oracle's 84 % were both measured with motions effectively 1.8×
+faster in physics time than they will be on the corrected clock. Nobody knows either score on the
+clock we will actually be scored on.** Two consequences, and they pull in opposite directions:
+
+- **The sign of the grasp effect is unknown.** Slower motion usually makes a grasp *more* stable, so
+  part of the triangle slip may be a speed artifact and the ceiling may rise. But the grasp
+  parameters were *tuned under* the fast clock, so any compensation baked into them is now wrong.
+  Either is possible; **measure, do not assume.** *(inference.)*
+- 🔴 **Time may become the binding constraint, and it was already a failure cause.** The baseline's
+  misses were *"mostly triangular prisms, plus the 120 s limit"* — time was already costing objects
+  at the fast clock. If a pick that consumed X seconds of episode time now consumes up to **1.8X**,
+  then 10–20 s per pick becomes **18–36 s**, and a 120 s episode fits **3–6 picks instead of
+  6–12**. With 5 objects that is no longer comfortable; it is tight or short.
+  *(inference — it depends on whether the published 10–20 s figure was wall or physics time, which
+  is question 1 in §7. The direction is clear enough to plan around, the magnitude is not.)*
+
+**What survives this untouched: item 1.** The language mapping is worth +2 per object whatever the
+physics clock does — it is a dictionary, not a motion. Of the four things we build, **it is the only
+one whose value does not move with this uncertainty**, which is a second, independent reason it goes
+first.
+
+**And the geometry in §3.2 survives too.** A corner contact is a point contact at any speed; speed
+only modulates how badly it slips. The mechanism stands, the size of the prize is uncertain.
+
+### 3.5 What the baseline already does, so we do not rebuild it
 
 `planner.py` (460 lines) already has: both arms, a finger-direction hint list tried in turn,
 bin-wall clearance, relocation of an object out of the way, a failed-position list so it does not
@@ -152,6 +181,16 @@ point and open posture were only ever checked in sim. Treat 76–82 % as a sim n
 at ~0.65× real time, so expect ±10 % between runs.
 
 ## 4. What we build, in order, and why each is in that slot
+
+### 0. First, re-measure the baseline on the corrected sim clock. **~30 min, before anything.**
+Because of §3.4: every number we would improve against was measured on a clock the organisers
+themselves say was 1.8× wrong. Run `sim.evaluate --trials 20` on rung 1 unmodified and write down
+the score, the clip count, the rate and **the wall and episode time per pick**. Without that, every
+"improvement" we measure is against an unknown reference, and we will not know whether we gained
+anything or just moved with the clock.
+
+This is also the cheapest way to settle whether time or grasping is the binding constraint, which
+decides how much of the night goes into item 4.
 
 ### 1. Instruction → mapping. **Unblocked, highest value, no GPU.**
 Because of §1: this is 83 % of the final and the baseline scores zero on it, and because the wiring
@@ -189,11 +228,17 @@ moved again and fixed, and §3.4 says nothing currently checks. A wrong bin is �
 turns it into +1 or +2 — **the largest per-object swing available, on a mistake we have already
 made.**
 
-### 4. Cleanup phase, ~10–15 s before the buzzer.
+### 4. Time triage and a cleanup phase. **Promoted if item 0 confirms the clock cost.**
 Because *"on counter"* is 0 but *"knocked off"* and *"wrong bin"* are −1, and because
 **not-at-rest** can cost the point. End the episode with nothing in the hand, nothing moving, and
 any object we are not confident about **left on the counter deliberately** — 0 beats −1. The margin
 from item 1 and the grasp confidence from item 2 are what decide which.
+
+**And if §3.4 is right, this stops being a tidy-up and becomes a budget.** At 18–36 s per pick,
+120 s does not fit 5 objects, so the policy has to **choose which objects to attempt** — cheapest
+shape first (cube), the known-hard prism last, and on rung 2 the objects whose mapping we are
+confident about before the ones we are not. Order of attempts becomes a scoring decision, not a
+scheduling detail.
 
 ### 5. Stretch, in this order: relay hand-over → depth-noise randomisation.
 The oracle already implements a **relay hand-over** for objects one arm can grasp but not carry
@@ -248,6 +293,10 @@ Two consequences:
 
 ## 7. Open questions, tagged with what they block
 
+- [ ] 🔴 **Was the published 10–20 s per pick wall time or physics time, and what does a pick cost
+      on the corrected clock?** This decides whether 5 objects fit in 120 s at all. **Blocks: the
+      whole time budget, item 4, and how to read any score we measure.** Answered by item 0 — run it
+      first.
 - [ ] **Does the `< 2 cm/s` at-rest test apply to an object on the counter, or only in a bin?**
       `scene.yaml` says *"not at rest at episode end counts as counter (0) unless it is inside a
       bin"*, while `RULES_AND_SCORING` defines IN as requiring at rest — those two readings
