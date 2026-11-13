@@ -157,3 +157,13 @@ Source: `aaltonomous/baselines/classical/README.md` and `config.yaml` in the sta
 - Grasp point in the palm frame is hand-tuned: `point_in_palm [0.099, -0.084, 0.015]`, grasp height at 0.5 x object size, three finger-direction hints tried in turn. It does not use object yaw or shape, which is a plausible cause of the 6 missed triangles. (My inference, not stated in the README.)
 - Planner runs in a low-priority thread and returns 6-tick hold chunks while planning, which keeps the command rate at 30 Hz.
 - Files: `perception.py` 9 KB, `planner.py` 24 KB, `kinematics.py` 12 KB, `policy.py` 12 KB. CPU only image, about 1.5 GB.
+
+## 2026-11-13 ~22:15 | Baseline source read: planner.py, perception.py, policy.py
+
+Source: baseline files in the starter repo, read directly (460-line planner, grep plus targeted reads).
+
+- **Perception is explicitly shape-agnostic.** It finds coloured blobs, takes the top-face centre from depth, and computes an in-plane `yaw` with `cv2.minAreaRect`, but the field is commented "info only". Planner code has no use of yaw or shape (grep for yaw/shape/prism returns nothing outside the time-scaling "triangle profile"). This confirms the likely cause of the 6 triangle misses: the grasp ignores object orientation and shape.
+- **Rung 2 is a one-line gap in `policy.py`**: `self.mapping = info.get("mapping") or dict(FIXED_MAPPING)`. The reset info carries only `{"instruction": ...}` from the server, so the mapping silently falls back to fixed red-left, yellow-center, blue-right. Anything that turns the instruction into a `{colour: bin}` dict and puts it in that field gives rung 2.
+- Planner already has: both arms, a finger-direction hint list tried in turn, bin-wall clearance checks, relocation of an object out of the way (`plan_relocation`), a failed-position list so it does not retry the same spot, and sends `done` when nothing sortable is left.
+- **No post-placement verification**: nothing checks that the object ended up in the bin. Since scoring is final-state, a verify-and-retry step (camera or wrist check) is an unused lever.
+- Not yet read: `kinematics.py`, hand posture tables (`config.yaml` hand section), how long each pick takes per phase (README says 10-20 s per pick, so about 6-12 picks fit in 120 s, enough for 5 objects only if few retries).
