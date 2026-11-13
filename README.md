@@ -32,6 +32,7 @@ a 7-person grand jury. One submission per team. Everything open-sourced under MI
 | [`docs/rules.md`](docs/rules.md) | Eligibility. Pre-existing code. What's safe and what disqualifies |
 | [`docs/challenges.md`](docs/challenges.md) | **All 19 main challenges + all 19 tech challenges.** Per challenge: sponsor, what they actually ask, judging weights, prizes, resources |
 | [`docs/hackerpack.md`](docs/hackerpack.md) | **What we actually get.** All 20 hackerpacks: credits per person and per team, how to claim each one, the hardware on the 5th floor, and the four with extra qualification requirements |
+| [`docs/who-its-for.md`](docs/who-its-for.md) | **The user decision, and it drives everything else.** Self-hosted, for operators of their own servers. What it buys against the rubric, what it costs, and what it rules out |
 | [`docs/hostinger-decode-the-noise.md`](docs/hostinger-decode-the-noise.md) | **Our likely challenge, researched deep.** The verbatim brief, what the VPS can actually run, which datasets are reachable this weekend, the baseline numbers, the prior art and the GDPR/ToS limits |
 | [`docs/afterquery-harbor.md`](docs/afterquery-harbor.md) | How AfterQuery's harness really works, verified against Harbor source. The MCP contract, the verifier, and the one-agent-per-trial blocker |
 | [`docs/coordbench-sketch.md`](docs/coordbench-sketch.md) | A design sketch for the AfterQuery challenge: simulated teammates in the MCP sidecar, the reward formula and how it survives exploit-hunting. **Not a decision** |
