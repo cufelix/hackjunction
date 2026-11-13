@@ -40,11 +40,18 @@ handed-out code sorts 76–82 % of objects on rung 1 and **0 % of the 83 %**.
 |---|---|---|
 | Command rate | **≥ 27 Hz** wall-clock on ticks carrying a command | challenge page + SUBMISSION |
 | Clips | a missing key, wrong shape or NaN is a clip; **>30 clips ends the episode** | INTERFACE |
+| **Per-tick step** | **≤ ~0.033 rad for arms and ~0.1 rad for hands per tick** (1 rad/s and 3 rad/s at 30 Hz). Exceeding it clips | grokbot report, arithmetic checked |
 | Safety | no crash, no safety stop. **Self-collision and fingertip-to-table are NOT checked by the filter — staff e-stop for them** | INTERFACE |
 | Limits | within joint and speed limits | challenge page |
 | Episode | **120 s**, points so far are kept, no timeout penalty | RULES_AND_SCORING |
 | Image | x86_64, CUDA ≥12.8, weights baked in, listening within 120 s, ≤32 GB VRAM, ≤40 GB image, no volumes or args | SUBMISSION |
 | GPU for rendering | **RTX-class ≥24 GB. Will not render on A100/H100** (ray-traced cameras). Finals PC: RTX 5090 | challenge page |
+
+🔴 **That per-tick cap is the constraint people miss, and it is stricter than the rate gate.**
+A chunk can be returned fast enough and still clip on every seam, because the last action of one
+chunk and the first of the next may differ by more than 0.033 rad. **Chunk seams have to be blended
+and we need our own rate limiter in front of whatever produces targets** — including the classical
+planner. 30 clips ends the episode; the gate also requires 0.
 
 **The 27 Hz gate is about action chunking, not model speed** — see
 [`humanoid-policy-approaches.md`](./humanoid-policy-approaches.md). Returning a chunk of k actions
@@ -166,6 +173,11 @@ a proximity count as support for the pair it denies. Needs an explicit inverting
 Because of §3.2: ~84 % is the ceiling with perfect perception, the organisers name this as the
 blocker, and the yaw we need is already computed and thrown away.
 
+**And it is affordable.** The correction needed is at most 30° = 0.524 rad (§3.2), and the per-tick
+arm cap is ~0.033 rad, so the worst-case wrist rotation takes **~16 ticks ≈ 0.53 s at 30 Hz**.
+Against a 120 s episode and a 10–20 s pick, half a second per prism is nothing. *(inference, from
+the two published limits.)*
+
 ### 3. Post-placement verification and correction.
 Because scoring is **final state, not on touch** (`RULES_AND_SCORING`), a misplaced object can be
 moved again and fixed, and §3.4 says nothing currently checks. A wrong bin is −1 and a correction
@@ -191,8 +203,17 @@ that criterion are all sim-to-real and data efficiency.
   OpenVLA base ~6 Hz on a 4090; both fail the 27 Hz gate without chunking, and with ~20 demos per
   rung there is not enough data to beat a baseline that already sorts ~80 %. Measured rates and who
   fails are in [`humanoid-policy-approaches.md`](./humanoid-policy-approaches.md).
-- **No from-scratch learned policy.** Evidence says VLAs on G1 need hundreds to ~1K demos; we get
-  ~20 per rung.
+- **No from-scratch learned policy.** The data-efficiency numbers are brutal and specific to this
+  robot: on a **real G1 with 81 demos**, a naive GR00T N1.6 fine-tune scored **0/50**; an engineered
+  recipe reached 32–42 % (DEED, arXiv 2607.20345); NVIDIA's own 98.8 % needed **1,000 demos**, and
+  a GitHub issue reports *"very low"* success at ~600 (Isaac-GR00T #414). **We get ~20 per rung.**
+  Vendor minimums: GR00T wants 100+, SmolVLA says 25 was not enough. (Via the grokbot report; the
+  bot marks these unverified unless checked, and the DEED figures should be confirmed against the
+  paper before we quote them on stage.)
+- ⚠️ **If anyone does try GR00T anyway, two traps are already known:** every checkpoint loads the
+  **gated `nvidia/Cosmos-Reason2-2B`** on first use, and the submission container has no network —
+  so all weights must be baked in; and its **default hue jitter (0.08) may blur red/yellow/blue**,
+  which in this task is not augmentation, it is destroying the label.
 - **No perception overhaul.** §3.2: capped at ~84 % on rung 1 regardless.
 - **No tactile or force feedback.** The Dex3-1 has 33 pressure sensors, and **the challenge
   interface exposes none of it** (FAQ). Designing around touch is designing around data we cannot
