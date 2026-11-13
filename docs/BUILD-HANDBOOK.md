@@ -620,6 +620,55 @@ pixels are silently dropped rather than reported as an unknown object. ⚠️ A 
 instruction *and* layout. A distractor is therefore either invisible to us or mistaken for cargo —
 **worth a deliberate "unknown object" branch.**
 
+#### 3.6.5 🔴 The organisers' own model of REAL noise is harsher than the DR we train against
+
+✅ `data/drop1/capture.py:137` — `MockSource`, the stand-in the organisers wrote for a real capture
+session — carries these defaults, and `:180` applies the last one specifically to object pixels
+(`holes = g.random(dep.shape) < np.where(self.obj_mask, self.obj_hole_p, self.hole_p)`):
+
+| | their real-capture mock | `dr/train.yaml` | |
+|---|---|---|---|
+| RGB noise σ | 2.0 | 3.0 | DR is noisier — fine |
+| **depth σ** | **3.0 mm** | 1.0 mm + 0.002·depth ≈ **2.0 mm at 0.5 m** | **real ≈ 1.5× noisier** |
+| **depth holes** | **2 %** | **1 %** | **real ≈ 2× more** |
+| **holes ON the object** | **20 %** | *no such parameter* | 🔴 **not modelled at all** |
+
+> 🔴 **A fifth of the depth pixels on an object can be missing, and nothing in the training
+> randomisation represents that.**
+
+**This is the sharpest consequence of the whole perception section**, because §3.2.2's prism fix reads
+the **centroid of the top-face depth cloud**. Losing 20 % of those points — non-uniformly, and worse
+on a matte PLA prism's sloped faces — is exactly the failure that method is exposed to.
+
+**So the top-face statistics must be built for missing data from the start:** a trimmed or median
+centroid rather than a mean, an explicit **minimum point count** below which we abstain, and the
+area-ratio shape classifier (§3.2.3) read from the **2D colour blob**, which has no holes, rather
+than from the depth mask.
+
+✅ And the route from a real drop to DR knobs is already written by the organisers: `data/drop1/stats.py`
+computes per-object `hole_frac`, `depth_std_mm_median`, a fitted **`std(mm) ≈ k·z(m)²`** model,
+`top_height_m_measured`, plus RGB temporal noise and luma percentiles. ⚠️ Their own comment in that
+file is worth reading before any colour tuning: *"Matte PLA under unknown light: wide hue bands,
+saturation floor."*
+
+#### 3.6.6 ⚠️ We have NO real-robot data — correction to an assumption we were all making
+
+✅ `aaltonomous/data/` is **416 kB and contains no frames.** `data/drop1/` holds the capture kit only
+(`capture.py`, `package.py`, `stats.py`, `CHECKLIST.md`, `checklist.yaml`); `test_drop1.py` runs
+against `MockSource` — *"mock backend: no DDS, no cameras, no sim"* — and `DATA_CARD.md` is a
+**template** with placeholders (*"Drop \<N\>"*, `aalto/<name>`, *"\<camera frame drops ... see
+warnings\>"*).
+
+⚠️ Combined with the organisers' *"no major drop tonight"* (venue wifi unusable for goggles teleop),
+**the honest position is: there is no Drop 1 to fit anything to.** The expected format when one
+arrives is ✅ **LeRobot v3.0** written by `lerobot==0.7.0`, with `observation.images.head_depth` as a
+480×640 HEVC 12-bit lossless depth video, **linear 0–4.095 m at 1 mm/code, 0 = invalid**.
+
+**What can be done now, with no data:** read `stats.py`, write down exactly which statistics it
+produces, and prepare the **mapping from each of them to a `train.yaml` knob** — including the
+`obj_hole_p` knob that does not exist yet. Then the first drop is actionable in minutes instead of
+hours.
+
 ### 3.7 ✅ The instruction space, exactly
 
 | | |
@@ -938,7 +987,7 @@ organisers ship and `test_classical.py:56` already drives with depth noise and 1
 **Relay hand-over** (§4.1) for objects one arm can grasp but not carry across the body — ✅ the
 baseline README lists exactly that as a failure and the oracle already implements it, config-only.
 
-**DR fitted to real data.** ⚠️ **Organisers, 14 Nov: no major data drop tonight** — teleoperation
+**DR fitted to real data — but there is nothing to fit to yet.** ⚠️ §3.6.6: the repo contains **no real frames at all**, only the capture kit, and ⚠️ **organisers, 14 Nov: no major data drop tonight** — teleoperation
 runs over wifi from the VR goggles and the venue wifi is unusable with the hall full. **Plan on
 Drop 1**, which is already in `aaltonomous/data/drop1/`. Fitting our depth-noise and colour
 randomisation to real Drop 1 frames is the citable **sim-to-real** story for the 25 %, it runs on

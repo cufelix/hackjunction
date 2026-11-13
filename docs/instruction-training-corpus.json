@@ -1,0 +1,3200 @@
+{
+ "source": "aaltonomous/sim/oracle.py::_parse_table() (MIT, DigiTwin / Aalto University)",
+ "what": "the complete training distribution of sort_language instructions, with ground truth",
+ "n": 288,
+ "templates": [
+  "Put the {c0} objects in the {b0} bin, the {c1} objects in the {b1} bin and the {c2} objects in the {b2} bin.",
+  "{C0} goes to the {b0} bin, {c1} to the {b1} bin, {c2} to the {b2} bin.",
+  "Sort the objects: {c0} into {b0}, {c1} into {b1}, {c2} into {b2}.",
+  "Place every {c0} object in the {b0} bin. {C1} objects belong in the {b1} bin, and {c2} ones in the {b2} bin.",
+  "The {b0} bin is for {c0} objects, the {b1} bin for {c1}, the {b2} bin for {c2}.",
+  "Move {c0} objects to the {b0} bin, {c1} objects to the {b1} bin, and {c2} objects to the {b2} bin.",
+  "Drop the {c0} ones into the {b0} bin, the {c1} ones into the {b1} bin, the {c2} ones into the {b2} bin.",
+  "Use the {b0} bin for {c0}, the {b1} bin for {c1} and the {b2} bin for {c2} objects."
+ ],
+ "colors": [
+  "red",
+  "yellow",
+  "blue"
+ ],
+ "bins": [
+  "left",
+  "center",
+  "right"
+ ],
+ "fixed_mapping": {
+  "red": "left",
+  "yellow": "center",
+  "blue": "right"
+ },
+ "items": [
+  {
+   "id": "TRAIN-001",
+   "template": -1,
+   "sentence": "Blue goes to the center bin, red to the left bin, yellow to the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-002",
+   "template": -1,
+   "sentence": "Blue goes to the center bin, red to the right bin, yellow to the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-003",
+   "template": -1,
+   "sentence": "Blue goes to the center bin, yellow to the left bin, red to the right bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-004",
+   "template": -1,
+   "sentence": "Blue goes to the center bin, yellow to the right bin, red to the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-005",
+   "template": -1,
+   "sentence": "Blue goes to the left bin, red to the center bin, yellow to the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-006",
+   "template": -1,
+   "sentence": "Blue goes to the left bin, red to the right bin, yellow to the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-007",
+   "template": -1,
+   "sentence": "Blue goes to the left bin, yellow to the center bin, red to the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-008",
+   "template": -1,
+   "sentence": "Blue goes to the left bin, yellow to the right bin, red to the center bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-009",
+   "template": -1,
+   "sentence": "Blue goes to the right bin, red to the center bin, yellow to the left bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-010",
+   "template": -1,
+   "sentence": "Blue goes to the right bin, red to the left bin, yellow to the center bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-011",
+   "template": -1,
+   "sentence": "Blue goes to the right bin, yellow to the center bin, red to the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-012",
+   "template": -1,
+   "sentence": "Blue goes to the right bin, yellow to the left bin, red to the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-013",
+   "template": 6,
+   "sentence": "Drop the blue ones into the center bin, the red ones into the left bin, the yellow ones into the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-014",
+   "template": 6,
+   "sentence": "Drop the blue ones into the center bin, the red ones into the right bin, the yellow ones into the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-015",
+   "template": 6,
+   "sentence": "Drop the blue ones into the center bin, the yellow ones into the left bin, the red ones into the right bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-016",
+   "template": 6,
+   "sentence": "Drop the blue ones into the center bin, the yellow ones into the right bin, the red ones into the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-017",
+   "template": 6,
+   "sentence": "Drop the blue ones into the left bin, the red ones into the center bin, the yellow ones into the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-018",
+   "template": 6,
+   "sentence": "Drop the blue ones into the left bin, the red ones into the right bin, the yellow ones into the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-019",
+   "template": 6,
+   "sentence": "Drop the blue ones into the left bin, the yellow ones into the center bin, the red ones into the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-020",
+   "template": 6,
+   "sentence": "Drop the blue ones into the left bin, the yellow ones into the right bin, the red ones into the center bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-021",
+   "template": 6,
+   "sentence": "Drop the blue ones into the right bin, the red ones into the center bin, the yellow ones into the left bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-022",
+   "template": 6,
+   "sentence": "Drop the blue ones into the right bin, the red ones into the left bin, the yellow ones into the center bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-023",
+   "template": 6,
+   "sentence": "Drop the blue ones into the right bin, the yellow ones into the center bin, the red ones into the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-024",
+   "template": 6,
+   "sentence": "Drop the blue ones into the right bin, the yellow ones into the left bin, the red ones into the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-025",
+   "template": 6,
+   "sentence": "Drop the red ones into the center bin, the blue ones into the left bin, the yellow ones into the right bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-026",
+   "template": 6,
+   "sentence": "Drop the red ones into the center bin, the blue ones into the right bin, the yellow ones into the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-027",
+   "template": 6,
+   "sentence": "Drop the red ones into the center bin, the yellow ones into the left bin, the blue ones into the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-028",
+   "template": 6,
+   "sentence": "Drop the red ones into the center bin, the yellow ones into the right bin, the blue ones into the left bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-029",
+   "template": 6,
+   "sentence": "Drop the red ones into the left bin, the blue ones into the center bin, the yellow ones into the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-030",
+   "template": 6,
+   "sentence": "Drop the red ones into the left bin, the blue ones into the right bin, the yellow ones into the center bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-031",
+   "template": 6,
+   "sentence": "Drop the red ones into the left bin, the yellow ones into the center bin, the blue ones into the right bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-032",
+   "template": 6,
+   "sentence": "Drop the red ones into the left bin, the yellow ones into the right bin, the blue ones into the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-033",
+   "template": 6,
+   "sentence": "Drop the red ones into the right bin, the blue ones into the center bin, the yellow ones into the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-034",
+   "template": 6,
+   "sentence": "Drop the red ones into the right bin, the blue ones into the left bin, the yellow ones into the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-035",
+   "template": 6,
+   "sentence": "Drop the red ones into the right bin, the yellow ones into the center bin, the blue ones into the left bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-036",
+   "template": 6,
+   "sentence": "Drop the red ones into the right bin, the yellow ones into the left bin, the blue ones into the center bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-037",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the center bin, the blue ones into the left bin, the red ones into the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-038",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the center bin, the blue ones into the right bin, the red ones into the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-039",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the center bin, the red ones into the left bin, the blue ones into the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-040",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the center bin, the red ones into the right bin, the blue ones into the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-041",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the left bin, the blue ones into the center bin, the red ones into the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-042",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the left bin, the blue ones into the right bin, the red ones into the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-043",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the left bin, the red ones into the center bin, the blue ones into the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-044",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the left bin, the red ones into the right bin, the blue ones into the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-045",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the right bin, the blue ones into the center bin, the red ones into the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-046",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the right bin, the blue ones into the left bin, the red ones into the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-047",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the right bin, the red ones into the center bin, the blue ones into the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-048",
+   "template": 6,
+   "sentence": "Drop the yellow ones into the right bin, the red ones into the left bin, the blue ones into the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-049",
+   "template": 5,
+   "sentence": "Move blue objects to the center bin, red objects to the left bin, and yellow objects to the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-050",
+   "template": 5,
+   "sentence": "Move blue objects to the center bin, red objects to the right bin, and yellow objects to the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-051",
+   "template": 5,
+   "sentence": "Move blue objects to the center bin, yellow objects to the left bin, and red objects to the right bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-052",
+   "template": 5,
+   "sentence": "Move blue objects to the center bin, yellow objects to the right bin, and red objects to the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-053",
+   "template": 5,
+   "sentence": "Move blue objects to the left bin, red objects to the center bin, and yellow objects to the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-054",
+   "template": 5,
+   "sentence": "Move blue objects to the left bin, red objects to the right bin, and yellow objects to the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-055",
+   "template": 5,
+   "sentence": "Move blue objects to the left bin, yellow objects to the center bin, and red objects to the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-056",
+   "template": 5,
+   "sentence": "Move blue objects to the left bin, yellow objects to the right bin, and red objects to the center bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-057",
+   "template": 5,
+   "sentence": "Move blue objects to the right bin, red objects to the center bin, and yellow objects to the left bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-058",
+   "template": 5,
+   "sentence": "Move blue objects to the right bin, red objects to the left bin, and yellow objects to the center bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-059",
+   "template": 5,
+   "sentence": "Move blue objects to the right bin, yellow objects to the center bin, and red objects to the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-060",
+   "template": 5,
+   "sentence": "Move blue objects to the right bin, yellow objects to the left bin, and red objects to the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-061",
+   "template": 5,
+   "sentence": "Move red objects to the center bin, blue objects to the left bin, and yellow objects to the right bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-062",
+   "template": 5,
+   "sentence": "Move red objects to the center bin, blue objects to the right bin, and yellow objects to the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-063",
+   "template": 5,
+   "sentence": "Move red objects to the center bin, yellow objects to the left bin, and blue objects to the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-064",
+   "template": 5,
+   "sentence": "Move red objects to the center bin, yellow objects to the right bin, and blue objects to the left bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-065",
+   "template": 5,
+   "sentence": "Move red objects to the left bin, blue objects to the center bin, and yellow objects to the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-066",
+   "template": 5,
+   "sentence": "Move red objects to the left bin, blue objects to the right bin, and yellow objects to the center bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-067",
+   "template": 5,
+   "sentence": "Move red objects to the left bin, yellow objects to the center bin, and blue objects to the right bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-068",
+   "template": 5,
+   "sentence": "Move red objects to the left bin, yellow objects to the right bin, and blue objects to the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-069",
+   "template": 5,
+   "sentence": "Move red objects to the right bin, blue objects to the center bin, and yellow objects to the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-070",
+   "template": 5,
+   "sentence": "Move red objects to the right bin, blue objects to the left bin, and yellow objects to the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-071",
+   "template": 5,
+   "sentence": "Move red objects to the right bin, yellow objects to the center bin, and blue objects to the left bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-072",
+   "template": 5,
+   "sentence": "Move red objects to the right bin, yellow objects to the left bin, and blue objects to the center bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-073",
+   "template": 5,
+   "sentence": "Move yellow objects to the center bin, blue objects to the left bin, and red objects to the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-074",
+   "template": 5,
+   "sentence": "Move yellow objects to the center bin, blue objects to the right bin, and red objects to the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-075",
+   "template": 5,
+   "sentence": "Move yellow objects to the center bin, red objects to the left bin, and blue objects to the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-076",
+   "template": 5,
+   "sentence": "Move yellow objects to the center bin, red objects to the right bin, and blue objects to the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-077",
+   "template": 5,
+   "sentence": "Move yellow objects to the left bin, blue objects to the center bin, and red objects to the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-078",
+   "template": 5,
+   "sentence": "Move yellow objects to the left bin, blue objects to the right bin, and red objects to the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-079",
+   "template": 5,
+   "sentence": "Move yellow objects to the left bin, red objects to the center bin, and blue objects to the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-080",
+   "template": 5,
+   "sentence": "Move yellow objects to the left bin, red objects to the right bin, and blue objects to the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-081",
+   "template": 5,
+   "sentence": "Move yellow objects to the right bin, blue objects to the center bin, and red objects to the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-082",
+   "template": 5,
+   "sentence": "Move yellow objects to the right bin, blue objects to the left bin, and red objects to the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-083",
+   "template": 5,
+   "sentence": "Move yellow objects to the right bin, red objects to the center bin, and blue objects to the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-084",
+   "template": 5,
+   "sentence": "Move yellow objects to the right bin, red objects to the left bin, and blue objects to the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-085",
+   "template": 3,
+   "sentence": "Place every blue object in the center bin. Red objects belong in the left bin, and yellow ones in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-086",
+   "template": 3,
+   "sentence": "Place every blue object in the center bin. Red objects belong in the right bin, and yellow ones in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-087",
+   "template": 3,
+   "sentence": "Place every blue object in the center bin. Yellow objects belong in the left bin, and red ones in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-088",
+   "template": 3,
+   "sentence": "Place every blue object in the center bin. Yellow objects belong in the right bin, and red ones in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-089",
+   "template": 3,
+   "sentence": "Place every blue object in the left bin. Red objects belong in the center bin, and yellow ones in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-090",
+   "template": 3,
+   "sentence": "Place every blue object in the left bin. Red objects belong in the right bin, and yellow ones in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-091",
+   "template": 3,
+   "sentence": "Place every blue object in the left bin. Yellow objects belong in the center bin, and red ones in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-092",
+   "template": 3,
+   "sentence": "Place every blue object in the left bin. Yellow objects belong in the right bin, and red ones in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-093",
+   "template": 3,
+   "sentence": "Place every blue object in the right bin. Red objects belong in the center bin, and yellow ones in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-094",
+   "template": 3,
+   "sentence": "Place every blue object in the right bin. Red objects belong in the left bin, and yellow ones in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-095",
+   "template": 3,
+   "sentence": "Place every blue object in the right bin. Yellow objects belong in the center bin, and red ones in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-096",
+   "template": 3,
+   "sentence": "Place every blue object in the right bin. Yellow objects belong in the left bin, and red ones in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-097",
+   "template": 3,
+   "sentence": "Place every red object in the center bin. Blue objects belong in the left bin, and yellow ones in the right bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-098",
+   "template": 3,
+   "sentence": "Place every red object in the center bin. Blue objects belong in the right bin, and yellow ones in the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-099",
+   "template": 3,
+   "sentence": "Place every red object in the center bin. Yellow objects belong in the left bin, and blue ones in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-100",
+   "template": 3,
+   "sentence": "Place every red object in the center bin. Yellow objects belong in the right bin, and blue ones in the left bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-101",
+   "template": 3,
+   "sentence": "Place every red object in the left bin. Blue objects belong in the center bin, and yellow ones in the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-102",
+   "template": 3,
+   "sentence": "Place every red object in the left bin. Blue objects belong in the right bin, and yellow ones in the center bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-103",
+   "template": 3,
+   "sentence": "Place every red object in the left bin. Yellow objects belong in the center bin, and blue ones in the right bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-104",
+   "template": 3,
+   "sentence": "Place every red object in the left bin. Yellow objects belong in the right bin, and blue ones in the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-105",
+   "template": 3,
+   "sentence": "Place every red object in the right bin. Blue objects belong in the center bin, and yellow ones in the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-106",
+   "template": 3,
+   "sentence": "Place every red object in the right bin. Blue objects belong in the left bin, and yellow ones in the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-107",
+   "template": 3,
+   "sentence": "Place every red object in the right bin. Yellow objects belong in the center bin, and blue ones in the left bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-108",
+   "template": 3,
+   "sentence": "Place every red object in the right bin. Yellow objects belong in the left bin, and blue ones in the center bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-109",
+   "template": 3,
+   "sentence": "Place every yellow object in the center bin. Blue objects belong in the left bin, and red ones in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-110",
+   "template": 3,
+   "sentence": "Place every yellow object in the center bin. Blue objects belong in the right bin, and red ones in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-111",
+   "template": 3,
+   "sentence": "Place every yellow object in the center bin. Red objects belong in the left bin, and blue ones in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-112",
+   "template": 3,
+   "sentence": "Place every yellow object in the center bin. Red objects belong in the right bin, and blue ones in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-113",
+   "template": 3,
+   "sentence": "Place every yellow object in the left bin. Blue objects belong in the center bin, and red ones in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-114",
+   "template": 3,
+   "sentence": "Place every yellow object in the left bin. Blue objects belong in the right bin, and red ones in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-115",
+   "template": 3,
+   "sentence": "Place every yellow object in the left bin. Red objects belong in the center bin, and blue ones in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-116",
+   "template": 3,
+   "sentence": "Place every yellow object in the left bin. Red objects belong in the right bin, and blue ones in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-117",
+   "template": 3,
+   "sentence": "Place every yellow object in the right bin. Blue objects belong in the center bin, and red ones in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-118",
+   "template": 3,
+   "sentence": "Place every yellow object in the right bin. Blue objects belong in the left bin, and red ones in the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-119",
+   "template": 3,
+   "sentence": "Place every yellow object in the right bin. Red objects belong in the center bin, and blue ones in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-120",
+   "template": 3,
+   "sentence": "Place every yellow object in the right bin. Red objects belong in the left bin, and blue ones in the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-121",
+   "template": 0,
+   "sentence": "Put the blue objects in the center bin, the red objects in the left bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-122",
+   "template": 0,
+   "sentence": "Put the blue objects in the center bin, the red objects in the right bin and the yellow objects in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-123",
+   "template": 0,
+   "sentence": "Put the blue objects in the center bin, the yellow objects in the left bin and the red objects in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-124",
+   "template": 0,
+   "sentence": "Put the blue objects in the center bin, the yellow objects in the right bin and the red objects in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-125",
+   "template": 0,
+   "sentence": "Put the blue objects in the left bin, the red objects in the center bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-126",
+   "template": 0,
+   "sentence": "Put the blue objects in the left bin, the red objects in the right bin and the yellow objects in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-127",
+   "template": 0,
+   "sentence": "Put the blue objects in the left bin, the yellow objects in the center bin and the red objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-128",
+   "template": 0,
+   "sentence": "Put the blue objects in the left bin, the yellow objects in the right bin and the red objects in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-129",
+   "template": 0,
+   "sentence": "Put the blue objects in the right bin, the red objects in the center bin and the yellow objects in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-130",
+   "template": 0,
+   "sentence": "Put the blue objects in the right bin, the red objects in the left bin and the yellow objects in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-131",
+   "template": 0,
+   "sentence": "Put the blue objects in the right bin, the yellow objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-132",
+   "template": 0,
+   "sentence": "Put the blue objects in the right bin, the yellow objects in the left bin and the red objects in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-133",
+   "template": 0,
+   "sentence": "Put the red objects in the center bin, the blue objects in the left bin and the yellow objects in the right bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-134",
+   "template": 0,
+   "sentence": "Put the red objects in the center bin, the blue objects in the right bin and the yellow objects in the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-135",
+   "template": 0,
+   "sentence": "Put the red objects in the center bin, the yellow objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-136",
+   "template": 0,
+   "sentence": "Put the red objects in the center bin, the yellow objects in the right bin and the blue objects in the left bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-137",
+   "template": 0,
+   "sentence": "Put the red objects in the left bin, the blue objects in the center bin and the yellow objects in the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-138",
+   "template": 0,
+   "sentence": "Put the red objects in the left bin, the blue objects in the right bin and the yellow objects in the center bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-139",
+   "template": 0,
+   "sentence": "Put the red objects in the left bin, the yellow objects in the center bin and the blue objects in the right bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-140",
+   "template": 0,
+   "sentence": "Put the red objects in the left bin, the yellow objects in the right bin and the blue objects in the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-141",
+   "template": 0,
+   "sentence": "Put the red objects in the right bin, the blue objects in the center bin and the yellow objects in the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-142",
+   "template": 0,
+   "sentence": "Put the red objects in the right bin, the blue objects in the left bin and the yellow objects in the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-143",
+   "template": 0,
+   "sentence": "Put the red objects in the right bin, the yellow objects in the center bin and the blue objects in the left bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-144",
+   "template": 0,
+   "sentence": "Put the red objects in the right bin, the yellow objects in the left bin and the blue objects in the center bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-145",
+   "template": 0,
+   "sentence": "Put the yellow objects in the center bin, the blue objects in the left bin and the red objects in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-146",
+   "template": 0,
+   "sentence": "Put the yellow objects in the center bin, the blue objects in the right bin and the red objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-147",
+   "template": 0,
+   "sentence": "Put the yellow objects in the center bin, the red objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-148",
+   "template": 0,
+   "sentence": "Put the yellow objects in the center bin, the red objects in the right bin and the blue objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-149",
+   "template": 0,
+   "sentence": "Put the yellow objects in the left bin, the blue objects in the center bin and the red objects in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-150",
+   "template": 0,
+   "sentence": "Put the yellow objects in the left bin, the blue objects in the right bin and the red objects in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-151",
+   "template": 0,
+   "sentence": "Put the yellow objects in the left bin, the red objects in the center bin and the blue objects in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-152",
+   "template": 0,
+   "sentence": "Put the yellow objects in the left bin, the red objects in the right bin and the blue objects in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-153",
+   "template": 0,
+   "sentence": "Put the yellow objects in the right bin, the blue objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-154",
+   "template": 0,
+   "sentence": "Put the yellow objects in the right bin, the blue objects in the left bin and the red objects in the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-155",
+   "template": 0,
+   "sentence": "Put the yellow objects in the right bin, the red objects in the center bin and the blue objects in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-156",
+   "template": 0,
+   "sentence": "Put the yellow objects in the right bin, the red objects in the left bin and the blue objects in the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-157",
+   "template": -1,
+   "sentence": "Red goes to the center bin, blue to the left bin, yellow to the right bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-158",
+   "template": -1,
+   "sentence": "Red goes to the center bin, blue to the right bin, yellow to the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-159",
+   "template": -1,
+   "sentence": "Red goes to the center bin, yellow to the left bin, blue to the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-160",
+   "template": -1,
+   "sentence": "Red goes to the center bin, yellow to the right bin, blue to the left bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-161",
+   "template": -1,
+   "sentence": "Red goes to the left bin, blue to the center bin, yellow to the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-162",
+   "template": -1,
+   "sentence": "Red goes to the left bin, blue to the right bin, yellow to the center bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-163",
+   "template": -1,
+   "sentence": "Red goes to the left bin, yellow to the center bin, blue to the right bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-164",
+   "template": -1,
+   "sentence": "Red goes to the left bin, yellow to the right bin, blue to the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-165",
+   "template": -1,
+   "sentence": "Red goes to the right bin, blue to the center bin, yellow to the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-166",
+   "template": -1,
+   "sentence": "Red goes to the right bin, blue to the left bin, yellow to the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-167",
+   "template": -1,
+   "sentence": "Red goes to the right bin, yellow to the center bin, blue to the left bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-168",
+   "template": -1,
+   "sentence": "Red goes to the right bin, yellow to the left bin, blue to the center bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-169",
+   "template": 2,
+   "sentence": "Sort the objects: blue into center, red into left, yellow into right.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-170",
+   "template": 2,
+   "sentence": "Sort the objects: blue into center, red into right, yellow into left.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-171",
+   "template": 2,
+   "sentence": "Sort the objects: blue into center, yellow into left, red into right.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-172",
+   "template": 2,
+   "sentence": "Sort the objects: blue into center, yellow into right, red into left.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-173",
+   "template": 2,
+   "sentence": "Sort the objects: blue into left, red into center, yellow into right.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-174",
+   "template": 2,
+   "sentence": "Sort the objects: blue into left, red into right, yellow into center.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-175",
+   "template": 2,
+   "sentence": "Sort the objects: blue into left, yellow into center, red into right.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-176",
+   "template": 2,
+   "sentence": "Sort the objects: blue into left, yellow into right, red into center.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-177",
+   "template": 2,
+   "sentence": "Sort the objects: blue into right, red into center, yellow into left.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-178",
+   "template": 2,
+   "sentence": "Sort the objects: blue into right, red into left, yellow into center.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-179",
+   "template": 2,
+   "sentence": "Sort the objects: blue into right, yellow into center, red into left.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-180",
+   "template": 2,
+   "sentence": "Sort the objects: blue into right, yellow into left, red into center.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-181",
+   "template": 2,
+   "sentence": "Sort the objects: red into center, blue into left, yellow into right.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-182",
+   "template": 2,
+   "sentence": "Sort the objects: red into center, blue into right, yellow into left.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-183",
+   "template": 2,
+   "sentence": "Sort the objects: red into center, yellow into left, blue into right.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-184",
+   "template": 2,
+   "sentence": "Sort the objects: red into center, yellow into right, blue into left.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-185",
+   "template": 2,
+   "sentence": "Sort the objects: red into left, blue into center, yellow into right.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-186",
+   "template": 2,
+   "sentence": "Sort the objects: red into left, blue into right, yellow into center.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-187",
+   "template": 2,
+   "sentence": "Sort the objects: red into left, yellow into center, blue into right.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-188",
+   "template": 2,
+   "sentence": "Sort the objects: red into left, yellow into right, blue into center.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-189",
+   "template": 2,
+   "sentence": "Sort the objects: red into right, blue into center, yellow into left.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-190",
+   "template": 2,
+   "sentence": "Sort the objects: red into right, blue into left, yellow into center.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-191",
+   "template": 2,
+   "sentence": "Sort the objects: red into right, yellow into center, blue into left.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-192",
+   "template": 2,
+   "sentence": "Sort the objects: red into right, yellow into left, blue into center.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-193",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into center, blue into left, red into right.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-194",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into center, blue into right, red into left.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-195",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into center, red into left, blue into right.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-196",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into center, red into right, blue into left.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-197",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into left, blue into center, red into right.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-198",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into left, blue into right, red into center.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-199",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into left, red into center, blue into right.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-200",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into left, red into right, blue into center.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-201",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into right, blue into center, red into left.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-202",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into right, blue into left, red into center.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-203",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into right, red into center, blue into left.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-204",
+   "template": 2,
+   "sentence": "Sort the objects: yellow into right, red into left, blue into center.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-205",
+   "template": 4,
+   "sentence": "The center bin is for blue objects, the left bin for red, the right bin for yellow.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-206",
+   "template": 4,
+   "sentence": "The center bin is for blue objects, the left bin for yellow, the right bin for red.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-207",
+   "template": 4,
+   "sentence": "The center bin is for blue objects, the right bin for red, the left bin for yellow.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-208",
+   "template": 4,
+   "sentence": "The center bin is for blue objects, the right bin for yellow, the left bin for red.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-209",
+   "template": 4,
+   "sentence": "The center bin is for red objects, the left bin for blue, the right bin for yellow.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-210",
+   "template": 4,
+   "sentence": "The center bin is for red objects, the left bin for yellow, the right bin for blue.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-211",
+   "template": 4,
+   "sentence": "The center bin is for red objects, the right bin for blue, the left bin for yellow.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-212",
+   "template": 4,
+   "sentence": "The center bin is for red objects, the right bin for yellow, the left bin for blue.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-213",
+   "template": 4,
+   "sentence": "The center bin is for yellow objects, the left bin for blue, the right bin for red.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-214",
+   "template": 4,
+   "sentence": "The center bin is for yellow objects, the left bin for red, the right bin for blue.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-215",
+   "template": 4,
+   "sentence": "The center bin is for yellow objects, the right bin for blue, the left bin for red.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-216",
+   "template": 4,
+   "sentence": "The center bin is for yellow objects, the right bin for red, the left bin for blue.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-217",
+   "template": 4,
+   "sentence": "The left bin is for blue objects, the center bin for red, the right bin for yellow.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-218",
+   "template": 4,
+   "sentence": "The left bin is for blue objects, the center bin for yellow, the right bin for red.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-219",
+   "template": 4,
+   "sentence": "The left bin is for blue objects, the right bin for red, the center bin for yellow.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-220",
+   "template": 4,
+   "sentence": "The left bin is for blue objects, the right bin for yellow, the center bin for red.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-221",
+   "template": 4,
+   "sentence": "The left bin is for red objects, the center bin for blue, the right bin for yellow.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-222",
+   "template": 4,
+   "sentence": "The left bin is for red objects, the center bin for yellow, the right bin for blue.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-223",
+   "template": 4,
+   "sentence": "The left bin is for red objects, the right bin for blue, the center bin for yellow.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-224",
+   "template": 4,
+   "sentence": "The left bin is for red objects, the right bin for yellow, the center bin for blue.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-225",
+   "template": 4,
+   "sentence": "The left bin is for yellow objects, the center bin for blue, the right bin for red.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-226",
+   "template": 4,
+   "sentence": "The left bin is for yellow objects, the center bin for red, the right bin for blue.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-227",
+   "template": 4,
+   "sentence": "The left bin is for yellow objects, the right bin for blue, the center bin for red.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-228",
+   "template": 4,
+   "sentence": "The left bin is for yellow objects, the right bin for red, the center bin for blue.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-229",
+   "template": 4,
+   "sentence": "The right bin is for blue objects, the center bin for red, the left bin for yellow.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-230",
+   "template": 4,
+   "sentence": "The right bin is for blue objects, the center bin for yellow, the left bin for red.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-231",
+   "template": 4,
+   "sentence": "The right bin is for blue objects, the left bin for red, the center bin for yellow.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-232",
+   "template": 4,
+   "sentence": "The right bin is for blue objects, the left bin for yellow, the center bin for red.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-233",
+   "template": 4,
+   "sentence": "The right bin is for red objects, the center bin for blue, the left bin for yellow.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-234",
+   "template": 4,
+   "sentence": "The right bin is for red objects, the center bin for yellow, the left bin for blue.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-235",
+   "template": 4,
+   "sentence": "The right bin is for red objects, the left bin for blue, the center bin for yellow.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-236",
+   "template": 4,
+   "sentence": "The right bin is for red objects, the left bin for yellow, the center bin for blue.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-237",
+   "template": 4,
+   "sentence": "The right bin is for yellow objects, the center bin for blue, the left bin for red.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-238",
+   "template": 4,
+   "sentence": "The right bin is for yellow objects, the center bin for red, the left bin for blue.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-239",
+   "template": 4,
+   "sentence": "The right bin is for yellow objects, the left bin for blue, the center bin for red.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-240",
+   "template": 4,
+   "sentence": "The right bin is for yellow objects, the left bin for red, the center bin for blue.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-241",
+   "template": 7,
+   "sentence": "Use the center bin for blue, the left bin for red and the right bin for yellow objects.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-242",
+   "template": 7,
+   "sentence": "Use the center bin for blue, the left bin for yellow and the right bin for red objects.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-243",
+   "template": 7,
+   "sentence": "Use the center bin for blue, the right bin for red and the left bin for yellow objects.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-244",
+   "template": 7,
+   "sentence": "Use the center bin for blue, the right bin for yellow and the left bin for red objects.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-245",
+   "template": 7,
+   "sentence": "Use the center bin for red, the left bin for blue and the right bin for yellow objects.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-246",
+   "template": 7,
+   "sentence": "Use the center bin for red, the left bin for yellow and the right bin for blue objects.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-247",
+   "template": 7,
+   "sentence": "Use the center bin for red, the right bin for blue and the left bin for yellow objects.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-248",
+   "template": 7,
+   "sentence": "Use the center bin for red, the right bin for yellow and the left bin for blue objects.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-249",
+   "template": 7,
+   "sentence": "Use the center bin for yellow, the left bin for blue and the right bin for red objects.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-250",
+   "template": 7,
+   "sentence": "Use the center bin for yellow, the left bin for red and the right bin for blue objects.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-251",
+   "template": 7,
+   "sentence": "Use the center bin for yellow, the right bin for blue and the left bin for red objects.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-252",
+   "template": 7,
+   "sentence": "Use the center bin for yellow, the right bin for red and the left bin for blue objects.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-253",
+   "template": 7,
+   "sentence": "Use the left bin for blue, the center bin for red and the right bin for yellow objects.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-254",
+   "template": 7,
+   "sentence": "Use the left bin for blue, the center bin for yellow and the right bin for red objects.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-255",
+   "template": 7,
+   "sentence": "Use the left bin for blue, the right bin for red and the center bin for yellow objects.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-256",
+   "template": 7,
+   "sentence": "Use the left bin for blue, the right bin for yellow and the center bin for red objects.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-257",
+   "template": 7,
+   "sentence": "Use the left bin for red, the center bin for blue and the right bin for yellow objects.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-258",
+   "template": 7,
+   "sentence": "Use the left bin for red, the center bin for yellow and the right bin for blue objects.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-259",
+   "template": 7,
+   "sentence": "Use the left bin for red, the right bin for blue and the center bin for yellow objects.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-260",
+   "template": 7,
+   "sentence": "Use the left bin for red, the right bin for yellow and the center bin for blue objects.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-261",
+   "template": 7,
+   "sentence": "Use the left bin for yellow, the center bin for blue and the right bin for red objects.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-262",
+   "template": 7,
+   "sentence": "Use the left bin for yellow, the center bin for red and the right bin for blue objects.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-263",
+   "template": 7,
+   "sentence": "Use the left bin for yellow, the right bin for blue and the center bin for red objects.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-264",
+   "template": 7,
+   "sentence": "Use the left bin for yellow, the right bin for red and the center bin for blue objects.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-265",
+   "template": 7,
+   "sentence": "Use the right bin for blue, the center bin for red and the left bin for yellow objects.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-266",
+   "template": 7,
+   "sentence": "Use the right bin for blue, the center bin for yellow and the left bin for red objects.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-267",
+   "template": 7,
+   "sentence": "Use the right bin for blue, the left bin for red and the center bin for yellow objects.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-268",
+   "template": 7,
+   "sentence": "Use the right bin for blue, the left bin for yellow and the center bin for red objects.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-269",
+   "template": 7,
+   "sentence": "Use the right bin for red, the center bin for blue and the left bin for yellow objects.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-270",
+   "template": 7,
+   "sentence": "Use the right bin for red, the center bin for yellow and the left bin for blue objects.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-271",
+   "template": 7,
+   "sentence": "Use the right bin for red, the left bin for blue and the center bin for yellow objects.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-272",
+   "template": 7,
+   "sentence": "Use the right bin for red, the left bin for yellow and the center bin for blue objects.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-273",
+   "template": 7,
+   "sentence": "Use the right bin for yellow, the center bin for blue and the left bin for red objects.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-274",
+   "template": 7,
+   "sentence": "Use the right bin for yellow, the center bin for red and the left bin for blue objects.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-275",
+   "template": 7,
+   "sentence": "Use the right bin for yellow, the left bin for blue and the center bin for red objects.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-276",
+   "template": 7,
+   "sentence": "Use the right bin for yellow, the left bin for red and the center bin for blue objects.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-277",
+   "template": -1,
+   "sentence": "Yellow goes to the center bin, blue to the left bin, red to the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-278",
+   "template": -1,
+   "sentence": "Yellow goes to the center bin, blue to the right bin, red to the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-279",
+   "template": -1,
+   "sentence": "Yellow goes to the center bin, red to the left bin, blue to the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-280",
+   "template": -1,
+   "sentence": "Yellow goes to the center bin, red to the right bin, blue to the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-281",
+   "template": -1,
+   "sentence": "Yellow goes to the left bin, blue to the center bin, red to the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-282",
+   "template": -1,
+   "sentence": "Yellow goes to the left bin, blue to the right bin, red to the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-283",
+   "template": -1,
+   "sentence": "Yellow goes to the left bin, red to the center bin, blue to the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-284",
+   "template": -1,
+   "sentence": "Yellow goes to the left bin, red to the right bin, blue to the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-285",
+   "template": -1,
+   "sentence": "Yellow goes to the right bin, blue to the center bin, red to the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-286",
+   "template": -1,
+   "sentence": "Yellow goes to the right bin, blue to the left bin, red to the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-287",
+   "template": -1,
+   "sentence": "Yellow goes to the right bin, red to the center bin, blue to the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   },
+   "key_type": "color"
+  },
+  {
+   "id": "TRAIN-288",
+   "template": -1,
+   "sentence": "Yellow goes to the right bin, red to the left bin, blue to the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   },
+   "key_type": "color"
+  }
+ ]
+}
