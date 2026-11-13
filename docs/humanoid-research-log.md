@@ -235,3 +235,15 @@ Bot's headline matches ours: hybrid, parser for rung 2, grasp is the bottleneck,
 
 - `docs/humanoid-grasp-report.md`: triangle-grasp deep dive. **Checked in the repo**: sim object friction 1.2 static / 1.0 dynamic with "max" combine (`scene_cfg.py:41-42,228`); no torsional-friction patch set; DR friction only x0.75-1.1 (`train.yaml:21`); real hand kp 1.5 / kd 0.2 (`backends.py:202`); baseline "closed" pose leaves a 3.6 cm gap = 0.9 cm squeeze on a 4.5 cm object (`config.yaml:104-105`). Bot's headline: pinch along an altitude (corner vs opposite face) using `cv2.minEnclosingTriangle` yaw, because minAreaRect gives wrong yaw on triangles; re-measure the oracle with realistic friction first.
 - `docs/humanoid-pitch-report.md`: what wins robot demos. Mostly unverified web links; useful framing: real robot live plus backup video, state real success rate, one ablation, honest sim-vs-real slide.
+
+## 2026-11-14 ~01:55 | Sim hand actuator and physics settings, read directly from source
+
+Sources: `unitreerobotics/unitree_sim_isaaclab` `robots/unitree.py` (the `G129_CFG_WITH_DEX3_BASE_FIX` articulation, lines ~11-30 and ~155-170) and the Aalto task `aaltonomous/sim/aalto_task/env_cfg.py` (lines 75-83) at repo commit `36daf5b`.
+
+- **Dex3 finger actuators in the sim (checked):** stiffness 100, damping 10, armature 0.1, `effort_limit=300`, `velocity_limit=100` for all index/middle/thumb joints.
+- **Real hand limits (checked, `interface/joint_spec.yaml`):** effort 1.4 to 2.45 Nm per the bot (the file shows hand-joint effort values; arm joints show 25 / 5 in the grep I made, so hand rows should be re-read before quoting). Real hand is commanded at kp 1.5, kd 0.2 (`backends.py:202`).
+  If the 300 vs about 2 Nm gap holds, simulated fingers can squeeze with about 100x the real torque and track targets far more stiffly. Unit mapping between SDK kp and PhysX stiffness is still unknown.
+- **No override in the Aalto task:** `env_cfg.py` sets no actuator, stiffness, damping or friction for the hand (grep returned only physics/timing lines), so the upstream Dex3 values apply (assumes `env_cfg.py` does not rebuild the robot cfg elsewhere, not fully read).
+- **Self-collision is off** for the articulation (`enabled_self_collisions=False`), solver iterations 8 position / 4 velocity.
+- **Aalto physics settings (checked):** `sim.dt = 0.005` (200 Hz physics), `decimation = 2` (100 Hz env step), `render_interval = decimation`, **`enable_ccd = True`**, `friction_correlation_distance = 0.003`, GPU aggregate pair capacities raised. So the sim README's "physics 2x1.9 ms" is the wall-time cost of two 5 ms physics substeps, not a substep setting (my wording to the bot was wrong; the bot caught it).
+- **Implication (opinion):** CCD is on, so tunnelling of 45 mm objects is less likely than feared. The likelier sim-vs-real differences for the pinch are finger torque/stiffness and friction (sim objects mu 1.2/1.0 with combine "max", no torsional patch), as the grasp report says.
