@@ -260,3 +260,13 @@ Sources: `unitreerobotics/unitree_sim_isaaclab` `robots/unitree.py` (the `G129_C
 ## 2026-11-14 ~02:25 | Research-bot job 3 received
 
 Saved as `docs/humanoid-sim-settings-report.md`. Corrections to my earlier entries: (1) the bot says `enable_ccd=True` probably does nothing for the objects because PhysX needs a per-body flag, so my "CCD is on, tunnelling less likely" line in the 01:55 entry is overstated; (2) the sim ignores DDS kp/kd (position targets only), so the starter's `hand_kp=1.5` only matters on the real robot. New: torsional friction is set via `min_torsional_patch_radius` on collision properties, and `solve_articulation_contact_last` has a measured effect on grasp penetration. Caveat: these are changes for our own sim copy; the finalist-selection sim is the organisers'.
+
+## 2026-11-14 ~02:45 | Organisers' Discord announcement (pasted by Oliver)
+
+Nothing in it contradicts the repo. New or worth keeping:
+- "Sim image link, submission form and times will be posted" in the challenge channel: the Docker sim image (`aalto-sim-v1.tar.zst`), the submission form and the times are NOT in the repo, only on Discord.
+- "Real robot data drops tonight, raw (good and bad episodes mixed)": Drop 0 is expected Friday night.
+- "No guaranteed internet in the finals": do not depend on external APIs.
+- "Organisers reserve the right to change rules and details during the event": re-read `RULES_AND_SCORING.md` and the verified-facts line numbers before building; they can drift.
+- Level naming used there: Level 1 fixed, Level 2 follow instructions (higher levels more points), Level 3 stretch push objects through the matching shape hole in a lid (same as rungs 1-3).
+- Tip given: point an AI assistant at `aaltonomous/docs/participants/` (we did).
