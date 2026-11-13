@@ -75,8 +75,9 @@ Published tracks:
 6. **Data**
 
 - **Tech challenges** run across every track: partners give credits for their platforms, and some give prizes for the best use of their tech. Any team can enter these alongside their track.
-- **The only published challenge brief so far is Cala's "Make Unicorns Real":** build a product that solves a real need for founders or VCs, using Cala's public data on companies, people, investors and funding rounds.
-- **Unknown:** every other track's brief. They're expected in the 18:00 challenge videos at the opening ceremony. The challenge list on the Platform is still empty.
+- ✅ **All briefs are now published and read.** This section is from before the opening ceremony; the
+  full set is in [`docs/challenges.md`](docs/challenges.md) (19 main + 19 tech), and what each sponsor
+  hands out is in [`docs/hackerpack.md`](docs/hackerpack.md).
 
 **Hardware Lab by Arduino (5th floor):** Arduino UNO Q boards, components, 3D printers, LeRobot arms "and much more", with hardware mentors.
 
@@ -118,12 +119,25 @@ Published tracks:
 - Contact: `hello@hackjunction.com`. The site also links a community Discord as the fastest place for answers.
 - The MLH Code of Conduct is linked in the site footer.
 
+## Read off the platform dashboard, Fri 19:35 CET
+
+- **The platform's own schedule confirms its times**, against the main site: preliminary submission
+  **11:55 PM** Friday, submissions start **12:00** Saturday, final **10:00 AM** Sunday,
+  **review time 2:00 PM**, event ends **5:00 PM**, doors close **6:00 PM**. So the 23:59/23:55 and
+  10:30/14:00 disagreements below are platform-vs-site, not a misreading. Aim for 23:50.
+- **Ticket: checked in.** Nothing left to do at registration.
+- **A submission already exists for our team, in DRAFT**, with the placeholder title and one-liner.
+  Draft projects are not reviewed — it has to be flipped to FINAL before Sun 10:00.
+- **Peer Review tab:** *"Pitching rounds have not been assigned to your team yet."* Check back Sunday.
+- **Partners listed on the dashboard:** Junction, Aalto University, AfterQuery, Arduino, AstraZeneca,
+  Bahn Express, Cala, City of Espoo, Context.dev, Exa, Hostinger, Ignite Next x Intel, Intel,
+  Major League Hacking, MariaDB, Meta, Rokoko, S-Pankki, Stoa, Tieto, Valio Aimo, Verda · plus
+  Aiven, Anthropic, Cloudinary, CRACI, Featherless, Google DeepMind, IronShard, Modal, OpenAI,
+  Oxylabs, Qualia, Scailab, Wendy, Atech, NVIDIA, Lifeline Ventures, XR Creator Con.
+
 ## Still unknown (watch the opening ceremony)
-- Every challenge brief except Cala's
 - The prize breakdown
 - Each track's judging criteria
-- What a submission has to include (video, demo, repo)
-- Which time is right for the preliminary submission and for review time
 - Rules or consent forms for minors
 - Wi-Fi details
 - Sunday meals
