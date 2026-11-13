@@ -2,8 +2,6 @@
 node_modules/
 .env*
 .DS_Store
-hub/.env
-hub/.env
 # warren agent credentials and lock
 /.warren.json
 /.warren.json.lock
