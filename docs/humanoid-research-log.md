@@ -106,3 +106,23 @@ Standard web search, summaries not yet checked against the primary pages.
 ### Read
 - Latency is not the blocker for a VLA path on the 5090 as long as it returns chunks. Data volume (about 20 demos) is.
 - Depth realism is a concrete, citable originality angle: fit a hole/noise model to Drop 1 depth and randomise the sim with it.
+
+## 2026-11-13 ~21:35 | Pass 3: prior G1 grasping work, synthetic data, instruction parsing
+
+### Prior G1 work
+- Åbo Akademi thesis, Ahmad Alkhaldi, 2026, "Reinforcement Learning for Humanoid Grasping with the Unitree G1" (https://doria.fi/handle/10024/195766). RL in Isaac Lab, sim only for the grasp policy. 91.9% grasp success in sim, 72.3% when the object must also end upright. Progress-based reward shaping beat the alternatives. Reward hacking (unintended contact, object displacement, standing still) forced reward and training changes. Sim-to-sim (MuJoCo) showed dynamics, timing and control-interface mismatches. No hardware grasp result. Hand model and details NOT read: the PDF came back as unreadable bytes (saved locally). Treat as abstract-level only.
+- `sl628/g1_hackathon` (a G1 hackathon repo): teleop with Quest 3 plus GR00T N1.6 fine-tune, no numbers, no Dex3 code, no licence. Not useful.
+
+### Synthetic data
+- DexMimicGen (arXiv 2410.24185, ICRA 2025): dexterous tasks used 5 source demos per task, expanded to about 21K synthetic demos in total across tasks. A secondary summary claims 40 validated synthetic rollouts from 4 real demos gave 90% real success on a can-sorting task vs 0% for real-only. UNVERIFIED, check the paper. https://arxiv.org/abs/2410.24185
+- Isaac Lab docs: G1 path is in the AutoData DexMimicGen guide, one sample run produced 5/10 successful generated demos (from the earlier pass).
+
+### Instruction parsing (rung 2)
+- No controlled study found of small local LLM vs rules. One self-published model card: Qwen2.5-1.5B 28% exact match at about 2 s, 0.5B 18% at about 3.8 s on its own robot-command set, a custom fine-tune 76% at 0.5 s. Not independently checked, different task. https://huggingface.co/AMFORGE/foros-v5.3
+- Our instruction space is tiny: each of 3 colours maps to one of 3 bins, so at most 27 mappings. That makes this a classification problem with a closed answer set, not open-ended parsing. A rule-based parser with fuzzy matching and a constrained fallback can be tested exhaustively against paraphrases. (My opinion.)
+- Note from STARTER_PATHS "difficulty knobs": the harder finals settings may add **colour + shape instructions, negation, and held-out paraphrases**. The code today only does colour, 8 training templates. A parser that only handles the 8 templates is at risk in the x1.5 final.
+- Latency is a non-issue if parsing happens once in `reset()`, not per tick.
+
+### Read
+- RL grasp policy in sim looks feasible (92% in a thesis) but the real-robot gap and reward hacking are the risks, and it is the highest-effort route.
+- Best value-for-effort ordering so far: (1) instruction parser handling colour+shape+negation, (2) better triangle/cylinder grasp, (3) depth-noise randomisation, (4) synthetic demos for a learned residual. None built.
