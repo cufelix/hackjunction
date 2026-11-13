@@ -8,6 +8,11 @@ fact that puts it in that position. §5 is what we deliberately do *not* build. 
 unknown, each tagged with what it blocks. Anything marked *(inference)* is reasoning from the
 facts, not something we read — tell them apart, because at 02:00 nobody will have time to re-check.
 
+**Per-fact file and line references live in Oliver's
+[`humanoid-verified-facts.md`](./humanoid-verified-facts.md)**, pinned to starter-repo commit
+`36daf5b4`. This handbook cites the facts and says what follows from them; that file is where you
+check one. If the two ever disagree, the file with the line number wins.
+
 Sources: `aaltonomous/` starter repo read directly (Oliver, see `humanoid-research-log.md`), the
 official challenge page (`challenge-320-aaltonomous-humanoid.md`), and primary vendor docs. Numbers
 without a source do not belong here.
