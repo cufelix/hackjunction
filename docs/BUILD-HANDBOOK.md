@@ -220,7 +220,51 @@ first.
 **And the geometry in §3.2 survives too.** A corner contact is a point contact at any speed; speed
 only modulates how badly it slips. The mechanism stands, the size of the prize is uncertain.
 
-### 3.5 What the baseline already does, so we do not rebuild it
+### 3.5 🔴 The sim hand is 120–210× stronger than the real one — and that hands us a free grasp sensor
+
+Oliver, from source: sim Dex3 finger actuators (`unitree_sim_isaaclab robots/unitree.py`, not
+overridden in the Aalto `env_cfg.py`) have **stiffness 100, damping 10, effort_limit 300**, and
+**self-collisions OFF**. The real limits (`interface/joint_spec.yaml`) are **2.45 Nm for thumb_0 and
+1.4 Nm for every other hand joint**.
+
+**Two consequences, and the first one threatens the 40 % that actually decides the prize.**
+
+**(a) Any grip tuned in sim will lean on squeeze force that does not exist on the robot.** In sim a
+position error produces force up to 300; on the robot the same error saturates at 1.4 Nm. So **the
+sim will close through an object the real hand cannot hold**, and a grasp that works in sim can fail
+on stage for a reason sim will never show us. This is a direct argument for the §3.2 design: the
+grip has to be stable **geometrically**, not by squeezing. "Grip harder" is not available to us.
+It also means self-collision is invisible in sim while the interface's safety filter does not check
+it either and **staff e-stop for it** — a gate failure with no warning anywhere in our loop.
+
+**The rule that follows: command an aperture, not a squeeze.** Taking stiffness as Nm/rad, holding
+the implied torque under 1.4 Nm needs a commanded position error below **~0.014 rad (0.8°)**, and
+0.0245 rad (1.4°) for thumb_0. Nobody hits that blind. So the honest grip is to **close until the
+finger stops tracking, then hold just past contact** — not to command full closure and let the
+solver invent force. *(inference; the stiffness unit and the real controller's own law both need
+checking, so treat 0.014 rad as an order of magnitude, not a setting.)*
+
+**(b) And that same lag is the grasp sensor we thought we did not have.** The Dex3-1 has 33 pressure
+sensors and **the interface exposes none of them** (§5) — but the observation *does* carry
+**`hand_q` (14)**, the measured finger positions, while we send `hand_q_target`. So:
+
+> **`hand_q_target` − `hand_q` is a contact signal, for free, every tick.**
+> Fingers stall short of the target → something is between them. Fingers reach the target → we
+> closed on air, or the object is gone.
+
+That gives us, with no new sensing and nothing in the way of the 27 Hz gate:
+- **grasp success / failure detection** — the exact thing we asked the research bot for and could
+  not get from tactile;
+- **a drop detector** mid-carry (lag disappears while we are still holding);
+- **an object-size estimate** from the stall aperture, which cross-checks the §3.2 shape classifier:
+  a prism pinched along its altitude stalls at ~45 mm, across the corners at ~52 mm, so **the stall
+  aperture tells us whether we got the good grip or the bad one** — before we lift.
+
+⚠️ That last one is the most useful and the least certain: it assumes the stall is detectable above
+the solver's own tracking error. **Measure the no-object and with-object lag in the sim first**
+(item 0 is already running the baseline; log `hand_q_target − hand_q` while it does).
+
+### 3.6 What the baseline already does, so we do not rebuild it
 
 `planner.py` (460 lines) already has: both arms, a finger-direction hint list tried in turn,
 bin-wall clearance, relocation of an object out of the way, a failed-position list so it does not
@@ -246,6 +290,10 @@ anything or just moved with the clock.
 
 This is also the cheapest way to settle whether time or grasping is the binding constraint, which
 decides how much of the night goes into item 4.
+
+**While it runs, log `hand_q_target − hand_q` per tick.** It costs nothing on top of the run and it
+is the measurement §3.5(b) depends on — if the stall is visible above the tracking error, we get a
+grasp sensor, a drop detector and a good-grip check out of one log file.
 
 ### 1. Instruction → mapping. **Unblocked, highest value, no GPU.**
 Because of §1: this is 83 % of the final and the baseline scores zero on it, and because the wiring
@@ -326,7 +374,10 @@ that criterion are all sim-to-real and data efficiency.
 - **No perception overhaul.** §3.2: capped at ~84 % on rung 1 regardless.
 - **No tactile or force feedback.** The Dex3-1 has 33 pressure sensors, and **the challenge
   interface exposes none of it** (FAQ). Designing around touch is designing around data we cannot
-  read.
+  read — but see §3.5(b): the **finger position lag** gives us most of what we wanted from touch,
+  from data the interface does expose.
+- **No grip-force tuning.** §3.5(a): the sim hand is 120–210× stronger than the real one, so any
+  number we tune against sim force is a number that does not exist on stage.
 - **No LLM in the control loop.** The instruction is parsed **once per episode in `reset()`**;
   latency is then irrelevant. A model is the fallback for a zero margin, not the mechanism.
 - **Nothing that leans on wrist-camera geometry.** Wrist **extrinsics are null and intrinsics are
