@@ -7,3 +7,4 @@ node_modules/
 /.warren.json.lock
 /.claude/settings.local.json
 /.serena/
+CLAUDE.md
