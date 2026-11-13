@@ -126,3 +126,11 @@ Standard web search, summaries not yet checked against the primary pages.
 ### Read
 - RL grasp policy in sim looks feasible (92% in a thesis) but the real-robot gap and reward hacking are the risks, and it is the highest-effort route.
 - Best value-for-effort ordering so far: (1) instruction parser handling colour+shape+negation, (2) better triangle/cylinder grasp, (3) depth-noise randomisation, (4) synthetic demos for a learned residual. None built.
+
+## 2026-11-13 ~21:45 | Scoring question from Felix, answered from the rules
+
+- Scoring is **final state at episode end**, not on touch. IN = centre inside the inner walls, below the rim, at rest (< 2 cm/s). A misplaced object can be moved again.
+- No timeout or "incomplete" penalty. Episode ends at 120 s, points so far kept. Safety abort keeps points too.
+- Per object: fixed +1 / wrong bin -1 / on counter 0 / knocked off -1. Language: +2 / -1 / 0 / -1.
+- Break-even for attempting an object: P(correct) above 1/2 on rung 1, above 1/3 on rung 2, if a failed attempt costs -1. A drop that stays on the counter costs 0, so the true risk is lower.
+- Felix's read (from the Warren thread): bin choice is an `if`, the hard part is the three-finger grasp. Matches the baseline's measured misses (mostly triangular prisms). Abstention should key on grasp confidence and instruction ambiguity, not colour.
