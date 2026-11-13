@@ -81,3 +81,28 @@ Extracted by a haiku subagent from the repo; numbers not independently re-checke
 2. The baseline ignores the instruction, so rung 2 (worth +2 per object, and the x1.5 final) is the biggest gap. A parser for the 8 templates plus paraphrases is cheap, a VLM is the robust version.
 3. Triangles are the main grasp failure. Better grasps there are worth more than a new architecture.
 4. Originality and generality need a story: robustness to sim-real mismatch (depth noise model, calibration check from Drop 1, DR) on top of the classical stack.
+
+## 2026-11-13 ~21:20 | Web pass 2: latency, depth noise, grasping, challenge buzz
+
+Standard web search, summaries not yet checked against the primary pages.
+
+### Challenge-specific
+- Nothing public found on the Aaltonomous Humanoid challenge, DigiTwin or "Väiski" outside the repo and the Junction page. Mentors and Discord are the only live source.
+
+### Inference speed (matters for the 27 Hz gate; finals PC is an RTX 5090 32 GB)
+- GR00T N1.6-3B on RTX 5090: NVIDIA path about 27 Hz per call (4 denoising steps, single view, torch.compile). Community FlashRT engine reports 13 ms (about 76 Hz). Pi0.5 on RTX 5090 with FlashRT: 17.6 ms (about 57 Hz). Source: https://forums.developer.nvidia.com/t/real-time-inference-on-thor-rtx-pi0-5-gr00t-n1-6-1-7-thor-23-hz-rtx-5090-50-80hz/368788
+- Caveat: those are model calls per second, not action steps. Returning a chunk of k actions per call decouples command rate from model rate. The wall-clock rule (`policy_hz_rt` at least 27) still applies to ticks that carry a command, so chunking is required for anything slower than 27 calls/s. Configs differ (steps, views), so the spread between 27 and 76 Hz is not hardware alone.
+- Our policy would see 3 camera views plus state, not one, so expect the slower end. UNVERIFIED for our exact input.
+
+### Depth noise recipes (for matching Drop 1 real depth)
+- NVIDIA Isaac Lab guide: depth camera randomization (uniform value noise plus deliberate data gaps): https://docs.nvidia.com/learning/physical-ai/getting-started-with-isaac-lab/latest/transferring-robot-learning-policies-from-simulation-to-reality/03-bridging-the-gap-simulation-enhancement/02-depth-camera-randomization.html
+- Parkour in the Wild (arXiv 2505.11164): D435-class recipe with edge dropouts, Perlin-noise hole patches that stay consistent across frames, Gaussian blur. Hole value is max depth there, but our data uses 0 = invalid, so convert.
+- Camera Depth Models (arXiv 2509.02530, ICLR 2026): learned D435 hole and noise model, reports transfer without extra randomisation. RaSim (arXiv 2404.03962) simulates the stereo pipeline physically.
+- Not found: an Isaac Sim built-in D435 noise model.
+
+### Grasping
+- Nothing on Dex3-1 specifically. General three-finger work: single point-cloud grasp predictors (CMG-Net, arXiv 2303.13182) and optimisation-based precision grasps at about 0.4-0.5 s per grasp (arXiv 1904.07332, 1902.10841). The challenge repo's own tip (pinch with the thumb, not index-middle) is more direct.
+
+### Read
+- Latency is not the blocker for a VLA path on the 5090 as long as it returns chunks. Data volume (about 20 demos) is.
+- Depth realism is a concrete, citable originality angle: fit a hole/noise model to Drop 1 depth and randomise the sim with it.
