@@ -149,17 +149,62 @@ and the deterministic answer is returned immediately.
 - ⚠️ `sample_layout` defaults to `n_max=6` while `scene.yaml` says 3–5 — a caller that forgets
   `layout_kwargs()` draws up to **6** objects (`tasks.py:54` vs `scene.yaml:70`).
 
-🔴 **Placement tolerance is not ±10 cm anywhere; it is about ±4–5 cm into one specific corner.**
+🔴 **Never aim at a bin centre — and the baseline already does not.** ✅ Measured locally,
+14 Nov, from `scene.yaml` plus the baseline's own `drop_inset`:
 
-- **Side-bin centres at 0.568 m are past the 0.55 m straight-arm reach.** The centre of a side bin
-  cannot be reached at all. `scene.yaml` says so itself: release in *"the near, inner part"*.
-- All three bins are past the 0.40 m comfortable reach, so **every release happens beyond
-  comfortable extension**, the side ones at essentially full extension.
-- *(inference, from the published coordinates)* with 3 mm walls the left bin's inner region spans
-  x 0.403–0.607, y 0.158–0.362; only the **near-inner quadrant** satisfies r ≤ 0.55 — an 8–10 cm
-  patch in one corner.
+| bin | centre r | nearest inner point | **+5 cm inset — what the baseline aims at** |
+|---|---|---|---|
+| left / right | **0.568 m** | 0.433 m | **0.498 m** |
+| centre | **0.505 m** | 0.403 m | **0.453 m** |
+
+against a **comfortable reach of 0.40 m** and a **straight arm of 0.55 m**.
+
+- **A side bin's centre at 0.568 m is past the straight arm.** Aiming there aims at a point the arm
+  cannot reach, and `scene.yaml` says so itself: release in *"the near, inner part"* of the box.
+- ✅ **`drop_inset: 0.05`** (`config.yaml:56`) — *"release this far inside the inner walls **at the box
+  point nearest the pelvis** (null = centre)"* — moves the target to **0.498 m for a side bin**, which
+  is **inside** the straight-arm reach. The baseline is already doing the right thing here.
+- So the usable release zone is a **strip along the near inner wall**, running from the near inner
+  edge at 0.403–0.433 m (essentially *at* the comfortable-reach boundary) out to about 0.50 m. That
+  is the whole budget: a few centimetres deep, not a 21 cm box.
 - And the object must clear a **6 cm rim** while being only 4.5 cm tall: **nothing can be swept or
-  pushed in, it must be lifted over** — at near-full extension.
+  pushed in, it must be lifted over.** ✅ The planner's release height is
+  `z_drop = counter_z + wall + H/2 + drop_above_rim` = **0.1325 m** in pelvis z
+  (`planner.py:342`, `drop_above_rim: 0.04`), carried at **0.170 m**.
+
+#### 3.1.1 ✅ This also settles the brief-vs-code contradiction about where the bins are
+
+The brief says the boxes are *"40 cm from the robot's torso"*; `scene.yaml` puts the centre bin at
+pelvis **r = 0.505 m** and the side bins at **0.568 m**. **Both are right, and they are measuring
+different things:** the **nearest inner point of the centre bin is at r = 0.403 m.** That is the
+brief's 40 cm. The brief quotes the near edge as a human would describe it; `scene.yaml` quotes bin
+centres in the pelvis frame, which is the frame IK and the safety filter work in.
+
+> **No mentor question needed. Use the pelvis-frame numbers above, and read the brief's 40 cm as the
+> near edge.**
+
+#### 3.1.2 ⚠️ `check_layout.py` reports *"bins: 0 % reachable"* — and that is a frame artefact, not a wall
+
+✅ Running the organisers' own `scene/check_layout.py --samples 40000` locally gives
+**`cube region: 100 % of cells seen + reachable`** and **`bins: 0 % of cells seen + reachable`**, and
+✅ `test_scene.py`'s corresponding assertion is marked `@unittest.expectedFailure` with
+*"KNOWN 2026-11-05: default counter is out of reach -- see check_layout.py"*.
+
+**Do not read that as "the bins cannot be reached."** Three reasons:
+
+1. ✅ `palm_cloud` samples the **`<side>_hand_palm_link`** position, while the planner's IK targets the
+   **grasp point**, which `point_in_palm [0.099, -0.084, 0.015]` puts **0.131 m** away from the palm
+   link. I measured the nearest palm sample to each release waypoint at **69–88 mm** — *smaller than
+   that offset*, so the metric cannot resolve the question it is being asked.
+2. ✅ The cloud is sampled with the **waist at neutral** and uniform random arm joints, so it is a
+   crude envelope, not an IK result.
+3. ✅ **The baseline scores 76–82 % in sim, which means it does release into bins.** That is an
+   empirical refutation of the pessimistic reading.
+
+**What the check *does* tell us, and it matters:** the near field is `r` — **reachable but not seen**
+— which is the same clipping as §3.6.2 seen from the other side, and the bins are `v`/`b` — **seen
+but outside the palm envelope**, i.e. at the edge of what the arm can do. **Treat every release as a
+near-limit motion**, which is exactly why §3.1's strip along the near inner wall is the target.
 
 ✅ Counterweight to all that: **`inside_margin` is 0.0** (`scene.yaml:75`), so an object resting
 exactly on a bin's inner edge **counts as in**. The boundary is generous; the *reach* is not.
@@ -989,7 +1034,7 @@ picked?" — we ask "which of the possible answers fits best, and by how much?"*
 | | Question | Blocks | Who |
 |---|---|---|---|
 | 🔴 | **Was the published 10–20 s per pick wall or physics time, and what does a pick cost on the corrected clock?** | the whole time budget, item 3, and how to read any score | **step 0** |
-| 🔴 | **Where are the bins, really?** ✅ The brief says *"40 cm from the robot's torso"*; ✅ `scene.yaml` puts the centre bin at pelvis r = 0.505 m and **side bins at 0.568 m**, past the 0.55 m straight-arm reach. If the two measure from different origins (torso face vs pelvis frame) both are right and §3.1 stands, because IK works in the pelvis frame. If not, §3.1 is too pessimistic | the whole release strategy and §3.1 | `scene/check_layout.py` on the GPU box — **direct answer**; or one question to a mentor |
+| ✅ | ~~**Where are the bins, really?**~~ **CLOSED 14 Nov 00:30, from our own files.** The brief's *"40 cm from the torso"* is the **near inner edge** of the centre bin (measured r = 0.403 m); `scene.yaml`'s 0.505 / 0.568 m are bin **centres** in the pelvis frame. Both correct. And `check_layout.py`'s *"bins: 0 % reachable"* is a **frame artefact** — it samples the palm link, 0.131 m from the grasp point the IK targets | — | — see §3.1.1 and §3.1.2 |
 | | **Does an object in the robot's hand at the buzzer count as counter (0) or knocked off (−1)?** ✅ The code has no path for it (§3.9.2), but the real score is read by eye | whether the endgame must put a held object down, and when the last pick may start | mentor |
 | | **Does the at-rest test apply on the counter or only in a bin?** ✅ The code says bins only (§3.9.1); `RULES_AND_SCORING` reads more broadly | how early cylinders must be placed | mentor |
 | | **How dense is the depth cloud on a 45 mm top face at 0.47–0.53 m?** | item 5's centroid stability | 🖥 one rendered frame |
