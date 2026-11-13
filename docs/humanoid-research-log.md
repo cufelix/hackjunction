@@ -167,3 +167,16 @@ Source: baseline files in the starter repo, read directly (460-line planner, gre
 - Planner already has: both arms, a finger-direction hint list tried in turn, bin-wall clearance checks, relocation of an object out of the way (`plan_relocation`), a failed-position list so it does not retry the same spot, and sends `done` when nothing sortable is left.
 - **No post-placement verification**: nothing checks that the object ended up in the bin. Since scoring is final-state, a verify-and-retry step (camera or wrist check) is an unused lever.
 - Not yet read: `kinematics.py`, hand posture tables (`config.yaml` hand section), how long each pick takes per phase (README says 10-20 s per pick, so about 6-12 picks fit in 120 s, enough for 5 objects only if few retries).
+
+## 2026-11-13 ~22:40 | Hand specs and public G1 Dex3 datasets (web, standard search)
+
+### Dex3-1 hand (Unitree's own page, https://unitree.com/Dex3-1, retailers repeat it)
+- 7 DoF: thumb 3 joints (-60..60, -35..60, 0..100 deg), index 2 joints (0..90, 0..100), middle 2 joints (same). Fingers only flex, no sideways spread on index/middle, so pinch geometry is limited and the thumb does the opposition work.
+- 33 tactile pressure sensors in 9 arrays (palm, finger pads, fingertips), 10-2500 g range. **The challenge interface exposes no force or tactile data** (FAQ), so this cannot be used in a submission.
+- Fingertip repeat positioning +-2 mm, 710 g, rated for a 500 g grasp of a 5 cm round hard object. Our objects (45 mm, light printed) are inside that envelope.
+- Teams cannot change the hand, so grasp design has to work with flex-only index/middle plus a 3-joint thumb.
+
+### Public G1 Dex3 datasets
+- Unitree publishes Dex3 datasets on Hugging Face: ObjectPlacement, BlockStacking, PickBottle, Pouring, CameraPackaging (https://huggingface.co/unitreerobotics). The earlier STARTER_PATHS names (`G1_Stack_Block`, `G1_Dex3_PickGum_Dataset`) were not confirmed by this search. Check each card's `meta/info.json` for action dims and fps before mixing with ours.
+- `unitree_lerobot` repo converts to LeRobot with `--robot_type Unitree_G1_Dex3` (https://github.com/unitreerobotics/unitree_lerobot). One community sim dataset is 30 fps, LeRobot v3.0.
+- Real action layout is NOT confirmed to be 28-dim in those sets; ours is (arm 14 + hand 14).
