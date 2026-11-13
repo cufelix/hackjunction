@@ -81,3 +81,10 @@ Takeaways:
   5. No beacon (mouse/scroll) layer: legal risk, spoofable, no external eval data (M4D dataset not downloadable).
 - **Pitch order sketch (2-min video, 3-min stage):** one real wrongly blocked human (Anubis issue 1248 or the Duke pilot) 15 s; live QR demo 60 s; numbers 45 s (Cloudflare 3x CGNAT, our measured FP with CI, abstention rate); how it differs 30 s; runs on a 2-core VPS 15 s.
 - **Working name:** "the detector that must be able to apologize", subtitle "I don't know as a feature".
+
+## Wave 2 research pointers (2026-11-13 evening; full texts were posted to Warren)
+
+- AI agents as visitors: Imperva 2026 says automated traffic is more than 53% of web traffic (fetched). Web Bot Auth (RFC 9421 signatures, IETF drafts, not final) per Cloudflare docs (fetched). A valid signature says who runs a bot, not that it is benign: treat as evidence. No open-source Web Bot Auth verifier for self-hosters found (not exhaustively searched). Unsigned agents driving real browsers are the case the "undecided" band should catch.
+- Calibration and abstention recipes: `calibration-abstention-recipes.md`.
+- EU legal: IP is personal data; EDPB 2/2023 puts IPs, session ids and user-agent in Art. 5(3) scope; no explicit security exemption found; Recitals 47 and 49 support legitimate interest; an explanation and a contest route are named safeguards (Art. 22(3), Recital 71) but do not replace a legal basis. Demo rules: no persisted IPs, notice before scoring, opt-in click, contest button.
+- Hostinger: KVM 2 specs and Docker templates verified; Hostinger's own blog says 60 to 85% of sites are visited daily by Google, Meta and OpenAI crawlers; server-level 429 limits on Meta, AWS and Microsoft ranges cannot be disabled; VPS PM is Minijus Savickas; the 21-Day Startup Challenge winners include FixGuard AI (tests AI-built sites in a real browser). The guidebook lists a Hostinger keynote on Saturday 13:00.
