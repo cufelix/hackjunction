@@ -5,3 +5,5 @@ node_modules/
 # warren agent credentials and lock
 /.warren.json
 /.warren.json.lock
+/.claude/settings.local.json
+/.serena/
