@@ -125,6 +125,61 @@ And the input is already there: **perception computes object yaw with `cv2.minAr
 it "info only"; the planner never reads it.** The fix is to set wrist yaw so the pinch axis lies
 along an altitude direction.
 
+#### The full taxonomy: three ways to pinch a prism, two of them bad
+
+Converging with the grokbot grasp report, which reached the same conclusion from friction:
+
+| Pinch | Span | Why it fails / works |
+|---|---|---|
+| **two faces** | — | The faces meet at 60°, so squeezing **wedges the prism out**. Bot's own calc: needs friction μ ≥ 0.58 even at perfect yaw. *(bot, unverified)* |
+| **two corners** | **52 mm** | Point contact on both sides → **it spins**, which is the organisers' own failure note |
+| **one corner vs the opposite face** | **45 mm** | The only good one. One flat contact, one locating apex, and the narrowest span |
+
+A triangle has no parallel faces, so **flat-against-flat does not exist** and apex-vs-opposite-face
+is not a compromise, it is the optimum.
+
+#### 🔴 And the yaw the baseline computes is the wrong yaw
+
+`cv2.minAreaRect` returns the **minimum-area bounding rectangle**, not the object's own axes. For an
+equilateral triangle that rectangle has one side flush with a triangle side, so its axes are
+*(along a side)* and *(along that side's altitude)*. Good news: **the altitude direction is one of
+the two rect axes.** Bad news: the angle is ambiguous **mod 90°** (which axis is the altitude?) and
+**mod 180°** (which way does the apex point?). Feeding the raw angle to a pinch gets the wrong
+answer most of the time — which is consistent with the baseline missing prisms even though it
+*has* a yaw.
+
+**Both ambiguities are resolved by one number we already have.** The triangle's centroid sits h/3
+from the flush side, the rectangle's centre at h/2, so
+
+> **the blob centroid is offset from the rect centre by h/6 = 7.5 mm, pointing directly away from
+> the apex.**
+
+So the apex direction is *centroid → rect centre*, and the pinch axis is the altitude through it.
+At the object band (~0.35 m) with the head camera's fx = 615, 1 mm is 1.76 px, so **7.5 mm is ~13 px
+and the 45 mm object is ~79 px across** — a comfortably measurable offset, not a sub-pixel one.
+*(inference; all four numbers are published, the composition is ours.)*
+
+#### The same two quantities give a shape classifier for free
+
+Blob area ÷ min-area-rect area:
+
+| Shape | Fill ratio | |
+|---|---|---|
+| Cube | **1.00** | square fills its own bounding rect |
+| Cylinder | **0.785** | π/4 |
+| Triangle | **0.50** | ½·base·height over base·height |
+
+Three well-separated values from quantities `minAreaRect` already returns, **no training and no new
+sensing**. That matters beyond the grasp: perception is *explicitly shape-agnostic* today, while
+`scene.resolve_bin` accepts shape-keyed mappings and the finals may use them (§4 item 1). This is
+the cheapest possible way to stop being shape-blind.
+
+⚠️ **Caveats, because this is derived and not measured.** The head camera looks down at ~48°, not
+straight down, so the top face is seen obliquely and both the ratio and the 7.5 mm offset are
+foreshortened; the objects have 2.5 mm fillets; and the ratios assume a clean HSV blob of the top
+face only. **Measure all three ratios in the sim before relying on them** — the gaps are large
+(0.5 / 0.785 / 1.0), so the method likely survives, but the thresholds are not ours to guess.
+
 **This is why perception work and a trained policy are both capped.** A perfect vision stack cannot
 pass ~84 % on rung 1. The grasp is the ceiling.
 
@@ -216,6 +271,10 @@ a proximity count as support for the pair it denies. Needs an explicit inverting
 ### 2. Yaw-aligned triangle pinch. **Promoted by the oracle number.**
 Because of §3.2: ~84 % is the ceiling with perfect perception, the organisers name this as the
 blocker, and the yaw we need is already computed and thrown away.
+
+**Do the disambiguation before the rotation** (§3.2): the raw `minAreaRect` angle is ambiguous mod
+90° and mod 180°, and the centroid-to-rect-centre offset fixes both. Rotating to the raw angle is
+worse than not rotating, because it will confidently pick a corner-to-corner pinch.
 
 **And it is affordable.** The correction needed is at most 30° = 0.524 rad (§3.2), and the per-tick
 arm cap is ~0.033 rad, so the worst-case wrist rotation takes **~16 ticks ≈ 0.53 s at 30 Hz**.
