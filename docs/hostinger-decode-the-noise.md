@@ -281,3 +281,57 @@ Saying this out loud in the pitch is itself a signal of honesty, which is what t
 - Deeper prior-art and legal research is running on the `reshercher` bot; fold its answer in
   here when it lands rather than starting a second document.
 - Nothing here is a decision about what we build. It is the evidence to decide with.
+
+---
+
+## Gemini Decisions API — verified against primary docs, 13 Nov 2026 21:05 CET
+
+Tim's plan puts the per-campaign verdict on `gemini-decision-1`. It is real, it launched
+**11 Nov 2026 — two days before the event**, and one of its properties decides how that layer
+has to be built. Read from `blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api/`
+and `aistudio.google.com/docs/decisions-api`.
+
+| Fact | Verified value |
+|---|---|
+| Model id | `gemini-decision-1` |
+| Call | `client.decisions.create` (`google-genai`, **SDK 3.2+**), REST `v1beta/decisions` |
+| Platform | Gemini Developer API (v1beta) only — **not on Vertex yet** |
+| Questions per request | **1 to 1000** |
+| Context | **262,144 tokens** (the blog's "16K" is only the condition its latency figures hold under) |
+| Latency | 150–250 ms end-to-end, **flat from 1 to 100 questions** |
+| Price | **$0.10 / 1M input, $0 output**; shared input billed once per request |
+| Free tier | real: **200 RPM / 50k TPM / 10k RPD** — enough for the whole weekend |
+| Modalities | text, image, video, audio, PDF (question `instructions` are text-only) |
+
+### 🔴 It generates zero text. That is a constraint, not a detail.
+
+> *"It generates zero text tokens, so output token usage is always 0."*
+
+The model page marks **text generation: not supported** and **structured outputs: not
+supported**. The response carries `probabilities`, `confidence`, and a `legend` that only echoes
+back our own rubric strings. **So the Decisions API can never write our explanation.**
+
+This is the same discipline argued for on design grounds earlier today, now enforced by the
+tool: **the verdict layer produces a calibrated number, and the explanation is composed by us
+from the features that produced it.** No LLM prose over the top of a score.
+
+### Three details that will break naive thresholds
+
+- **Yes/no probabilities are clamped to 0.01–0.99.** A threshold above 0.99 never matches. Docs:
+  *"Set thresholds inside that range, since a check above 0.99 never matches."*
+- **A choice question always distributes probability across the options we supply, even when none
+  fits.** So every choice question needs an explicit *none of these* option — otherwise the model
+  always picks something and we manufacture false positives. This lands directly on the 40 % of
+  the rubric that is false-positive rate.
+- **`confidence` is not a measured uncertainty.** It is defined as the top outcome's probability,
+  or `max(p, 1-p)` for yes/no. It cannot be sold on stage as "the model knows when it doesn't
+  know" — our "insufficient evidence" verdict has to come from our own evidence thresholds.
+
+Docs also push threshold-setting onto us — *"Set thresholds using labeled examples from your own
+traffic"* — which is an argument for the account-disjoint, time-disjoint eval splits rather than
+hand-set constants, and *"Treat input as untrusted. User-supplied text can argue for its own
+classification"*, which is why the verdict layer receives **our numbers, never the attacker's raw
+text**.
+
+**Not found anywhere in the docs:** any restriction on using it for moderation or for decisions
+about people, and any statement of regional availability. The generic `/docs/terms` was not read.
