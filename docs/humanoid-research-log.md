@@ -145,3 +145,15 @@ Source: `aaltonomous/interface/tasks.py` in the starter repo (read directly).
 - Shapes in code: cube (extruded square), cylinder, triangle (equilateral triangle prism). Colours: red, yellow, blue.
 - `sample_layout`: 3 to 6 objects by default (task text says 3-5), at most 2 per colour, shape drawn per object after positions. `layout_card` prints the layout for staff on the real robot.
 - Implication: a parser that finds each colour word and its nearest bin word, tested against all 8 templates x 6 mappings, would be right on every training case. The open risk is the held-out finals phrasing, possibly with shape words or negation (see difficulty knobs in STARTER_PATHS).
+
+## 2026-11-13 ~22:05 | Baseline README and grasp config read directly
+
+Source: `aaltonomous/baselines/classical/README.md` and `config.yaml` in the starter repo.
+
+- **Never run on the real robot** ("not run yet (M8)"). All tuning was in sim. HSV floor, grasp point and `open` posture are "only checked in the sim". Treat the 76-82% as a sim number.
+- History: 0/24 through the runner before the 2026-11-11 fixes, because perception was 15-20 mm short (lit top faces washed out, so HSV saturation floor lowered 120 to 70) and grasps slipped.
+- Sim ran at about 0.65x real time with 2-3 Isaac instances, making the 30 Hz motions look about 1.5x faster to the physics. Expect +-10% between runs.
+- Grasp = "claw from above": palm faces the counter, fingers curl down in front of the object, thumb swings in from behind. Pinch is thumb vs ONE finger, because the Dex3 index and middle tips are 57 mm apart and a 45 mm object wedges between them.
+- Grasp point in the palm frame is hand-tuned: `point_in_palm [0.099, -0.084, 0.015]`, grasp height at 0.5 x object size, three finger-direction hints tried in turn. It does not use object yaw or shape, which is a plausible cause of the 6 missed triangles. (My inference, not stated in the README.)
+- Planner runs in a low-priority thread and returns 6-tick hold chunks while planning, which keeps the command rate at 30 Hz.
+- Files: `perception.py` 9 KB, `planner.py` 24 KB, `kinematics.py` 12 KB, `policy.py` 12 KB. CPU only image, about 1.5 GB.
