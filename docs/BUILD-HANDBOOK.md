@@ -49,11 +49,12 @@ handed-out code sorts 76–82 % of objects on rung 1 and **0 % of the 83 %**.
 | Gate | Value | Source |
 |---|---|---|
 | Command rate | **≥ 27 Hz** wall-clock on ticks carrying a command | challenge page + SUBMISSION |
-| Clips | a missing key, wrong shape or NaN is a clip; **>30 clips ends the episode** | INTERFACE |
+| Clips | ✅ **the sim gate is `--gate-max-clips 0` — ZERO clips**, while >30 clips *aborts* the episode. A clip is any tick where `SafetyFilter.filter` records ≥1 reason, **including the velocity cap and the workspace box** | `safety.py:239-245`, `RULES_AND_SCORING.md:55` |
 | **Per-tick step** | **≤ ~0.033 rad for arms and ~0.1 rad for hands per tick** (1 rad/s and 3 rad/s at 30 Hz). Exceeding it clips | grokbot report, arithmetic checked |
 | Safety | no crash, no safety stop. **Self-collision and fingertip-to-table are NOT checked by the filter — staff e-stop for them** | INTERFACE |
 | Limits | within joint and speed limits | challenge page |
-| Episode | **120 s**, points so far are kept, no timeout penalty | RULES_AND_SCORING |
+| Episode | **120 s**, points so far are kept, **no time, retry, touch or per-clip penalty exists in the scoring code at all** | ✅ `scene.yaml:78-82` |
+| Finals settings | ⚠️ **not announced in advance** — objects, layout and time limit are all open. Today's code says 3–5 objects / 120 s | ✅ `RULES_AND_SCORING.md:68` |
 | Image | x86_64, CUDA ≥12.8, weights baked in, listening within 120 s, ≤32 GB VRAM, ≤40 GB image, no volumes or args | SUBMISSION |
 | GPU for rendering | **RTX-class ≥24 GB. Will not render on A100/H100** (ray-traced cameras). Finals PC: RTX 5090 | challenge page |
 
@@ -551,22 +552,65 @@ shape-agnostic today.
 it is the thing that unlocks a whole rung**, on top of serving shape-keyed mappings in the finals.
 That raises its priority above where §4 currently puts it, and it is the cheapest item on the list.
 
-### 9.4 The held-out evaluation randomises the colours we key on
+### 9.4 ❌ **I got this one wrong.** We cannot run their held-out config, and we must not try
 
-`sim/README.md` lists the DR knobs — lights, mat, **counter + bin + object colours (HSV)**, object
-mass and friction, layout jitter, **head camera pose jitter**, RGB gain and noise, depth noise and
-holes — **off unless `AALTO_DR` is set**, with named profiles **`train`** and **`eval_heldout`**.
+I wrote earlier that we could run the organisers' own held-out randomisation. **We cannot.**
 
-Two things follow. First, **we can run the organisers' own held-out randomisation ourselves**, which
-is the single best thing available for the 25 % generality score — it is their test, not ours.
-Second, and more sharply:
+**Only `dr/train.yaml` exists.** `eval_heldout` is *named* in `sim/run_sim.sh:9` and
+`sim/README.md:49`, but **there is no `eval_heldout.yaml` in the repo** — setting
+`AALTO_DR=eval_heldout` resolves to a missing file and crashes at load (`aalto_task/dr.py:39-42`).
+Its details live in `ORGANISER_NOTES.md`, which is organiser-only and not in the bundle.
 
-🔴 **The held-out evaluation randomises object colour in HSV, and the baseline's perception is
-hand-tuned absolute HSV thresholds** (its saturation floor was moved from 120 to 70 to fix washed-out
-top faces). **Absolute thresholds are the wrong shape of answer for a test that moves the colours.**
+🔴 **And we are explicitly forbidden from going after it.** `RULES_AND_SCORING.md:87-88` bans
+*"trying to extract or reverse-engineer held-out configs, seeds or templates"* and *"training or
+tuning on the held-out sim variant"*.
 
-(`ORGANISER_NOTES.md` holds the held-out details and is **organiser-only, not in the bundle** — so
-`eval_heldout` is as close to the real test as we can get.)
+> **Rule for everyone, including subagents: nobody looks for the held-out configuration.** Not in
+> git history, not in reverted merges, not by probing the organisers' sim. If anyone stumbles on
+> held-out values, **that is a leak to report to the organisers, not material to train on.** The
+> agent that did this extraction found a reverted merge commit that might contain them and
+> deliberately did not open it. That was the right call and it is now the standard.
+
+So our generality evidence has to come from **`train.yaml` plus randomisation we design ourselves**,
+and we say so openly. That is honest and it is still good evidence — it is just not their test.
+
+### 9.5 ✅ The actual DR numbers, and the colour panic was overstated
+
+I also implied absolute HSV thresholds are the wrong shape of answer. **On the published `train`
+profile that is too strong.** The real numbers (`sim/dr/train.yaml`):
+
+| | range | note |
+|---|---|---|
+| object **hue** jitter | **±0.02 turn = ±7.2°**, per object | small |
+| object sat / val scale | ×[0.8, 1.15], clipped | red can drop to S≈0.68, V≈0.63 |
+| object mass | ×[0.7, 1.5] of 50 g | |
+| object friction | ×[0.75, 1.1] | |
+| key light intensity / rgb | ×[0.6, 1.4] / ±8 % | |
+| dome light intensity / rgb | ×[0.5, 1.5] / ±5 % | |
+| counter / bin colour | ±20 % / ±8 % per channel | **bin colour moves, bin geometry does not** |
+| head cam pose | **±0.01 m, ±1.0°** | |
+| head RGB | gain ×[0.9, 1.1] once per seed, noise σ = 3.0 (0–255) | |
+| head depth | σ = 1.0 mm + 0.002·depth, **1 % of pixels zeroed**, invalid = **0** | ≈2 mm at 0.5 m |
+| layout | ±0.005 m disc, ±5° yaw | |
+
+Base colours (`scene.yaml:34-36`) are red H≈0°, yellow H≈50°, blue H≈226°, so with ±7.2° of
+jitter **no two of red / yellow / blue can collide** — they stay 36°, 127° and 160° apart. Hue
+thresholds are fine. Three real risks replace the imagined one:
+
+1. 🔴 **The orange bins sit between red and yellow.** Bins are H≈24° (`scene.yaml:53`), and the
+   baseline's red window is OpenCV hue 0–8 (plus 170–180) against the bins at ≈12 — **a margin of
+   about 4 OpenCV units, which is the narrowest gap in the whole colour system.** Exclude bins by
+   **position**, never by hue alone. *(inference from the two published values.)*
+2. **Low saturation and value corners**, not hue, are where a red goes dull-brick. Tune against
+   drawn `train` samples, never one nominal render.
+3. **Camera pose jitter beats perception error.** ±1° at 0.35 m is ≈6 mm of lateral shift, against a
+   stated perception error of ≈4 mm (`baselines/classical/README.md:32`). **So the camera pose is
+   the dominant error term**, which is direct support for Timi's self-calibration-from-the-bins
+   idea: the bins are at known fixed positions and their geometry is **never randomised**, so they
+   are a free calibration target in every frame. *(inference.)*
+
+**Wrist cameras are not randomised at all** — and they are also uncalibrated presets with *"no
+measured mount yet"* (`aalto_task/scene_cfg.py:11`). Unusable either way, which §5 already said.
 
 ## 10. The one idea underneath all of it
 
@@ -590,3 +634,111 @@ GPU, training data, or a place in the 30 Hz loop.
 **That is the pitch, and it is checkable in the code rather than taken on trust:** *we never ask
 "is this value above a number we picked?" — we ask "which of the possible answers fits best, and by
 how much?"*
+
+
+---
+
+## 11. ✅ The scoring code, read directly — and it settles three open questions
+
+All from `aaltonomous/scene/scene.py` and `scene.yaml` unless noted. **Where prose and code
+disagree, the code is what scores us.**
+
+### 11.1 🔴 The biggest finding: our sim score will be systematically optimistic
+
+```
+sim:  evaluate.py  --settle  default 3.0   "max s to wait for objects at rest before scoring"
+real: scored at the instant the episode ends
+```
+
+**The sim waits up to 3 sim-seconds for objects to settle before it scores. The real robot does
+not.** So an object still rolling or sliding when the buzzer goes **scores 0 on stage and often +1
+or +2 in sim** (`evaluate.py:199-200`, default at `:314`; rules line 25: *"at rest at episode
+end"*).
+
+That is a bias in the exact direction that hurts: **it inflates the number that qualifies us and
+not the number that pays.** And §3.3 already singled out the cylinder as the shape that rolls.
+
+> **Rule: finish with every object settled and the hand clear, and when judging our own sim runs,
+> re-score them with `--settle 0` to see the real-robot number.** Treat the gap between the two as
+> our rolling-object debt.
+
+### 11.2 ✅ At rest applies to **bins only** — which corrects what I wrote in §4
+
+```python
+b = self.bin_of(p)
+if b is None or speed > float(self.cfg["success"]["at_rest_speed"]): return "counter"
+```
+`scene.py:239-241`
+
+An object **on the counter is "counter" whatever its speed** — motion costs nothing there. The
+velocity test only ever decides whether something **in a bin** counts as in it.
+
+🔴 **So "nothing moving at the end" was too broad a rule and I had it wrong.** The correct version:
+**an object still moving *inside a bin* loses the whole point (it becomes 0), while an object
+rattling around on the counter was already 0 and loses nothing.** The cleanup phase should therefore
+protect **placements**, not tidy the counter. And `scene.yaml:83`'s *"unless it is inside a bin"* is
+simply wrong — `RULES_AND_SCORING.md:38` (*"or still moving at the end"*) agrees with the code.
+
+### 11.3 ✅ An object in the hand is judged only by where its centre is
+
+There is **no code path for a held object at all** — nothing in the repo mentions the hand when
+scoring. An object is classified by centre position and speed, full stop (`scene.py:237-242`):
+
+| Where the centre is at the buzzer | Score |
+|---|---|
+| in the hand, above the bin rim | **0** (counter) |
+| past the 110 × 60 cm table top, or >3 cm below the counter | **−1** (off) |
+| **inside a bin box, below the rim, at rest** | **counts as in that bin**, held or not |
+
+So **releasing a last object late over the correct bin beats carrying it to the buzzer**, and in
+principle lowering it in and holding it still also scores. ⚠️ But the real-robot score is read **by
+eye**, and a human judge may not count an object still in the gripper. **Design for the release,
+treat the held-in-bin case as a fallback we do not advertise.**
+
+### 11.4 ✅ Rung 3 pays the most per object, with the mildest downside
+
+```yaml
+insert_shapes: {"inserted": 3, "forced": -1, "dropped": -1, "wrong_hole": 0, "counter": 0, "off": 0}
+```
+`scene.yaml:82`
+
+**+3 per object** — higher than language's +2 and triple the fixed rung. And look at the losses:
+**`wrong_hole` is 0, `counter` is 0, `off` is 0.** The only ways to go negative are `forced`
+(−1) and `dropped` (−1).
+
+**That is an unusually favourable risk profile**: putting an object through the *wrong* hole costs
+nothing, so on rung 3 an attempt is nearly free. It also needs **no instruction parsing** (§9.3) —
+only shape. If rung 3 appears at all, **the free fill-ratio shape classifier plus a willingness to
+try is worth more per object than anything else in the challenge.**
+
+⚠️ Unknown whether the finals include rung 3 at all — the finals format we have is fixed +
+language + unseen language, and finals settings are not announced.
+
+### 11.5 ✅ `resolve_bin` accepts four key forms, in order
+
+```python
+for k in ((color, shape), color, shape, "default"):
+    if k is not None and k in mapping: return mapping[k]
+```
+`scene.py:46-49`
+
+So the candidate set in §4 item 1 may have to cover **`(colour, shape)` composites and a
+`"default"` catch-all**, not just colour and shape permutations. The `"default"` form is the
+interesting one: a finals instruction could say *"put everything in the left bin except the red
+cubes"*, which is a default plus one exception — and that is also the **negation** case §4 flagged.
+**Enumeration should include "one default + one exception" as a candidate family.**
+
+### 11.6 Smaller things worth not rediscovering
+
+- **`inside_margin` is 0.0** (`scene.yaml:75`): an object resting exactly on a bin's inner edge
+  counts as in. The bin boundary is generous, not strict.
+- **Knocked off = centre outside the 110 × 60 cm table top, or more than 3 cm below the counter
+  surface** (`scene.py:229-230`, `off_counter_drop: 0.03`). **No time component** — an object that
+  falls and is never touched again is −1 from then on.
+- **The ×1.5 finals weight is prose only and is not implemented** — `Scene.score` is a plain
+  `sum()` (`scene.py:251`). Our own eval will never show it, so the 83 %-of-the-final arithmetic in
+  §1 has to be applied by us, by hand.
+- **`sample_layout` defaults to `n_max=6`** while `scene.yaml` says 3–5; a caller that forgets
+  `layout_kwargs()` draws up to 6 objects (`tasks.py:54` vs `scene.yaml:70`).
+- **The 30-clip abort is marked *"spec N, to be decided"* in the source** (`safety.py:74`) while the
+  rules state it as final. Do not build anything that depends on the exact number.
