@@ -77,8 +77,8 @@ anniversary. Demo on a real case.
 data · usefulness to a specific group of real people · clarity in showing sources ·
 originality · **demo works on live queries the judges type themselves**.
 
-**They provide:** $50 Exa credits per participant (code `EXA50JUNCTION` at
-dashboard.exa.ai/billing), full API (search with fast/balanced/deep modes, contents API,
+**They provide:** $50 Exa credits per participant (redeem at dashboard.exa.ai/billing with
+the code on hackerpack `49`), full API (search with fast/balanced/deep modes, contents API,
 Websets, Monitors, hosted MCP server, Python/JS SDKs), demo gallery at demos.exa.ai,
 engineers on site + Discord.
 
@@ -344,8 +344,8 @@ activity leaderboard, cve.now, personalised onboarding.
 demo · technical execution (latency and accuracy) · **real-timeness — does it react to change
 over time or take a one-off snapshot**.
 
-**They provide:** 50 000 non-expiring API credits (sign up at context.dev/signup, redeem
-`JUNCTION26`), 50 concurrent requests, search/scrape/crawl/extract, brand and company
+**They provide:** 50 000 non-expiring API credits per team (sign up at context.dev/signup,
+redeem the code on hackerpack `60`), 50 concurrent requests, search/scrape/crawl/extract, brand and company
 entities, news monitors with webhooks, batch API, PDF parsing. Mentors on site Fri to 23:00,
 Sat 09:00 → Sun 02:00, Sun 07:00 → end.
 

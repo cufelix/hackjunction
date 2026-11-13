@@ -31,6 +31,7 @@ a 7-person grand jury. One submission per team. Everything open-sourced under MI
 | [`INFO_HACKATHON.md`](INFO_HACKATHON.md) | Schedule, venue (Hype Areena, Espoo), the 7 grand-jury judges and what each says they look for, logistics, submission mechanics |
 | [`docs/rules.md`](docs/rules.md) | Eligibility. Pre-existing code. What's safe and what disqualifies |
 | [`docs/challenges.md`](docs/challenges.md) | **All 19 main challenges + all 19 tech challenges.** Per challenge: sponsor, what they actually ask, judging weights, prizes, resources |
+| [`docs/hackerpack.md`](docs/hackerpack.md) | **What we actually get.** All 20 hackerpacks: credits per person and per team, how to claim each one, the hardware on the 5th floor, and the four with extra qualification requirements |
 | [`docs/afterquery-harbor.md`](docs/afterquery-harbor.md) | How AfterQuery's harness really works, verified against Harbor source. The MCP contract, the verifier, and the one-agent-per-trial blocker |
 | [`docs/coordbench-sketch.md`](docs/coordbench-sketch.md) | A design sketch for the AfterQuery challenge: simulated teammates in the MCP sidecar, the reward formula and how it survives exploit-hunting. **Not a decision** |
 | [`docs/spread.md`](docs/spread.md) | The Bahn Express leaderboard challenge, assessed. API, kits, what's legal to exploit, honest hour estimate |
@@ -94,6 +95,7 @@ separate form) · Nemotron · Arduino UNO Q · Atech · ElevenLabs · Tiger Data
 Vultr · Solana.
 
 Full list with requirements: [`docs/challenges.md`](docs/challenges.md).
+What each sponsor hands us to build with: [`docs/hackerpack.md`](docs/hackerpack.md).
 
 ---
 
@@ -104,6 +106,10 @@ Full list with requirements: [`docs/challenges.md`](docs/challenges.md).
 - Peer review rewards a demo people grasp instantly. **A dev tool is the hardest format for that** — if we build one, the visualisation *is* the demo, not a bonus.
 - Judges across briefs want reproducible, source-shown, false-positive-honest work. AfterQuery reruns your eval and spends 15 minutes trying to break your reward; Exa types its own live queries; Hostinger wants your precision and FP rate; AstraZeneca wants a source per claim; Stoa wants the drawing location per answer.
 - AfterQuery's harness **runs one agent per trial** — no multi-agent mode. A team must be simulated inside the environment. See [`docs/afterquery-harbor.md`](docs/afterquery-harbor.md).
+- **Compute is not our constraint.** CRACI gives every team €1000, Verda €200 and Modal $100
+  per person, and two sponsors ship MCP servers we can use today. The OpenAI $100 is Codex/ChatGPT
+  usage only, **not** API credits — and it's the one code the platform issues directly, still
+  unclaimed. See [`docs/hackerpack.md`](docs/hackerpack.md).
 - Spread is **not** a cheap parallel win: 15–25 h, one person, awake at 07:30 Sunday.
 
 ## Still open
