@@ -73,6 +73,31 @@ Datasets:
 - TwiBot-22, twibot22.github.io: CC BY-NC-ND 4.0, bot benchmark not coordination.
 - No open dataset found combining account-level data with mouse or scroll signals for sockpuppets. The behaviour-fingerprint eval needs self-collected traffic and must be labelled as such.
 
+## Fifth pass: prior art from primary docs (subagent, web only)
+
+R = per-visitor reason, S = confidence or score, FP = way to measure false positives, U = "watching / undecided" state. Partial rows are partly verified; UNVERIFIED means the doc page could not be read.
+
+| Product | R | S | FP | U | Evidence |
+|---|---|---|---|---|---|
+| Anubis | Partial | Partial | N | N | `X-Anubis-Rule` header names the matched rule, goes to downstream services. Rule "weight" is documented as "experimental". Visitor sees only an opaque error code. Source: raw docs at github.com/TecharoHQ/anubis (policies.mdx) |
+| CrowdSec | Partial | N | Partial UNVERIFIED | Partial | Alerts record the triggering scenario/AppSec rule. Out-of-band AppSec rules are "non-blocking and evaluated asynchronously". `cscli simulation` behaviour not read. docs.crowdsec.net concepts, appsec/intro |
+| Cloudflare Bot Management | Y, Enterprise | Y, 1 to 99 | N | Partial | Detection IDs are Enterprise only. Score 0 means not evaluated. developers.cloudflare.com/bots/concepts/ |
+| CF Super Bot Fight Mode | N | N | N | N | Only a Service label in the log |
+| CF Turnstile | N | N | N | N | Siteverify returns success and error codes, no score |
+| Hostinger CDN / AI Audit | N | N | N | N | Shows which AI crawlers visit and lets you block them. Allow-listing needs a support ticket. hostinger.com/blog/cdn-ai-audit, support/?p=16218 |
+| Wordfence | Y UNVERIFIED | N UNVERIFIED | UNVERIFIED | N | Search summaries only |
+| DataDome | Partial | N UNVERIFIED | Partial | N | Explore previews matched traffic before activating a model. docs.datadome.co/docs/threat-detection |
+| BunkerWeb, go-away | UNVERIFIED | UNVERIFIED | UNVERIFIED | N | Docs not read, star counts unchecked (GitHub API 403) |
+
+Gap nobody fills (from verified rows):
+- Reasons are rule names or detection IDs, not a plain-language why.
+- Scores exist only in vendor-managed tiers and are not tied to a measured FP rate.
+- No product gives the owner a "this was a human" feedback loop with a resulting FP rate.
+- No true "undecided, N signals so far" state. Nearest: CrowdSec out-of-band rules, Cloudflare score 0.
+- Self-hosters get the least: pass or fail with a rule name.
+
+Still to confirm in a browser (about 10 min): Wordfence block page and Live Traffic, BunkerWeb, `cscli simulation`, star counts via `gh api`.
+
 ## Open, needs a human or a better source
 
 1. Junction 2026 judging criteria for the Hostinger challenge and for the main prize. Read the platform track page and the Reviewing section of the participant guidebook.
