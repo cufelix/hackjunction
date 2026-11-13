@@ -66,7 +66,10 @@ _SHAPE_WORDS = {
     # ("three identical orange boxes"), so reading them as the cube shape injects phantom shape
     # mentions into every sentence that names a bin that way, which silently wrecks the pairing.
     "cube": "cube", "cubes": "cube", "cubic": "cube",
-    "square": "cube", "squares": "cube", "cuboid": "cube", "block": "cube", "blocks": "cube",
+    "square": "cube", "squares": "cube", "cuboid": "cube",
+    # NB: "block"/"blocks" are deliberately NOT here either. Like "box", they are the natural
+    # GENERIC noun for all three solids ("put all yellow blocks in the left bin"), so reading them
+    # as the cube shape turns every colour-keyed sentence into a compound-keyed one.
     "cylinder": "cylinder", "cylinders": "cylinder", "cylindrical": "cylinder",
     "circle": "cylinder", "circles": "cylinder", "circular": "cylinder", "round": "cylinder",
     "disc": "cylinder", "disk": "cylinder", "tube": "cylinder", "tubes": "cylinder",
@@ -74,13 +77,28 @@ _SHAPE_WORDS = {
     "prisms": "triangle", "wedge": "triangle", "wedges": "triangle", "tri": "triangle",
 }
 # "everything else" -> the "default" key resolve_bin() falls back to.
-_DEFAULT_PATTERNS = (
+# A bin noun after the phrase flips its meaning, so every pattern forbids one: "the red ones go in
+# the remaining BIN" names the one unused bin (handled by the bijection completion below), whereas
+# "the rest go in the left bin" is a catch-all over the unnamed colours. Opposite meanings, one word
+# apart. Oliver's corpus category 12 is exactly this, and all 18 of its sentences were misread
+# before this guard.
+_NOT_A_BIN = r"(?!\s*(?:bin|box|one|ones|container|crate|tray|slot)\b)"
+_DEFAULT_PATTERNS = tuple(p + _NOT_A_BIN for p in (
     r"\beverything\s+else\b", r"\banything\s+else\b", r"\ball\s+(?:the\s+)?others?\b",
     r"\bany\s+others?\b", r"\bthe\s+rest\b", r"\bthe\s+remaining\b", r"\bremaining\s+ones?\b",
     r"\ball\s+other\b", r"\bevery(?:thing)?\s+other\b", r"\bwhatever(?:'s|\s+is)?\s+left\b",
     r"\bthe\s+others\b",
-)
+))
 _TOKEN_RE = re.compile(r"[a-z]+|\d+")
+
+# "the remaining bin" / "the other box" / "the last one" names a bin by ELIMINATION: whichever bin
+# the sentence has not already used. It is a real bin reference, so it gets a placeholder bin value
+# here and is resolved against the leftovers in resolve(). Treating it as a catch-all over the
+# unnamed colours instead is the opposite meaning and costs every sentence of this shape.
+_ELIM = "__elim__"
+_ELIM_WORDS = {"remaining", "other", "last", "final", "leftover", "unused", "spare"}
+_BIN_NOUNS = {"bin", "bins", "box", "boxes", "one", "ones", "slot", "slots",
+              "container", "containers", "crate", "crates", "tray", "trays"}
 
 
 def _tokens(text):
@@ -105,9 +123,13 @@ def _mentions(toks):
         if t in _SHAPE_WORDS:
             out.append((i, "shape", _SHAPE_WORDS[t]))
 
+    for i, t in enumerate(toks):
+        if t in _ELIM_WORDS and i + 1 < len(toks) and toks[i + 1] in _BIN_NOUNS:
+            out.append((i, "bin", _ELIM))
+    out.sort()
+
     if len({v for _, k, v in out if k == "bin"}) < 2:
-        container = {"bin", "bins", "box", "boxes", "one", "ones", "slot", "slots",
-                     "container", "containers", "crate", "crates", "tray", "trays"}
+        container = _BIN_NOUNS
         found = [(i, _ORDINAL_BINS[t]) for i, t in enumerate(toks) if t in _ORDINAL_BINS]
         anchored = any(
             toks[j] in container
@@ -232,6 +254,14 @@ def resolve(text, fallback=None):
         if free:
             mapping["default"] = min(free)[1]
         break
+
+    # Resolve "the remaining bin" to whichever bin the sentence did not name.
+    if _ELIM in mapping.values():
+        free = [b for b in BINS if b not in set(mapping.values())]
+        if len(free) == 1:
+            mapping = {k: (free[0] if v == _ELIM else v) for k, v in mapping.items()}
+        else:  # ambiguous: drop the key rather than send an object to a guessed bin
+            mapping = {k: v for k, v in mapping.items() if v != _ELIM}
 
     # Complete the bijection rather than drop a key. Every episode seen so far maps all three
     # colours onto all three bins, and a key with no bin leaves the policy nowhere to put that
