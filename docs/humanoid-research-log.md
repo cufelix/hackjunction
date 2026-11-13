@@ -134,3 +134,14 @@ Standard web search, summaries not yet checked against the primary pages.
 - Per object: fixed +1 / wrong bin -1 / on counter 0 / knocked off -1. Language: +2 / -1 / 0 / -1.
 - Break-even for attempting an object: P(correct) above 1/2 on rung 1, above 1/3 on rung 2, if a failed attempt costs -1. A drop that stays on the counter costs 0, so the true risk is lower.
 - Felix's read (from the Warren thread): bin choice is an `if`, the hard part is the three-finger grasp. Matches the baseline's measured misses (mostly triangular prisms). Abstention should key on grasp confidence and instruction ambiguity, not colour.
+
+## 2026-11-13 ~21:55 | tasks.py read: CORRECTION to the "27 mappings" line above
+
+Source: `aaltonomous/interface/tasks.py` in the starter repo (read directly).
+
+- **The generator only makes permutations**: `rng.permutation(COLORS)` and `rng.permutation(BINS)`, zipped. So training instructions have **6 possible mappings (3!)**, each colour to a different bin. My earlier "at most 27" was wrong for the training generator. Finals may differ: the repo says held-out templates are deliberately not in this file.
+- 8 training templates, all mention all three colours and all three bins. Two orderings exist: colour then bin ("red into left", "Drop the red ones into the left bin") and **bin then colour** ("The left bin is for red objects", "Use the left bin for red"). A parser has to pair each colour with its bin in both orders.
+- Bins are always named by position: left, center, right. Never by colour or "the middle one". Spelling is "center" (US).
+- Shapes in code: cube (extruded square), cylinder, triangle (equilateral triangle prism). Colours: red, yellow, blue.
+- `sample_layout`: 3 to 6 objects by default (task text says 3-5), at most 2 per colour, shape drawn per object after positions. `layout_card` prints the layout for staff on the real robot.
+- Implication: a parser that finds each colour word and its nearest bin word, tested against all 8 templates x 6 mappings, would be right on every training case. The open risk is the held-out finals phrasing, possibly with shape words or negation (see difficulty knobs in STARTER_PATHS).
