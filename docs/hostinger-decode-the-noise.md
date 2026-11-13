@@ -120,15 +120,41 @@ question is not "what do we build" but **"what can we measure against by tomorro
 | **FiveThirtyEight IRA troll tweets** | 2 973 371 tweets, 2 848 IRA handles, 5 hand-assigned troll types, Feb 2012 – May 2018 ([FiveThirtyEight](https://fivethirtyeight.com/features/why-were-sharing-3-million-russian-troll-tweets/)) | ✅ **Open on GitHub, CC0** — the most usable positive-class set we have | 1, 4 |
 | **TwiBot-22** | 1 M accounts, 4 entity types, 14 relation types, NeurIPS 2022 benchmark ([arXiv](https://arxiv.org/abs/2206.04564)) | ❌ **Dead end for us.** Access requires emailing the authors from an *institutional* email, naming your research advisor and use case | 1 |
 | **TwiBot-20 / cresci-2017 (Bot Repository)** | labelled bot vs human accounts | ⚠️ Request form, same problem at hackathon speed. UNVERIFIED whether any mirror is openly downloadable | 1 |
-| **Web-server-log bot traffic, labelled** | — | ❌ **No credible public labelled set found.** Direction 3 would mean generating our own traffic, i.e. we'd be scoring ourselves against our own labels | 3 |
+| **AUTH web robot detection — server logs** | **Sessions labelled bot vs human**, plus extracted simple and semantic features | ✅ **Open, CC BY 4.0, no key** — [zenodo.org/records/3477932](https://zenodo.org/records/3477932). 4 091 155 requests over March 2018 from a university library search engine, 27 061 unique IPs, 3 441 user-agent strings, IPs anonymised. `simple_features.csv` is 16 MB, the raw JSON is 3.2 GB | **3** |
+| **Wikipedia Sockpuppet Investigations (CheckUser-confirmed)** | Coordinated multi-account editing, adjudicated by an uninvolved admin plus CheckUser technical correlation. `Category:Wikipedia sockpuppets of <user>` = confirmed, a separate category = merely suspected, and **every case carries a human-written rationale** | ✅ **Open, CC BY-SA, free MediaWiki API, no key.** Category members → account names → `list=usercontribs` for timestamped edit text | **1** |
+| **Verified crawler IP ranges** (Google, Bing, OpenAI, Anthropic) | **Legitimate** automation — self-declared and IP-range-backed by the vendors themselves | ✅ Plain JSON at each vendor's own path, no key, minutes | **3** |
+| **EUvsDisinfo** | ~14 500 catalogued disinformation cases, each with an EU East StratCom verdict **and a written debunk** | ✅ Via the Mendeley mirror, **CC BY 4.0, no signup** — [data.mendeley.com/datasets/yhdtkszvgp/3](https://data.mendeley.com/datasets/yhdtkszvgp/3). The official API is email-request only; use the mirror | 2, 4 |
+| **RAID / HC3** | Machine-generated vs human text | ✅ Ungated on Hugging Face, minutes | 2, 4 |
 
-**Consequence, and this is the main finding of this document:** of the four directions,
-**only 2 ("name the technique") and 1 ("spot the swarm") have any path to a real labelled
-eval set**, and direction 1's path is one open dataset of *positives only* — the IRA tweets —
-so the negative class has to come from somewhere defensible.
+### 🔴 Correction, 13 Nov 20:25 — direction 3 is not the dead end this document first claimed
 
-Direction 3 has no ground truth we can honestly claim, and it is the direction where a judge
-can most easily ask "labelled by whom?".
+An earlier version of this file said *"no credible public labelled set found"* for web-server-log
+bot traffic, and concluded that direction 3 was the weakest of the four. **That was wrong.**
+`@claude-timi` found labelled log corpora, and the AUTH dataset above was then verified
+independently through the Zenodo API: it is real, open, CC BY 4.0, and its own description says
+it contains *"a labelled dataset of log entries grouped into sessions along with their extracted
+features"*. So the claim collapses.
+
+Also found by `@claude-timi`, **not independently verified here** — treat as leads, not facts:
+**SR-BH 2020** (Univ. Alcalá, CC0, ~907 k WordPress-honeypot requests, 525 k normal / 383 k
+anomalous, 13 labels, with a known mislabelling audit and a corrected `SR-BH2020-fix`);
+**Biblio-US17** (Seville, labelled production-server requests); **CSIC 2010** (older, generated);
+**Iliou et al.** (Bournemouth / m4d.iti.gr — logs *plus mouse movement*, human vs moderate vs
+advanced bot); **notesbymuneeb/ai-waf-dataset** (MIT, 12 k requests). Unlabelled real logs useful
+as a false-positive test bed: Zenodo 18895701 (Polish e-shop, Dec 2025, 179 k requests) and
+17178461 (30 days of ModSecurity-blocked requests — positives only).
+He also reports a 2026 state-of-the-art reference of **67.7 % of bots caught at a 3 % false-positive
+rate from logs alone** — UNVERIFIED, but if it holds it is the number to beat, and it is far more
+quotable than anything on the social side.
+
+**Credential stuffing specifically has no public labelled set** — there, a honeypot is the only
+honest route.
+
+**Revised consequence:** all four directions now have a path to a real eval set, and direction 3
+has the *best* one — a single CC BY 4.0 file with bot/human session labels somebody else assigned,
+plus vendor-published ground truth for the legitimate-automation class. What stays true is the
+narrower point: **a precision number we invented by writing the attack ourselves is worthless**, so
+self-generated honeypot traffic is a stress test to disclose, never a headline metric.
 
 ### The live data source that is actually legal
 
@@ -229,8 +255,10 @@ Saying this out loud in the pitch is itself a signal of honesty, which is what t
 
 - **§1 and §2** — read first-hand off the platform, 13 Nov 2026 ~19:55 CET. Those are their words.
 - **§3–§5** — external sources, each linked inline. The Botometer figures and the SemEval
-  baselines come from peer-reviewed papers; dataset reachability was checked by search, **not**
-  by actually downloading, so a gate could be worse or better than stated.
+  baselines come from peer-reviewed papers. Dataset reachability was checked by search rather
+  than by downloading, **except** the AUTH log corpus, which was confirmed through the Zenodo
+  API directly. The direction-3 claim in the first version of this file was wrong and is
+  corrected above — see that box before quoting anything from this document.
 - Deeper prior-art and legal research is running on the `reshercher` bot; fold its answer in
   here when it lands rather than starting a second document.
 - Nothing here is a decision about what we build. It is the evidence to decide with.
