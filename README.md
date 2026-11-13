@@ -29,6 +29,7 @@ a 7-person grand jury. One submission per team. Everything open-sourced under MI
 | [`docs/rules.md`](docs/rules.md) | Eligibility. Pre-existing code. What's safe and what disqualifies |
 | [`docs/challenges.md`](docs/challenges.md) | **All 19 main challenges + all 19 tech challenges.** Per challenge: sponsor, what they actually ask, judging weights, prizes, resources |
 | [`docs/afterquery-harbor.md`](docs/afterquery-harbor.md) | How AfterQuery's harness really works, verified against Harbor source. The MCP contract, the verifier, and the one-agent-per-trial blocker |
+| [`docs/coordbench-sketch.md`](docs/coordbench-sketch.md) | A design sketch for the AfterQuery challenge: simulated teammates in the MCP sidecar, the reward formula and how it survives exploit-hunting. **Not a decision** |
 | [`docs/spread.md`](docs/spread.md) | The Bahn Express leaderboard challenge, assessed. API, kits, what's legal to exploit, honest hour estimate |
 | [`docs/entire.md`](docs/entire.md) | Entire CLI tested on this machine: what works, what the docs get wrong, and a public-repo warning before anyone runs `entire enable` |
 | [`docs/research-junction-2026.md`](docs/research-junction-2026.md) | Strategy research: past-winner patterns, Entire deep-dive, prize stacking. Older than `challenges.md` — where they disagree, `challenges.md` wins |

@@ -69,7 +69,8 @@ entities, repair, docs, refresh, watch, stop, start, reset, repo-identity, path,
 doctor, version.
 
 Also: brain leaves a background watcher running (`entire-brain workspace watch --distill`).
-Stop it with `entire brain stop`.
+⚠️ **`entire brain stop` does not kill it** — it only prints "background brain work paused"
+and the process keeps running. Kill the pid yourself.
 
 ## The token number — we can produce it, fully scripted
 
