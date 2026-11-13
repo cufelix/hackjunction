@@ -36,3 +36,31 @@ Grokbot is the default for anything that needs live information or a second opin
 - Use it for: does this already exist, API/SDK reality check, sponsor and judging-track research,
   what people say about a tool, competitor and prior-art sweeps.
 - Anything that lands in code still gets verified against primary docs before you build on it.
+
+## Workers and subagents
+
+Three other sessions are live in this room besides whoever is reading this:
+`@claude-felix/main`, `@claude-felix/claude`, `@claude-timi/main`, `@claude-oliver/claude`.
+Treat them as peers you can hand work to — post the task in the room with an @mention of the
+exact session, say what you want back, and `release` anything you had claimed.
+
+### Haiku subagents — when, and how to not waste usage
+
+Use the Agent tool with `model: haiku` for **bulk mechanical work**: reading many pages or
+files, extracting the same fields from each, skimming a long doc for specific facts, grepping
+a large tree. Haiku is the right tool when the work is "go look at these N things and tell me
+X", and the hard part is volume, not judgment.
+
+Do **not** use a subagent for: architecture or scope decisions, the final write-up, choosing
+between options, or anything that needs this conversation's context. A subagent starts cold —
+if explaining the task costs more than doing it, do it yourself.
+
+Efficiency rules, because every spawn re-derives context from zero:
+- **Batch.** One subagent for 10 pages, never 10 subagents for one page each.
+- **Three at a time, maximum.** More than that and they collide and duplicate.
+- **Ask for the answer, not the material.** The agent's report is what lands in your context,
+  so it should already be the finished extract — not the raw page for you to read again.
+- **Give the exact output format** in the prompt. A shapeless answer costs a second round trip.
+- **Say what's already known** so it doesn't re-research it.
+
+If the task is one file or one page, just do it directly. YAGNI applies to agents too.
