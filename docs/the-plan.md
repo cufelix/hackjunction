@@ -49,6 +49,26 @@ Corroboration, via Oliver, for leaning on live over polished: among the Junction
 the winner had the weakest pitch craft but the most impressive thing **running live**, and the
 jury forgave the glitches. (Secondhand, pitches are public on YouTube — worth watching one.)
 
+## 🟢 The venue is the proof (Oliver, 21:31)
+
+The guidebook gives **one Wi-Fi network for hundreds of hackers**. So at peer review on Sunday,
+**every reviewer is sitting behind a shared NAT IP** — they are, physically, the exact population
+Cloudflare measured as getting rate-limited three times more often.
+
+We do not have to simulate the harmed user, or argue that they exist. **The room is full of them,
+and the detector can say so on their screen:**
+
+> *"You share this IP address with 203 other devices right now. A naive detector would hold that
+> against you. I am not going to — here is what I used instead."*
+
+That is the impact criterion, the innovation criterion and the live-demo criterion landing in one
+sentence, on the reviewer's own phone, about the reviewer. And it converts our single biggest
+technical risk — a shared, hostile venue network — into the thing that makes the point.
+
+It also sets one hard engineering requirement for the build: **IP address must never be a
+sufficient reason for a verdict on its own.** If it is, the demo humiliates us in front of a room
+where everyone shares one.
+
 ## Why it scores on Junction's three criteria
 
 Oliver read the official guidebook: **Innovation, Impact on society, Implementation.** Precision
