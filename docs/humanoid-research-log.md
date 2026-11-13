@@ -201,3 +201,9 @@ Source: `aaltonomous/scene/scene.yaml`. Values marked "(default)" in the file ar
 - Counter: table top 80 cm above floor, pelvis assumed 79 cm, so counter surface at z = +0.01 in the pelvis frame (default, to be measured).
 - "Not at rest at episode end counts as counter (0 points) unless it is inside a bin." So a bounce or roll at release time can cost the point.
 - Rung 3 lid: sits on bin 'left', 3 mm thick, hole clearance 1 cm default (1.5 cm easy, 3 mm hard).
+
+## 2026-11-13 ~23:50 | Grokbot Research report received
+
+Saved in `docs/humanoid-grokbot-report.md` (condensed, bot claims UNVERIFIED unless marked checked). Verified here against `sim/dr/train.yaml`: the DR defaults (depth noise 1 mm + 0.2%, 1% holes, +-1 cm / +-1 deg head jitter) are as the bot says, and the file itself calls them "(default) guesses until the venue capture".
+Decision from Oliver: do NOT use the plain xAI API / `grokbot login`; only the bot channel and normal web search.
+Bot's headline matches ours: hybrid, parser for rung 2, grasp is the bottleneck, skip end-to-end VLA with about 20 demos.
