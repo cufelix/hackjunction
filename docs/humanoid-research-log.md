@@ -230,3 +230,8 @@ Bot's headline matches ours: hybrid, parser for rung 2, grasp is the bottleneck,
 - Classical `home_arm_q` (wrist pitch 1.0, arms out) collides hand-vs-body in sim: wrist pitch stalls at about 0.6 and wrist yaw is pushed about 0.7 rad off, so every grasp from it misses. The task `ARM_HOME` replaces it (sim profile).
 - Camera noise applies to the :55560 head RGB-D only, not the wrist or teleimager streams. Upstream `rt/sim_state` is disabled (4 KB slot overflows with 18 objects), use the scene service.
 - Open items the organisers list: wrist camera poses (M7), head pose re-check against the real overlay (M7), real arm home pose, **real Dex3 friction and PD fit (N1)**. That last one means sim finger physics is unfitted to the real hand, so a sim-tuned grasp may not transfer.
+
+## 2026-11-14 ~01:40 | Two more Research-bot reports received
+
+- `docs/humanoid-grasp-report.md`: triangle-grasp deep dive. **Checked in the repo**: sim object friction 1.2 static / 1.0 dynamic with "max" combine (`scene_cfg.py:41-42,228`); no torsional-friction patch set; DR friction only x0.75-1.1 (`train.yaml:21`); real hand kp 1.5 / kd 0.2 (`backends.py:202`); baseline "closed" pose leaves a 3.6 cm gap = 0.9 cm squeeze on a 4.5 cm object (`config.yaml:104-105`). Bot's headline: pinch along an altitude (corner vs opposite face) using `cv2.minEnclosingTriangle` yaw, because minAreaRect gives wrong yaw on triangles; re-measure the oracle with realistic friction first.
+- `docs/humanoid-pitch-report.md`: what wins robot demos. Mostly unverified web links; useful framing: real robot live plus backup video, state real success rate, one ablation, honest sim-vs-real slide.
