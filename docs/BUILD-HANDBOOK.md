@@ -220,31 +220,47 @@ first.
 **And the geometry in §3.2 survives too.** A corner contact is a point contact at any speed; speed
 only modulates how badly it slips. The mechanism stands, the size of the prize is uncertain.
 
-### 3.5 🔴 The sim hand is 120–210× stronger than the real one — and that hands us a free grasp sensor
+### 3.5 🔴 The sim hand's force ceiling is 120–210× the real one — and the lag that shows it is a free grasp sensor
 
 Oliver, from source: sim Dex3 finger actuators (`unitree_sim_isaaclab robots/unitree.py`, not
 overridden in the Aalto `env_cfg.py`) have **stiffness 100, damping 10, effort_limit 300**, and
 **self-collisions OFF**. The real limits (`interface/joint_spec.yaml`) are **2.45 Nm for thumb_0 and
 1.4 Nm for every other hand joint**.
 
-**Two consequences, and the first one threatens the 40 % that actually decides the prize.**
+**Two consequences. The first needs a caveat I got wrong first time round; the second does not.**
 
-**(a) Any grip tuned in sim will lean on squeeze force that does not exist on the robot.** In sim a
-position error produces force up to 300; on the robot the same error saturates at 1.4 Nm. So **the
-sim will close through an object the real hand cannot hold**, and a grasp that works in sim can fail
-on stage for a reason sim will never show us. This is a direct argument for the §3.2 design: the
-grip has to be stable **geometrically**, not by squeezing. "Grip harder" is not available to us.
-It also means self-collision is invisible in sim while the interface's safety filter does not check
-it either and **staff e-stop for it** — a gate failure with no warning anywhere in our loop.
+**(a) The ceiling gap is checked. The actual force gap is not.** `effort_limit 300` against a real
+1.4–2.45 Nm is a **saturation ceiling** ratio, and both ends are verified. Whether the sim ever
+*reaches* force the robot cannot is a different question, because the force is stiffness × error and
+**the units of that stiffness are an open Isaac Lab bug.** Issue #4918 reports implicit-actuator
+joints behaving **50–57× softer than stated**, with a maintainer calling it plausible; if it
+applies, stiffness 100 acts like **~1.75 N·m/rad, essentially the real 1.5**, and most of the
+discrepancy evaporates. NVIDIA's own gripper guide separately warns that USD and PhysX stiffness
+units differ by 180/π.
 
-**The rule that follows: command an aperture, not a squeeze.** Taking stiffness as Nm/rad, holding
-the implied torque under 1.4 Nm needs a commanded position error below **~0.014 rad (0.8°)**, and
-0.0245 rad (1.4°) for thumb_0. Nobody hits that blind. So the honest grip is to **close until the
-finger stops tracking, then hold just past contact** — not to command full closure and let the
-solver invent force. *(inference; the stiffness unit and the real controller's own law both need
-checking, so treat 0.014 rad as an order of magnitude, not a setting.)*
+⚠️ **So do not quote "the sim hand is 120–210× stronger" as a fact, and never on stage.** The
+honest statement is: *the sim's force ceiling is two orders of magnitude above the robot's, and
+whether that ceiling is ever reached depends on a gain whose units are unresolved.* The **step
+test** settles it — command a known position error against a blocked finger and compare the sim's
+`hand_q` response with the real hand's. Oliver's report recommends exactly that, and it must come
+before any gain is tuned.
 
-**(b) And that same lag is the grasp sensor we thought we did not have.** The Dex3-1 has 33 pressure
+**The design rule survives either way, which is why it is still a rule.** Whatever the gain turns
+out to be, **command an aperture, not a squeeze**: close until the finger stops tracking and hold
+just past contact, rather than commanding full closure and letting the solver invent force. If the
+units are wrong we lose nothing by doing it; if they are right it is the difference between a grasp
+that works on stage and one that only ever worked in sim. Same reason §3.2 matters: the grip has to
+be stable **geometrically**, because "grip harder" may not be available to us at all.
+
+And the same report notes NVIDIA's warning that with an implicit drive **extra stiffness does not
+make the drive provide more force** — so turning the gain up is not a fix even where it looks like
+one. One forum user saw slips at μ = 10. Sim grasp success is fragile in both directions.
+
+⚠️ **Self-collisions are off in sim**, the interface's safety filter does not check them either,
+and **staff e-stop for them** — a gate failure with no warning anywhere in our loop. That part needs
+no units to be true.
+
+**(b) The free grasp sensor, and this half does not depend on the units at all.** The Dex3-1 has 33 pressure
 sensors and **the interface exposes none of them** (§5) — but the observation *does* carry
 **`hand_q` (14)**, the measured finger positions, while we send `hand_q_target`. So:
 
@@ -260,11 +276,43 @@ That gives us, with no new sensing and nothing in the way of the 27 Hz gate:
   a prism pinched along its altitude stalls at ~45 mm, across the corners at ~52 mm, so **the stall
   aperture tells us whether we got the good grip or the bad one** — before we lift.
 
+**This is the robust half of §3.5.** A blocked finger lags its target whatever the gain is, so
+unlike (a) it survives the #4918 question untouched — only the *size* of the lag moves, not its
+existence.
+
 ⚠️ That last one is the most useful and the least certain: it assumes the stall is detectable above
 the solver's own tracking error. **Measure the no-object and with-object lag in the sim first**
 (item 0 is already running the baseline; log `hand_q_target − hand_q` while it does).
 
-### 3.6 What the baseline already does, so we do not rebuild it
+### 3.6 🔴 Two different targets, and sim fixes can cost us the one that gates the prize
+
+Oliver's report ends on a line that deserves to be a design rule: **we cannot change the
+organisers' sim for the held-out evaluation.** Every physics fix in it —
+`solve_articulation_contact_last`, torsional friction, capping `effort_limit`, self-collisions on —
+applies only to **our** training and testing copy.
+
+So we are shooting at two targets at once:
+
+| | runs on | what it decides |
+|---|---|---|
+| **The qualifier** | the **organisers'** unmodified sim | whether we are in the top ~5 at all, which gates the 40 % |
+| **The prize** | the **real robot** | the 40 % itself |
+
+**The trap: making our sim copy more realistic makes it harder, and a grasp tuned against our
+harder copy can score worse on theirs.** Their sim is what picks the finalists. *(inference, from
+their constraint plus the published judging split.)*
+
+**The rule: use the realistic copy to choose the design, validate the submitted score on the
+organisers' unmodified sim.** A geometry-stable grasp (§3.2) is exactly the kind of choice that
+should hold up on both, because it does not depend on which physics is more forgiving. **Never
+submit a policy whose numbers only exist against our modified physics.**
+
+One smaller fact from the same report, worth knowing before anyone spends time on friction: objects
+use PhysX combine mode **"max" with static friction 1.2** (`scene_cfg.py:228`, checked), so
+**fingertip friction only matters above 1.2** — tuning a pad material below that value changes
+nothing.
+
+### 3.7 What the baseline already does, so we do not rebuild it
 
 `planner.py` (460 lines) already has: both arms, a finger-direction hint list tried in turn,
 bin-wall clearance, relocation of an object out of the way, a failed-position list so it does not
