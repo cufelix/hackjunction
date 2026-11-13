@@ -1,789 +1,353 @@
 # Build handbook — Aaltonomous Humanoid (challenge 320)
 
-**Written during the research freeze of Fri 13 Nov 2026, no code. Felix's rule: nothing is built
-before 02:00; this document is what the night produces, and from 02:00 we build from it.**
+**The document we build from.** Written during the research night of 13–14 Nov 2026 and rewritten
+at 00:30 on 14 Nov so that corrections sit **where the fact is**, not 400 lines further down. The
+provenance and the full correction log are in Appendix A; if you want to know what changed and
+why, read that. If you want to build, read §1 to §5 and ignore the appendix.
 
-How to read it: **§1–3 are facts with a source.** §4 is the build order, and every item names the
-fact that puts it in that position. §5 is what we deliberately do *not* build. §8 is what is still
-unknown, each tagged with what it blocks. Anything marked *(inference)* is reasoning from the
-facts, not something we read — tell them apart, because at 02:00 nobody will have time to re-check.
+**How to read a claim in here:**
 
-✅ **The starter repo is public and MIT-licensed** (`github.com/zupermiez/aaltonomous-humanoid`,
-`LICENSE`: *"MIT License / Copyright (c) 2026 DigiTwin, Aalto University"*). It is cloned locally,
-so facts below marked **✅ read directly** were verified in the source rather than relayed. **MIT
-also settles an open question: we may copy from `oracle.py`**, with attribution.
+| Mark | Means |
+|---|---|
+| ✅ | read directly from the starter-repo clone or measured locally, with the file and line |
+| *(inference)* | reasoning from marked facts — correct only as far as the facts are |
+| ⚠️ | known uncertainty, with what would settle it |
+| 🔴 | changes a design decision |
 
-**Per-fact file and line references live in Oliver's
-[`humanoid-verified-facts.md`](./humanoid-verified-facts.md)**, pinned to starter-repo commit
-`36daf5b4`. This handbook cites the facts and says what follows from them; that file is where you
-check one. If the two ever disagree, the file with the line number wins.
+**Facts carry a source. Numbers without a source do not belong here.** That rule is why three of
+this handbook's own numbers were caught and fixed before anyone built on them.
 
-Sources: `aaltonomous/` starter repo read directly (Oliver, see `humanoid-research-log.md`), the
-official challenge page (`challenge-320-aaltonomous-humanoid.md`), and primary vendor docs. Numbers
-without a source do not belong here.
+✅ **The starter repo is public and MIT** (`github.com/zupermiez/aaltonomous-humanoid`, `LICENSE`:
+*"MIT License / Copyright (c) 2026 DigiTwin, Aalto University"*). It is cloned locally. **MIT
+settles a question we had: we may read and copy from `oracle.py`**, with attribution.
+
+Per-fact line references also live in Oliver's [`humanoid-verified-facts.md`](./humanoid-verified-facts.md)
+(pinned to starter commit `36daf5b4`) and his [`humanoid-research-log.md`](./humanoid-research-log.md).
+Where that file and this one disagree, **the one with the line number wins.**
 
 ---
 
 ## 1. Where the points are
 
-This is the only arithmetic that matters, and it decides everything below.
+This is the only arithmetic that matters, and every decision below follows from it.
 
 | | per object | 5 objects |
 |---|---|---|
-| **Rung 1, fixed mapping** | +1 correct / −1 wrong bin / −1 knocked off / 0 on counter | max **5** |
-| **Rung 2, language mapping** | **+2** correct / −1 wrong bin / −1 knocked off / 0 on counter | max **10** |
+| **Rung 1 — fixed mapping** | +1 correct · −1 wrong bin · −1 knocked off · 0 on counter | max **5** |
+| **Rung 2 — language mapping** | **+2** correct · −1 wrong bin · −1 knocked off · 0 on counter | max **10** |
+| **Rung 3 — insert shapes** | **+3** inserted · −1 forced · −1 dropped · **0 wrong hole · 0 counter · 0 off** | max 15 |
 
-Finals are **3 episodes: fixed + language + an unseen-instruction language episode weighted ×1.5.**
-So with 5 objects the final is 5 + 10 + 15 = **30 points, of which 25 — 83 % — come from language
-episodes.** Timi and I reached this independently, from the episode format and from the rung weights.
+✅ Values read from `scene.yaml:78-82`. ⚠️ Rung 3 is almost certainly **not** evaluated — see §1.3.
 
-**And the baseline we are handed scores exactly zero on all of it.** `policy.py` contains
-`self.mapping = info.get("mapping") or dict(FIXED_MAPPING)`, and the reset info carries only
-`{"instruction": ...}` — the mapping is never sent, so it silently falls back to fixed. The
-handed-out code sorts 76–82 % of objects on rung 1 and **0 % of the 83 %**.
+### 1.1 83 % of the final is language, and the handed-out code scores zero on it
 
-**Conclusion: the instruction is not a feature of this project. It is the project.**
+The finals are **three episodes: fixed + language + an unseen-instruction language episode weighted
+×1.5.** With 5 objects that is 5 + 10 + 15 = **30 points, of which 25 — 83 % — come from the two
+language episodes.** (Timi and I reached this independently, from the episode format and the rung
+weights.)
 
-## 2. Hard gates — fail one and none of the above counts
+✅ **And the baseline is wired to score zero on all of it.** `policy.py` has
+
+```python
+self.mapping = info.get("mapping") or dict(FIXED_MAPPING)
+```
+
+and the reset info carries only `{"instruction": ...}` — **the mapping is never sent**, so it
+silently falls back to fixed. The handed-out code sorts 76–82 % on rung 1 and **0 % of the 83 %**.
+
+> 🔴 **The instruction is not a feature of this project. It is the project.**
+
+### 1.2 ✅ The ×1.5 weight is prose only and is not implemented
+
+`Scene.score` is a plain `sum()` (`scene.py:251`). Nothing in the repo applies the finals weight,
+so **our own evaluation will never show it.** The arithmetic above has to be applied by hand when
+we judge our own runs — otherwise a language improvement looks like a third of what it is worth.
+
+### 1.3 ⚠️ Rung 3 pays the most per object and is probably never played
+
+✅ `docs/participants/SUBMISSION.md:134` declares `tasks: [sort_fixed, sort_language]` and
+`evaluate` is invoked only with those two (`:106-107`). `insert_shapes` appears nowhere in the
+submission path, and the finals format is fixed + language + unseen language.
+
+Note the risk profile anyway, because it is unusual and because finals settings are officially
+unannounced (✅ `RULES_AND_SCORING.md:68`): **wrong hole costs 0, counter costs 0, off costs 0.**
+Only `forced` and `dropped` are −1. If rung 3 ever appears, *attempting* is nearly free, and the
+only thing it needs is knowing each object's shape (§3.3) — no instruction parsing at all, because
+the instruction is the constant `INSERT_INSTRUCTION` with mapping `{}` (✅ `tasks.py`).
+
+**It is not a reason to build anything.** It is a reason the shape classifier is cheap insurance.
+
+---
+
+## 2. Hard gates — fail one and nothing above counts
 
 | Gate | Value | Source |
 |---|---|---|
-| Command rate | **≥ 27 Hz** wall-clock on ticks carrying a command | challenge page + SUBMISSION |
-| Clips | ✅ **the sim gate is `--gate-max-clips 0` — ZERO clips**, while >30 clips *aborts* the episode. A clip is any tick where `SafetyFilter.filter` records ≥1 reason, **including the velocity cap and the workspace box** | `safety.py:239-245`, `RULES_AND_SCORING.md:55` |
-| **Per-tick step** | **≤ ~0.033 rad for arms and ~0.1 rad for hands per tick** (1 rad/s and 3 rad/s at 30 Hz). Exceeding it clips | grokbot report, arithmetic checked |
-| Safety | no crash, no safety stop. **Self-collision and fingertip-to-table are NOT checked by the filter — staff e-stop for them** | INTERFACE |
-| Limits | within joint and speed limits | challenge page |
-| Episode | **120 s**, points so far are kept, **no time, retry, touch or per-clip penalty exists in the scoring code at all** | ✅ `scene.yaml:78-82` |
-| Finals settings | ⚠️ **not announced in advance** — objects, layout and time limit are all open. Today's code says 3–5 objects / 120 s | ✅ `RULES_AND_SCORING.md:68` |
-| Image | x86_64, CUDA ≥12.8, weights baked in, listening within 120 s, ≤32 GB VRAM, ≤40 GB image, no volumes or args | SUBMISSION |
-| GPU for rendering | **RTX-class ≥24 GB. Will not render on A100/H100** (ray-traced cameras). Finals PC: RTX 5090 | challenge page |
+| Command rate | **≥ 27 Hz** on ticks carrying a command | challenge page + SUBMISSION |
+| Clips | ✅ the sim gate is **`--gate-max-clips 0` — ZERO**, while >30 clips *aborts* the episode | `safety.py:239-245`, `RULES_AND_SCORING.md:55` |
+| **Per-tick step** | **≤ ~0.033 rad arms, ~0.1 rad hands, per tick** (1 and 3 rad/s at 30 Hz). Exceeding it clips | arithmetic from `safety.py:49-50` |
+| Safety | no crash, no safety stop. ⚠️ **self-collision and fingertip-to-table are NOT checked by the filter** — staff e-stop for them | INTERFACE |
+| Episode | **120 s**; points so far are kept. ✅ **no time, retry, touch or per-clip penalty exists anywhere in the scoring code** | `scene.yaml:78-82` |
+| Finals settings | ⚠️ **not announced in advance** — objects, layout and time limit all open. Today's code says 3–5 objects / 120 s | ✅ `RULES_AND_SCORING.md:68` |
+| Image | x86_64, CUDA ≥12.8, weights baked in, listening within 120 s, ≤32 GB VRAM, ≤40 GB image, no volumes, no args | SUBMISSION |
+| Render GPU | **RTX-class ≥24 GB; will not render on A100/H100** (ray-traced cameras). Finals PC: RTX 5090 | ✅ `QUICKSTART.md:10-11` |
 
-🔴 **That per-tick cap is the constraint people miss, and it is stricter than the rate gate.**
-A chunk can be returned fast enough and still clip on every seam, because the last action of one
-chunk and the first of the next may differ by more than 0.033 rad. **Chunk seams have to be blended
-and we need our own rate limiter in front of whatever produces targets** — including the classical
-planner. 30 clips ends the episode; the gate also requires 0.
+### 2.1 🔴 The per-tick cap is the gate people miss, and it is stricter than the rate
 
-**The 27 Hz gate is about action chunking, not model speed** — see
-[`humanoid-policy-approaches.md`](./humanoid-policy-approaches.md). Returning a chunk of k actions
-per call decouples the command rate from the inference rate; the baseline already does this,
-returning 6-tick hold chunks from a low-priority planner thread while it plans. ❌ **I wrote
-"held ticks do not count toward the gate" and that is backwards in the way that matters — see
-§14.2.** `command_hz = (ticks − holds) / span` subtracts only the **runner's own** idle holds
-(queue empty, nothing in flight). **A hold the policy itself returns is an explicit target and
-counts as a command**, which is exactly how the baseline holds 30 Hz while it thinks. Anything that cannot hold the rate *without* chunking is disqualified by
-arithmetic, not by tuning.
+A chunk can be returned fast enough and still clip on **every seam**, because the last action of
+one chunk and the first of the next may differ by more than 0.033 rad. **Chunk seams must be
+blended, and we need our own rate limiter in front of anything that produces targets** — including
+the classical planner. Zero clips is the gate; 30 ends the episode.
+
+⚠️ The 30-clip abort is marked *"spec N, to be decided"* in the source (`safety.py:74`) while the
+rules state it as final. **Build nothing that depends on the exact number.**
+
+### 2.2 ✅ How the rate is actually computed — and why a slow policy can still pass
+
+From `deploy/runner.py`: `hold = not queue`, `wait = hold and pending is not None`. A wait re-sends
+the last command **as an explicit target** and is counted in `waits`, not `holds`. The summary is
+
+```python
+command_hz = (ticks − holds) / span   # policy targets only (spec §8 gate)
+```
+
+> **Only the runner's own idle holds are excluded. Everything the policy emits counts — including
+> explicit hold targets and re-sent commands.**
+
+That is good news: a policy that needs thinking time can hold the gate by **returning explicit
+holds**, which is exactly how the baseline keeps 30 Hz from a low-priority planner thread. What
+must stay rare is the *runner* having nothing to send.
+
+**So the 27 Hz gate is about action chunking, not model speed.** Returning k actions per call
+decouples command rate from inference rate (see [`humanoid-policy-approaches.md`](./humanoid-policy-approaches.md)).
+✅ Chunk size is **10 ticks per `act()`** (`config.yaml:89`); the planner returns 6-tick holds while
+planning. Anything that cannot hold the rate *even with* chunking is disqualified by arithmetic,
+not by tuning.
+
+### 2.3 ⚠️ Latency has a second, sharper limit inside `reset()`
+
+✅ The safety watchdog has `stop_after_s = 1.0` (`safety.py:69`). A `reset` that takes over a second
+risks a latched `safe_stop`. A deterministic instruction resolver runs in microseconds and is safe.
+**An LLM call in `reset()` is not** — if we ever add a model fallback it goes in a background thread
+and the deterministic answer is returned immediately.
+
+---
 
 ## 3. The facts that constrain the design
 
 ### 3.1 The scene is small, but the bins are *far*
 
-From `scene/scene.yaml`, read directly:
+✅ From `scene/scene.yaml`:
 
-- Bins **21 × 21 cm outer, measured on the real boxes 13 Nov**. Wall height **6 cm** and 3 mm
-  thickness are *file defaults, not measured*.
+- Bins **21 × 21 cm outer**, measured on the real boxes 13 Nov. ⚠️ Wall height **6 cm** and 3 mm
+  thickness are **file defaults, not measured**.
 - Bin centres: centre bin at pelvis **r = 0.505 m**, **side bins at r = 0.568 m**.
 - Reach: **comfortable ≈ 0.40 m, straight arm ≈ 0.55 m.**
-- Objects **45 mm** for every shape, 2.5 mm fillets, in a band at pelvis x 0.26–0.35, |y| ≤ 0.17,
-  min 8 cm apart, yaw −45…+45°, **3–5 objects** (`sample_layout` allows 3–6, ≤2 per colour).
+- Objects **45 mm** for every shape, 2.5 mm fillets, spawned at pelvis x 0.26–0.35, |y| ≤ 0.17,
+  min 8 cm apart, yaw −45…+45°, **3–5 objects**.
 - Counter surface at pelvis **z = +0.01** (default, to be measured).
+- ⚠️ `sample_layout` defaults to `n_max=6` while `scene.yaml` says 3–5 — a caller that forgets
+  `layout_kwargs()` draws up to **6** objects (`tasks.py:54` vs `scene.yaml:70`).
 
-🔴 **This corrects something I wrote earlier today.** In
-[`challenge-320`](./challenge-320-aaltonomous-humanoid.md) I argued that because the bins are 21 cm
-wide and 5 cm apart, placement needs only **±10 cm** and is therefore easy. **The lateral half of
-that is right and the radial half is wrong.**
+🔴 **Placement tolerance is not ±10 cm anywhere; it is about ±4–5 cm into one specific corner.**
 
 - **Side-bin centres at 0.568 m are past the 0.55 m straight-arm reach.** The centre of a side bin
-  cannot be reached at all. `scene.yaml` says so itself: release in *"the near, inner part"* of the
-  side boxes.
+  cannot be reached at all. `scene.yaml` says so itself: release in *"the near, inner part"*.
 - All three bins are past the 0.40 m comfortable reach, so **every release happens beyond
-  comfortable extension**, and the side ones at essentially full extension.
-- With 3 mm walls the inner region of the left bin spans x 0.403–0.607, y 0.158–0.362. Only the
-  **near-inner quadrant** of that satisfies r ≤ 0.55 — roughly an 8–10 cm patch, in one corner.
-  *(inference, from the published coordinates.)*
-- And the object must clear a **6 cm rim** while an object is only 4.5 cm tall — **nothing can be
-  swept or pushed in; it must be lifted over.** At near-full extension.
+  comfortable extension**, the side ones at essentially full extension.
+- *(inference, from the published coordinates)* with 3 mm walls the left bin's inner region spans
+  x 0.403–0.607, y 0.158–0.362; only the **near-inner quadrant** satisfies r ≤ 0.55 — an 8–10 cm
+  patch in one corner.
+- And the object must clear a **6 cm rim** while being only 4.5 cm tall: **nothing can be swept or
+  pushed in, it must be lifted over** — at near-full extension.
 
-**So placement tolerance is about ±4–5 cm into a specific corner, not ±10 cm anywhere.** It is
-still not the hardest part — but it is not free, and a release aimed at the geometric bin centre
-aims at a point the arm cannot reach.
+✅ Counterweight to all that: **`inside_margin` is 0.0** (`scene.yaml:75`), so an object resting
+exactly on a bin's inner edge **counts as in**. The boundary is generous; the *reach* is not.
 
-### 3.2 Why the triangle fails, with the numbers
+✅ **Knocked off** = centre outside the 110 × 60 cm table top, or more than 3 cm below the counter
+(`scene.py:229-230`, `off_counter_drop: 0.03`). **No time component** — an object that falls once is
+−1 from then on.
 
-This is the mechanism behind the organisers' own note, and it is derivable.
+### 3.2 The grasp: three ways to pinch a prism, two of them bad
 
-- `scene.yaml`: *"cube side = cylinder diameter = triangle ALTITUDE (flat-to-apex)"*, all 45 mm.
+The organisers' own ceiling note is the anchor. ✅ `sim/README.md:77`: their **oracle, with exact
+privileged poses and shapes, reaches only ~84 % on rung 1**, noting *"needs >90 %: triangle grasps
+(thumb vs one finger spins the prism)"*.
+
+The mechanism is derivable:
+
+- ✅ `scene.yaml`: *"cube side = cylinder diameter = triangle ALTITUDE (flat-to-apex)"*, all 45 mm.
   An equilateral triangle of altitude 45 mm has sides **s = 2h/√3 ≈ 52 mm**.
-- A triangle's grip width depends on approach angle: **45 mm across an altitude** (flat face on one
-  side, apex on the other) and **52 mm across the side direction** (an apex on *both* sides).
-  *(inference, support widths of an equilateral triangle.)*
-- Dex3-1: index and middle **flex only, no sideways spread**; thumb has 3 joints and does the
-  opposition. Fingertip repeatability ±2 mm. (Unitree's own page.)
-- Baseline README: index and middle tips are **57 mm apart**, a 45 mm object wedges between them,
-  so the pinch is **thumb vs ONE finger**.
-- Organisers, `sim/README.md:77`: their **oracle, with exact privileged poses and shapes, reaches
-  only ~84 % on rung 1**, noting *"needs >90 %: triangle grasps (thumb vs one finger spins the
-  prism)"*.
+- ✅ Dex3-1 index and middle **flex only, no sideways spread**; the thumb's 3 joints do the
+  opposition. Fingertip repeatability ±2 mm (Unitree).
+- ✅ Baseline README: index and middle tips are **57 mm apart**, so a 45 mm object wedges between
+  them and the pinch is **thumb vs ONE finger**.
 
-**Put together: the worst grip is 52 mm with a corner contact on both sides — two point contacts,
-so the prism spins. The best grip is 45 mm with one flat face. They are 30° apart in wrist yaw, and
-the triangle's 3-fold symmetry guarantees that from any orientation the nearest good direction is
-at most 30° away.** *(inference.)*
-
-And the input is already there: **perception computes object yaw with `cv2.minAreaRect` and marks
-it "info only"; the planner never reads it.** The fix is to set wrist yaw so the pinch axis lies
-along an altitude direction.
-
-#### The full taxonomy: three ways to pinch a prism, two of them bad
-
-Converging with the grokbot grasp report, which reached the same conclusion from friction:
-
-| Pinch | Span | Why it fails / works |
+| Pinch | Span | Why |
 |---|---|---|
-| **two faces** | — | The faces meet at 60°, so squeezing **wedges the prism out**. Bot's own calc: needs friction μ ≥ 0.58 even at perfect yaw. *(bot, unverified)* |
-| **two corners** | **52 mm** | Point contact on both sides → **it spins**, which is the organisers' own failure note |
-| **one corner vs the opposite face** | **45 mm** | The only good one. One flat contact, one locating apex, and the narrowest span |
+| **two faces** | — | faces meet at 60°, so squeezing **wedges the prism out**. *(grokbot: needs μ ≥ 0.58 even at perfect yaw — unverified)* |
+| **two corners** | **52 mm** | point contact both sides → **it spins**. This is the organisers' named failure |
+| **one corner vs the opposite face** | **45 mm** | the only good one: one flat contact, one locating apex, narrowest span |
 
-A triangle has no parallel faces, so **flat-against-flat does not exist** and apex-vs-opposite-face
-is not a compromise, it is the optimum.
+A triangle has no parallel faces, so **flat-against-flat does not exist** — apex-vs-opposite-face is
+not a compromise, it is the optimum. *(inference, support widths of an equilateral triangle.)*
 
-#### 🔴 And the yaw the baseline computes is the wrong yaw
+> *(inference)* **The best and worst grips are 30° apart in wrist yaw, and 3-fold symmetry
+> guarantees the nearest good direction is at most 30° away from any starting orientation.**
 
-`cv2.minAreaRect` returns the **minimum-area bounding rectangle**, not the object's own axes. For an
-equilateral triangle that rectangle has one side flush with a triangle side, so its axes are
-*(along a side)* and *(along that side's altitude)*. Good news: **the altitude direction is one of
-the two rect axes.** Bad news: the angle is ambiguous **mod 90°** (which axis is the altitude?) and
-**mod 180°** (which way does the apex point?). Feeding the raw angle to a pinch gets the wrong
-answer most of the time — which is consistent with the baseline missing prisms even though it
-*has* a yaw.
+✅ **And it is affordable.** 30° = 0.524 rad against a per-tick arm cap of ~0.033 rad is **~16 ticks
+≈ 0.53 s at 30 Hz.** Half a second per prism against a 120 s episode is nothing.
 
-**Both ambiguities are resolved by one number we already have.** The triangle's centroid sits h/3
-from the flush side, the rectangle's centre at h/2, so
+#### 3.2.1 ✅ There are TWO grasp failures, and the organisers already fixed one of them
 
-> **the blob centroid is offset from the rect centre by h/6 = 7.5 mm, pointing directly away from
-> the apex.**
+`oracle.py:48-50`, MIT:
 
-So the apex direction is *centroid → rect centre*, and the pinch axis is the altitude through it.
-❌ **My first pixel arithmetic here was wrong — corrected in §14.1.** The real numbers:
-fx = **604.8** (not 615), the camera sits at **z = 0.474 m**, so the object band is **0.47–0.53 m
-away, not 0.35 m**. That gives **51–58 px across a 45 mm object** and the apex offset at
-**~7–10 px** after foreshortening. Still measurable — roughly 15 % of the object's width — but not
-the comfortable margin I claimed.
+```
+# Pinch thumb vs ONE finger: the Dex3 index/middle tips are 57 mm apart (URDF), so with the object
+# centred between them (classical `auto` grasp point) a 45 mm object wedges between the two fingers
+# and is never released (carried back home; seen with cylinders).
+# Shift the grasp point 15 mm sideways in the palm (palm z).
+```
 
-#### The same two quantities give a shape classifier for free
+| failure | symptom | cause | fix |
+|---|---|---|---|
+| **wedging** | object **never released**, carried back home — *seen with cylinders* | object centred in the 57 mm gap | ✅ **shift the grasp point 15 mm sideways in the palm** — written, MIT, free to take |
+| **spinning** | prism rotates out of the pinch | corner → point contact | **wrist yaw onto an altitude — ours, not in the repo** |
 
-Blob area ÷ min-area-rect area:
+**Take the 15 mm offset. Keep the yaw work for the prism.**
+
+#### 3.2.2 🔴 The yaw the baseline computes cannot align a prism, by construction
+
+✅ `perception.py:190-196`:
+
+```python
+def _yaw(xy):
+    """Principal direction of the top-face points, folded to [-pi/4, pi/4) (square symmetry). Info only."""
+    (_, _), (_, _), ang = cv2.minAreaRect(xy.astype(np.float32))
+    return float((a + np.pi / 4) % (np.pi / 2) - np.pi / 4)
+```
+
+Two things in that function decide our design, and **the first one was misread in an earlier draft
+of this handbook, so read it carefully:**
+
+1. ✅ **It runs on metres, not pixels.** The caller is `_yaw(top[:, :2])` (`perception.py:149`),
+   where `top` is the **3D top-face point cloud in pelvis coordinates**, selected by
+   `top_percentile` / `top_band` from the depth image. So `minAreaRect` operates on a **metric**
+   point set. No projection error, no pixel quantisation, no foreshortening.
+2. ✅ **The fold is `% (π/2)` — square symmetry** — and the docstring says *"Info only."* For a
+   3-fold prism that modulus is simply wrong (3-fold is 120°; the grasp cares mod 60°), and the
+   planner never reads the value anyway.
+
+**`minAreaRect` is still the right primitive, but its raw angle is ambiguous** mod 90° (which axis
+is the altitude?) and mod 180° (which way does the apex point?). For an equilateral triangle the
+min-area rectangle has one side flush with a triangle side, so its axes are *(along a side)* and
+*(along that side's altitude)* — **the altitude direction is one of the two rect axes**, which is
+what makes the fix cheap.
+
+> **Both ambiguities are resolved by one number.** The centroid sits h/3 from the flush side and the
+> rect centre at h/2, so **the centroid is offset from the rect centre by h/6 = 7.5 mm, pointing
+> directly away from the apex.** Apex direction = *centroid → rect centre*; the pinch axis is the
+> altitude through it.
+
+✅ **And because `_yaw` works in metres, 7.5 mm is a metric measurement against a 52 mm-sided
+triangle** — about 14 % of the side length, read off the top-face cloud. ⚠️ What has to be checked
+is therefore **not pixels but point density**: how many depth points land on a 45 mm top face at
+0.47–0.53 m, and whether `top_band` keeps enough of them for a stable centroid. That is the one
+measurement this fix waits on.
+
+**Do the disambiguation before the rotation.** Rotating to the raw angle is *worse* than not
+rotating, because it will confidently pick a corner-to-corner pinch.
+
+#### 3.2.3 The same primitive gives a shape classifier for free — with one guard
+
+Blob area ÷ min-area-rect area, on the **2D** blob:
 
 | Shape | Fill ratio | |
 |---|---|---|
-| Cube | **1.00** | square fills its own bounding rect |
+| Cube | **1.00** | a square fills its own bounding rect |
 | Cylinder | **0.785** | π/4 |
 | Triangle | **0.50** | ½·base·height over base·height |
 
-Three well-separated values from quantities `minAreaRect` already returns, **no training and no new
-sensing**. That matters beyond the grasp: perception is *explicitly shape-agnostic* today, while
-`scene.resolve_bin` accepts shape-keyed mappings and the finals may use them (§4 item 1). This is
-the cheapest possible way to stop being shape-blind.
+Three well-separated values from quantities already computed. No training, no new sensing.
 
-⚠️ **Caveats, because this is derived and not measured.** The head camera looks down at ~48°, not
-straight down, so the top face is seen obliquely and both the ratio and the 7.5 mm offset are
-foreshortened; the objects have 2.5 mm fillets; and the ratios assume a clean HSV blob of the top
-face only. **Measure all three ratios in the sim before relying on them** — the gaps are large
-(0.5 / 0.785 / 1.0), so the method likely survives, but the thresholds are not ours to guess.
+⚠️ **This one IS a 2D measurement, so the pixel budget applies to it** (§3.6) and so does the
+clipping risk: ✅ **the near edge of the spawn region sits exactly on the bottom image border**
+(§3.6.2), and **a clipped blob gives a wrong ratio.** The guard is one line — does the blob touch
+row 0 / row 479 / column 0 / column 639 — and the response is to **abstain on shape rather than
+guess**, or to relocate the object first. ✅ The baseline already has a relocate path
+(`test_classical.py:134 test_cross_body_object_is_relocated`).
 
-**This is why perception work and a trained policy are both capped.** A perfect vision stack cannot
-pass ~84 % on rung 1. The grasp is the ceiling.
+⚠️ Also: the head camera looks down at ~47.6°, not straight down, so the top face is seen obliquely
+and the ratios are foreshortened; objects have 2.5 mm fillets. **Measure all three ratios against
+`mock_world.Renderer` before relying on them** — the gaps (0.50 / 0.785 / 1.00) are large, so the
+method likely survives, but the thresholds are not ours to guess.
+
+**Why the classifier stays on the list even though rung 3 is probably dead (§1.3):**
+1. ✅ `scene.resolve_bin` accepts shape-keyed mappings and `STARTER_PATHS` says harder finals may add
+   shape words (§3.7) — being shape-blind would score zero on those objects;
+2. **the prism fix needs to know it is a prism** (§3.2.2). The yaw disambiguation is shape-specific.
+
+> 🔴 **Perception work and a trained policy are both capped by this section.** A perfect vision
+> stack cannot pass ~84 % on rung 1. **The grasp is the ceiling.**
 
 ### 3.3 Three shapes, three different failure modes *(inference, from the geometry)*
 
 | Shape | Failure mode | What it demands |
 |---|---|---|
 | **Cube** | essentially none — flat faces both sides, 45 mm | nothing |
-| **Triangle** | **grasp** — corner contact spins it | wrist yaw aligned to an altitude (§3.2) |
-| **Cylinder** | **rest** — it rolls, and *"not at rest at episode end counts as counter unless it is inside a bin"* | place it **early**, so it has time to settle |
+| **Triangle** | **grasp** — corner contact spins it | wrist yaw aligned to an altitude (§3.2.2) |
+| **Cylinder** | **wedging** (✅ the organisers' own note names cylinders) **and rolling** — an object still moving *inside a bin* scores 0 | the 15 mm palm offset (§3.2.1), and **place it early** so it settles |
 
-### 3.4 🔴 Both anchor numbers were measured on the wrong clock
+### 3.4 🔴 Time is the constraint everyone underestimates, for two independent reasons
 
-The organisers' own note in `sim/README.md` ("Still open"): the earlier grasp tuning *"ran ~1.8x too
-fast in physics time (wall pacing at RTF ~0.55); re-check grasp parameters on the sim clock."*
+Both reasons were read from the source, they **stack**, and together they are the most practical
+finding of the research night.
 
-**So the baseline's 76–82 % and the oracle's 84 % were both measured with motions effectively 1.8×
-faster in physics time than they will be on the corrected clock. Nobody knows either score on the
-clock we will actually be scored on.** Two consequences, and they pull in opposite directions:
+#### 3.4.1 The real robot loads the slow motion profile
 
-- **The sign of the grasp effect is unknown.** Slower motion usually makes a grasp *more* stable, so
-  part of the triangle slip may be a speed artifact and the ceiling may rise. But the grasp
-  parameters were *tuned under* the fast clock, so any compensation baked into them is now wrong.
-  Either is possible; **measure, do not assume.** *(inference.)*
-- 🔴 **Time may become the binding constraint, and it was already a failure cause.** The baseline's
-  misses were *"mostly triangular prisms, plus the 120 s limit"* — time was already costing objects
-  at the fast clock. If a pick that consumed X seconds of episode time now consumes up to **1.8X**,
-  then 10–20 s per pick becomes **18–36 s**, and a 120 s episode fits **3–6 picks instead of
-  6–12**. With 5 objects that is no longer comfortable; it is tight or short.
-  ✅ **The 1.8× is now verified, not inferred.** `sim/README.md` states the budget and the clock are
-  in **sim seconds** (*"`command_hz` count sim seconds"*, *"Episodes take 1/RTF longer in wall time
-  (120 s sim ~ 220 s wall)"*), and RTF is 0.70 alone, ~0.59 with two sims, 0.50–0.53 with three. A
-  motion of N ticks at 30 Hz took 0.55·N/30 **sim** seconds under wall pacing and takes N/30 under
-  sim pacing — so it consumes **1/0.55 = 1.8× more of a budget that is denominated in sim seconds.**
-  What remains open is only whether the published 10–20 s per pick was itself wall or sim time.
-
-**What survives this untouched: item 1.** The language mapping is worth +2 per object whatever the
-physics clock does — it is a dictionary, not a motion. Of the four things we build, **it is the only
-one whose value does not move with this uncertainty**, which is a second, independent reason it goes
-first.
-
-**And the geometry in §3.2 survives too.** A corner contact is a point contact at any speed; speed
-only modulates how badly it slips. The mechanism stands, the size of the prize is uncertain.
-
-### 3.5 🔴 The sim hand's force ceiling is 120–210× the real one — and the lag that shows it is a free grasp sensor
-
-Oliver, from source: sim Dex3 finger actuators (`unitree_sim_isaaclab robots/unitree.py`, not
-overridden in the Aalto `env_cfg.py`) have **stiffness 100, damping 10, effort_limit 300**, and
-**self-collisions OFF**. The real limits (`interface/joint_spec.yaml`) are **2.45 Nm for thumb_0 and
-1.4 Nm for every other hand joint**.
-
-**Two consequences. The first needs a caveat I got wrong first time round; the second does not.**
-
-**(a) The ceiling gap is checked. The actual force gap is not.** `effort_limit 300` against a real
-1.4–2.45 Nm is a **saturation ceiling** ratio, and both ends are verified. Whether the sim ever
-*reaches* force the robot cannot is a different question, because the force is stiffness × error and
-**the units of that stiffness are an open Isaac Lab bug.** Issue #4918 reports implicit-actuator
-joints behaving **50–57× softer than stated**, with a maintainer calling it plausible; if it
-applies, stiffness 100 acts like **~1.75 N·m/rad, essentially the real 1.5**, and most of the
-discrepancy evaporates. NVIDIA's own gripper guide separately warns that USD and PhysX stiffness
-units differ by 180/π.
-
-⚠️ **So do not quote "the sim hand is 120–210× stronger" as a fact, and never on stage.** The
-honest statement is: *the sim's force ceiling is two orders of magnitude above the robot's, and
-whether that ceiling is ever reached depends on a gain whose units are unresolved.* The **step
-test** settles it — command a known position error against a blocked finger and compare the sim's
-`hand_q` response with the real hand's. Oliver's report recommends exactly that, and it must come
-before any gain is tuned.
-
-**The design rule survives either way, which is why it is still a rule.** Whatever the gain turns
-out to be, **command an aperture, not a squeeze**: close until the finger stops tracking and hold
-just past contact, rather than commanding full closure and letting the solver invent force. If the
-units are wrong we lose nothing by doing it; if they are right it is the difference between a grasp
-that works on stage and one that only ever worked in sim. Same reason §3.2 matters: the grip has to
-be stable **geometrically**, because "grip harder" may not be available to us at all.
-
-And the same report notes NVIDIA's warning that with an implicit drive **extra stiffness does not
-make the drive provide more force** — so turning the gain up is not a fix even where it looks like
-one. One forum user saw slips at μ = 10. Sim grasp success is fragile in both directions.
-
-⚠️ **Self-collisions are off in sim**, the interface's safety filter does not check them either,
-and **staff e-stop for them** — a gate failure with no warning anywhere in our loop. That part needs
-no units to be true.
-
-**(b) The free grasp sensor, and this half does not depend on the units at all.** The Dex3-1 has 33 pressure
-sensors and **the interface exposes none of them** (§5) — but the observation *does* carry
-**`hand_q` (14)**, the measured finger positions, while we send `hand_q_target`. So:
-
-> **`hand_q_target` − `hand_q` is a contact signal, for free, every tick.**
-> Fingers stall short of the target → something is between them. Fingers reach the target → we
-> closed on air, or the object is gone.
-
-That gives us, with no new sensing and nothing in the way of the 27 Hz gate:
-- **grasp success / failure detection** — the exact thing we asked the research bot for and could
-  not get from tactile;
-- **a drop detector** mid-carry (lag disappears while we are still holding);
-- **an object-size estimate** from the stall aperture, which cross-checks the §3.2 shape classifier:
-  a prism pinched along its altitude stalls at ~45 mm, across the corners at ~52 mm, so **the stall
-  aperture tells us whether we got the good grip or the bad one** — before we lift.
-
-**This is the robust half of §3.5.** A blocked finger lags its target whatever the gain is, so
-unlike (a) it survives the #4918 question untouched — only the *size* of the lag moves, not its
-existence.
-
-⚠️ That last one is the most useful and the least certain: it assumes the stall is detectable above
-the solver's own tracking error. **Measure the no-object and with-object lag in the sim first**
-(item 0 is already running the baseline; log `hand_q_target − hand_q` while it does).
-
-### 3.6 🔴 Two different targets, and sim fixes can cost us the one that gates the prize
-
-Oliver's report ends on a line that deserves to be a design rule: **we cannot change the
-organisers' sim for the held-out evaluation.** Every physics fix in it —
-`solve_articulation_contact_last`, torsional friction, capping `effort_limit`, self-collisions on —
-applies only to **our** training and testing copy.
-
-So we are shooting at two targets at once:
-
-| | runs on | what it decides |
-|---|---|---|
-| **The qualifier** | the **organisers'** unmodified sim | whether we are in the top ~5 at all, which gates the 40 % |
-| **The prize** | the **real robot** | the 40 % itself |
-
-**The trap: making our sim copy more realistic makes it harder, and a grasp tuned against our
-harder copy can score worse on theirs.** Their sim is what picks the finalists. *(inference, from
-their constraint plus the published judging split.)*
-
-**The rule: use the realistic copy to choose the design, validate the submitted score on the
-organisers' unmodified sim.** A geometry-stable grasp (§3.2) is exactly the kind of choice that
-should hold up on both, because it does not depend on which physics is more forgiving. **Never
-submit a policy whose numbers only exist against our modified physics.**
-
-One smaller fact from the same report, worth knowing before anyone spends time on friction: objects
-use PhysX combine mode **"max" with static friction 1.2** (`scene_cfg.py:228`, checked), so
-**fingertip friction only matters above 1.2** — tuning a pad material below that value changes
-nothing.
-
-### 3.7 What the baseline already does, so we do not rebuild it
-
-`planner.py` (460 lines) already has: both arms, a finger-direction hint list tried in turn,
-bin-wall clearance, relocation of an object out of the way, a failed-position list so it does not
-retry the same spot, `done` when nothing sortable is left, and 6-tick hold chunks that keep the
-command rate at 30 Hz. Sim rung 1, seeds 0–7: **76–82 % sorted, 0 clips, 30 Hz, gate PASS.**
-
-Two things it does **not** have: it never reads the instruction (§1), and **there is no
-post-placement verification at all** — nothing checks whether the object actually landed in the
-bin. With final-state scoring, that is an unused lever, not a missing nicety.
-
-⚠️ **The baseline has never run on the real robot** (*"not run yet (M8)"*); the HSV floor, grasp
-point and open posture were only ever checked in sim. Treat 76–82 % as a sim number. Sim also ran
-at ~0.65× real time, so expect ±10 % between runs.
-
-## 4. What we build, in order, and why each is in that slot
-
-### 0. First, re-measure the baseline on the corrected sim clock. **~30 min, before anything.**
-Because of §3.4: every number we would improve against was measured on a clock the organisers
-themselves say was 1.8× wrong. Run `sim.evaluate --trials 20` on rung 1 unmodified and write down
-the score, the clip count, the rate and **the wall and episode time per pick**. Without that, every
-"improvement" we measure is against an unknown reference, and we will not know whether we gained
-anything or just moved with the clock.
-
-This is also the cheapest way to settle whether time or grasping is the binding constraint, which
-decides how much of the night goes into item 4.
-
-**While it runs, log `hand_q_target − hand_q` per tick.** It costs nothing on top of the run and it
-is the measurement §3.5(b) depends on — if the stall is visible above the tracking error, we get a
-grasp sensor, a drop detector and a good-grip check out of one log file.
-
-### 1. Instruction → mapping. **Unblocked, highest value, no GPU.**
-Because of §1: this is 83 % of the final and the baseline scores zero on it, and because the wiring
-gap is one line.
-
-Design in [`instruction-parsing-six-permutations.md`](./instruction-parsing-six-permutations.md):
-the instruction is always a full permutation, so **enumerate the candidate mappings and score each
-against the sentence** instead of writing a parser. Decide the key vocabulary first (colour words /
-shape words / both — `scene.resolve_bin` accepts all three), then enumerate the 6 permutations over
-that key; 12 candidates in total. Three properties a parser cannot have: it cannot emit an
-impossible mapping, it **completes the third pair by elimination** from two correct ones, and its
-**confidence is the margin** between best and second-best candidate.
-
-`oracle.py` already contains a parser for all 8 training templates. The oracle is a sim-only
-privileged policy, but **the instruction string is not privileged** — our policy receives it too —
-so that parser is legitimate reference for the known phrasings (check its licence first). The
-finals templates are deliberately different, so the enumeration is the robustness layer on top.
-
-The one thing enumeration gets *backwards* is **negation** — *"anything but the left bin"* reads to
-a proximity count as support for the pair it denies. Needs an explicit inverting flag, and
-`STARTER_PATHS` says harder finals may add negation.
-
-### 2. Yaw-aligned triangle pinch. **Promoted by the oracle number.**
-Because of §3.2: ~84 % is the ceiling with perfect perception, the organisers name this as the
-blocker, and the yaw we need is already computed and thrown away.
-
-**Do the disambiguation before the rotation** (§3.2): the raw `minAreaRect` angle is ambiguous mod
-90° and mod 180°, and the centroid-to-rect-centre offset fixes both. Rotating to the raw angle is
-worse than not rotating, because it will confidently pick a corner-to-corner pinch.
-
-**And it is affordable.** The correction needed is at most 30° = 0.524 rad (§3.2), and the per-tick
-arm cap is ~0.033 rad, so the worst-case wrist rotation takes **~16 ticks ≈ 0.53 s at 30 Hz**.
-Against a 120 s episode and a 10–20 s pick, half a second per prism is nothing. *(inference, from
-the two published limits.)*
-
-### 3. Post-placement verification and correction.
-Because scoring is **final state, not on touch** (`RULES_AND_SCORING`), a misplaced object can be
-moved again and fixed, and §3.4 says nothing currently checks. A wrong bin is −1 and a correction
-turns it into +1 or +2 — **the largest per-object swing available, on a mistake we have already
-made.**
-
-### 4. Time triage and a cleanup phase. **Promoted if item 0 confirms the clock cost.**
-Because *"on counter"* is 0 but *"knocked off"* and *"wrong bin"* are −1, and because
-**not-at-rest** can cost the point. End the episode with nothing in the hand, nothing moving, and
-any object we are not confident about **left on the counter deliberately** — 0 beats −1. The margin
-from item 1 and the grasp confidence from item 2 are what decide which.
-
-**And if §3.4 is right, this stops being a tidy-up and becomes a budget.** At 18–36 s per pick,
-120 s does not fit 5 objects, so the policy has to **choose which objects to attempt** — cheapest
-shape first (cube), the known-hard prism last, and on rung 2 the objects whose mapping we are
-confident about before the ones we are not. Order of attempts becomes a scoring decision, not a
-scheduling detail.
-
-### 5. Stretch, in this order: relay hand-over → depth-noise randomisation.
-The oracle already implements a **relay hand-over** for objects one arm can grasp but not carry
-across the body (it puts them down near the centre line for the other arm) — the baseline README
-lists exactly that as a failure. Depth-noise randomisation fitted to the real Drop 1 depth is the
-citable **sim-to-real** story for the 25 % generality score, and the organisers' stated wishes for
-that criterion are all sim-to-real and data efficiency.
-
-## 5. What we do not build, and why
-
-- **No VLA as the control policy.** GR00T N1.7 measures ~140 ms (~7 Hz) on an RTX A6000 and
-  OpenVLA base ~6 Hz on a 4090; both fail the 27 Hz gate without chunking, and with ~20 demos per
-  rung there is not enough data to beat a baseline that already sorts ~80 %. Measured rates and who
-  fails are in [`humanoid-policy-approaches.md`](./humanoid-policy-approaches.md).
-- **No from-scratch learned policy.** The data-efficiency numbers are brutal and specific to this
-  robot: on a **real G1 with 81 demos**, a naive GR00T N1.6 fine-tune scored **0/50**; an engineered
-  recipe reached 32–42 % (DEED, arXiv 2607.20345); NVIDIA's own 98.8 % needed **1,000 demos**, and
-  a GitHub issue reports *"very low"* success at ~600 (Isaac-GR00T #414). **We get ~20 per rung.**
-  Vendor minimums: GR00T wants 100+, SmolVLA says 25 was not enough. (Via the grokbot report; the
-  bot marks these unverified unless checked, and the DEED figures should be confirmed against the
-  paper before we quote them on stage.)
-- ⚠️ **If anyone does try GR00T anyway, two traps are already known:** every checkpoint loads the
-  **gated `nvidia/Cosmos-Reason2-2B`** on first use, and the submission container has no network —
-  so all weights must be baked in; and its **default hue jitter (0.08) may blur red/yellow/blue**,
-  which in this task is not augmentation, it is destroying the label.
-- **No perception overhaul.** §3.2: capped at ~84 % on rung 1 regardless.
-- **No tactile or force feedback.** The Dex3-1 has 33 pressure sensors, and **the challenge
-  interface exposes none of it** (FAQ). Designing around touch is designing around data we cannot
-  read — but see §3.5(b): the **finger position lag** gives us most of what we wanted from touch,
-  from data the interface does expose.
-- **No grip-force tuning.** §3.5(a): the sim hand is 120–210× stronger than the real one, so any
-  number we tune against sim force is a number that does not exist on stage.
-- **No LLM in the control loop.** The instruction is parsed **once per episode in `reset()`**.
-  ⚠️ **But latency there is not free:** the safety watchdog has `stop_after_s = 1.0`
-  (`safety.py:69`), so a `reset` that takes over a second risks a latched `safe_stop`. A
-  deterministic resolver runs in microseconds and is safe; **an LLM in `reset()` is not**, and if we
-  ever add the model fallback it goes in a background thread with the deterministic answer
-  returned immediately. A model is the fallback for a zero margin, not the mechanism.
-- **Nothing that leans on wrist-camera geometry.** Wrist **extrinsics are null and intrinsics are
-  placeholders — uncalibrated today.** Head camera is a RealSense D435i, fx=fy=615, extrinsics from
-  URDF (~48° down, unverified).
-
-## 6. Judging, and what the demo has to be
-
-**Real robot 40 % (gated to the top ~5 by sim performance) · generality 25 % · originality 20 % ·
-presentation 15 %.** Prize 2,000 € plus an Aalto lab visit. Mentors on site: Erkka Lehtonen,
-Viktor Solianoi.
-
-Two consequences:
-
-1. **Sim performance is a qualifier, not a score.** It buys the ticket to the 40 %. So a fragile
-   sim-only trick that does not survive the real robot is worth nothing, and the last image pushed
-   before the deadline is the one that runs in the finals.
-2. **Generality is 25 % and their stated wishes for it are sim-to-real robustness, ideas beyond
-   this one setup, and a lot from very little real data.** Our story is a design-level one and can
-   be checked in the code rather than taken on trust: *we cannot emit an impossible mapping, and we
-   recover the whole instruction from two thirds of it.* That is a property, not a benchmark number
-   from our own test set.
-
-## 7. Open questions, tagged with what they block
-
-- [ ] 🔴 **Was the published 10–20 s per pick wall time or physics time, and what does a pick cost
-      on the corrected clock?** This decides whether 5 objects fit in 120 s at all. **Blocks: the
-      whole time budget, item 4, and how to read any score we measure.** Answered by item 0 — run it
-      first.
-- [ ] **Does the `< 2 cm/s` at-rest test apply to an object on the counter, or only in a bin?**
-      `scene.yaml` says *"not at rest at episode end counts as counter (0) unless it is inside a
-      bin"*, while `RULES_AND_SCORING` defines IN as requiring at rest — those two readings
-      disagree about a cylinder still rolling **inside** a bin at the buzzer. **Blocks: how early
-      cylinders must be placed (§3.3) and the length of the cleanup phase (item 4).** Ask a mentor.
-- [ ] **Does an object in the robot's hand at the buzzer count as "on counter" (0) or "knocked off"
-      (−1)?** **Blocks: whether the cleanup phase must put a held object down, and when the last
-      pick may safely start.** Ask a mentor.
-- [ ] **Do the finals instructions key on shape or on (colour, shape)?** `scene.resolve_bin`
-      accepts all three and `STARTER_PATHS` mentions shape words. **Blocks: the size of the
-      candidate set in item 1** (6 vs 12 vs composite).
-- [ ] **Is wall height really 6 cm?** It is a file default, not measured, and it sets the lift
-      height at near-full extension (§3.1). **Blocks: the release trajectory.**
-- [ ] **Rung 3 exists** — a 3 mm lid on bin `left`, hole clearance 1 cm default (1.5 cm easy, 3 mm
-      hard). Not yet assessed at all. **Blocks: nothing yet; do not start it before items 1–4.**
-- [ ] **Is `oracle.py` licensed for us to copy from?** **Blocks: whether item 1 reuses its template
-      list or re-derives it.**
-- [ ] **What is the real end-to-end budget** with 3 camera views plus state over the websocket?
-      Published rates are per model call with a single view. **Blocks: chunk length.** Measure in
-      the provided sim before choosing.
-
-## 8. How we work, until this changes
-
-- **No code before 02:00.** Research and documents only. Three plans died tonight to three reads;
-  that is three afternoons saved for one evening.
-- **Claim files in Warren before touching shared code, release when done.** No silent edits.
-- **Facts carry a source** — file and line, or a primary doc. Inferences are labelled. This
-  document keeps them apart on purpose.
-- **Do not delete another session's research.** It happened once today and it was not that
-  session's call to make.
-
-
----
-
-## 9. ✅ Read directly from the starter repo — four things that change the design
-
-Verified in the local clone, not relayed. Each one has a consequence, which is why it is here and
-not only in the facts file.
-
-### 9.1 `bin_phrase(b, rng)` is an empty seam, and it tells us what the finals will do
-
-```python
-BINS = ("left", "center", "right")
-
-def bin_phrase(b, rng=None):
-    """Bins are always named by position ('left'); they all look the same."""
-    return b
-```
-
-**The function takes an `rng` and does not use it.** It is called as `bin_phrase(b, rng)` when the
-instruction is built. So the organisers wrote a hook whose entire purpose is to vary how a bin is
-worded, and shipped it as the identity function in the training set.
-
-🔴 **Design requirement: match bin *phrases*, not bin words.** *"the one on the left"*,
-*"leftmost"*, *"the left-hand bin"*, *"the far left"* all have to score as `left`. A matcher keyed
-on the exact token `left` passes every training episode and can fail the ×1.5 final — which is
-exactly the trap this seam is shaped like.
-
-### 9.2 One of the eight training templates never says the word "bin"
-
-```
-"Sort the objects: {c0} into {b0}, {c1} into {b1}, {c2} into {b2}."
-```
-
-🔴 **Design requirement: never require the token `bin` to find a pair.** The eight templates
-confirm the pairing rule works — each colour sits next to its bin, in one of two word orders
-(colour-then-bin in six of them, bin-then-colour in *"The {b0} bin is for {c0} objects"* and
-*"Use the {b0} bin for {c0}"*) — but the anchor has to be colour-to-position adjacency, not the
-noun.
-
-### 9.3 Rung 3 needs no instruction parser at all — it needs the shape classifier
-
-```python
-INSERT_INSTRUCTION = "Put each object through the hole of the same shape in the lid."
-...
-if task == "insert_shapes":  # rung 3: no bin mapping, the lid holes define the target
-    return INSERT_INSTRUCTION, {}
-```
-
-The mapping is literally `{}`. The instruction is a **constant** — nothing to parse, ever. What
-rung 3 actually requires is knowing **which shape each object is**, and perception is explicitly
-shape-agnostic today.
-
-✅ **So the free shape classifier in §3.2 (fill ratio 1.00 / 0.785 / 0.50) is not a nice-to-have —
-it is the thing that unlocks a whole rung**, on top of serving shape-keyed mappings in the finals.
-That raises its priority above where §4 currently puts it, and it is the cheapest item on the list.
-
-### 9.4 ❌ **I got this one wrong.** We cannot run their held-out config, and we must not try
-
-I wrote earlier that we could run the organisers' own held-out randomisation. **We cannot.**
-
-**Only `dr/train.yaml` exists.** `eval_heldout` is *named* in `sim/run_sim.sh:9` and
-`sim/README.md:49`, but **there is no `eval_heldout.yaml` in the repo** — setting
-`AALTO_DR=eval_heldout` resolves to a missing file and crashes at load (`aalto_task/dr.py:39-42`).
-Its details live in `ORGANISER_NOTES.md`, which is organiser-only and not in the bundle.
-
-🔴 **And we are explicitly forbidden from going after it.** `RULES_AND_SCORING.md:87-88` bans
-*"trying to extract or reverse-engineer held-out configs, seeds or templates"* and *"training or
-tuning on the held-out sim variant"*.
-
-> **Rule for everyone, including subagents: nobody looks for the held-out configuration.** Not in
-> git history, not in reverted merges, not by probing the organisers' sim. If anyone stumbles on
-> held-out values, **that is a leak to report to the organisers, not material to train on.** The
-> agent that did this extraction found a reverted merge commit that might contain them and
-> deliberately did not open it. That was the right call and it is now the standard.
-
-So our generality evidence has to come from **`train.yaml` plus randomisation we design ourselves**,
-and we say so openly. That is honest and it is still good evidence — it is just not their test.
-
-### 9.5 ✅ The actual DR numbers, and the colour panic was overstated
-
-I also implied absolute HSV thresholds are the wrong shape of answer. **On the published `train`
-profile that is too strong.** The real numbers (`sim/dr/train.yaml`):
-
-| | range | note |
-|---|---|---|
-| object **hue** jitter | **±0.02 turn = ±7.2°**, per object | small |
-| object sat / val scale | ×[0.8, 1.15], clipped | red can drop to S≈0.68, V≈0.63 |
-| object mass | ×[0.7, 1.5] of 50 g | |
-| object friction | ×[0.75, 1.1] | |
-| key light intensity / rgb | ×[0.6, 1.4] / ±8 % | |
-| dome light intensity / rgb | ×[0.5, 1.5] / ±5 % | |
-| counter / bin colour | ±20 % / ±8 % per channel | **bin colour moves, bin geometry does not** |
-| head cam pose | **±0.01 m, ±1.0°** | |
-| head RGB | gain ×[0.9, 1.1] once per seed, noise σ = 3.0 (0–255) | |
-| head depth | σ = 1.0 mm + 0.002·depth, **1 % of pixels zeroed**, invalid = **0** | ≈2 mm at 0.5 m |
-| layout | ±0.005 m disc, ±5° yaw | |
-
-Base colours (`scene.yaml:34-36`) are red H≈0°, yellow H≈50°, blue H≈226°, so with ±7.2° of
-jitter **no two of red / yellow / blue can collide** — they stay 36°, 127° and 160° apart. Hue
-thresholds are fine. Three real risks replace the imagined one:
-
-1. 🔴 **The orange bins sit between red and yellow.** Bins are H≈24° (`scene.yaml:53`), and the
-   baseline's red window is OpenCV hue 0–8 (plus 170–180) against the bins at ≈12 — **a margin of
-   about 4 OpenCV units, which is the narrowest gap in the whole colour system.** Exclude bins by
-   **position**, never by hue alone. *(inference from the two published values.)*
-2. **Low saturation and value corners**, not hue, are where a red goes dull-brick. Tune against
-   drawn `train` samples, never one nominal render.
-3. **Camera pose jitter beats perception error.** ±1° at 0.35 m is ≈6 mm of lateral shift, against a
-   stated perception error of ≈4 mm (`baselines/classical/README.md:32`). **So the camera pose is
-   the dominant error term**, which is direct support for Timi's self-calibration-from-the-bins
-   idea: the bins are at known fixed positions and their geometry is **never randomised**, so they
-   are a free calibration target in every frame. *(inference.)*
-
-**Wrist cameras are not randomised at all** — and they are also uncalibrated presets with *"no
-measured mount yet"* (`aalto_task/scene_cfg.py:11`). Unusable either way, which §5 already said.
-
-## 10. The one idea underneath all of it
-
-Three of our four design decisions turned out to be the same decision, and it is worth saying as one
-thing rather than three tricks — for the 25 % generality and the 20 % originality, and because a
-single idea is what a judge remembers from a three-minute pitch.
-
-> **Use relative and ordinal structure, never absolute thresholds.**
-
-| Where | The absolute version (fragile) | Ours (relative) |
-|---|---|---|
-| **Instruction** | parse the sentence into a mapping and hope | **rank all six permutations**; the margin is the confidence (§4.1) |
-| **Colour** | fixed HSV thresholds per colour | the scene always holds red, yellow and blue — **order the blobs' hues** and assign by position on the hue circle, which survives a hue shift that breaks any threshold *(inference)* |
-| **Grasp** | tune a squeeze force | **compare the stall aperture** — 45 mm means we got the altitude pinch, 52 mm means we got the corners (§3.5b) |
-| **Shape** | train a classifier | **area ÷ bounding-rect area**, three separated ratios (§3.2) |
-
-Every row is a quantity that **moves with the perturbation instead of against it**, which is
-precisely what the held-out test (§9.4) and the real robot (§3.5) do to us. None of the four needs a
-GPU, training data, or a place in the 30 Hz loop.
-
-**That is the pitch, and it is checkable in the code rather than taken on trust:** *we never ask
-"is this value above a number we picked?" — we ask "which of the possible answers fits best, and by
-how much?"*
-
-
----
-
-## 11. ✅ The scoring code, read directly — and it settles three open questions
-
-All from `aaltonomous/scene/scene.py` and `scene.yaml` unless noted. **Where prose and code
-disagree, the code is what scores us.**
-
-### 11.1 🔴 The biggest finding: our sim score will be systematically optimistic
-
-```
-sim:  evaluate.py  --settle  default 3.0   "max s to wait for objects at rest before scoring"
-real: scored at the instant the episode ends
-```
-
-**The sim waits up to 3 sim-seconds for objects to settle before it scores. The real robot does
-not.** So an object still rolling or sliding when the buzzer goes **scores 0 on stage and often +1
-or +2 in sim** (`evaluate.py:199-200`, default at `:314`; rules line 25: *"at rest at episode
-end"*).
-
-That is a bias in the exact direction that hurts: **it inflates the number that qualifies us and
-not the number that pays.** And §3.3 already singled out the cylinder as the shape that rolls.
-
-> **Rule: finish with every object settled and the hand clear, and when judging our own sim runs,
-> re-score them with `--settle 0` to see the real-robot number.** Treat the gap between the two as
-> our rolling-object debt.
-
-### 11.2 ✅ At rest applies to **bins only** — which corrects what I wrote in §4
-
-```python
-b = self.bin_of(p)
-if b is None or speed > float(self.cfg["success"]["at_rest_speed"]): return "counter"
-```
-`scene.py:239-241`
-
-An object **on the counter is "counter" whatever its speed** — motion costs nothing there. The
-velocity test only ever decides whether something **in a bin** counts as in it.
-
-🔴 **So "nothing moving at the end" was too broad a rule and I had it wrong.** The correct version:
-**an object still moving *inside a bin* loses the whole point (it becomes 0), while an object
-rattling around on the counter was already 0 and loses nothing.** The cleanup phase should therefore
-protect **placements**, not tidy the counter. And `scene.yaml:83`'s *"unless it is inside a bin"* is
-simply wrong — `RULES_AND_SCORING.md:38` (*"or still moving at the end"*) agrees with the code.
-
-### 11.3 ✅ An object in the hand is judged only by where its centre is
-
-There is **no code path for a held object at all** — nothing in the repo mentions the hand when
-scoring. An object is classified by centre position and speed, full stop (`scene.py:237-242`):
-
-| Where the centre is at the buzzer | Score |
-|---|---|
-| in the hand, above the bin rim | **0** (counter) |
-| past the 110 × 60 cm table top, or >3 cm below the counter | **−1** (off) |
-| **inside a bin box, below the rim, at rest** | **counts as in that bin**, held or not |
-
-So **releasing a last object late over the correct bin beats carrying it to the buzzer**, and in
-principle lowering it in and holding it still also scores. ⚠️ But the real-robot score is read **by
-eye**, and a human judge may not count an object still in the gripper. **Design for the release,
-treat the held-in-bin case as a fallback we do not advertise.**
-
-### 11.4 ✅ Rung 3 pays the most per object, with the mildest downside
-
-```yaml
-insert_shapes: {"inserted": 3, "forced": -1, "dropped": -1, "wrong_hole": 0, "counter": 0, "off": 0}
-```
-`scene.yaml:82`
-
-**+3 per object** — higher than language's +2 and triple the fixed rung. And look at the losses:
-**`wrong_hole` is 0, `counter` is 0, `off` is 0.** The only ways to go negative are `forced`
-(−1) and `dropped` (−1).
-
-**That is an unusually favourable risk profile**: putting an object through the *wrong* hole costs
-nothing, so on rung 3 an attempt is nearly free. It also needs **no instruction parsing** (§9.3) —
-only shape. If rung 3 appears at all, **the free fill-ratio shape classifier plus a willingness to
-try is worth more per object than anything else in the challenge.**
-
-⚠️ Unknown whether the finals include rung 3 at all — the finals format we have is fixed +
-language + unseen language, and finals settings are not announced.
-
-### 11.5 ✅ `resolve_bin` accepts four key forms, in order
-
-```python
-for k in ((color, shape), color, shape, "default"):
-    if k is not None and k in mapping: return mapping[k]
-```
-`scene.py:46-49`
-
-So the candidate set in §4 item 1 may have to cover **`(colour, shape)` composites and a
-`"default"` catch-all**, not just colour and shape permutations. The `"default"` form is the
-interesting one: a finals instruction could say *"put everything in the left bin except the red
-cubes"*, which is a default plus one exception — and that is also the **negation** case §4 flagged.
-**Enumeration should include "one default + one exception" as a candidate family.**
-
-### 11.6 Smaller things worth not rediscovering
-
-- **`inside_margin` is 0.0** (`scene.yaml:75`): an object resting exactly on a bin's inner edge
-  counts as in. The bin boundary is generous, not strict.
-- **Knocked off = centre outside the 110 × 60 cm table top, or more than 3 cm below the counter
-  surface** (`scene.py:229-230`, `off_counter_drop: 0.03`). **No time component** — an object that
-  falls and is never touched again is −1 from then on.
-- **The ×1.5 finals weight is prose only and is not implemented** — `Scene.score` is a plain
-  `sum()` (`scene.py:251`). Our own eval will never show it, so the 83 %-of-the-final arithmetic in
-  §1 has to be applied by us, by hand.
-- **`sample_layout` defaults to `n_max=6`** while `scene.yaml` says 3–5; a caller that forgets
-  `layout_kwargs()` draws up to 6 objects (`tasks.py:54` vs `scene.yaml:70`).
-- **The 30-clip abort is marked *"spec N, to be decided"* in the source** (`safety.py:74`) while the
-  rules state it as final. Do not build anything that depends on the exact number.
-
-
----
-
-## 12. ✅ The real time bomb: the robot runs at half the speed the sim score was measured at
-
-From `baselines/classical/config.yaml` and `planner.py`, read directly. This is the most practical
-finding of the night and it **reorders the build list.**
-
-### 12.1 Two speed profiles, and the real robot gets the slow one
+✅ From `baselines/classical/config.yaml` and `planner.py`:
 
 | | arm vel | arm accel | hand vel | used by |
 |---|---|---|---|---|
 | **`sim` profile** | **0.97 rad/s** | **8.0 rad/s²** | 2.5 rad/s | the sim runs the 76–82 % was measured on |
 | **base (profile `none`)** | **0.50 rad/s** | **1.5 rad/s²** | 1.2 rad/s | ✅ **`run.py --backend real`** (`config.yaml:8`) |
-| safety filter ceiling | 1.0 rad/s | — | 3.0 rad/s | `interface/safety.py:49-50` |
+| safety filter ceiling | 1.0 rad/s | — | 3.0 rad/s | `safety.py:49-50` |
 
-The planner's move duration is `ta + S/vmax` with `ta = vmax/amax` (`planner.py:58-73`). So:
+The planner's move duration is `ta + S/vmax` with `ta = vmax/amax` (`planner.py:58-73`), so:
 
 - **per-move overhead**: sim `0.97/8 = 0.121 s` → real `0.50/1.5 = 0.333 s`, **2.75× worse**
 - **joint travel**: `S/0.97` → `S/0.50`, **1.94× longer**
 - **hand ramps** roughly double (2.5 → 1.2 rad/s)
 
-A pick is 7 arm moves plus a close, an open and a settle. Fixed floor before any joint travel:
-**≈2.5 s in sim, ≈4.8 s real.** So a 10 s sim pick (2.5 floor + 7.5 travel) becomes
-**≈ 4.8 + 7.5×1.94 ≈ 19 s on the robot.** *(inference, from the published gains and the planner's
-own formula — but every input is a read number.)*
+*(inference, from the published gains and the planner's own formula — every input is a read
+number.)* A pick is 7 arm moves plus a close, an open and a settle, so the fixed floor before any
+joint travel is **≈2.5 s in sim, ≈4.8 s real**, and a 10 s sim pick becomes
+**≈ 4.8 + 7.5×1.94 ≈ 19 s on the robot**.
 
-🔴 **Five objects at ~19 s is ~97 s of a 120 s budget, with no room for a single retry.** And
-§3.4's sim-clock correction stacks on top of this, not instead of it: that one was about the sim's
-own pacing, this one is about which gains the real backend loads.
+> 🔴 **Five objects at ~19 s is ~97 s of a 120 s budget, with no room for one retry.**
 
-### 12.2 And when it runs out of time, the baseline gives up completely
+#### 3.4.2 And the sim score itself was measured on a clock the organisers call 1.8× wrong
+
+✅ `sim/README.md` ("Still open"): the earlier grasp tuning *"ran ~1.8x too fast in physics time
+(wall pacing at RTF ~0.55); re-check grasp parameters on the sim clock."* The budget is denominated
+in **sim seconds** (*"`command_hz` count sim seconds"*, *"120 s sim ~ 220 s wall"*), and RTF is 0.70
+alone, ~0.59 with two sims, 0.50–0.53 with three.
+
+✅ **Confirmed by the organisers directly** (Discord, via Oliver, 14 Nov): *"Oracle on sim clock:
+NOT re-measured since the clock fix. The ~84 % was pre-fix; triangle grasps were the main miss. Our
+76–82 % is in the same range."* And ✅ the oracle's own `ORACLE_OVERRIDES` carry
+`motion.arm_max_vel 0.97, arm_max_acc 8.0, hand_max_vel 2.5` (`oracle.py:38-48`) — the fast profile.
+
+> 🔴 **So the 84 % ceiling and the 76–82 % baseline are both fast-profile, fast-clock numbers.
+> Nobody — including the organisers — knows either score on the clock we are scored on.**
+
+This is §3.4.1's effect *in the sim*, stacking on top of it rather than replacing it: that one is
+about which gains the real backend loads, this one about the sim's own pacing.
+
+⚠️ What remains open: whether the published *"10–20 s per pick"* was wall or sim time. **This is
+what step 0 measures** (§5), and it decides whether 5 objects fit in 120 s at all.
+
+#### 3.4.3 ✅ And when it runs out of time, the baseline gives up completely
 
 ```python
 if t + plan.duration > self.time_limit:
@@ -792,160 +356,116 @@ if t + plan.duration > self.time_limit:
 `policy.py:220-223`
 
 **One failed time check ends the baseline for the rest of the episode.** Candidates are ranked
-**nearest-bin first** (`policy.py:191-204`) with **no fallback to a shorter one**. So the moment the
-cheapest-looking remaining plan does not fit, it stops — even if another object would have fitted in
-the time left.
+**nearest-bin first** (`policy.py:191-204`) with **no fallback to a shorter one**. The moment the
+cheapest-looking remaining plan does not fit, it stops — even when another object would have fitted
+in the time left.
 
-✅ **That is a free and obvious fix, and it is the cheapest point in the challenge after the
-instruction:** rank the remaining candidates by **estimated duration**, try the shortest that fits,
-and only stop when *nothing* fits. The duration estimate already exists — `plan.duration` is what
-the check reads.
+> ✅ **The cheapest point in the whole challenge after the instruction:** rank the remaining
+> candidates by **estimated duration**, try the **shortest that fits**, and stop only when *nothing*
+> fits. The estimate already exists — `plan.duration` is what the failing check reads.
 
-### 12.3 ✅ Revised build order (supersedes the ordering in §4)
-
-| # | What | Why here |
-|---|---|---|
-| **0** | Measure the unmodified baseline on the sim clock, **and log `hand_q_target − hand_q`**, and re-score with `--settle 0` | §3.4, §3.5b, §11.1 — three unknowns, one run |
-| **1** | **Instruction → mapping** | 83 % of the final, baseline scores 0, and the only item whose value is immune to every clock and physics question |
-| **2** | **Time triage: shortest-fitting candidate, never give up** | §12.2 — a few lines, and without it the real robot's 2× slowdown silently truncates the episode |
-| **3** | **Yaw-aligned prism grasp** (disambiguate first, §3.2) | the organisers' own named blocker; the oracle caps at ~84 % until it changes |
-| **4** | **Post-placement verification** | nothing checks today; −1 → +2 is the largest per-object swing available |
-| **5** | **Settle before the buzzer** | §11.1 — the real robot has no 3 s settle grace that the sim gives us |
-| 6 | Shape classifier (fill ratio) | free, and it is what unlocks rung 3 (§9.3, §11.4) |
-| 7 | stretch: relay hand-over, depth-noise DR | §4 item 5, unchanged |
-
-**Item 2 moved from fourth to second** because of §12, and **the grasp dropped to third** — not
-because it matters less, but because items 1 and 2 are each a handful of lines against a measurable
-point loss, and the grasp is a tuning job with an uncertain ceiling (§3.4).
-
-### 12.4 Smaller reads worth having before anyone starts
-
-- **Chunk size is 10 ticks per `act()`** (`config.yaml:89`), and the planner returns 6-tick holds
-  while planning.
-- ✅ **The safety filter already has a target-vs-measured mechanism — `hand_max_lead` — and it is
-  `None` by default** (`safety.py:52`, applied at `:228-230`). So the §3.5b finger-lag signal is
-  not only available, the organisers built a hook for it and left it off. **Nothing in the baseline
-  reads `hand_q` except to seed the command** (`policy.py:105`).
-- **Stated perception error ≈ 4 mm** after the HSV fix, down from 15–20 mm
-  (`baselines/classical/README.md:32`, `config.yaml:123`) — and §9.5 notes camera pose jitter is
-  worth ≈6 mm, i.e. more.
-- **Grasp config, raw**: `point_in_palm [0.099, -0.084, 0.015]`, approach axis `[0, -1, 0]`,
-  `height_frac 0.5`, fingertip clearance `0.012`, three finger hints
-  (`[1,0,0]`, `[1,-1,0]`, `[0,-1,0]`) at weight `0.3`; hand open
-  `[0, -0.5, 1.5, -0.4, -0.4, -0.4, -0.4]`, closed `[0, -0.1, 1.2, -1.0, -0.6, -1.0, -0.6]`,
-  release `[0, -0.5, 1.5, -0.05, -0.05, -0.05, -0.05]`.
-- **Baseline HSV windows** (OpenCV units): red `0–8` and `170–180`, yellow `18–35`, blue `100–130`,
-  all with S,V floors of 70/70, 70/90, 70/50. **A blob matching no colour is never formed at all** —
-  perception loops only over configured colours (`perception.py:51-58`), so unknown-coloured pixels
-  are silently dropped rather than reported as an unknown object.
-
-
----
-
-## 13. ✅ `oracle.py`, read directly — the organisers never solved the held-out instruction either
-
-All from `aaltonomous/sim/oracle.py` (423 lines), MIT.
-
-### 13.1 Their "parser" memorises 288 sentences and gives up on anything else
-
-```python
-def _parse_table():
-    """Every training-template instruction (...) -> mapping."""
-    for tpl in tasks.TEMPLATES:
-        for colors in itertools.permutations(tasks.COLORS):
-            for bins in itertools.permutations(tasks.BINS):
-                table[tpl.format(**w)] = dict(zip(colors, bins))
-
-def parse_instruction(text):
-    ...  m = _PARSE.get(text);  return dict(m) if m else None
-```
-`oracle.py:196-218`
-
-**It is exact string equality against a table of 8 templates × 36 orderings = 288 memorised
-sentences.** On any held-out phrasing it returns `None`, and the oracle then falls back to the
-privileged mapping it is given (`:291-294`, `m is None and self.privileged_mapping is not None`).
-
-🔴 **So the organisers' own reference solution does not solve the unseen-instruction episode at
-all — it cheats past it with privileged state we do not have.** The ×1.5 final episode is
-unanswered in the entire repo. That is the clearest possible confirmation that §4 item 1 is where
-the differentiation is, and it also means **nobody is handing us a solution to copy** — only a
-yardstick to beat.
-
-### 13.2 ✅ But `_parse_table()` is a free, exhaustive test set
-
-Those 288 sentences come with their ground-truth mappings, generated by the organisers' own code.
-**So we can test our enumerate-and-rank resolver against every sentence the training distribution
-can produce, exhaustively, for free** — not a sample, the whole space. Any design that scores less
-than 288/288 on it is broken before we even get to held-out phrasings.
-
-That is the cheapest validation in the project and it costs one import.
-
-### 13.3 🔴 Their grasp fix is **not** a rotation — and it is for a different failure than I analysed
+#### 3.4.4 ✅ The sim gives a 3-second settle grace that the robot does not
 
 ```
-# Pinch thumb vs ONE finger: the Dex3 index/middle tips are 57 mm apart (URDF), so with the object
-# centred between them (classical `auto` grasp point) a 45 mm object wedges between the two fingers
-# and is never released (carried back home; seen with cylinders).
-# Shift the grasp point 15 mm sideways in the palm (palm z).
+sim:  evaluate.py  --settle  default 3.0   "max s to wait for objects at rest before scoring"
+real: scored at the instant the episode ends
 ```
-`oracle.py:48-50`
+`evaluate.py:199-200`, default at `:314`; rules line 25 *"at rest at episode end"*.
 
-**There are two separate grasp failures and I had been treating them as one:**
+**The sim waits up to 3 sim-seconds for objects to settle before scoring. The real robot does not.**
+So an object still rolling at the buzzer **scores 0 on stage and often +1 or +2 in sim** — a bias in
+the exact direction that hurts: **it inflates the number that qualifies us and not the number that
+pays.**
 
-| failure | symptom | cause | fix |
-|---|---|---|---|
-| **wedging** | object **never released**, carried back home — *seen with cylinders* | object centred between index and middle, 45 mm into a 57 mm gap | ✅ **shift the grasp point 15 mm sideways in the palm** — already written, MIT, free to take |
-| **spinning** | prism rotates out of the pinch | corner contact → point contact (§3.2) | wrist yaw onto an altitude — **ours, not in the repo** |
+> **Rule: finish with every object settled and the hand clear, and re-score our own runs with
+> `--settle 0` to see the real-robot number.** The gap between the two is our rolling-object debt.
 
-So the 15 mm lateral offset is a **gift**: it is the organisers' own fix for a failure mode we had
-not separately identified, and it explains the "carried back home" behaviour. **Take it, and keep
-the yaw work for the prism**, which is the failure their own `sim/README.md:77` note names.
+### 3.5 The hand: force is not a lever, so the grip must be geometric
 
-### 13.4 ✅ The relay hand-over is a config trick, uses no privileged state, and is copyable
+#### 3.5.1 ✅ The gains are fixed and identical for every team
 
-```python
-def _relay_scene(scene, cfg):
-    """Scene copy whose 'bins' are the relay points at counter level, so the stock planner places
-    (not drops) there: wall_height 0 -> release height = counter + object/2 + drop_above_rim."""
-    b["wall_height"] = 0.0
-    b["centers"] = {f"relay{i}": ... for i, (x, y) in enumerate(RELAY_POINTS)}
-    return Scene(cfg2)
-```
-`oracle.py:251-261`
+✅ **Organisers (Discord, via Oliver, 14 Nov):** *"Dex3 gains: real runner uses **kp 1.5 / kd 0.2,
+fixed, same for all teams**. We only send joint targets."* This matches the code: `hand_kp=1.5,
+hand_kd=0.2, hand_hz=100.0` (`interface/backends.py:202`).
 
-It **deep-copies the scene config, zeroes the wall height and replaces the bin centres with
-hand-over points**, then runs the *stock* planner against that fake scene. So the entire
-bin-placement machinery is reused to place an object gently at counter level for the other arm.
+> 🔴 **There is nothing to tune. Grip force is not a design variable for anyone in this
+> competition** — we send joint targets into a fixed controller.
 
-✅ **Nothing privileged is involved** — it is derived from the scene config, not the scene service.
-The privileged parts of `oracle.py` are cleanly fenced into `PrivilegedPerception` (reads the scene
-service instead of a camera) and the `privileged_mapping` callable. **Everything else in that file
-is ordinary MIT code we may read and copy**, which is the answer to §7's licence question.
+That reduces a question this handbook spent a long time on to a prediction problem. For the record,
+because it still shapes what to expect: the sim's implicit finger actuators are **stiffness 100,
+damping 10, effort_limit 300** with **self-collisions off** (`unitree_sim_isaaclab robots/unitree.py`,
+not overridden in the Aalto `env_cfg.py`), against real limits of **2.45 N·m for thumb_0 and 1.4 N·m
+elsewhere** (`interface/joint_spec.yaml`). ⚠️ Whether stiffness 100 means a **67×** gap or a
+**~1.2×** one depends on Isaac Lab issue **#4918** (implicit-actuator joints reported 50–57× softer
+than stated, a maintainer calling it plausible; NVIDIA separately warns USD and PhysX stiffness
+units differ by 180/π). **Never quote "the sim hand is 120–210× stronger" as a fact, and never on
+stage.** The honest line: *the sim's force ceiling is two orders of magnitude above the robot's, and
+whether it is ever reached depends on a gain whose units are unresolved.*
 
-### 13.5 Free tuning values, and one caveat about the 84 %
+A **step test** — command a known position error against a blocked finger, compare `hand_q`
+response — settles it. It is now **informational, not blocking**, precisely because no gain is ours
+to change. Do it after the score measurement, not before.
 
-`ORACLE_OVERRIDES` (`oracle.py:38-48`) differ from the baseline's and are the organisers' own
-tuned numbers: `motion.counter_clearance 0.02`, `motion.max_joint_step 0.6`, `ik.max_tilt_deg 35`,
-`ik.random_restarts 4`, `motion.close_hold_s 0.25`, `motion.settle_s 0.3`.
+> **The design rule holds under every reading: command an aperture, not a squeeze.** Close until the
+> finger stops tracking and hold just past contact, rather than commanding full closure and letting
+> the solver invent force. NVIDIA's own warning that with an implicit drive **extra stiffness does
+> not make the drive provide more force** means turning a gain up is not a fix even where it looks
+> like one.
 
-⚠️ **And note `motion.arm_max_vel 0.97`, `arm_max_acc 8.0`, `hand_max_vel 2.5` in that same
-block** — the oracle's ~84 % was measured on the **fast sim profile too**, not the slow profile the
-real robot loads (§12.1). So the 84 % ceiling and the 76–82 % baseline are *both* fast-profile
-numbers, and neither has ever been measured at the speeds the robot will actually run.
+#### 3.5.2 🔴 The real robot grips WORSE than the sim
 
+✅ **Organisers (Discord, via Oliver, 14 Nov):** *"Pad friction: not measured. Pads are rubber. Sim
+uses static 1.2 / dynamic 1.0 (grippy) → **expect a bit LESS grip on the real robot**."*
 
----
+And ✅ objects use PhysX combine mode **"max" with static friction 1.2** (`scene_cfg.py:228`), so
+**a pad material below 1.2 changes nothing** in sim — the object's value wins.
 
-## 14. ✅ Corrections round two — verified against the clone after a cross-check
+> 🔴 **This is the single most load-bearing sentence we have about the grasp.** Any grip that holds
+> because of friction margin degrades **on the exact run that pays**. The only defence is
+> **geometric stability** — the 45 mm apex-against-flat-face pinch of §3.2 — not a firmer squeeze,
+> which §3.5.1 says we cannot command anyway.
 
-A teammate's research was cross-checked against this handbook and challenged six of its claims.
-**I re-verified each one in the local clone rather than taking the relay.** Four were right, one did
-not reproduce where it was cited (but is real elsewhere), and the net effect is that **three numbers
-of mine were wrong.**
+One forum user reports slips at μ = 10 in Isaac; sim grasp success is fragile in both directions.
 
-### 14.1 ❌ The camera intrinsics and therefore my pixel arithmetic
+⚠️ **Self-collisions are off in sim**, the safety filter does not check them, and **staff e-stop for
+them** — a gate failure with no warning anywhere in our loop. Same for fingertip-to-table.
 
-`interface/calibration.yaml` is the source of truth, and **`INTERFACE.md`'s fx = 615 is stale**:
+#### 3.5.3 ✅ The free grasp sensor, and it does not depend on the gain question at all
+
+The Dex3-1 has 33 pressure sensors and ✅ **the interface exposes none of them** (FAQ). But the
+observation **does** carry **`hand_q` (14)** — measured finger positions — while we send
+`hand_q_target`.
+
+> **`hand_q_target` − `hand_q` is a contact signal, for free, every tick.** Fingers stall short of
+> target → something is between them. Fingers reach target → we closed on air, or the object is gone.
+
+With no new sensing and nothing in the way of the 27 Hz gate, that gives:
+
+- **grasp success / failure detection** — the thing tactile data would have given us;
+- **a drop detector** mid-carry (the lag disappears while we are still holding);
+- **a good-grip check**: a prism pinched along its altitude stalls at ~45 mm, across the corners at
+  ~52 mm, so **the stall aperture says whether we got the good grip or the bad one — before we
+  lift** (§3.2).
+
+✅ **The organisers built the hook and left it off:** the safety filter already has a
+target-vs-measured mechanism, **`hand_max_lead`, default `None`** (`safety.py:52`, applied at
+`:228-230`), and **nothing in the baseline reads `hand_q` except to seed the command**
+(`policy.py:105`).
+
+⚠️ Two cautions. **A blocked finger lags its target whatever the gain is**, so the signal's
+*existence* survives the #4918 question — only its *size* moves; but it must be detectable above the
+solver's tracking error, so **log `hand_q_target − hand_q` during step 0 and look before building on
+it.** And a relayed lead says **real `hand_q` reads slightly past zero at rest and can glitch**, so
+any lag code needs a clamp and a median filter. ⚠️ A second lead says `hand_max_lead` **may be
+enabled in the finals** (*"final safety values will not be looser"*) — if it is on, a deliberate
+squeeze-past-contact posture **clips**, and the gate wants zero clips. **Another argument for
+aperture over squeeze.**
+
+### 3.6 Perception: the numbers are measured, and the margins are thin
+
+#### 3.6.1 ✅ Use `Calibration.load()`, never a literal
+
+`interface/calibration.yaml` is the source of truth and **`INTERFACE.md`'s fx = 615 is stale**:
 
 ```yaml
 head:
@@ -954,80 +474,69 @@ head:
   T_pelvis_optical: [... 0.053660], [... 0.017530], [... 0.473870]
 ```
 
-These are **measured from the actual serial number on 2026-11-12**, not a `(default)` placeholder,
-and the sim reads the yaml. **Use `Calibration.load()`, never a literal.**
+**Measured from the actual serial number on 2026-11-12**, not a placeholder, and the sim reads the
+yaml. The camera sits at pelvis **(0.054, 0.018, 0.474)** looking down **47.6°**, so the object band
+is **0.47–0.53 m from the lens**. A 45 mm object is therefore **51–58 px**, and 7.5 mm is ~9.7 px,
+or **~7 px after foreshortening** — relevant to the 2D shape classifier (§3.2.3), **not** to the
+yaw, which works in metres (§3.2.2).
 
-And the extrinsics change the geometry I reasoned from: the camera sits at pelvis
-**(0.054, 0.018, 0.474)**, looking down at **47.6°** (from the rotation column
-`(0.674, 0, -0.738)`). The object band at pelvis x 0.26–0.33 with a 4.5 cm top face is therefore
-**0.47–0.53 m from the lens, not the 0.35 m I used.**
+#### 3.6.2 🔴 The near edge of the spawn region sits exactly on the bottom image border
 
-| | I said | ✅ actual |
+✅ Measured locally, 14 Nov: `scene/test_scene.py:224 test_cubes_and_bins_visible` — whose class
+docstring states *"With the default calibration (URDF head pose), **every object must be in the head
+image**"* — **fails** on the shipped calibration. The four points outside are the **bottom corners
+(z = 0)** of an object at the **near-y edge** of the region (`region_y = [0.12, 0.19]`,
+`region_x = [0.28, 0.62]`). Via `cal.project` they land at **v = 480.2 in a 480-px-high image** —
+out by two tenths of a pixel. The far corners sit 21 px from the left border, 22 px from the right.
+
+Object **tops** are comfortably in frame; the **bottom edge of a near object is clipped**.
+
+*(inference)* `sim/dr/train.yaml` jitters the head camera pose by ±0.01 m and **±1.0°**. At
+fy ≈ 604 one degree is **≈10.5 px**. A 0.2 px margin under ±10 px of jitter means the near row of
+the region is clipped on some episodes and clear on others.
+
+✅ **`perception.py` has no border check of any kind** — verified by grep: no `border`, `edge`,
+`clip` or image-shape test anywhere in it.
+
+> **Guard: one line.** Does the blob touch row 0 / row 479 / column 0 / column 639? If yes, **abstain
+> on shape** rather than guess, or relocate the object first (the relocate path exists).
+
+#### 3.6.3 ✅ The real DR numbers — and the colour panic was overstated
+
+| | range | note |
 |---|---|---|
-| fx | 615 | **604.8** |
-| object distance | 0.35 m | **0.47–0.53 m** |
-| 45 mm object | 79 px | **51–58 px** |
-| 7.5 mm apex offset | 13 px | **~9.7 px, or ~7 px after the 42° foreshortening** |
+| object **hue** jitter | **±0.02 turn = ±7.2°**, per object | small |
+| object sat / val scale | ×[0.8, 1.15], clipped | red can drop to S≈0.68, V≈0.63 |
+| object mass / friction | ×[0.7, 1.5] of 50 g · ×[0.75, 1.1] | |
+| key / dome light | ×[0.6, 1.4], ±8 % · ×[0.5, 1.5], ±5 % | |
+| counter / bin colour | ±20 % / ±8 % per channel | **bin colour moves, bin geometry never does** |
+| head cam pose | **±0.01 m, ±1.0°** | the dominant error term, see below |
+| head RGB | gain ×[0.9, 1.1] per seed, noise σ = 3.0 (0–255) | |
+| head depth | σ = 1.0 mm + 0.002·depth, **1 % of pixels zeroed**, invalid = **0** | ≈2 mm at 0.5 m |
+| layout | ±0.005 m disc, ±5° yaw | |
 
-**The method survives, the margin does not.** The apex offset is still ~15 % of the object's width,
-which is workable, but it is close enough to the noise floor that **§3.2's disambiguation must be
-validated on rendered frames before anything depends on it** — it is no longer obviously safe.
+✅ Base colours (`scene.yaml:34-36`) are red H≈0°, yellow H≈50°, blue H≈226°, so with ±7.2° of
+jitter **no two of them can collide** — they stay 36°, 127° and 160° apart. **Hue thresholds on the
+objects are fine.** Three real risks replace the imagined one:
 
-### 14.2 ❌ Holds and the gate, corrected above
+1. 🔴 **The orange bins sit between red and yellow.** Bins are H≈24° (`scene.yaml:53`); the
+   baseline's red window is OpenCV hue 0–8 (plus 170–180) against bins at ≈12 — **a margin of about
+   4 OpenCV units, the narrowest gap in the whole colour system.** Exclude bins by **position**,
+   never by hue alone. *(inference from the two read values.)*
+2. **Low saturation and value corners**, not hue, are where a red goes dull-brick. Tune against
+   drawn `train` samples, never one nominal render.
+3. ✅ **Camera pose jitter beats perception error.** Stated perception error is **≈4 mm** after the
+   HSV fix (`baselines/classical/README.md:32`), while ±1 cm and ±1° together are worth **≈15 mm**.
+   **The camera pose is the dominant error term** — which is direct support for Timi's
+   self-calibration-from-the-bins idea: the bins are at known fixed positions and **their geometry
+   is never randomised**, so they are a free calibration target in every frame.
 
-From `deploy/runner.py`: `hold = not queue`, and `wait = hold and pending is not None`. A wait
-re-sends the last command **as an explicit target** and is counted in `waits`, not `holds`. The
-summary computes `command_hz = (ticks − holds) / span  # policy targets only (spec §8 gate)`.
+✅ **Wrist cameras are not randomised at all**, and they are uncalibrated presets with *"no measured
+mount yet"* (`aalto_task/scene_cfg.py:11`) — null extrinsics, placeholder intrinsics. **Unusable.**
 
-**So only the runner's idle holds are excluded. Everything the policy emits counts, including
-explicit hold targets and re-sent commands.** That is better news than my original wording: a slow
-policy can hold the gate by returning explicit holds. What must stay rare is the runner having
-nothing to send.
+#### 3.6.4 ⚠️ The bin-rim false positive — real, but narrower than it first looked
 
-### 14.3 ✅ Rung 3 is probably not evaluated — so the shape classifier loses its best argument
-
-```yaml
-tasks: [sort_fixed, sort_language]    # optional, default both
-```
-`docs/participants/SUBMISSION.md:134`
-
-The submission manifest offers **only the two sorting tasks**, `evaluate` is invoked with
-`--task sort_fixed` and `--task sort_language` (`:106-107`), and the finals format is fixed +
-language + unseen language. `insert_shapes` appears nowhere in the submission path.
-
-🔴 **So §9.3 and §11.4 overstated the case: I used rung 3 to promote the shape classifier, and
-rung 3 is probably never played.** Finals settings are officially unannounced, so it is not
-impossible — but it is not a reason to build anything.
-
-**The classifier still stands on two other legs**, which is why it stays on the list:
-1. `scene.resolve_bin` accepts shape-keyed mappings and `STARTER_PATHS` says the harder finals may
-   add shape words (§11.5) — if that happens, being shape-blind scores zero on those objects.
-2. **The prism fix needs to know it is a prism** (§3.2). The yaw disambiguation is shape-specific.
-
-### 14.4 ✅ The hand gain gap is real, and now it has a number
-
-The claim was cited to `deploy/backends.py` and is not there. It is in **`interface/backends.py:202`**:
-
-```python
-hand_kp=1.5, hand_kd=0.2, hand_hz=100.0, ...
-```
-
-So **the real hand is commanded at kp = 1.5 over DDS at 100 Hz**, while the sim's implicit actuator
-is **stiffness 100** (§3.5). That makes the gap either:
-
-- **~67×**, if the sim's stiffness is what it says, or
-- **~1.2×**, if Isaac Lab issue #4918 applies and stiffness 100 behaves like ~1.75 N·m/rad.
-
-✅ **§3.5's position was the right one and now it is sharper:** the ceiling ratio is checked, the
-gain ratio is bimodal, and **the step test picks between 67× and 1.2×.** Until it runs, "command an
-aperture, not a squeeze" is the rule that is correct under both. Also note **the real hand runs its
-own loop at 100 Hz** while we command at 30 — there are ~3 hand updates per tick we do not see.
-
-### 14.5 🔴 New and verified: an orange bin wall can pass as a red object
-
-This one is a genuine gap and it undercuts "exclude bins by position" from §9.5.
-
-`baselines/classical/perception.py:100-118` builds the mask like this:
+`baselines/classical/perception.py:100-118`:
 
 ```python
 keep = self._bin_hulls_mask(...)          # 2D projected bin hulls
@@ -1039,206 +548,528 @@ half = outer_size/2 + c["bin_pixel_margin"]
 for ctr in bins.centers: ok &= ~(inside that footprint)
 ```
 
-Three things compose badly:
+1. ✅ **With valid depth the 2D bin mask is thrown away** (`keep[:] = 255`).
+2. ✅ **The height test does not reject a bin wall.** `height_range: [0.4, 2.0]` is in object sizes
+   (`config.yaml:29`, comment claims it *"rejects hands, bin walls"*); a 6 cm rim is
+   **6/4.5 = 1.33 sizes — inside the band.**
+3. ✅ **`bin_pixel_margin` is 0.004** — a 4 mm footprint margin against the ≈15 mm camera-pose error
+   of §3.6.3.
+4. ✅ **Depth holes are kept as "unknown" by design**, and real depth has holes near bin walls.
 
-1. **With valid depth the 2D bin mask is thrown away** (`keep[:] = 255`) and everything rests on the
-   3D test.
-2. **The height test does not reject a bin wall.** `height_range: [0.4, 2.0]` is in object sizes
-   (`config.yaml:29`, whose comment claims it *"rejects hands, bin walls"*). A 6 cm rim is
-   **6/4.5 = 1.33 object sizes — inside the band.** So the rim passes the height test.
-3. **The only thing left is a 4 mm footprint margin.** `bin_pixel_margin: 0.004`
-   (`config.yaml:33`) — against a camera-pose error that §9.5 puts at **≈15 mm** once the ±1 cm
-   translation and ±1° rotation are both counted.
+✅ **But a second guard survives the depth path:** `_reject` (`perception.py:170-187`) runs **after**
+3D reconstruction and rejects any detection whose top centre lands inside a bin footprint +
+`bin_exclusion_margin`, returning `in_bin:<name>`. **That one is not discarded.**
 
-🔴 **A 4 mm margin against a 15 mm error means bin-rim pixels can survive the exclusion** — and the
-bins are orange, sitting between red and yellow in hue (§9.5). **Plus depth holes are kept as
-"unknown" by design**, and real depth has holes near bin walls. So the failure is: *a strip of
-orange rim gets grouped as a red blob near the correct height, and the robot tries to pick up the
-bin.*
+> **So the honest exposure is narrow: a rim blob whose reconstructed centre lands *outside* the
+> footprint + margin — the outer face of the wall.** Not "the robot will try to pick up a bin".
+> Still worth one rendered frame, and the fix is free: keep the 2D hull mask as a **union** with the
+> 3D test instead of discarding it, and widen `bin_pixel_margin` to cover real jitter.
 
-**Fix before trusting any colour work:** widen `bin_pixel_margin` to cover the real jitter, keep the
-2D hull mask as a union with the 3D test instead of discarding it, and treat the rim band as
-keep-out rather than inferring it. *(The composition is ours; all four numbers are read.)*
-
-Minor, same file: the code hardcodes the lower height bound as `h >= 0.25` while `config.yaml` says
+✅ Minor, same file: the code hardcodes the lower bound as `h >= 0.25` while `config.yaml` says
 `height_range: [0.4, 2.0]`. **The configured lower bound is ignored.**
 
-### 14.6 Relayed but not yet verified by me — treat as leads, not facts
+✅ And one behaviour to design around: **a blob matching no configured colour is never formed at
+all** — perception loops only over configured colours (`perception.py:51-58`), so unknown-coloured
+pixels are silently dropped rather than reported as an unknown object. ⚠️ A relayed lead says **a
+"distractor object" is the named harder-layout knob** and that finals episode 3 is unseen
+instruction *and* layout. A distractor is therefore either invisible to us or mistaken for cargo —
+**worth a deliberate "unknown object" branch.**
 
-Each of these came through two hops. They are plausible and worth checking first thing:
+### 3.7 ✅ The instruction space, exactly
 
-- **The baseline Dockerfile may not build from the public clone** — `baseline.Dockerfile:22` copies
-  a URDF said to be absent, with a pinned-commit workaround. **If true this blocks item 0 and every
-  submission**, so it is the first thing to try.
-- **Two objects in one bin: the second may be lost.** An object resting on another has its centre
-  at z ≈ 0.0705, **above the 6 cm rim**, so it scores as counter. The baseline uses one drop point
-  per bin. Colour-only bijections cap a bin at 2 objects, but shape-keyed or `default` mappings can
-  send 3–5 to one bin. **This would directly cap item 1's payoff**, so verify before relying on
-  many-to-one mappings.
-- **`hand_max_lead` may be enabled in the finals** — `INTERFACE.md` reportedly says final safety
-  values *"will not be looser"*. If it is on, a deliberate squeeze-past-contact posture clips, and
-  the gate needs zero clips. **Argues again for aperture over squeeze.**
-- **Real arm sag**, no gravity feedforward, estimated 1.5–3.5 cm against a 12 mm
-  `fingertip_clearance`. Real-robot only, so the qualifier will never show it.
-- **Real `hand_q` reads slightly past zero at rest and can glitch**, so any lag-signal code
-  (§3.5b) needs a clamp and a median filter, and the first action must be within the per-tick cap
-  of the measured state.
-- **Real head camera runs auto-exposure and auto-white-balance with JPEG q85** — so real colour
-  drifts in ways no DR profile models, and all our hue reasoning is sim-only today.
-- **A "distractor object" is the named harder-layout knob**, and episode 3 is unseen instruction
-  *and layout*. Since perception silently drops unknown colours (§12.4), a distractor is either
-  invisible or mistaken for cargo. **Worth a deliberate "unknown object" branch.**
+| | |
+|---|---|
+| Bins | `BINS = ("left", "center", "right")` — ✅ and the brief confirms *"no markings; they are told apart only by their position"* |
+| Fixed mapping | `{"red": "left", "yellow": "center", "blue": "right"}` |
+| Training templates | **8**, two word orders (colour-then-bin in six; bin-then-colour in *"The {b0} bin is for {c0} objects"* and *"Use the {b0} bin for {c0}"*) |
+| Mappings | `rng.permutation(COLORS)` zipped with `rng.permutation(BINS)` → **6** |
+| Total training sentences | 8 × 36 = **288** |
 
-### 14.7 ⚠️ Integrity note, for a mentor rather than for us
+#### 3.7.1 🔴 `bin_phrase` is an empty seam, and it tells us what the finals will do
 
-The cross-check flagged that **a held-out DR parameter appears to be quoted in a comment in the
-public starter's `baselines/classical/config.yaml`**, and that a teammate's research derived
-worst-case ranges from it. The value was not reproduced into this handbook and **I have not opened
-it.**
+```python
+def bin_phrase(b, rng=None):
+    """Bins are always named by position ('left'); they all look the same."""
+    return b
+```
 
-**Position: we do not use it, and we mention it to a mentor.** It reached us through the
-organisers' own shipped file rather than through anything we extracted, so it is not a breach on our
-side — but §9.4's rule is about not benefiting from held-out configuration, and deriving stress
-ranges from that comment would benefit from it. **Anything already derived from it should be
-re-derived from `train.yaml` plus our own margins.**
+✅ **The function takes an `rng` and does not use it**, and it is called as `bin_phrase(b, rng)` when
+the instruction is built. The organisers wrote a hook whose entire purpose is to vary how a bin is
+worded and shipped it as the identity function in the training set.
+
+> 🔴 **Match bin *phrases*, not bin words.** *"the one on the left"*, *"leftmost"*, *"the left-hand
+> bin"*, *"the far left"* must all resolve to `left`. A matcher keyed on the exact token `left`
+> passes every training episode and can fail the ×1.5 final — which is exactly the shape of this seam.
+
+#### 3.7.2 🔴 One of the eight templates never says the word "bin"
+
+```
+"Sort the objects: {c0} into {b0}, {c1} into {b1}, {c2} into {b2}."
+```
+
+> **Never require the token `bin` to find a pair.** The anchor is colour-to-position **adjacency**,
+> not the noun.
+
+#### 3.7.3 ✅ `resolve_bin` accepts four key forms, in order
+
+```python
+for k in ((color, shape), color, shape, "default"):
+    if k is not None and k in mapping: return mapping[k]
+```
+`scene.py:46-49`
+
+So a mapping may be keyed on **`(colour, shape)` composites**, colour, shape, or a **`"default"`
+catch-all**.
+
+#### 3.7.4 ✅ What the organisers say the finals will actually test
+
+✅ **Organisers (Discord, via Oliver, 14 Nov):** *"Finals instructions: **colour first**. If several
+teams handle colour, **shape-based instructions may also be tested**. **No negation**."*
+
+Three consequences:
+
+1. **Colour permutations (6) are the primary target.** Build that first and build it well.
+2. **Shape-keyed is a contingent second tier** — and we should assume several teams handle colour,
+   so **assume shape words appear.** This is the argument that keeps the shape classifier (§3.2.3)
+   on the list now that rung 3 looks dead: going into the finals shape-blind scores **zero** on
+   those objects.
+3. **No negation.** This removes the one case enumeration reads *backwards* — *"anything but the
+   left bin"* looks to a proximity count like support for the pair it denies. The inverting flag and
+   the *"one default + one exception"* candidate family both leave the critical path.
+
+⚠️ **Provenance caution, and it is load-bearing:** this is Discord relayed through two hops, not a
+line of code. *"No negation"* is a **relaxation**, so if it is wrong we lose points. Treat it as
+binding for **priority** (what we build first) and not as licence to break robustness that costs us
+nothing — enumeration cannot emit an impossible mapping with or without it.
+
+### 3.8 🔴 Two targets, and a sim fix can cost us the one that gates the prize
+
+**We cannot change the organisers' sim for the held-out evaluation.** Every physics fix —
+`solve_articulation_contact_last`, torsional friction, capping `effort_limit`, self-collisions on —
+applies only to **our** training and testing copy.
+
+| | runs on | what it decides |
+|---|---|---|
+| **The qualifier** | the **organisers'** unmodified sim | whether we are in the finalists at all |
+| **The prize** | the **real robot** | ✅ the brief: *"The best real-robot score wins."* |
+
+**The trap:** *(inference)* making our copy more realistic makes it **harder**, and a grasp tuned
+against our harder copy can score **worse** on theirs — and theirs picks the finalists.
+
+> **The rule: use the realistic copy to choose the design, validate the submitted score on the
+> organisers' unmodified sim. Never submit a policy whose numbers only exist against our modified
+> physics.**
+
+A geometry-stable grasp (§3.2) is exactly the kind of choice that holds on both, because it does not
+depend on which physics is more forgiving.
+
+### 3.9 ✅ Scoring details that decide the endgame
+
+#### 3.9.1 At rest applies to **bins only**
+
+```python
+b = self.bin_of(p)
+if b is None or speed > float(self.cfg["success"]["at_rest_speed"]): return "counter"
+```
+`scene.py:239-241`
+
+An object **on the counter is "counter" whatever its speed** — motion costs nothing there. The
+velocity test only ever decides whether something **in a bin** counts as in it.
+
+> **An object still moving *inside a bin* loses the whole point (it becomes 0). An object rattling
+> on the counter was already 0 and loses nothing.** So the cleanup phase protects **placements**, it
+> does not tidy the counter.
+
+✅ `scene.yaml:83`'s *"unless it is inside a bin"* is simply wrong; `RULES_AND_SCORING.md:38`
+(*"or still moving at the end"*) agrees with the code. **Where prose and code disagree, the code is
+what scores us.**
+
+#### 3.9.2 An object in the hand is judged only by where its centre is
+
+✅ There is **no code path for a held object at all** — nothing in the repo mentions the hand when
+scoring (`scene.py:237-242`):
+
+| Centre at the buzzer | Score |
+|---|---|
+| in the hand, above the bin rim | **0** (counter) |
+| past the 110 × 60 cm table top, or >3 cm below the counter | **−1** (off) |
+| **inside a bin box, below the rim, at rest** | **counts as in that bin**, held or not |
+
+> **Releasing a last object late over the correct bin beats carrying it to the buzzer.**
+
+⚠️ But the real-robot score is read **by eye**, and a human judge may not count an object still in
+the gripper. **Design for the release; treat held-in-bin as a fallback we do not advertise.** (Open
+question for a mentor, §8.)
 
 ---
 
-## 15. What ran on Felix's laptop, 14 Nov 00:00–00:20 CET
+## 4. ✅ What the baseline already does, so we do not rebuild it
 
-No GPU here, so the simulator never had a chance — but the whole logic layer ran, and it
-settled four of the six questions I had sent to Timi as "needs a running sim". Two of my own
-claims come out wrong, and one of the questions turns out to be weaker than I told him.
+`planner.py` (460 lines) already has: both arms, a finger-direction hint list tried in turn,
+bin-wall clearance, relocation of an object out of the way, a failed-position list so it does not
+retry the same spot, `done` when nothing sortable is left, and 6-tick hold chunks that keep the
+command rate at 30 Hz. ✅ Sim rung 1, seeds 0–7: **76–82 % sorted, 0 clips, 30 Hz, gate PASS.**
 
-### 15.1 The simulator cannot run on this machine, and it is not a configuration problem ✅
+**Three things it does not have**, and each is an item in §5:
 
-`QUICKSTART.md:10-11` requires an **RTX-class GPU with ≥24 GB** and driver ≥580.65.06, and
-states the cameras are ray-traced: *"A100 / H100 have no RT cores: the sim will not render."*
-This laptop has an **Intel Lunar Lake iGPU**, 26 GB free disk and ~6 GB free RAM. Isaac Sim is
-out. The GPU work has to go to a cloud box (Verda €200 / Modal $100 per person are already in
-the hackerpack) or to whoever has an RTX machine.
+1. ✅ **It never reads the instruction** (§1.1) — 83 % of the final.
+2. ✅ **There is no post-placement verification at all.** Nothing checks whether the object landed in
+   the bin. With final-state scoring that is an unused lever, not a missing nicety.
+3. ✅ **It gives up on the first failed time check** (§3.4.3).
 
-### 15.2 Everything except the physics is CPU-only ✅
+⚠️ **The baseline has never run on the real robot** (*"not run yet (M8)"*); the HSV floor, grasp
+point and open posture were only ever checked in sim. **Treat 76–82 % as a sim number**, and expect
+±10 % between runs.
 
-All **12** test files in the repo import no Isaac and no `omni`. `python -m unittest discover`
-with the baseline Dockerfile's own pins ran **93 tests: 79 passed**, 9 skipped, 1 expected
-failure, 2 errors (missing `zmq`, a dep the baseline image does not install, so `head_rgbd`
-cannot load), **2 real failures** — one of which matters, below.
+### 4.1 ✅ Free tuning values from the oracle, and the relay hand-over
 
-That includes 26 tests on `scene.py` (the scoring), 10 on the classical baseline including its
-perception, 11 on the safety filter, 12 on the policy server, 6 on the layout. **The reason this
-matters:** the instruction parser, the scoring, the shape classifier, the grasp geometry and the
-safety gate are all testable on a laptop. Only physics and rendering need the GPU.
+`ORACLE_OVERRIDES` (`oracle.py:38-48`) are the organisers' own tuned numbers and differ from the
+baseline's: `motion.counter_clearance 0.02`, `motion.max_joint_step 0.6`, `ik.max_tilt_deg 35`,
+`ik.random_restarts 4`, `motion.close_hold_s 0.25`, `motion.settle_s 0.3`.
 
-`deploy/replay.py` imports no Isaac either. `--synthetic N` drives the real policy server over
-the websocket with blank images and measures the command-rate gate (`--min-hz`, default 27), and
-`load_obs(log)` replays an `episode_NNN.npz` the runner recorded — so **episodes captured on a
-GPU box can be re-examined on CPU**.
+✅ **The relay hand-over is a config trick with nothing privileged in it** (`oracle.py:251-261`): it
+deep-copies the scene config, zeroes `wall_height` and replaces the bin centres with hand-over
+points, then runs the **stock** planner against that fake scene — so the whole bin-placement
+machinery places an object gently at counter level for the other arm. The privileged parts of
+`oracle.py` are cleanly fenced into `PrivilegedPerception` and the `privileged_mapping` callable;
+**everything else in that file is ordinary MIT code we may read and copy.**
 
-### 15.3 The missing URDF is not a bug ✅ — correction
+### 4.2 ✅ Grasp config, raw, so nobody re-reads it
 
-`baselines/.../baseline.Dockerfile:22` does copy a URDF that a fresh clone does not contain, but
-lines 8-9 of that same file say so: *"Needs third_party/xr_teleoperate (URDF for IK + the
-planner's safety pre-check): scripts/setup_host.sh or cloud/setup_instance.sh clone it."* It is a
-documented setup step. `cloud/setup_instance.sh:24` pins
-`XRTELEOP_REV=817fb00c63cde15e5f24a0f8fa08e1e33ed89d3b` *"only for the G1 URDF"*; a sparse
-`--filter=blob:none` checkout of `assets/g1` is 74 MB and the build then has what it needs.
-**Nothing is blocked.** The lead I passed on as "blocks step 0, every test and every submission"
-was wrong, and I had flagged it as unverified — it is now verified as a non-issue.
+`point_in_palm [0.099, -0.084, 0.015]`, approach axis `[0, -1, 0]`, `height_frac 0.5`, fingertip
+clearance `0.012`, three finger hints (`[1,0,0]`, `[1,-1,0]`, `[0,-1,0]`) at weight `0.3`; hand open
+`[0, -0.5, 1.5, -0.4, -0.4, -0.4, -0.4]`, closed `[0, -0.1, 1.2, -1.0, -0.6, -1.0, -0.6]`, release
+`[0, -0.5, 1.5, -0.05, -0.05, -0.05, -0.05]`. Baseline HSV windows (OpenCV units): red `0–8` and
+`170–180`, yellow `18–35`, blue `100–130`, with S,V floors 70/70, 70/90, 70/50.
 
-### 15.4 The organisers' own visibility test fails, by 0.2 of a pixel ✅
+⚠️ A relayed lead: **real arm sag**, no gravity feedforward, estimated **1.5–3.5 cm** against the
+12 mm `fingertip_clearance`. Real-robot only, so the qualifier will never show it.
 
-`scene/test_scene.py:224` `test_cubes_and_bins_visible`, whose class docstring states *"With the
-default calibration (URDF head pose), **every object must be in the head image**"*, **fails** on
-the shipped `calibration.yaml`. Four points are outside: the bottom corners (z = 0) of an object
-at the **near-y edge** of the spawn region, `region_y = [0.12, 0.19]`, `region_x = [0.28, 0.62]`.
+---
 
-Measured with `cal.project`: they land at **v = 480.2 in a 480-pixel-high image**. Out by two
-tenths of a pixel. The far corners sit 21 px from the left border and 22 px from the right.
+## 5. The build order
 
-So the honest statement is not "part of the scene is invisible" — it is that **the near edge of
-the object region lies exactly on the bottom image border**. Object *tops* are comfortably in
-frame; the bottom edge of a near object is clipped.
+Each item says **which lane it needs** — and that split is itself a finding: ✅ **all 12 test files
+in the repo are CPU-only** (none import `isaac` or `omni`), and `deploy/replay.py` is too. 93 tests
+ran on a GPU-less laptop; 79 passed. **Only physics and rendering need the GPU**, so the two lanes
+run in parallel and the GPU box is never the bottleneck for logic work.
 
-*(inference, and the reason it is worth knowing)* `sim/dr/train.yaml` jitters the head camera
-pose by ±0.01 m and **±1.0°**. At fy ≈ 604, one degree is ≈ 10.5 px. A 0.2 px margin under ±10 px
-of jitter means the near row of the region is clipped on some episodes and clear on others.
+| # | What | Lane | Why it sits here |
+|---|---|---|---|
+| **0** | **Measure the unmodified baseline on the sim clock** | 🖥 GPU | Three unknowns, one run. Everything else is measured against it |
+| **1** | **Instruction → mapping** | 💻 CPU | 83 % of the final; baseline scores 0; immune to every clock and physics question |
+| **2** | **Take the oracle's free constants** | 🖥 GPU to verify | A one-line fix for a named failure, already written and MIT |
+| **3** | **Time triage: shortest-fitting candidate, never give up** | 💻 CPU logic, 🖥 verify | A few lines against a silent episode truncation |
+| **4** | **Endgame: settle, and release rather than carry** | 💻+🖥 | The sim's 3 s grace does not exist on stage |
+| **5** | **Yaw-aligned prism grasp** | 🖥 GPU | The organisers' own named blocker, and the real robot grips *worse* |
+| **6** | **Post-placement verification** | 🖥 GPU | Largest per-object swing available: −1 → +2 |
+| **7** | **Shape classifier + border guard** | 💻 CPU | Insurance against shape-keyed finals instructions |
+| 8 | Stretch: relay hand-over · DR fitted to Drop 1 | both | Generality story, 25 % |
 
-**Two things in this handbook depend on an unclipped blob and therefore need a guard:**
+### 0. Measure the baseline on the sim clock 🖥 **before anything else**
 
-1. the **blob-area ratio shape classifier** (§3.2: 1.00 cube / 0.785 cylinder / 0.50 triangle)
-   reads a wrong ratio off a clipped blob;
-2. anything reading the blob's 2D centroid.
+**Why first:** §3.4.2 — every number we would improve against was measured on a clock the organisers
+say was 1.8× wrong, and they have ✅ confirmed they never re-measured it. Without this reference,
+every "improvement" is measured against an unknown and we cannot tell a gain from a clock change.
 
-**`perception.py` has no border check of any kind** — verified by grep: no `border`, `edge`,
-`clip` or image-shape test anywhere in it. The guard is one line (does the blob touch row 0 /
-row 479 / column 0 / column 639) and the response is to abstain on shape rather than guess, or to
-relocate the object first — the baseline already has a `relocate` path
-(`test_classical.py:134 test_cross_body_object_is_relocated`).
+`sim.evaluate --task sort_fixed --trials 20`, unmodified. Record score, clip count, command rate,
+**and wall vs episode time per pick**. Three free add-ons on the same run:
 
-### 15.5 `_yaw` works in metres on the top face, not in pixels — correction ✅
+- **re-score with `--settle 0`** → the real-robot number (§3.4.4). The gap is our rolling-object debt.
+- **log `hand_q_target − hand_q` per tick** → decides whether §3.5.3 gives us a grasp sensor at all.
+- **`aalto check`** (8 PASS / 0 FAIL expected) and `scene/check_layout.py` → settles §8's reach
+  question directly.
 
-`perception.py:190-196`:
+**Done when:** we have a number for rung 1 on the sim clock, with and without settle, and a measured
+seconds-per-pick. **Owner: Timi** (Verda RTX PRO 6000, running).
 
-```python
-def _yaw(xy):
-    """Principal direction of the top-face points, folded to [-pi/4, pi/4) (square symmetry). Info only."""
-    (_, _), (_, _), ang = cv2.minAreaRect(xy.astype(np.float32))
-    return float((a + np.pi / 4) % (np.pi / 2) - np.pi / 4)
-```
+### 1. Instruction → mapping 💻 **highest value, no GPU, start now**
 
-and the caller is `_yaw(top[:, :2])` (`perception.py:149`), where `top` is the **3D top-face
-points in pelvis coordinates, in metres**, selected by `top_percentile` / `top_band` from the
-depth cloud.
+**Why:** §1.1. This is 83 % of the final, the baseline scores zero, and the wiring gap is one line.
 
-So §3.2 and §14.1 were anchored on the wrong input. `minAreaRect` is **not** run on the pixel
-blob, and the pixel budget I corrected in §14.1 (51–58 px object, ~7 px apex offset after
-foreshortening) **does not apply to the yaw at all**. It applies to the blob-area shape
-classifier, which is a 2D measurement.
+**The design** ([`instruction-parsing-six-permutations.md`](./instruction-parsing-six-permutations.md)):
+the instruction is always a full permutation, so **enumerate the candidate mappings and score each
+against the sentence** instead of writing a parser. Decide the key vocabulary first (colour / shape /
+both, §3.7.3), then enumerate the 6 permutations over that key.
 
-This is better for us, not worse: **the apex offset is measurable in metres on the top-face
-cloud** — the h/6 = 7.5 mm centroid-to-rect-centre offset is a metric quantity against a
-52 mm-sided triangle, with no projection error and no pixel quantisation. The prism fix gets
-easier, and item 5 on Timi's list ("is the offset visible on a rendered frame?") becomes a
-question about the depth cloud's density on the top face, not about pixels.
+Three properties a parser cannot have:
+- it **cannot emit an impossible mapping** (two colours into one bin);
+- it **completes the third pair by elimination** from two correct ones;
+- its **confidence is the margin** between the best and second-best candidate — a real number we can
+  act on in §4's endgame.
 
-The fold is also decisive: `% (np.pi / 2)` is **square** symmetry. For a triangular prism that is
-simply the wrong modulus (3-fold = 120°, and the grasp cares mod 60°), and the docstring says
-*"Info only."* The baseline's yaw cannot align a prism **by construction**, which is the §3.2
-conclusion reached for a cleaner reason than the one written there.
+**Scope, from ✅ the organisers (§3.7.4):** colour first; assume shape words appear too; **no
+negation**. So the candidate set is 6 colour permutations, extended to shape when shape words are
+detected. Build the bin-**phrase** matcher of §3.7.1, not a token match, and never require the word
+`bin` (§3.7.2).
 
-### 15.6 The bin-rim question is weaker than I sent it — correction ✅
+**The test set is free and exhaustive.** ✅ `oracle.py:196-218` builds `_parse_table()` — all 8
+templates × 36 orderings = **288 sentences with ground-truth mappings**, generated by the
+organisers' own code. **Any design scoring less than 288/288 on it is broken before we reach
+held-out phrasings.** One import, no GPU, runs in milliseconds.
 
-I told Timi the rim false-positive was *"the most concrete verified bug we found"*. It is not.
-`perception.py:170-187` `_reject` runs **after** the 3D reconstruction and rejects a detection
-whose top centre lands inside any bin footprint + `bin_exclusion_margin`, returning
-`in_bin:<name>`. That guard is **not** discarded when depth is valid — unlike the 2D hull mask
-(`keep[:] = 255`) that §9 is about. So there are two guards, not one.
+🔴 **And note what that table tells us about the competition:** the oracle "parser" is **exact string
+equality** against those 288 sentences; on any held-out phrasing it returns `None` and the oracle
+falls back to the privileged mapping it is given (`:291-294`). **The organisers' own reference
+solution does not solve the unseen-instruction episode — it cheats past it with state we do not
+have.** Nobody is handing us a solution to copy. This is the differentiator.
 
-What remains, stated honestly: `height_range: [0.4, 2.0]` is in units of object height, i.e.
-1.8–9 cm, so a 6 cm rim is **not** excluded by height; and `_reject` keys on the bin
-**footprint**, so the exposure is a rim blob whose reconstructed centre falls *outside* the
-footprint + margin — the outer face of the wall. Narrower than "the robot will try to pick up a
-bin", and still worth one rendered frame to settle.
+**Done when:** 288/288 on the generated table, plus a held-out set we write ourselves with
+paraphrased bin phrases, and the mapping is actually threaded into `policy.py`.
 
-### 15.7 One failure that is probably this laptop, not the code
+### 2. Take the oracle's free constants 🖥 to verify
 
-`deploy/test_deploy.py:134 test_stuck_policy_latency_cap` wanted a stuck policy handled in under
-8.0 s and took **11.12 s** on this machine (8 cores, 24 of 30 GB RAM already in use). Most likely
-host load, not a defect — but it is a **timing** test of the watchdog, so it should be re-run on
-the GPU box before anyone calls it environmental. Noted, not concluded.
+✅ `oracle.py:48-50` is the organisers' own fix for a failure we had not separately identified:
+**wedging** — a 45 mm object centred in the 57 mm index-middle gap is *never released* and gets
+carried back home, **seen with cylinders**. The fix is **shift the grasp point 15 mm sideways in the
+palm**. It is a constant, it is MIT, and it costs one config value.
 
-### 15.8 What this changes in the build order
+Also available: `ORACLE_OVERRIDES` (§4.1) — the organisers' tuned IK and motion values.
 
-Step 0 of §12.3 ("measure the unmodified baseline") still needs a GPU and still comes first for
-anything about *score*. But the four items below now have no GPU dependency and can be done on
-any laptop, in parallel with whoever gets a cloud box running:
+**Done when:** rung 1 with the offset is measured against step 0's number, and cylinders stop coming
+home in the hand.
 
-- **the instruction → mapping ranker, with the oracle's 288 sentences as the test set** — pure
-  Python, 83 % of the final score, and `_parse_table()` hands us ground truth for free;
-- **the border guard** (§15.4) and the shape classifier it protects;
-- **the prism yaw fix in metric top-face space** (§15.5), testable against `mock_world.Renderer`,
-  which the organisers ship and which `test_classical.py:56` already drives with depth noise and
-  15 % holes;
-- **the scoring arithmetic** against `scene.py`, including the second-object-in-one-bin question
-  (item 6), which is a geometry question `scene.py` can answer without physics.
+### 3. Time triage 💻 logic, 🖥 verify
+
+**Why here:** §3.4.3. **One failed time check ends the baseline's episode.** Rank remaining
+candidates by `plan.duration`, attempt the **shortest that fits**, stop only when *nothing* fits.
+
+**And if step 0 confirms §3.4.1, this stops being a tidy-up and becomes a budget.** At ~19 s a pick,
+120 s does not fit 5 objects, so the policy must **choose which objects to attempt**: cheapest shape
+first (cube), the known-hard prism last, and on a language episode the objects whose mapping we are
+**confident** about (item 1's margin) before the ones we are not. **Order of attempts becomes a
+scoring decision, not a scheduling detail.**
+
+**Done when:** an episode that previously stopped early now keeps sorting, measured on the same seeds.
+
+### 4. Endgame: settle, and release rather than carry 💻+🖥
+
+Three separate facts converge on the last five seconds of an episode:
+
+- §3.4.4 — the sim grants 3 s of settle before scoring, **the robot grants none**;
+- §3.9.1 — an object still moving **inside a bin** scores 0; one rattling on the counter costs
+  nothing. **Protect placements, do not tidy the counter;**
+- §3.9.2 — **release over the correct bin beats carrying to the buzzer**, and an object we are not
+  confident about is better **left on the counter deliberately** (0) than put in a wrong bin (−1).
+
+That last one is where item 1's confidence margin and item 5's stall aperture get spent.
+
+**Done when:** `--settle 0` and `--settle 3` give the same score on our runs. That equality *is* the
+success criterion.
+
+### 5. Yaw-aligned prism grasp 🖥
+
+**Why it matters more than the ordering suggests:** ✅ the organisers' oracle caps at ~84 % on rung 1
+**with perfect privileged perception**, and names this as the blocker. And ✅ **the real robot grips
+*worse* than the sim** (§3.5.2) while **grip force is not tunable by anyone** (§3.5.1) — so
+**geometric stability is the only lever that exists**, and it pays on the run that decides the prize.
+
+**Do the disambiguation before the rotation** (§3.2.2): the raw `minAreaRect` angle is ambiguous mod
+90° and mod 180°, and the centroid-to-rect-centre offset (h/6 = 7.5 mm, pointing away from the apex)
+fixes both. **Rotating to the raw angle is worse than not rotating** — it will confidently pick a
+corner-to-corner pinch. Work in **metres on the top-face cloud**, which is where `_yaw` already
+works. ⚠️ The open measurement is **point density on a 45 mm top face at 0.47–0.53 m**, not pixels.
+
+Cost: ≤30° = ~16 ticks ≈ **0.53 s** per prism. Against a 120 s episode, nothing.
+
+**Done when:** prism success on rung 1 rises against step 0's number on the same seeds, with zero
+clips.
+
+### 6. Post-placement verification 🖥
+
+Scoring is **final state, not on touch**, so a misplaced object **can be moved again and fixed**, and
+✅ nothing checks today. A wrong bin is −1 and a correction turns it into +1 or +2 — **the largest
+per-object swing in the challenge, on a mistake we have already made.**
+
+### 7. Shape classifier + border guard 💻
+
+§3.2.3 and §3.6.2. Free (area ÷ rect area), no training, and it is insurance against ✅ the
+organisers' *"shape-based instructions may also be tested"*. The border guard is one line and
+protects the ratio from a clipped blob. Validate against `mock_world.Renderer`, which ✅ the
+organisers ship and `test_classical.py:56` already drives with depth noise and 15 % holes.
+
+### 8. Stretch
+
+**Relay hand-over** (§4.1) for objects one arm can grasp but not carry across the body — ✅ the
+baseline README lists exactly that as a failure and the oracle already implements it, config-only.
+
+**DR fitted to real data.** ⚠️ **Organisers, 14 Nov: no major data drop tonight** — teleoperation
+runs over wifi from the VR goggles and the venue wifi is unusable with the hall full. **Plan on
+Drop 1**, which is already in `aaltonomous/data/drop1/`. Fitting our depth-noise and colour
+randomisation to real Drop 1 frames is the citable **sim-to-real** story for the 25 %, it runs on
+CPU, and it needs **zero** demonstration rollouts — which is itself the answer to *"clever ways to do
+a lot with very little real-world data."*
+
+---
+
+## 6. What we do not build, and why
+
+- **No VLA as the control policy.** GR00T N1.7 measures ~140 ms (~7 Hz) on an RTX A6000, OpenVLA
+  base ~6 Hz on a 4090 — both fail the 27 Hz gate without chunking, and with ~20 demos per rung
+  there is not enough data to beat a baseline that already sorts ~80 %.
+- **No from-scratch learned policy.** The data-efficiency numbers are brutal and specific to this
+  robot: on a **real G1 with 81 demos** a naive GR00T N1.6 fine-tune scored **0/50**; an engineered
+  recipe reached 32–42 % (DEED, arXiv 2607.20345); NVIDIA's own 98.8 % needed **1,000 demos**, and a
+  GitHub issue reports *"very low"* success at ~600 (Isaac-GR00T #414). **We get ~20 per rung**, and
+  ⚠️ tonight we get **no new drop at all**. ⚠️ Via the grokbot report — confirm DEED against the
+  paper before quoting it on stage.
+- ⚠️ **If anyone tries GR00T anyway, two traps are known:** every checkpoint loads the **gated
+  `nvidia/Cosmos-Reason2-2B`** on first use and the submission container has **no network**, so all
+  weights must be baked in; and its **default hue jitter (0.08) may blur red/yellow/blue**, which in
+  this task is not augmentation, it is destroying the label.
+- **No perception overhaul.** §3.2: capped at ~84 % on rung 1 regardless. The grasp is the ceiling.
+- **No tactile or force feedback.** 33 pressure sensors exist and ✅ the interface exposes none of
+  them. But see §3.5.3 — the **finger-position lag** gives us most of what we wanted from touch.
+- **No grip-force tuning.** ✅ §3.5.1: the gains are **fixed and identical for every team.** There is
+  nothing to tune.
+- **No LLM in the control loop.** The instruction is parsed **once per episode in `reset()`**, and
+  ⚠️ §2.3: `stop_after_s = 1.0` means a slow `reset()` risks a latched `safe_stop`. A model is the
+  fallback for a zero margin, in a background thread, never the mechanism.
+- **Nothing that leans on wrist-camera geometry.** ✅ Null extrinsics, placeholder intrinsics,
+  *"no measured mount yet"*, and not randomised in DR.
+- **Nothing that depends on rung 3.** §1.3.
+
+---
+
+## 7. Judging, and what the demo has to be
+
+⚠️ **Two sources disagree about how winning works, and we build so that both hold.**
+
+| Source | Says |
+|---|---|
+| Platform rubric | real robot **40 %** · generality **25 %** · originality **20 %** · presentation **15 %** |
+| ✅ The brief | *"We evaluate submissions in simulation, on a version of the scene you can't train on, and pick the finalists. They run on the real robot on Sunday. **The best real-robot score wins.**"* |
+
+**We follow the rubric, because it is the more specific of the two, and we note that nothing in the
+build order trades one against the other:** every item that raises the real-robot score (geometric
+grasp, time triage, settle before the buzzer) is also the generality story. The only genuine
+trade-off is **hours into the pitch versus hours into the robot**, and that is decided by what the
+sim tells us on Saturday, not now.
+
+Prize 2,000 € plus an Aalto lab visit. Mentors on site: **Erkka Lehtonen, Viktor Solianoi**.
+
+**Two things follow for the demo:**
+
+1. **Sim performance is a qualifier, not a score.** It buys the ticket. A fragile sim-only trick that
+   does not survive the real robot is worth nothing, and **the last image pushed before the deadline
+   is the one that runs in the finals.**
+2. ✅ **Generality is 25 % and the brief states its three wishes verbatim:** *"solutions that still
+   work when the real world doesn't match the simulation exactly"*, *"general ideas that could work
+   beyond a single task"*, *"clever ways to do a lot with very little real-world data."* Our story
+   answers all three **as a property of the design, checkable in the code** rather than a number from
+   our own test set: *we cannot emit an impossible mapping, and we recover the whole instruction from
+   two thirds of it.*
+
+### 7.1 The one idea underneath all of it
+
+Four of our design decisions turned out to be the same decision. It is worth saying as one thing
+rather than four tricks — for the 25 %, for the 20 % originality, and because a single idea is what
+a judge remembers from a three-minute pitch.
+
+> **Use relative and ordinal structure, never absolute thresholds.**
+
+| Where | The absolute version (fragile) | Ours (relative) |
+|---|---|---|
+| **Instruction** | parse the sentence and hope | **rank all six permutations**; the margin is the confidence |
+| **Colour** | fixed HSV thresholds | the scene always holds red, yellow and blue — **order the blobs' hues** and assign by position on the hue circle *(inference)* |
+| **Grasp** | tune a squeeze force | **compare the stall aperture** — 45 mm means the altitude pinch, 52 mm means the corners |
+| **Shape** | train a classifier | **area ÷ bounding-rect area**, three separated ratios |
+
+Every row is a quantity that **moves with the perturbation instead of against it** — which is
+precisely what the held-out sim and the real robot do to us. ✅ None of the four needs a GPU,
+training data, or a place in the 30 Hz loop.
+
+**And it is checkable rather than taken on trust:** *we never ask "is this value above a number we
+picked?" — we ask "which of the possible answers fits best, and by how much?"*
+
+---
+
+## 8. Open questions, with who can close them
+
+| | Question | Blocks | Who |
+|---|---|---|---|
+| 🔴 | **Was the published 10–20 s per pick wall or physics time, and what does a pick cost on the corrected clock?** | the whole time budget, item 3, and how to read any score | **step 0** |
+| 🔴 | **Where are the bins, really?** ✅ The brief says *"40 cm from the robot's torso"*; ✅ `scene.yaml` puts the centre bin at pelvis r = 0.505 m and **side bins at 0.568 m**, past the 0.55 m straight-arm reach. If the two measure from different origins (torso face vs pelvis frame) both are right and §3.1 stands, because IK works in the pelvis frame. If not, §3.1 is too pessimistic | the whole release strategy and §3.1 | `scene/check_layout.py` on the GPU box — **direct answer**; or one question to a mentor |
+| | **Does an object in the robot's hand at the buzzer count as counter (0) or knocked off (−1)?** ✅ The code has no path for it (§3.9.2), but the real score is read by eye | whether the endgame must put a held object down, and when the last pick may start | mentor |
+| | **Does the at-rest test apply on the counter or only in a bin?** ✅ The code says bins only (§3.9.1); `RULES_AND_SCORING` reads more broadly | how early cylinders must be placed | mentor |
+| | **How dense is the depth cloud on a 45 mm top face at 0.47–0.53 m?** | item 5's centroid stability | 🖥 one rendered frame |
+| | **Is wall height really 6 cm?** ✅ A file default, not measured, and it sets the lift height at near-full extension | the release trajectory | mentor / measure at the venue |
+| | **Does the second object in a bin get lost?** A relayed lead: an object resting on another has its centre at z ≈ 0.0705, **above the 6 cm rim**, so it scores as counter. The baseline uses one drop point per bin | the payoff of many-to-one mappings in item 1 | 🖥 or `scene.py` arithmetic — no physics needed |
+| | **What is the real end-to-end budget** with 3 camera views plus state over the websocket? Published rates are per model call with a single view | chunk length | 🖥 measure before choosing |
+
+---
+
+## 9. How we work
+
+- **Facts carry a source** — file and line, or a primary doc. **Inferences are labelled.** This
+  document keeps them apart on purpose, and that rule is why three of its own numbers were caught.
+- **Relayed information is marked as relayed.** Discord via a teammate is authoritative about
+  *intent* and not a substitute for a line of code. Where a relay **relaxes** a requirement
+  (*"no negation"*), it sets priority, never licence to drop robustness that costs nothing.
+- 🔴 **Nobody looks for the held-out configuration.** ✅ `RULES_AND_SCORING.md:87-88` bans *"trying to
+  extract or reverse-engineer held-out configs, seeds or templates"* and *"training or tuning on the
+  held-out sim variant"*. Only `dr/train.yaml` exists; `eval_heldout` is named in `run_sim.sh:9` but
+  **has no file** and crashes on load. Not in git history, not in reverted merges, not by probing
+  their sim. **If anyone stumbles on held-out values, that is a leak to report to the organisers,
+  not material to train on.** This applies to subagents too.
+  ⚠️ **One live instance:** a held-out DR parameter appears to be quoted in a comment in the public
+  `baselines/classical/config.yaml`. It has not been opened or reproduced here. **Position: we do not
+  use it, and we raise it with a mentor.** Anything already derived from it is re-derived from
+  `train.yaml` plus our own margins.
+- **Claim a file in Warren (or post to `@room`) before touching shared code; release when done.**
+- **Do not delete another session's research.** It happened once and it was not that session's call.
+- **Over-communicate.** Post on starting, on changing, on being blocked. At a hackathon silence
+  costs more than noise.
+
+---
+
+## Appendix A — provenance, and every correction this handbook has made
+
+The value of §1–§9 is that the wrong versions were caught **before** anyone built on them. They are
+listed here, not inline, so the body reads as fact and this reads as history.
+
+### A.1 Sources
+
+| Source | What came from it |
+|---|---|
+| The starter repo, cloned locally (MIT, `github.com/zupermiez/aaltonomous-humanoid`) | everything marked ✅ with a file and line |
+| Locally executed tests, 14 Nov 00:00–00:20 | the 93-test run, the visibility failure, `_yaw`'s input, the `_reject` guard |
+| ✅ The official challenge brief | reach discrepancy (§8), *"best real-robot score wins"* (§7), *"no markings… told apart only by their position"*, rung 3 as *"stretch goal"* |
+| Organisers via Discord, relayed by Oliver, 14 Nov | fixed Dex3 gains · less grip on the real robot · colour-first / shape-maybe / no negation · oracle never re-measured · no data drop tonight |
+| Oliver's [`humanoid-verified-facts.md`](./humanoid-verified-facts.md) (starter commit `36daf5b4`) and [`humanoid-research-log.md`](./humanoid-research-log.md) | per-fact line references — **if they disagree with this file, the one with the line number wins** |
+| grokbot reports | marked *(bot, unverified)* wherever used |
+
+### A.2 Corrections, in the order they were made
+
+| # | The claim | What it actually is | Where it lives now |
+|---|---|---|---|
+| 1 | *"The sim hand is 120–210× stronger."* | That is the **effort-ceiling** ratio. The force gap is bimodal (67× or ~1.2×) pending Isaac Lab #4918 — and ✅ it turned out moot: the gains are fixed for every team | §3.5.1 |
+| 2 | *"We can run the organisers' held-out DR."* | **We cannot and must not.** Only `train.yaml` exists; `eval_heldout` has no file; `RULES_AND_SCORING.md:87-88` forbids it | §9 |
+| 3 | *"Absolute HSV thresholds are the wrong shape of answer."* | Overstated — hue jitter is only ±7.2° and the colours stay 36–160° apart. The real risks are the orange bins, low sat/val corners, and camera-pose jitter | §3.6.3 |
+| 4 | *"Nothing moving at the end."* | Too broad. ✅ At rest applies to **bins only** | §3.9.1 |
+| 5 | Pixel arithmetic using fx 615 at 0.35 m | ✅ fx **604.8**, object band **0.47–0.53 m**, so **51–58 px**, not 79 | §3.6.1 |
+| 6 | *"Held ticks do not count toward the gate."* | Backwards. ✅ Only the **runner's idle holds** are excluded; policy-returned holds count | §2.2 |
+| 7 | Rung 3 used to promote the shape classifier | ✅ `SUBMISSION.md:134` lists only `[sort_fixed, sort_language]`. The classifier now stands on shape-keyed instructions instead — which ✅ the organisers have since confirmed as a real possibility | §1.3, §3.7.4 |
+| 8 | *"The baseline Dockerfile may not build — blocks everything."* | ✅ Not a bug. `baseline.Dockerfile:8-9` says the setup script clones the URDF; `setup_instance.sh:24` pins `XRTELEOP_REV=817fb00c`. A sparse checkout of `assets/g1` is 74 MB. **Nothing was blocked** | §A.3 |
+| 9 | *"`minAreaRect` runs on the 2D pixel blob."* | ✅ It runs on **metric top-face points** (`perception.py:149`). The pixel budget never applied to the yaw — only to the 2D shape classifier. **This made the prism fix easier, not harder** | §3.2.2 |
+| 10 | *"The bin-rim false positive is the most concrete bug we found."* | ✅ Overstated. `_reject`'s `in_bin` guard survives the depth path. The real exposure is the outer wall face only | §3.6.4 |
+
+### A.3 What ran locally on a GPU-less laptop, 14 Nov
+
+✅ The simulator **cannot** run on an Intel iGPU — `QUICKSTART.md:10-11` requires an RTX-class card
+with ≥24 GB and ray-traced cameras (*"A100 / H100 have no RT cores: the sim will not render"*).
+
+But ✅ **all 12 test files are CPU-only.** With the baseline Dockerfile's own pins (numpy 2.2.6,
+scipy 1.15.2, opencv-headless 4.10.0.84, pyyaml, msgpack, websockets, pin 3.3.1) and a sparse
+checkout of the G1 URDF, `unittest discover` ran **93 tests: 79 passed**, 9 skipped, 1 expected
+failure, 2 errors (missing `zmq`, not in the baseline pins), **2 real failures**:
+
+- ✅ `test_cubes_and_bins_visible` — the 0.2-pixel finding, now §3.6.2;
+- ⚠️ `deploy/test_deploy.py:134 test_stuck_policy_latency_cap` — wanted a stuck policy handled in
+  under 8.0 s, took **11.12 s** on a machine with 24 of 30 GB RAM in use. Probably host load, **but
+  it is a timing test of the watchdog — re-run it on the GPU box before calling it environmental.**
+
+✅ `deploy/replay.py` imports no Isaac: `--synthetic N` drives the real policy server over the
+websocket and measures the command-rate gate, and `load_obs(log)` replays an `episode_NNN.npz`
+recorded by the runner. **Episodes captured on the GPU box can be re-examined on any laptop** — so
+GPU hours go to things that genuinely need a GPU.
