@@ -620,36 +620,46 @@ pixels are silently dropped rather than reported as an unknown object. ⚠️ A 
 instruction *and* layout. A distractor is therefore either invisible to us or mistaken for cargo —
 **worth a deliberate "unknown object" branch.**
 
-#### 3.6.5 🔴 The organisers' own model of REAL noise is harsher than the DR we train against
+#### 3.6.5 ⚠️ Object depth holes are unmodelled in `train.yaml` — and the numbers I first quoted were wrong
 
-✅ `data/drop1/capture.py:137` — `MockSource`, the stand-in the organisers wrote for a real capture
-session — carries these defaults, and `:180` applies the last one specifically to object pixels
-(`holes = g.random(dep.shape) < np.where(self.obj_mask, self.obj_hole_p, self.hole_p)`):
+**An earlier version of this section claimed the organisers ship a model of real camera noise that
+is harsher than the training DR. That was wrong and it is retracted.** Oliver's session caught it.
+✅ `data/drop1/capture.py:133` says what it is in its own docstring:
 
-| | their real-capture mock | `dr/train.yaml` | |
-|---|---|---|---|
-| RGB noise σ | 2.0 | 3.0 | DR is noisier — fine |
-| **depth σ** | **3.0 mm** | 1.0 mm + 0.002·depth ≈ **2.0 mm at 0.5 m** | **real ≈ 1.5× noisier** |
-| **depth holes** | **2 %** | **1 %** | **real ≈ 2× more** |
-| **holes ON the object** | **20 %** | *no such parameter* | 🔴 **not modelled at all** |
+```python
+class MockSource:
+    """Synthetic static scene for offline tests: grey counter + coloured objects at their projected
+    positions, Gaussian RGB noise, depth = counter plane / object tops with noise and random holes."""
+    def __init__(self, seed=0, rgb_sigma=2.0, depth_sigma_mm=3.0, hole_p=0.02, obj_hole_p=0.2):
+```
 
-> 🔴 **A fifth of the depth pixels on an object can be missing, and nothing in the training
-> randomisation represents that.**
+It is a **test fixture**. `test_drop1.py:22` passes `3.0 / 0.02 / 0.25` so the test can check that
+`stats.py` recovers the values it injected. Those numbers are **plausible placeholders chosen to be
+measurable, not measurements of the D435i.** Treating them as a camera model was exactly the
+over-read §9 exists to prevent.
 
-**This is the sharpest consequence of the whole perception section**, because §3.2.2's prism fix reads
-the **centroid of the top-face depth cloud**. Losing 20 % of those points — non-uniformly, and worse
-on a matte PLA prism's sloped faces — is exactly the failure that method is exposed to.
+**What actually survives, and only this:**
 
-**So the top-face statistics must be built for missing data from the start:** a trimmed or median
-centroid rather than a mean, an explicit **minimum point count** below which we abstain, and the
-area-ratio shape classifier (§3.2.3) read from the **2D colour blob**, which has no holes, rather
-than from the depth mask.
+1. ✅ **`train.yaml` has no object-specific depth-hole parameter at all**, while the capture tooling
+   has the *concept* of one — `holes = g.random(dep.shape) < np.where(self.obj_mask, self.obj_hole_p,
+   self.hole_p)` (`capture.py:180`). The **structural** asymmetry is real; the magnitude is unknown.
+2. ✅ **`stats.py` computes per-object `hole_frac` and `hole_frac_always`** (`:142`), i.e. the
+   organisers built a measurement for object holes — which says they expect them to matter. It does
+   not say how large they are.
+3. ✅ `train.yaml` does model **1 % holes with `invalid = 0`**, so missing depth exists in training
+   already, just not concentrated on objects.
 
-✅ And the route from a real drop to DR knobs is already written by the organisers: `data/drop1/stats.py`
-computes per-object `hole_frac`, `depth_std_mm_median`, a fitted **`std(mm) ≈ k·z(m)²`** model,
-`top_height_m_measured`, plus RGB temporal noise and luma percentiles. ⚠️ Their own comment in that
-file is worth reading before any colour tuning: *"Matte PLA under unknown light: wide hue bands,
-saturation floor."*
+> **The design consequence is unchanged, and it never depended on the numbers:** §3.2.2's prism fix
+> reads the **centroid of the top-face depth cloud**, so it must tolerate missing points whatever
+> their rate — a **trimmed or median centroid** rather than a mean, an explicit **minimum point
+> count** below which we abstain, and the area-ratio shape classifier (§3.2.3) read from the **2D
+> colour blob**, which has no holes, rather than from the depth mask. All three cost nothing and are
+> right under any hole rate, which is why they stay.
+
+⚠️ **The real hole rate on a matte PLA prism is now an open question with no number** (§8), and the
+only thing that answers it is a real drop or a render measured on the GPU box. ✅ One line from
+`stats.py` is worth having in mind before any colour tuning, though: *"Matte PLA under unknown light:
+wide hue bands, saturation floor."*
 
 #### 3.6.6 ⚠️ We have NO real-robot data — correction to an assumption we were all making
 
@@ -1158,6 +1168,8 @@ listed here, not inline, so the body reads as fact and this reads as history.
 | 8 | *"The baseline Dockerfile may not build — blocks everything."* | ✅ Not a bug. `baseline.Dockerfile:8-9` says the setup script clones the URDF; `setup_instance.sh:24` pins `XRTELEOP_REV=817fb00c`. A sparse checkout of `assets/g1` is 74 MB. **Nothing was blocked** | §A.3 |
 | 9 | *"`minAreaRect` runs on the 2D pixel blob."* | ✅ It runs on **metric top-face points** (`perception.py:149`). The pixel budget never applied to the yaw — only to the 2D shape classifier. **This made the prism fix easier, not harder** | §3.2.2 |
 | 10 | *"The bin-rim false positive is the most concrete bug we found."* | ✅ Overstated. `_reject`'s `in_bin` guard survives the depth path. The real exposure is the outer wall face only | §3.6.4 |
+
+| 11 | *"The organisers ship a model of real camera noise harsher than the DR — depth σ 3 mm, 20 % holes on the object."* | ✅ Those are **test-fixture values**. `capture.py:133` `MockSource` is *"Synthetic static scene for offline tests"* and `test_drop1.py:22` injects them so `stats.py` can be checked against them. Caught by Oliver's session. What survives: `train.yaml` has **no object-hole parameter** and `stats.py` **measures one**, so the structural gap is real and the magnitude is unknown | §3.6.5 |
 
 ### A.3 What ran locally on a GPU-less laptop, 14 Nov
 
