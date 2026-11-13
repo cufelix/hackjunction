@@ -67,8 +67,11 @@ planner. 30 clips ends the episode; the gate also requires 0.
 **The 27 Hz gate is about action chunking, not model speed** — see
 [`humanoid-policy-approaches.md`](./humanoid-policy-approaches.md). Returning a chunk of k actions
 per call decouples the command rate from the inference rate; the baseline already does this,
-returning 6-tick hold chunks from a low-priority planner thread while it plans. **Held ticks do not
-count toward the gate.** Anything that cannot hold the rate *without* chunking is disqualified by
+returning 6-tick hold chunks from a low-priority planner thread while it plans. ❌ **I wrote
+"held ticks do not count toward the gate" and that is backwards in the way that matters — see
+§14.2.** `command_hz = (ticks − holds) / span` subtracts only the **runner's own** idle holds
+(queue empty, nothing in flight). **A hold the policy itself returns is an explicit target and
+counts as a command**, which is exactly how the baseline holds 30 Hz while it thinks. Anything that cannot hold the rate *without* chunking is disqualified by
 arithmetic, not by tuning.
 
 ## 3. The facts that constrain the design
@@ -161,9 +164,11 @@ from the flush side, the rectangle's centre at h/2, so
 > the apex.**
 
 So the apex direction is *centroid → rect centre*, and the pinch axis is the altitude through it.
-At the object band (~0.35 m) with the head camera's fx = 615, 1 mm is 1.76 px, so **7.5 mm is ~13 px
-and the 45 mm object is ~79 px across** — a comfortably measurable offset, not a sub-pixel one.
-*(inference; all four numbers are published, the composition is ours.)*
+❌ **My first pixel arithmetic here was wrong — corrected in §14.1.** The real numbers:
+fx = **604.8** (not 615), the camera sits at **z = 0.474 m**, so the object band is **0.47–0.53 m
+away, not 0.35 m**. That gives **51–58 px across a 45 mm object** and the apex offset at
+**~7–10 px** after foreshortening. Still measurable — roughly 15 % of the object's width — but not
+the comfortable margin I claimed.
 
 #### The same two quantities give a shape classifier for free
 
@@ -436,8 +441,12 @@ that criterion are all sim-to-real and data efficiency.
   from data the interface does expose.
 - **No grip-force tuning.** §3.5(a): the sim hand is 120–210× stronger than the real one, so any
   number we tune against sim force is a number that does not exist on stage.
-- **No LLM in the control loop.** The instruction is parsed **once per episode in `reset()`**;
-  latency is then irrelevant. A model is the fallback for a zero margin, not the mechanism.
+- **No LLM in the control loop.** The instruction is parsed **once per episode in `reset()`**.
+  ⚠️ **But latency there is not free:** the safety watchdog has `stop_after_s = 1.0`
+  (`safety.py:69`), so a `reset` that takes over a second risks a latched `safe_stop`. A
+  deterministic resolver runs in microseconds and is safe; **an LLM in `reset()` is not**, and if we
+  ever add the model fallback it goes in a background thread with the deterministic answer
+  returned immediately. A model is the fallback for a zero margin, not the mechanism.
 - **Nothing that leans on wrist-camera geometry.** Wrist **extrinsics are null and intrinsics are
   placeholders — uncalibrated today.** Head camera is a RealSense D435i, fx=fy=615, extrinsics from
   URDF (~48° down, unverified).
@@ -923,3 +932,172 @@ tuned numbers: `motion.counter_clearance 0.02`, `motion.max_joint_step 0.6`, `ik
 block** — the oracle's ~84 % was measured on the **fast sim profile too**, not the slow profile the
 real robot loads (§12.1). So the 84 % ceiling and the 76–82 % baseline are *both* fast-profile
 numbers, and neither has ever been measured at the speeds the robot will actually run.
+
+
+---
+
+## 14. ✅ Corrections round two — verified against the clone after a cross-check
+
+A teammate's research was cross-checked against this handbook and challenged six of its claims.
+**I re-verified each one in the local clone rather than taking the relay.** Four were right, one did
+not reproduce where it was cited (but is real elsewhere), and the net effect is that **three numbers
+of mine were wrong.**
+
+### 14.1 ❌ The camera intrinsics and therefore my pixel arithmetic
+
+`interface/calibration.yaml` is the source of truth, and **`INTERFACE.md`'s fx = 615 is stale**:
+
+```yaml
+head:
+  intrinsics: {width: 640, height: 480, fx: 604.827, fy: 604.298, cx: 325.042, cy: 250.927}
+  # D435I s/n 332522071513 factory colour 640x480 (rs2, 2026-11-12)
+  T_pelvis_optical: [... 0.053660], [... 0.017530], [... 0.473870]
+```
+
+These are **measured from the actual serial number on 2026-11-12**, not a `(default)` placeholder,
+and the sim reads the yaml. **Use `Calibration.load()`, never a literal.**
+
+And the extrinsics change the geometry I reasoned from: the camera sits at pelvis
+**(0.054, 0.018, 0.474)**, looking down at **47.6°** (from the rotation column
+`(0.674, 0, -0.738)`). The object band at pelvis x 0.26–0.33 with a 4.5 cm top face is therefore
+**0.47–0.53 m from the lens, not the 0.35 m I used.**
+
+| | I said | ✅ actual |
+|---|---|---|
+| fx | 615 | **604.8** |
+| object distance | 0.35 m | **0.47–0.53 m** |
+| 45 mm object | 79 px | **51–58 px** |
+| 7.5 mm apex offset | 13 px | **~9.7 px, or ~7 px after the 42° foreshortening** |
+
+**The method survives, the margin does not.** The apex offset is still ~15 % of the object's width,
+which is workable, but it is close enough to the noise floor that **§3.2's disambiguation must be
+validated on rendered frames before anything depends on it** — it is no longer obviously safe.
+
+### 14.2 ❌ Holds and the gate, corrected above
+
+From `deploy/runner.py`: `hold = not queue`, and `wait = hold and pending is not None`. A wait
+re-sends the last command **as an explicit target** and is counted in `waits`, not `holds`. The
+summary computes `command_hz = (ticks − holds) / span  # policy targets only (spec §8 gate)`.
+
+**So only the runner's idle holds are excluded. Everything the policy emits counts, including
+explicit hold targets and re-sent commands.** That is better news than my original wording: a slow
+policy can hold the gate by returning explicit holds. What must stay rare is the runner having
+nothing to send.
+
+### 14.3 ✅ Rung 3 is probably not evaluated — so the shape classifier loses its best argument
+
+```yaml
+tasks: [sort_fixed, sort_language]    # optional, default both
+```
+`docs/participants/SUBMISSION.md:134`
+
+The submission manifest offers **only the two sorting tasks**, `evaluate` is invoked with
+`--task sort_fixed` and `--task sort_language` (`:106-107`), and the finals format is fixed +
+language + unseen language. `insert_shapes` appears nowhere in the submission path.
+
+🔴 **So §9.3 and §11.4 overstated the case: I used rung 3 to promote the shape classifier, and
+rung 3 is probably never played.** Finals settings are officially unannounced, so it is not
+impossible — but it is not a reason to build anything.
+
+**The classifier still stands on two other legs**, which is why it stays on the list:
+1. `scene.resolve_bin` accepts shape-keyed mappings and `STARTER_PATHS` says the harder finals may
+   add shape words (§11.5) — if that happens, being shape-blind scores zero on those objects.
+2. **The prism fix needs to know it is a prism** (§3.2). The yaw disambiguation is shape-specific.
+
+### 14.4 ✅ The hand gain gap is real, and now it has a number
+
+The claim was cited to `deploy/backends.py` and is not there. It is in **`interface/backends.py:202`**:
+
+```python
+hand_kp=1.5, hand_kd=0.2, hand_hz=100.0, ...
+```
+
+So **the real hand is commanded at kp = 1.5 over DDS at 100 Hz**, while the sim's implicit actuator
+is **stiffness 100** (§3.5). That makes the gap either:
+
+- **~67×**, if the sim's stiffness is what it says, or
+- **~1.2×**, if Isaac Lab issue #4918 applies and stiffness 100 behaves like ~1.75 N·m/rad.
+
+✅ **§3.5's position was the right one and now it is sharper:** the ceiling ratio is checked, the
+gain ratio is bimodal, and **the step test picks between 67× and 1.2×.** Until it runs, "command an
+aperture, not a squeeze" is the rule that is correct under both. Also note **the real hand runs its
+own loop at 100 Hz** while we command at 30 — there are ~3 hand updates per tick we do not see.
+
+### 14.5 🔴 New and verified: an orange bin wall can pass as a red object
+
+This one is a genuine gap and it undercuts "exclude bins by position" from §9.5.
+
+`baselines/classical/perception.py:100-118` builds the mask like this:
+
+```python
+keep = self._bin_hulls_mask(...)          # 2D projected bin hulls
+if depth is None: return keep
+if valid.mean() < min_valid_frac: return keep
+keep[:] = 255    # with depth: holes stay "unknown" (kept); valid pixels are judged in 3D
+ok = (h >= 0.25) & (h <= c["height_range"][1])
+half = outer_size/2 + c["bin_pixel_margin"]
+for ctr in bins.centers: ok &= ~(inside that footprint)
+```
+
+Three things compose badly:
+
+1. **With valid depth the 2D bin mask is thrown away** (`keep[:] = 255`) and everything rests on the
+   3D test.
+2. **The height test does not reject a bin wall.** `height_range: [0.4, 2.0]` is in object sizes
+   (`config.yaml:29`, whose comment claims it *"rejects hands, bin walls"*). A 6 cm rim is
+   **6/4.5 = 1.33 object sizes — inside the band.** So the rim passes the height test.
+3. **The only thing left is a 4 mm footprint margin.** `bin_pixel_margin: 0.004`
+   (`config.yaml:33`) — against a camera-pose error that §9.5 puts at **≈15 mm** once the ±1 cm
+   translation and ±1° rotation are both counted.
+
+🔴 **A 4 mm margin against a 15 mm error means bin-rim pixels can survive the exclusion** — and the
+bins are orange, sitting between red and yellow in hue (§9.5). **Plus depth holes are kept as
+"unknown" by design**, and real depth has holes near bin walls. So the failure is: *a strip of
+orange rim gets grouped as a red blob near the correct height, and the robot tries to pick up the
+bin.*
+
+**Fix before trusting any colour work:** widen `bin_pixel_margin` to cover the real jitter, keep the
+2D hull mask as a union with the 3D test instead of discarding it, and treat the rim band as
+keep-out rather than inferring it. *(The composition is ours; all four numbers are read.)*
+
+Minor, same file: the code hardcodes the lower height bound as `h >= 0.25` while `config.yaml` says
+`height_range: [0.4, 2.0]`. **The configured lower bound is ignored.**
+
+### 14.6 Relayed but not yet verified by me — treat as leads, not facts
+
+Each of these came through two hops. They are plausible and worth checking first thing:
+
+- **The baseline Dockerfile may not build from the public clone** — `baseline.Dockerfile:22` copies
+  a URDF said to be absent, with a pinned-commit workaround. **If true this blocks item 0 and every
+  submission**, so it is the first thing to try.
+- **Two objects in one bin: the second may be lost.** An object resting on another has its centre
+  at z ≈ 0.0705, **above the 6 cm rim**, so it scores as counter. The baseline uses one drop point
+  per bin. Colour-only bijections cap a bin at 2 objects, but shape-keyed or `default` mappings can
+  send 3–5 to one bin. **This would directly cap item 1's payoff**, so verify before relying on
+  many-to-one mappings.
+- **`hand_max_lead` may be enabled in the finals** — `INTERFACE.md` reportedly says final safety
+  values *"will not be looser"*. If it is on, a deliberate squeeze-past-contact posture clips, and
+  the gate needs zero clips. **Argues again for aperture over squeeze.**
+- **Real arm sag**, no gravity feedforward, estimated 1.5–3.5 cm against a 12 mm
+  `fingertip_clearance`. Real-robot only, so the qualifier will never show it.
+- **Real `hand_q` reads slightly past zero at rest and can glitch**, so any lag-signal code
+  (§3.5b) needs a clamp and a median filter, and the first action must be within the per-tick cap
+  of the measured state.
+- **Real head camera runs auto-exposure and auto-white-balance with JPEG q85** — so real colour
+  drifts in ways no DR profile models, and all our hue reasoning is sim-only today.
+- **A "distractor object" is the named harder-layout knob**, and episode 3 is unseen instruction
+  *and layout*. Since perception silently drops unknown colours (§12.4), a distractor is either
+  invisible or mistaken for cargo. **Worth a deliberate "unknown object" branch.**
+
+### 14.7 ⚠️ Integrity note, for a mentor rather than for us
+
+The cross-check flagged that **a held-out DR parameter appears to be quoted in a comment in the
+public starter's `baselines/classical/config.yaml`**, and that a teammate's research derived
+worst-case ranges from it. The value was not reproduced into this handbook and **I have not opened
+it.**
+
+**Position: we do not use it, and we mention it to a mentor.** It reached us through the
+organisers' own shipped file rather than through anything we extracted, so it is not a breach on our
+side — but §9.4's rule is about not benefiting from held-out configuration, and deriving stress
+ranges from that comment would benefit from it. **Anything already derived from it should be
+re-derived from `train.yaml` plus our own margins.**
