@@ -23,6 +23,11 @@ Per-person, not per-team — **each of the three of us claims their own on their
   So this does not pay for anything we call from code.
 - Campaign owner for support: Juhana Peltomaa, OpenAI.
 
+⚠️ One thing I could not resolve: every pack page prints **"Status: Closed"** with a countdown,
+while the platform's own credit API still reports codes available for this pack. Whoever is at the
+venue should just open pack `70` and see whether a claim button is live — if the window has shut,
+ask at the OpenAI/Junction desk rather than assuming.
+
 ## Compute and API credits
 
 | Pack | What | Scope | How to claim | Watch out |
