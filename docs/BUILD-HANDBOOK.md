@@ -661,6 +661,59 @@ only thing that answers it is a real drop or a render measured on the GPU box. �
 `stats.py` is worth having in mind before any colour tuning, though: *"Matte PLA under unknown light:
 wide hue bands, saturation floor."*
 
+#### 3.6.7 🟢 The noise model that counts, and why the camera POSE is the whole problem
+
+`sim/dr/train.yaml` is the organisers' actual noise model, and the finals run in their sim with
+their DR, so this is the distribution we are graded against. ✅ Verbatim:
+
+```yaml
+camera:
+  rgb_noise_std: 3.0        # 0-255
+  rgb_gain: [0.9, 1.1]
+  depth_noise_mm: 1.0
+  depth_noise_rel: 0.002    # D435 ~0.2 % of range   <- their comment
+  depth_hole_frac: 0.01
+  pose_jitter_m: 0.01       # head extrinsic error (spec: +-1 cm / +-1 deg)
+  pose_jitter_deg: 1.0
+```
+
+**The two halves behave completely differently, and that is the finding.** ✅ `dr.py:102-105`
+samples `pos_offset` and `rot_offset_rad` **once, into the episode's params dict**:
+
+```python
+"pos_offset": [float(rc.uniform(-pj, pj)) if pj else 0.0 for _ in range(3)],
+"rot_offset_rad": [float(rc.uniform(-aj, aj)) if aj else 0.0 for _ in range(3)],
+```
+
+whereas `corrupt(rgb, depth, cam, rng)` at `dr.py:131` draws the pixel noise **fresh every frame**:
+`d += rng.normal(0.0, 1.0, d.shape) * (dn + dr * d)`.
+
+| Error source | Size at the 0.47-0.53 m object band | Behaviour |
+|---|---|---|
+| depth noise | `1.0 + 0.002 x 500` = **2.0 mm**, per pixel, zero mean | per **frame** — averages away over a ~50x50 px top face and over ticks |
+| camera position offset | **±10 mm**, uniform, per axis | sampled **once per episode** — a constant bias, averaging does nothing |
+| camera rotation offset | ±1° → `0.5 x tan(1°)` = **±8.7 mm** lateral at 0.5 m | same: constant for the episode |
+
+⚠️ So the dominant error is **5-10x the depth noise, systematic, and immune to every filter**, and
+note it is `uniform`, not Gaussian — ±10 mm is a hard bound, not a sigma. Against §3.2's measured
+grasp slack (a 45 mm pinch inside a 57 mm hand gap, so ~6 mm per side) **the pose bias alone can
+exceed the slack that makes the grasp work.**
+
+> **🟢 The lever, and it is free: the bins are at known positions.** `scene.yaml` gives the bin
+> geometry exactly, and §3.1 measured it. The episode's camera offset is one constant 6-DoF
+> transform, and the bins are large, fixed, always in frame. Observe them, compare to the known
+> layout, solve for the offset, and apply the correction to every object detection for the rest of
+> the episode. That turns the largest error term into a per-episode calibration computed from data
+> already in the first frame — and the baseline does none of it (`perception.py` trusts
+> `calibration.yaml` as given).
+>
+> ⚠️ Unverified: whether the bins are visible enough to constrain all 6 DoF, or only the 3
+> translations. Fit translation first; it is the ±10 mm term and the easy one. Measure on the GPU
+> box before trusting a rotation fit.
+
+What this replaces: the retracted §3.6.5 reached for a fixture to argue the DR was optimistic. It
+did not need to — the DR's own structure says where the error lives, and it is not in the pixels.
+
 #### 3.6.6 ⚠️ We have NO real-robot data — correction to an assumption we were all making
 
 ✅ `aaltonomous/data/` is **416 kB and contains no frames.** `data/drop1/` holds the capture kit only
