@@ -46,69 +46,60 @@ a 7-person grand jury. One submission per team. Everything open-sourced under MI
 
 **Six tracks, 19 main challenges.** Enter one. Then stack tech challenges on top.
 
-### Main challenges by track
+### Main challenges — what each one asks you to build
 
-**Agentic AI (6)** — the crowded track
-| Challenge | By | Prize |
-|---|---|---|
-| Trusted Trade Agents | Valio Aimo | **4 000 / 2 000 / 1 000 €** |
-| Break the Agent | AfterQuery | **3 000 €** + work trial |
-| The Internet Butler | Exa | $2 500 + $5 000 credits |
-| Decode the Noise | Hostinger | 2 000 / 1 000 / 500 € + 1 yr hosting |
-| Earned Trust in AI Code | Tieto | 2 000 / 1 000 / 500 € |
-| Spread | Bahn Express | 2 000 / 1 000 / 500 € |
+Prizes are deliberately not here. They don't vary enough to decide anything, and every
+challenge is won the same way: build the thing the brief asks for, well enough to demo.
+Prizes are recorded in [`docs/challenges.md`](docs/challenges.md) if anyone needs them.
 
-**Hardware by Arduino (5)**
-| Challenge | By | Prize |
-|---|---|---|
-| Intel Physical AI | Ignite Next × Intel | **5 000 / 3 000 / 2 000 €** — biggest cash at the event |
-| Aaltonomous Humanoid | Aalto | 2 000 € + top 5 run on the real robot |
-| Robot Teleoperation | Rokoko | Hardware ~€4 990 / €2 295 / €1 095 |
-| AI Glasses for Everyone | Meta | Ray-Ban Meta per member |
-| The Green European Renaissance | Arduino | Hardware kits |
+**Agentic AI (6)** — six briefs, so the most competition
+| Challenge | Build this |
+|---|---|
+| Break the Agent · AfterQuery | An RL environment that beats frontier agents. Judges rerun your eval from the README and spend 15 min trying to cheat your reward |
+| Trusted Trade Agents · Valio Aimo | The interface a purchasing agent uses to buy from a wholesaler: lookup, order, and which decisions need a human |
+| Earned Trust in AI Code · Tieto | A concept (not a product) for AI code review where a named human stays accountable. Writing-heavy |
+| Decode the Noise · Hostinger | Propaganda / bot-network detection. Must run live on their infra, and they want your false-positive rate |
+| The Internet Butler · Exa | A personal agent for life admin. Judges type their own live queries at it |
+| Spread · Bahn Express | A bot that runs a car-transport company on a leaderboard. Own clock: final Sun 08:00 |
 
-**FinTech (2)** · Make Unicorns Real (Cala, ~5 000 € Comet + credits) · Personal Economic Trainer (S-Pankki, Airbnb vouchers 2 000/1 000/500 €)
+**Hardware by Arduino (5)** — all need physical hardware from the labs
+| Challenge | Build this |
+|---|---|
+| Intel Physical AI | Teach a robot arm to sort bricks autonomously: teleop demos → VLA policy → anomaly detection, on their stack |
+| Aaltonomous Humanoid | Give a Unitree G1 a brain: sort objects into boxes in 2 min, shipped as a Docker policy server |
+| Robot Teleoperation · Rokoko | Drive robot hands/arms/humanoids with mocap gloves and suits. Brief is wide open |
+| AI Glasses · Meta | A first-person use case that beats mirroring a phone screen |
+| The Green European Renaissance · Arduino | Edge AI on an UNO Q for a local environmental problem. Also publish to Arduino Project Hub |
 
-**Healthcare (2)** · Equal Care Across Finland (AstraZeneca, 1 000/750/250 €) · Beyond the Clinic (Aalto, prizes TBA)
+**FinTech (2)** · *Make Unicorns Real* (Cala) — one sharp tool for founders or investors on their company/funding graph; focus beats breadth · *Personal Economic Trainer* (S-Pankki) — chat with your own bank transactions, mobile-first, teaching where money actually goes
 
-**AI Infrastructure by Verda (1)** · Make Blueprints Talk (Stoa, 1 000 € + work trial) — **only one challenge in the whole track, smallest field at the event**
+**Healthcare (2)** · *Equal Care Across Finland* (AstraZeneca) — find where Finnish cancer care is unequal **and recommend concrete actions**; working demo required, source per claim · *Beyond the Clinic* (Aalto) — help people stay well at home after depression treatment; a laptop and phone are enough
 
-**Data (3)** · The Web Is Your Real-Time Database (Context.dev, 2 000 €) · Rethinking Recruitment (City of Espoo, 1 500/1 000/500 €) · Wikipedia Through Time (MariaDB, 1 000 € + credits + certs)
+**AI Infrastructure by Verda (1)** · *Make Blueprints Talk* (Stoa) — answer questions about construction drawings and show where in the drawing the answer came from. **Only one challenge in the whole track, so the smallest field at the event.** 25 % of the score is low inference cost
 
-### The stackable layer — where the money actually is
+**Data (3)** · *The Web Is Your Real-Time Database* (Context.dev) — a product that reacts to the live web, scored on whether it's real-time or a snapshot · *Rethinking Recruitment* (City of Espoo) — better matching at hiring events; synthetic data only, no automated decisions about people · *Wikipedia Through Time* (MariaDB) — RAG over Finnish Wikipedia, or time-travel through its edit history
 
-These run across every track and combine with whatever we enter.
+### The stackable layer (19 tech challenges)
 
-| | By | Prize |
-|---|---|---|
-| **Best Use of Codex** | OpenAI | **$10 000 / $5 000 / $2 500 API credits** — open challenge |
-| **Verda Compute Track** | Verda | **$10 000 cloud credits** / $2 500 / $2 500 |
-| **Best Use of Gemini API** | Google DeepMind | **4 000 € + $1 000 GCloud per member** / 2 000 / 1 000 € |
-| Best use of Modal | Modal | $2 000 cash + $3 000 credits |
-| Best agentic usecase of Oxylabs Web API | Oxylabs | €1 000 voucher + $500/member |
-| Best Use of Aiven | Aiven | 1 000 / 750 / 500 € |
-| Best Use of Gemma | Google DeepMind | €1 000 × top 3, unranked |
-| Best Use of Context.dev | Context.dev | €750 / €250 |
-| Best Use of Cloudinary | Cloudinary | $500 Amazon **per member** — needs a separate form |
-| Best Use of Nemotron | NVIDIA | RTX 5080 × 2 teams |
-| Best use of CRACI | Craci | LEGO / Red Bull / Slush lunch — just needs CI on their runner |
-| Best use of Arduino UNO Q, Atech | Arduino, Atech | Hardware kits |
-| MLH swag tier | MLH | Entire, ElevenLabs, Tiger Data, MongoDB, Vultr, Solana — one prize each, no cash |
+Cross-track. One project can be submitted to several — the platform says so explicitly. They
+change nothing about *what* we build; they're things we bolt on or are already doing.
 
-⚠️ **These are prizes you have to win, not credits you get for signing up.** Entering costs
-little — one project can be submitted to several — but Codex and Gemini are *open to every
-team at the event*, so they are the **most contested prizes here**, not free money. Treat
-them as extra lottery tickets bought cheaply, never as expected value.
+**Free to qualify if we're doing it anyway:** Codex (use it in our dev process) · Gemini or
+Gemma (we need a model) · Verda or Modal (we need GPU/hosting) · CRACI (just point CI at
+their runner) · Aiven (if we need a database) · Entire (if we use their session tooling).
 
-**What you actually get just for showing up** is separate and much smaller: $50 Exa credits,
-50 000 Context.dev credits, Verda compute credits for every team, a Hostinger VPS if you
-enter theirs, Cala credits, $10 MLH credit for Entire. Useful for building. Not prizes.
+**Only if the project genuinely needs it:** Context.dev or Oxylabs (live web data — both
+require it to drive the demo visibly, not sit on the side) · Cloudinary (images/video, and a
+separate form) · Nemotron · Arduino UNO Q · Atech · ElevenLabs · Tiger Data · MongoDB ·
+Vultr · Solana.
+
+Full list with requirements: [`docs/challenges.md`](docs/challenges.md).
 
 ---
 
 ## What we've settled
 
-- The MLH email **badly undersold** the tech challenges: it showed 8 mostly-swag prizes; the platform has 19 and the money is in the ones it never mentioned.
+- The MLH email listed 8 tech challenges; the platform has **19**. Several are free to qualify for if we're already using the tool.
 - Every recent Junction overall winner **first won or placed in a partner challenge**. Junction 2025 was won by a GPU radio-wave simulator with **no AI at all**.
 - Peer review rewards a demo people grasp instantly. **A dev tool is the hardest format for that** — if we build one, the visualisation *is* the demo, not a bonus.
 - Judges across briefs want reproducible, source-shown, false-positive-honest work. AfterQuery reruns your eval and spends 15 minutes trying to break your reward; Exa types its own live queries; Hostinger wants your precision and FP rate; AstraZeneca wants a source per claim; Stoa wants the drawing location per answer.
