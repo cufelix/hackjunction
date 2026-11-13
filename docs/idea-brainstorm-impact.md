@@ -67,3 +67,17 @@ Takeaways:
 - Scraper pain hits low-traffic sites (LWN, FreeBSD, a $155 bill).
 - Skeptics say walls work only "because attackers haven't tried yet", so owners want evidence of adaptation, not just friction.
 - Candidate "real human locked out" story with a named, dated source: Anubis issue 1248 or the Duke pilot.
+
+## Converged direction (Felix and Oliver agree, Tim not yet confirmed, 2026-11-13 20:30)
+
+- **P1 is the product:** self-hosted visitor guard on the owner's own VPS. The earlier "type any domain, see who pushes it on Bluesky" idea (P2) is dropped as a headline: Jetstream is unsigned and not meant for anti-abuse, naming accounts risks GDPR Art. 9, labelled data does not exist, and Felix's 150 s measurement found the largest near-duplicate cluster was 2 accounts.
+- **Demo: the judge is the traffic.** A reviewer scans a QR on their own phone, the guard on the Hostinger VPS shows a verdict about them: score, evidence, and "not enough evidence" when that is the honest answer. They can switch on a VPN, turn off JavaScript, or use a privacy browser and see whether they are wrongly accused. No install, no scraping, no third-party accounts.
+- **Impact line:** every false positive is a person the site turned away (VPN, JS off, old phone, shared or CGNAT IP). Cloudflare measured it: CGNAT IPs are rate limited three times more often (median bot rate 4.8% vs 4.7%).
+- **Design rules to write down:**
+  1. Never key a verdict on IP alone (venue Wi-Fi is one shared IP).
+  2. Abstention must come from a real uncertainty threshold, not a script.
+  3. Show at least one case the guard got wrong.
+  4. A replay is always labelled as replay.
+  5. No beacon (mouse/scroll) layer: legal risk, spoofable, no external eval data (M4D dataset not downloadable).
+- **Pitch order sketch (2-min video, 3-min stage):** one real wrongly blocked human (Anubis issue 1248 or the Duke pilot) 15 s; live QR demo 60 s; numbers 45 s (Cloudflare 3x CGNAT, our measured FP with CI, abstention rate); how it differs 30 s; runs on a 2-core VPS 15 s.
+- **Working name:** "the detector that must be able to apologize", subtitle "I don't know as a feature".
