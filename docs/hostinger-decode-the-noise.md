@@ -115,7 +115,7 @@ question is not "what do we build" but **"what can we measure against by tomorro
 
 | Dataset | Labels | Reachable tonight? | Fits direction |
 |---|---|---|---|
-| **SemEval-2020 Task 11 / Propaganda Techniques Corpus** | 14 propaganda techniques, span-level, news articles | ⚠️ **Gated** — registration at `propaganda.qcri.org/ptc/registration.php`; the HF entry `SemEvalWorkshop/sem_eval_2020_task_11` is a loader that still requires the manual download | 2 |
+| **SemEval-2020 Task 11 / Propaganda Techniques Corpus** | Propaganda techniques, **both span-level (SI) and technique classification (TC)** | ✅ **NOT gated — corrected 13 Nov 20:55.** [zenodo.org/records/3952415](https://zenodo.org/records/3952415), CC BY 4.0, one 1.1 MB `datasets-v2.tgz`. Found by `@claude-timi`, verified here through the Zenodo API. See the caveat below | 2 |
 | **SemEval-2023 Task 3** | 23 persuasion techniques, 6 languages, 1 612 articles / ~26 663 train+dev samples ([KInIT paper](https://arxiv.org/abs/2304.11924)) | ⚠️ Task data was also distributed via registration — **check first thing**, a fine-tuned model is public at [huggingface.co/kinit/...](https://huggingface.co/kinit/semeval2023-task3-persuasion-techniques) even if the raw data is gated | 2 |
 | **FiveThirtyEight IRA troll tweets** | 2 973 371 tweets, 2 848 IRA handles, 5 hand-assigned troll types, Feb 2012 – May 2018 ([FiveThirtyEight](https://fivethirtyeight.com/features/why-were-sharing-3-million-russian-troll-tweets/)) | ✅ **Open on GitHub, CC0** — the most usable positive-class set we have | 1, 4 |
 | **TwiBot-22** | 1 M accounts, 4 entity types, 14 relation types, NeurIPS 2022 benchmark ([arXiv](https://arxiv.org/abs/2206.04564)) | ❌ **Dead end for us.** Access requires emailing the authors from an *institutional* email, naming your research advisor and use case | 1 |
@@ -125,6 +125,25 @@ question is not "what do we build" but **"what can we measure against by tomorro
 | **Verified crawler IP ranges** (Google, Bing, OpenAI, Anthropic) | **Legitimate** automation — self-declared and IP-range-backed by the vendors themselves | ✅ Plain JSON at each vendor's own path, no key, minutes | **3** |
 | **EUvsDisinfo** | ~14 500 catalogued disinformation cases, each with an EU East StratCom verdict **and a written debunk** | ✅ Via the Mendeley mirror, **CC BY 4.0, no signup** — [data.mendeley.com/datasets/yhdtkszvgp/3](https://data.mendeley.com/datasets/yhdtkszvgp/3). The official API is email-request only; use the mirror | 2, 4 |
 | **RAID / HC3** | Machine-generated vs human text | ✅ Ungated on Hugging Face, minutes | 2, 4 |
+
+### 🔴 Correction, 13 Nov 20:55 — the propaganda corpus is not behind a registration wall
+
+This file said SemEval-2020 Task 11 was gated behind `propaganda.qcri.org`. **Wrong.**
+`@claude-timi` found it openly on Zenodo and downloaded it; verified here through the Zenodo
+API: *"SemEval-2020 Task 11: Detection of Propaganda Techniques in News Articles"*,
+CC BY 4.0, a single 1.1 MB archive holding train/dev/test text for both subtasks.
+
+**But read the fine print before quoting a number from it.** The record says it includes
+*"the gold-standard files for the training sets"* — i.e. the **test** labels are not in the
+archive, because the organizers still run a **live leaderboard** against them. Consequences:
+
+- We can train and score on our own split, but that number is **not** directly comparable to
+  the published 51.55 (span) / 62.07 (technique) leaderboard figures. Saying otherwise is the
+  kind of overclaim a juror who knows the task will catch instantly.
+- **The upside: the leaderboard is still open.** A submission scored by the task organizers
+  would be an externally produced number on a held-out test set — the strongest possible version
+  of "somebody else measured us", and worth far more to the 40 % criterion than any figure we
+  compute ourselves. Worth an hour to try, even if it misses.
 
 ### 🔴 Correction, 13 Nov 20:25 — direction 3 is not the dead end this document first claimed
 
