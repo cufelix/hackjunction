@@ -742,3 +742,90 @@ cubes"*, which is a default plus one exception — and that is also the **negati
   `layout_kwargs()` draws up to 6 objects (`tasks.py:54` vs `scene.yaml:70`).
 - **The 30-clip abort is marked *"spec N, to be decided"* in the source** (`safety.py:74`) while the
   rules state it as final. Do not build anything that depends on the exact number.
+
+
+---
+
+## 12. ✅ The real time bomb: the robot runs at half the speed the sim score was measured at
+
+From `baselines/classical/config.yaml` and `planner.py`, read directly. This is the most practical
+finding of the night and it **reorders the build list.**
+
+### 12.1 Two speed profiles, and the real robot gets the slow one
+
+| | arm vel | arm accel | hand vel | used by |
+|---|---|---|---|---|
+| **`sim` profile** | **0.97 rad/s** | **8.0 rad/s²** | 2.5 rad/s | the sim runs the 76–82 % was measured on |
+| **base (profile `none`)** | **0.50 rad/s** | **1.5 rad/s²** | 1.2 rad/s | ✅ **`run.py --backend real`** (`config.yaml:8`) |
+| safety filter ceiling | 1.0 rad/s | — | 3.0 rad/s | `interface/safety.py:49-50` |
+
+The planner's move duration is `ta + S/vmax` with `ta = vmax/amax` (`planner.py:58-73`). So:
+
+- **per-move overhead**: sim `0.97/8 = 0.121 s` → real `0.50/1.5 = 0.333 s`, **2.75× worse**
+- **joint travel**: `S/0.97` → `S/0.50`, **1.94× longer**
+- **hand ramps** roughly double (2.5 → 1.2 rad/s)
+
+A pick is 7 arm moves plus a close, an open and a settle. Fixed floor before any joint travel:
+**≈2.5 s in sim, ≈4.8 s real.** So a 10 s sim pick (2.5 floor + 7.5 travel) becomes
+**≈ 4.8 + 7.5×1.94 ≈ 19 s on the robot.** *(inference, from the published gains and the planner's
+own formula — but every input is a read number.)*
+
+🔴 **Five objects at ~19 s is ~97 s of a 120 s budget, with no room for a single retry.** And
+§3.4's sim-clock correction stacks on top of this, not instead of it: that one was about the sim's
+own pacing, this one is about which gains the real backend loads.
+
+### 12.2 And when it runs out of time, the baseline gives up completely
+
+```python
+if t + plan.duration > self.time_limit:
+    ...  self.state = "done"
+```
+`policy.py:220-223`
+
+**One failed time check ends the baseline for the rest of the episode.** Candidates are ranked
+**nearest-bin first** (`policy.py:191-204`) with **no fallback to a shorter one**. So the moment the
+cheapest-looking remaining plan does not fit, it stops — even if another object would have fitted in
+the time left.
+
+✅ **That is a free and obvious fix, and it is the cheapest point in the challenge after the
+instruction:** rank the remaining candidates by **estimated duration**, try the shortest that fits,
+and only stop when *nothing* fits. The duration estimate already exists — `plan.duration` is what
+the check reads.
+
+### 12.3 ✅ Revised build order (supersedes the ordering in §4)
+
+| # | What | Why here |
+|---|---|---|
+| **0** | Measure the unmodified baseline on the sim clock, **and log `hand_q_target − hand_q`**, and re-score with `--settle 0` | §3.4, §3.5b, §11.1 — three unknowns, one run |
+| **1** | **Instruction → mapping** | 83 % of the final, baseline scores 0, and the only item whose value is immune to every clock and physics question |
+| **2** | **Time triage: shortest-fitting candidate, never give up** | §12.2 — a few lines, and without it the real robot's 2× slowdown silently truncates the episode |
+| **3** | **Yaw-aligned prism grasp** (disambiguate first, §3.2) | the organisers' own named blocker; the oracle caps at ~84 % until it changes |
+| **4** | **Post-placement verification** | nothing checks today; −1 → +2 is the largest per-object swing available |
+| **5** | **Settle before the buzzer** | §11.1 — the real robot has no 3 s settle grace that the sim gives us |
+| 6 | Shape classifier (fill ratio) | free, and it is what unlocks rung 3 (§9.3, §11.4) |
+| 7 | stretch: relay hand-over, depth-noise DR | §4 item 5, unchanged |
+
+**Item 2 moved from fourth to second** because of §12, and **the grasp dropped to third** — not
+because it matters less, but because items 1 and 2 are each a handful of lines against a measurable
+point loss, and the grasp is a tuning job with an uncertain ceiling (§3.4).
+
+### 12.4 Smaller reads worth having before anyone starts
+
+- **Chunk size is 10 ticks per `act()`** (`config.yaml:89`), and the planner returns 6-tick holds
+  while planning.
+- ✅ **The safety filter already has a target-vs-measured mechanism — `hand_max_lead` — and it is
+  `None` by default** (`safety.py:52`, applied at `:228-230`). So the §3.5b finger-lag signal is
+  not only available, the organisers built a hook for it and left it off. **Nothing in the baseline
+  reads `hand_q` except to seed the command** (`policy.py:105`).
+- **Stated perception error ≈ 4 mm** after the HSV fix, down from 15–20 mm
+  (`baselines/classical/README.md:32`, `config.yaml:123`) — and §9.5 notes camera pose jitter is
+  worth ≈6 mm, i.e. more.
+- **Grasp config, raw**: `point_in_palm [0.099, -0.084, 0.015]`, approach axis `[0, -1, 0]`,
+  `height_frac 0.5`, fingertip clearance `0.012`, three finger hints
+  (`[1,0,0]`, `[1,-1,0]`, `[0,-1,0]`) at weight `0.3`; hand open
+  `[0, -0.5, 1.5, -0.4, -0.4, -0.4, -0.4]`, closed `[0, -0.1, 1.2, -1.0, -0.6, -1.0, -0.6]`,
+  release `[0, -0.5, 1.5, -0.05, -0.05, -0.05, -0.05]`.
+- **Baseline HSV windows** (OpenCV units): red `0–8` and `170–180`, yellow `18–35`, blue `100–130`,
+  all with S,V floors of 70/70, 70/90, 70/50. **A blob matching no colour is never formed at all** —
+  perception loops only over configured colours (`perception.py:51-58`), so unknown-coloured pixels
+  are silently dropped rather than reported as an unknown object.
