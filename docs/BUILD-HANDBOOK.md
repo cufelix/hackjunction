@@ -987,12 +987,23 @@ organisers ship and `test_classical.py:56` already drives with depth noise and 1
 **Relay hand-over** (§4.1) for objects one arm can grasp but not carry across the body — ✅ the
 baseline README lists exactly that as a failure and the oracle already implements it, config-only.
 
-**DR fitted to real data — but there is nothing to fit to yet.** ⚠️ §3.6.6: the repo contains **no real frames at all**, only the capture kit, and ⚠️ **organisers, 14 Nov: no major data drop tonight** — teleoperation
-runs over wifi from the VR goggles and the venue wifi is unusable with the hall full. **Plan on
-Drop 1**, which is already in `aaltonomous/data/drop1/`. Fitting our depth-noise and colour
-randomisation to real Drop 1 frames is the citable **sim-to-real** story for the 25 %, it runs on
-CPU, and it needs **zero** demonstration rollouts — which is itself the answer to *"clever ways to do
-a lot with very little real-world data."*
+**DR fitted to real data — and 🔴 there is NO real data yet, so this is preparation, not fitting.**
+
+⚠️ §3.6.6: `aaltonomous/data/` is **416 kB and contains no frames** — `data/drop1/` is the capture
+kit only, `test_drop1.py` runs against `MockSource`, and `DATA_CARD.md` is a template. ⚠️ And the
+organisers (14 Nov) say **no major drop tonight**: teleoperation runs over wifi from the VR goggles
+and the venue wifi is unusable with the hall full. **Do not plan on having Drop 1.**
+
+**So the deliverable here is the prepared path, not the fit:** `docs/dr-fit-plan.md` — every
+statistic `data/drop1/stats.py` produces, mapped to the `train.yaml` knob it should set, **including
+the `obj_hole_p` knob that does not exist in `train.yaml` at all** (§3.6.5). No data and no GPU
+needed, and it makes the first drop actionable in minutes instead of hours.
+
+**When a drop does arrive**, fitting our depth-noise and colour randomisation to real frames is the
+citable **sim-to-real** story for the 25 %, it runs on CPU, and it needs **zero** demonstration
+rollouts — which is itself the answer to *"clever ways to do a lot with very little real-world
+data."* Expected format: ✅ **LeRobot v3.0** (`lerobot==0.7.0`), `observation.images.head_depth` as a
+480×640 HEVC 12-bit lossless depth video, **linear 0–4.095 m at 1 mm/code, 0 = invalid.**
 
 ---
 
