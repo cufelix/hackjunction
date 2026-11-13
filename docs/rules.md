@@ -1,4 +1,35 @@
-# Eligibility rules — read this before writing any code
+# Rules and submission — read this before writing any code
+
+## Verified first-hand on the platform
+
+Read directly off `hackjunction.app/participate/45/guide` while signed in, 13 Nov 2026
+19:08 CET. These are not secondhand:
+
+- **Team size is 1–4.** (The older rules page said 1–5.)
+- **"You are allowed to submit a project for multiple challenges."** Stacking tech challenges
+  on one project is explicitly sanctioned.
+- On **Fri 23:59** you submit *which challenge you plan to tackle*. You may change it later.
+- **Final submission Sun 10:00.** The form closes automatically, no late submissions. You
+  must set the project from **DRAFT to FINAL** — *"Draft projects are not reviewed."*
+- **Peer review Sun 10:30–14:00, everyone must be there.** *"If you or your team do not take
+  part in the peer reviewing, you are not eligible for the main prize."* There's a
+  "not present" button reviewers press if a team isn't at its table.
+- Top 5 pitch on stage: **exactly 3 minutes, then mics are killed**, plus 3 minutes of
+  judges' questions. You can demo from your own laptop.
+
+### What the final submission form requires
+
+Project name, punchline, description · challenge · technologies used · **a 2-minute video
+pitch** publicly viewable (*"not a second longer than 2 minutes, and we will be very strict"*)
+· demo and source code links · source code publicity · pitch deck (PDF) · team phone numbers ·
+Discord username.
+
+⚠️ Two of these are quietly expensive and nobody plans for them: the **video** and the
+**pitch deck**. Budget Sunday morning for both, before 10:00.
+
+---
+
+## Eligibility — the part that constrains what we build
 
 **Bottom line: we cannot submit Warren, or anything built on Warren's existing code, as our
 project.** Both Junction's rules and MLH's forbid it.
@@ -18,9 +49,18 @@ Also from that page: organizers must be able to access the source code; teams ar
 at least one challenge must be entered; the pitch video is 2 minutes or less.
 
 ⚠️ **Caveat on the source.** That page is titled *official rules for Junction 2024* and was
-last edited 2025-06-23. No 2026 version was found, so it is the latest visible version — but
-it is **not confirmed as the 2026 rules**. Treat it as binding until an organizer says
-otherwise, because the downside is disqualification.
+last edited 2025-06-23. The platform's own Guide page does **not** carry the code rules, so
+this remains the governing text we can find. Treat it as binding — the downside is
+disqualification.
+
+**A second, 2026-dated source agrees.** Another team's public knowledge base
+(`github.com/madviking/junction2026`, commit 178b449, 13 Nov 2026) transcribes a 2026 rules
+text with the same no-pre-event-code wording, and its other claims that we *could* check
+first-hand — team size 1–4, mandatory peer review for main-prize eligibility — both turned
+out correct. Two further claims from it we have **not** verified and should not rely on:
+that **all submissions are licensed MIT** (2024 allowed a private repo), and the exact 2026
+numbering. If the MIT claim is right it matters for anything meant to outlive the weekend —
+worth confirming before the final submission.
 
 ## What MLH's rules say — stricter
 

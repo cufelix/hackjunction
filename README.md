@@ -14,6 +14,9 @@ Junction: *"No code written before the event."* MLH: only new work is judged.
 **Warren cannot be our project.** The *idea* can be reworked; the code cannot be reused.
 Anything we submit must be written this weekend. Confirm with organizers in writing.
 
+**1b. Submitting a project for several challenges at once is explicitly allowed.** Verified
+on the platform guide. The tech-challenge stack below is sanctioned, not a loophole.
+
 **2. [`INFO_HACKATHON.md`](INFO_HACKATHON.md) — the clock.**
 Hacking started Fri 19:30. **Preliminary submission Fri 23:59** (platform says 23:55 — aim
 for 23:50). Submissions open Sat 12:00. **Final Sun 10:00.** Peer review, then top 5 pitch to
@@ -111,6 +114,16 @@ These run across every track and combine with whatever we enter.
 - [ ] Can a multi-agent setup inside the MCP sidecar pass AfterQuery's standard-harness rerun? Ask Daksh Raghuwanshi or Ved Vedere on site.
 - [ ] **What are we building?** Not decided.
 - [ ] Do MLH prizes need a separate submission on mlh.com? Ask the MLH coach.
+- [ ] Are all submissions really MIT-licensed this year? Secondhand claim, unverified, and it
+  matters for anything meant to outlive the weekend.
+
+## Don't lose the prize on paperwork
+
+Verified on the platform: the final submission needs a **2-minute video pitch** (publicly
+viewable, *"not a second longer"*), a **pitch deck PDF**, demo and source links, and the
+project flipped from **DRAFT to FINAL** — drafts are not reviewed. **Everyone must attend
+peer review Sun 10:30–14:00 or we are not eligible for the main prize.** Budget Sunday
+morning for the video and deck.
 
 ---
 
