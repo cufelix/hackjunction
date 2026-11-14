@@ -45,6 +45,8 @@ class TestPanHandleGrasp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.cfg = novel_config()
+        # geometry test; no pan placement in the FP filter bands was found (sweep), FP filter covered in test_novel_objects
+        cls.cfg["perception"]["novel"]["fp_filter"] = False
         cls.cfg["perception"]["novel"]["max_area_px"] = 60000  # a 20 cm disc is ~35-41k px here; the universal overlay gate is 60000
         cls.planner = Planner(cls.cfg, SC, hand_postures(cls.cfg), home_arm(cls.cfg))
 
