@@ -17,6 +17,7 @@ each object; the runner calls confirm() / skip() / stop() while `pol.waiting` is
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -34,6 +35,8 @@ from .perception import Perception
 from .planner import Planner, lookup_bin
 
 HZ = 30.0
+_HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence names a hole AND the lid
+_LID = re.compile(r"\blids?\b")
 
 
 def _lower_thread_priority(nice=10):
@@ -86,11 +89,32 @@ class ClassicalPolicy:
             self.log(f"instruction resolve failed ({e}), using FIXED_MAPPING")
             return None
 
+    def _insert_guard_mapping(self, info):
+        """policy.insert_guard: rung 3 (insert_shapes) -> {"default": "abstain"}, i.e. pick nothing; else None.
+
+        The lid sits on the left bin, so FIXED_MAPPING (what the resolver falls back to for the hole sentence) releases
+        every red object onto the lid: -1 each (forced). The holes are past the arm's reach, so 0 is the best safe
+        score. Detected from the task id (policy_server passes it) or the sentence (needs both 'hole' and 'lid').
+        NEVER raises (reset() runs under the 1 s watchdog)."""
+        try:
+            if not (self.cfg.get("policy") or {}).get("insert_guard", False):
+                return None
+            task = (info or {}).get("task")
+            text = str((info or {}).get("instruction") or "").lower()
+            if task == "insert_shapes" or (_HOLE.search(text) and _LID.search(text)):
+                self.log("[insert_guard] insert_shapes: abstain on every object (no release over the lid)")
+                return {"default": "abstain"}
+            return None
+        except Exception as e:
+            self.log(f"insert_guard failed ({e})")
+            return None
+
     def reset(self, info=None):
         if isinstance(info, str):
             info = {"instruction": info}
         info = info or {}
-        self.mapping = info.get("mapping") or self._instruction_mapping(info) or dict(FIXED_MAPPING)
+        self.mapping = (info.get("mapping") or self._insert_guard_mapping(info) or self._instruction_mapping(info)
+                        or dict(FIXED_MAPPING))
         self.planner.mapping = self.mapping
         self.time_limit = info.get("time_limit", self.time_limit)
         self.state = "init"
