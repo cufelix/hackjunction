@@ -138,7 +138,12 @@ perception:
   # area_frac * (fx * 0.045 / Z)^2 px (no Z: min_px_no_z); blobs over a bin or within edge_m of its edge (a rim blob
   # is kept only as a depth top face edge_h above the counter); top_k by n_px when > max_cands survive (degraded);
   # a non-depth triangle loses its shape.
-  color_gate: {enabled: false, fk_mask: false, fk_dilate_px: 15, live_bins: false, near_margin_m: 0.10, area_frac: 0.4, min_px_no_z: 1000, edge_m: 0.02, edge_h: [0.03, 0.07], max_cands: 6, top_k: 3}
+  # 1b: n_px > max_area_frac * expected (no Z: > max_px_no_z) = rim / tape / merged blob. 2b: positive workspace, pelvis
+  # x in ws_x, |y| <= ws_abs_y, in front of the bin row near edge - ws_edge_m (OpenCode E1 audit: 426 -> 0 bin-zone FP).
+  # Near-edge blobs without depth are kept; with depth kept only at object height edge_h (rim = 0.06 m is not).
+  color_gate: {enabled: false, fk_mask: false, fk_dilate_px: 15, live_bins: false, near_margin_m: 0.10, area_frac: 0.4, min_px_no_z: 1000,
+               max_area_frac: 3.0, max_px_no_z: 6000, ws_x: [0.12, 0.45], ws_abs_y: 0.40, ws_edge_m: 0.01,
+               edge_m: 0.02, edge_h: [0.03, 0.055], max_cands: 6}
   split:
     object_size: null         # m, expected object edge for the size gate; null = scene objects.size (perception.object_size)
     area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;

@@ -1369,7 +1369,8 @@ class Perception:
 
     def _color_gate(self, dets, rejected):
         """perception.color_gate (FLAG): post-filter of the accepted detections. Rejected ones are appended to
-        `rejected` as (det, "color_gate:<why>"). More than max_cands survivors -> top_k by n_px and degraded."""
+        `rejected` as (det, "color_gate:<why>"). More than max_cands survivors -> degraded (the policy's DEGRADED tier
+        orders them); NOTHING is truncated here, so an unplannable large blob can never hide a real object (Codex C1)."""
         g = self.color_gate_cfg
         kept = []
         for det in dets:
@@ -1379,25 +1380,42 @@ class Perception:
             else:
                 kept.append(det)
         if len(kept) > int(g["max_cands"]):
-            top_k = int(g["top_k"])
             self.color_gate_degraded = True
-            self.log(f"[color_gate] degraded: {len(kept)} candidates > max_cands {g['max_cands']}; "
-                     f"kept top {top_k} by n_px")
-            kept = sorted(kept, key=lambda d: d.n_px, reverse=True)[:top_k]
+            self.log(f"[color_gate] degraded: {len(kept)} candidates > max_cands {g['max_cands']}; all passed on, "
+                     f"largest first")
+            kept = sorted(kept, key=lambda d: d.n_px, reverse=True)
         return [self._color_gate_shape(d) for d in kept]
 
     def _color_gate_why(self, det, g):
-        """Rules 1 (area floor scaled by distance) and 2 (bin zone). None = keep."""
+        """Rules 1 (area floor scaled by distance), 1b (area ceiling: rim / tape / merged blob), 2b (positive workspace:
+        only the counter in front of the bin row) and 2 (bin zone). None = keep."""
         Z = self._color_gate_depth(det.top)
         if Z is None:
             if det.n_px < g["min_px_no_z"]:
                 return "color_gate:speckle_no_z"
+            if g.get("max_px_no_z") is not None and det.n_px > g["max_px_no_z"]:
+                return "color_gate:too_big_no_z"
         else:
-            fx = float(self.cal.cams[self.cam].K[0, 0])
-            expected = (fx * 0.045 / Z) ** 2   # 0.045 m = object edge (scene.yaml objects.size)
+            K = self.cal.cams[self.cam].K
+            expected = float(K[0, 0]) * float(K[1, 1]) * (self.size / Z) ** 2   # one object's top face, px
             if det.n_px < g["area_frac"] * expected:
                 return "color_gate:speckle"
-        return self._color_gate_bin(det, g)
+            if g.get("max_area_frac") is not None and det.n_px > g["max_area_frac"] * expected:
+                return "color_gate:too_big"
+        return self._color_gate_workspace(det, g) or self._color_gate_bin(det, g)
+
+    def _color_gate_workspace(self, det, g):
+        """Rule 2b: keep only pelvis x in ws_x, |y| <= ws_abs_y, and in front of the bin row's near edge (nominal or
+        bin.vote-shifted footprint, never the near_margin hedge) minus ws_edge_m. Bin walls / rims project BEHIND it."""
+        ws_x = g.get("ws_x")
+        if ws_x is None:
+            return None
+        x, y = float(det.top[0]), float(det.top[1])
+        near_mat_y = min(float(lo[1]) for lo, _ in self._color_gate_boxes(g, hedge=False))
+        near_x = float(self.scene.mat_to_pelvis(np.array([0.0, near_mat_y]))[0])
+        if not (ws_x[0] <= x <= min(ws_x[1], near_x - float(g.get("ws_edge_m", 0.01)))) or abs(y) > g["ws_abs_y"]:
+            return "color_gate:workspace"
+        return None
 
     def _color_gate_depth(self, top):
         """Camera-frame depth Z (optical axis, m) of a pelvis-frame point, or None (no extrinsics / not in front)."""
@@ -1419,11 +1437,12 @@ class Perception:
             if gap == 0.0:
                 return "color_gate:in_bin"
             near_edge = near_edge or gap <= float(g["edge_m"])
-        if near_edge and not self._color_gate_rim_ok(det, g):
+        # no depth = cannot tell a rim from an object: keep (Codex H2); depth: keep only an object-height top face
+        if near_edge and det.method == "depth" and not self._color_gate_rim_ok(det, g):
             return "color_gate:bin_edge"
         return None
 
-    def _color_gate_boxes(self, g):
+    def _color_gate_boxes(self, g, hedge=True):
         """[(lo, hi)] mat-frame footprint of every bin. Flag live_bins off: nominal scene.yaml. On: the policy's live
         estimate (bin.vote shift; a calibrate_bins success already moves the DETECTIONS onto the nominal bins), and with
         no estimate at all the nominal box grown near_margin_m towards the robot (mat -y = pelvis -x, the drop_2 shift)."""
@@ -1437,7 +1456,7 @@ class Perception:
             if name in shift:
                 c = c + np.asarray(shift[name], float)[::-1]   # pelvis (dx, dy) -> mat (dy, dx)
             lo, hi = c - half, c + half
-            if self.live_bins and not estimate:
+            if hedge and self.live_bins and not estimate:
                 lo = lo - np.array([0.0, float(g.get("near_margin_m", 0.10))])
             out.append((lo, hi))
         return out
@@ -1450,7 +1469,9 @@ class Perception:
     def _color_gate_shape(self, det):
         """Rule 4: a triangle that is not a depth top face (2D blob) has no trusted shape: unknown."""
         if det.shape == "triangle" and det.method != "depth":
-            return replace(det, shape=None, shape_conf=0.0)
+            diag = dict(det.shape_diag, label=None, gate="color_gate:no_depth_triangle") if det.shape_diag else None
+            return replace(det, shape=None, shape_conf=0.0, shape_path="abstain_color_gate", shape_diag=diag,
+                           apex_yaw=None, apex_conf=0.0, apex_gate=None)
         return det
 
 

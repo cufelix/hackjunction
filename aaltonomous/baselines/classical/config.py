@@ -57,7 +57,7 @@ FLAGS = {
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
     "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = the policy's current bin estimate (bin.vote shift / calibrate_bins); none -> nominal + near_margin_m towards the robot"),
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
-    "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor by distance, bin footprint/rim rejects, top_k when > max_cands, shape None for non-depth triangles"),
+    "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
@@ -227,6 +227,7 @@ def check_flag_values(cfg):
     if ice is not None and not (isinstance(ice, (list, tuple)) and len(ice) == 5
                                 and all(isinstance(x, (int, float)) for x in ice)):
         raise ValueError(f"perception.inject_cam_error = {ice!r}: want null or [dpitch_deg, dyaw_deg, dx, dy, dz]")
+    _check_color_gate(cfg)
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}
@@ -235,6 +236,34 @@ def check_flag_values(cfg):
         if name in h and name not in right and abs(float(h[name][0])) > 1e-12:
             raise ValueError(f"hand.{name} thumb0={h[name][0]}: thumb0≠0 requires fixing mirror_left_to_right "
                              f"(keep thumb0 sign)")
+
+
+def _check_color_gate(cfg):
+    """perception.color_gate tuning: fail at load, never inside detect() (Codex M8)."""
+    g = (cfg.get("perception") or {}).get("color_gate") or {}
+    if not g.get("enabled"):
+        return
+
+    def num(k, lo=0.0, opt=False):
+        v = g.get(k)
+        if v is None and opt:
+            return
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or v < lo:
+            raise ValueError(f"perception.color_gate.{k} = {v!r}: want a finite number >= {lo}")
+    for k in ("area_frac", "min_px_no_z", "edge_m", "near_margin_m"):
+        num(k)
+    for k in ("max_area_frac", "max_px_no_z", "ws_abs_y", "ws_edge_m"):
+        num(k, opt=True)
+    num("max_cands", lo=1)
+    for k in ("edge_h", "ws_x"):
+        v = g.get(k)
+        if v is None and k == "ws_x":
+            continue
+        if not (isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(x, (int, float)) and np.isfinite(x)
+                                                                     for x in v) and v[0] <= v[1]):
+            raise ValueError(f"perception.color_gate.{k} = {v!r}: want [lo, hi] finite, lo <= hi")
+    if g.get("ws_x") is not None and g.get("ws_abs_y") is None:
+        raise ValueError("perception.color_gate.ws_x needs ws_abs_y")
 
 
 def effective_flags(cfg):
