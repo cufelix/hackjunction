@@ -222,6 +222,7 @@ class Perception:
         self.fk_mask_px = 0        # pixels the last fk mask removed (diagnostics)
         self.live_bins = bool(self.color_gate_cfg.get("live_bins", False))   # perception.color_gate.live_bins (FLAG)
         self.bin_shift_src = None  # live_bins: object with .bin_shift {bin: pelvis dxy} (the policy's planner, bin.vote)
+        self.bin_vote_on = False   # bin.vote flag, set by policy.py: bin footprints follow bin_shift_src.bin_shift
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
@@ -1109,6 +1110,18 @@ class Perception:
             out.append((full, int(p.sum()), np.array([x + uu.mean(), y + vv.mean()])))
         return out
 
+    def _bin_centres_mat(self):
+        """{bin: mat-frame centre}. bin.vote on and a shift for that bin: nominal + the planner's pelvis shift
+        (x, y) -> mat (y, x). Otherwise the nominal scene.yaml centres."""
+        centres = {name: np.asarray(ctr, float) for name, ctr in self.scene.cfg["bins"]["centers"].items()}
+        if not self.bin_vote_on:
+            return centres
+        shift = getattr(self.bin_shift_src, "bin_shift", None) or {}
+        for name in centres:
+            if name in shift:
+                centres[name] = centres[name] + np.asarray(shift[name], float)[::-1]
+        return centres
+
     def _keep_mask(self, depth, exclude_bins=True):
         """uint8 mask of pixels that may belong to an object: no valid depth (unknown), or a 3D point at object
         height over the mat and outside every bin footprint."""
@@ -1134,8 +1147,8 @@ class Perception:
         ok = (h >= 0.25) & (h <= upper)
         if exclude_bins:
             half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + c["bin_pixel_margin"]
-            for ctr in sc.cfg["bins"]["centers"].values():
-                ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1)
+            for ctr in self._bin_centres_mat().values():
+                ok &= ~np.all(np.abs(pm[:, :2] - ctr) <= half, axis=1)
         keep[vv[~ok], uu[~ok]] = 0
         return keep
 
@@ -1146,7 +1159,7 @@ class Perception:
         keep = np.full(shape, 255, np.uint8)
         b = sc.cfg["bins"]
         half = np.asarray(b["outer_size"], float) / 2 + self.cfg["bin_pixel_margin"]
-        for cx, cy in b["centers"].values():
+        for cx, cy in self._bin_centres_mat().values():
             corners = np.array([[cx + sx * half[0], cy + sy * half[1], z] for sx in (-1, 1) for sy in (-1, 1)
                                 for z in (0.0, float(b["wall_height"]))])
             uvz = self._project(sc.mat_to_pelvis(corners))
@@ -1164,7 +1177,7 @@ class Perception:
         pm = sc.pelvis_to_mat(np.asarray(top, float))
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + self.cfg["bin_pixel_margin"] + self.size
         return any(np.any(np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1))
-                   for ctr in sc.cfg["bins"]["centers"].values())
+                   for ctr in self._bin_centres_mat().values())
 
     def _y_affine(self, xy):
         """y_corrected = y - (a*y + b): the measured perceived-minus-true error model in the pelvis frame."""
@@ -1297,8 +1310,8 @@ class Perception:
             return "off_mat"
         bm = c["bin_exclusion_margin"]
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + bm
-        for name, ctr in sc.cfg["bins"]["centers"].items():
-            if np.all(np.abs(pm[:2] - np.asarray(ctr, float)) <= half):
+        for name, ctr in self._bin_centres_mat().items():
+            if np.all(np.abs(pm[:2] - ctr) <= half):
                 return f"in_bin:{name}"
         if bins_first and not lo <= h <= hi:
             return f"height {h:.2f} sizes"
