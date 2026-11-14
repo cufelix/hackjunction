@@ -1245,6 +1245,9 @@ _S_AMBER = re.compile(r"\bamber\b", re.I)
 _S_AMBER_TOKEN = "xamber"          # not a colour word (normalize matches amber at a word start only); no fuzzy target starts with x
 _S_CAN = re.compile(
     rf"\b({_S_COLOURS})(\s+)(can)\b(?=\s*(?:[.,;:!?]|$)|\s+(?:in|into|onto|inside|to|at|goes|belongs|is|are)\b)", re.I)
+_S_MODAL_CAN = re.compile(
+    rf"((?:^|[.;,:!?]\s*|\b(?:and|then|but)\s+))({_S_COLOURS})\s+can\s+(?=(?:go|be|belong|stay|move|sit|fit|land|end|head|get)\b)",
+    re.I)
 _S_INTENSIFIER = re.compile(
     r"(?<![A-Za-z])((?:the\s+)?)right(\s+)((?:in|at|on|by)\s+the\s+(?:very\s+|far\s+)?(?:left|right|center|centre|middle)\b)",
     re.I)
@@ -1301,7 +1304,9 @@ def structured_normalize(text: str) -> str:
     try:
         s = str(text)
         s = _S_AMBER.sub(_S_AMBER_TOKEN, s)
-        s = _S_INTENSIFIER.sub(lambda m: m.group(0) if m.group(1) else m.group(3), s)
+        # "the right in the middle bin" = the middle bin ("right" intensifies); "... in the middle of the table" is unclear
+        s = _S_INTENSIFIER.sub(lambda m: m.group(0) if m.group(1) and re.match(r"\s+of\b", s[m.end():]) else m.group(3), s)
+        s = _S_MODAL_CAN.sub(lambda m: f"{m.group(1)}{m.group(2)} objects can ", s)   # "Red can go left": modal, all red objects
         s = _S_CAN.sub(lambda m: m.group(1) + m.group(2) + ("Cylinder" if m.group(3)[0].isupper() else "cylinder"), s)
         if _S_CZ_DETECT.search(s):
             for rx, w in _S_CZ_REPL:

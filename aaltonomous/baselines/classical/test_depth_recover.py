@@ -88,6 +88,21 @@ class TestDepthBlobRecover(unittest.TestCase):
         accepted, _, _, _ = recover_depth_blobs(self._perception(), rgb, depth, hsv, arm_mask=arm_mask)
         self.assertEqual(accepted, [])
 
+    def test_depth_recover_alone_does_not_fk_mask_colour_blobs(self):
+        """Bug 2: keep[arm]=0 is gated by color_gate.fk_mask only; depth_blob_recover alone leaves colour blobs untouched."""
+        rgb, depth = self._frame("red", "cube", (0, 220, 210))
+        arm = (depth != self.empty_depth) | np.any(rgb != self.empty_rgb, axis=2)
+        q = (np.zeros(14), np.zeros(14))
+
+        def run(**ov):
+            p = self._perception(**ov)
+            with mock.patch.object(Perception, "_fk_arm_mask", return_value=arm):
+                return p.detect(rgb, depth, robot_q=q)
+
+        dbr_only = run()                                          # depth_blob_recover ON, fk_mask OFF
+        self.assertEqual([d.color for d in dbr_only], ["red"])
+        self.assertEqual(run(**{"perception.color_gate.fk_mask": True}), [])   # fk_mask ON still masks the blob
+
     def test_policy_supplies_joint_state_for_recovery_fk_mask(self):
         policy = object.__new__(ClassicalPolicy)
         policy.cfg = load_config(overlay="none", overrides={"perception.depth_blob_recover": True})

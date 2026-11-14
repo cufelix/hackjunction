@@ -204,5 +204,24 @@ class TestWiringAndSpeed(unittest.TestCase):
         self.assertLess(samples[989], 5.0, f"p99 {samples[989]:.2f} ms")
 
 
+class TestBugsweepLeftovers(unittest.TestCase):
+    def test_right_in_the_middle_bin_is_centre(self):
+        for t in ("Put red cubes to the right in the middle bin", "Red cubes go to the right in the middle bin.",
+                  "red cubes right in the middle bin"):
+            self.assertEqual(bins(t)[("red", "cube")], "center", t)
+        self.assertEqual(bins("Red cubes to the right bin")[("red", "cube")], "right")   # plain right unchanged
+
+    def test_clause_leading_modal_can_is_all_objects_of_that_colour(self):
+        for t in ("Red can go left.", "Red can go left and yellow can go right", "Yellow cubes right. Then red can be in the left bin"):
+            b = bins(t)
+            self.assertTrue(all(b[("red", s)] == "left" for s in SHAPES), (t, b))
+        b = bins("Red can go left and yellow can go right")
+        self.assertTrue(all(b[("yellow", s)] == "right" for s in SHAPES))
+        # noun reading unchanged: "can" before a preposition / "goes" is still the cylinder
+        self.assertEqual(bins("red can in the left bin")[("red", "cylinder")], "left")
+        self.assertNotEqual(bins("red can in the left bin")[("red", "cube")], "left")
+        self.assertNotIn("objects", structured_normalize("put the red can in the right bin"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -172,6 +172,43 @@ class TestLayer(unittest.TestCase):
         self.assertIsNone(L.take())
         self.assertEqual(L.req.status, "timeout")
 
+    def test_abstain_only_guard(self):
+        """Bug 1: brain may bin only objects the parser abstained on; every dropped override is logged."""
+        logs = []
+        known = {**WORLD, "objects": [{**WORLD["objects"][0], "resolver_bin": "left"},
+                                      {**WORLD["objects"][1], "resolver_bin": None}]}
+        # (1) different bin for a parser-mapped object -> ignored and logged
+        L = self.layer(Scripted({"choice": idx("pick_place", obj_id="o0", bin="right"), "confidence": 1.0}))
+        L.log = logs.append
+        L.request("after_look", known, STATE, self.CL, abstain=False)
+        L.wait(1.0)
+        self.assertIsNone(L.take())
+        self.assertTrue(any("[brain_guard] override dropped" in m for m in logs), logs)
+        # (2) bin for an abstained object -> used
+        L = self.layer(Scripted({"choice": idx("pick_place", obj_id="o1", bin="right"), "confidence": 0.9}))
+        L.request("after_look", known, STATE, self.CL, abstain=False)
+        L.wait(1.0)
+        self.assertEqual(L.take()["args"], {"obj_id": "o1", "bin": "right"})
+
+    def test_brain_not_asked_when_nothing_abstained(self):
+        class Count(PlannerBackend):
+            n = 0
+
+            def decide(self, rj):
+                Count.n += 1
+                return json.dumps({"choice": 0, "confidence": 1.0})
+
+        allknown = {**WORLD, "objects": [{**WORLD["objects"][0], "resolver_bin": "left"},
+                                         {**WORLD["objects"][1], "resolver_bin": "right"}]}
+        L = self.layer(Count())
+        L.request("after_look", allknown, STATE, self.CL, abstain=False)
+        L.prefetch("after_look", allknown, STATE, self.CL, None, False)
+        L.wait(0.2)
+        self.assertIsNone(L.take())
+        time.sleep(0.2)
+        self.assertEqual(Count.n, 0)
+        self.assertEqual(L.stats["no_abstain"], 1)
+
     def test_known_bin_cannot_be_overridden_but_unknown_object_can(self):
         known = {**WORLD, "objects": [{**WORLD["objects"][0], "resolver_bin": "left"},
                                       {**WORLD["objects"][1], "resolver_bin": None}]}
@@ -390,7 +427,7 @@ class TestPrefetch(unittest.TestCase):
                 "objects": [{"id": "o0", "color": "red", "shape": None, "shape_conf": 0, "xy": [x, 0.1],
                              "reachable": None, "near_bin": None, "resolver_bin": "left"},
                             {"id": "o1", "color": "blue", "shape": None, "shape_conf": 0, "xy": [0.2, -0.1],
-                             "reachable": None, "near_bin": None, "resolver_bin": "right"}]}
+                             "reachable": None, "near_bin": None, "resolver_bin": None}]}   # o1 abstained: the brain is asked
 
     def test_hit_uses_prefetched_answer_without_new_request(self):
         b = Counting()
