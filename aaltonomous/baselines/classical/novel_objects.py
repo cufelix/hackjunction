@@ -248,16 +248,17 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
             HP = points[huse]
             if len(HP) >= 10:
                 _, hmajor, hminor, hdims = _axes_and_footprint(HP[:, :2])
-                # body centre (handle pixels excluded): the handle axis points outward from it; grasp >= rim + 3 cm
+                # body centre (handle pixels excluded): the handle axis points outward from it; grasp >= rim + 4 cm
                 BP = points[blob & valid & ~handle_mask]
                 body_c = np.median(BP[:, :2], axis=0) if len(BP) >= 10 else object_centre_xy
                 u = hmajor if float((np.median(HP[:, :2], axis=0) - body_c) @ hmajor) >= 0 else -hmajor
                 w = np.array([-u[1], u[0]])
                 rel = HP[:, :2] - body_c
-                rim = float(np.percentile((BP[:, :2] - body_c) @ u, 95.0)) if len(BP) >= 10 else float(dims[0]) / 2
-                if len(BP) >= 10:
-                    rim = max(rim, float(_axes_and_footprint(BP[:, :2])[3][0]) / 2)   # body diameter, not just the visible reach
-                s_min = rim + 0.03
+                DP = BP[:, :2] - body_c
+                # disc pixels only: handle pixels the handle mask missed sit in the handle band and would push the rim out to the tip
+                DP = DP[np.abs(DP @ w - float(np.median(rel @ w))) > float(hdims[1]) / 2 + 0.01]
+                rim = max(float(np.percentile(DP @ u, 100.0)), float(_axes_and_footprint(DP)[3][0]) / 2) if len(DP) >= 10 else float(dims[0]) / 2
+                s_min = rim + float(cfg.get("handle_rim_margin_m", 0.06))
                 if float((rel @ u).max()) < s_min + 0.01:
                     ungraspable_reason = "handle too short/occluded"
                 else:
