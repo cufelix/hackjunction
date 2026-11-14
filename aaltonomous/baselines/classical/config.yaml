@@ -662,6 +662,9 @@ policy:
   fixed_mapping: null         # FLAG (organisers P0). explicit sort_fixed scene metadata passed at server reset;
                               # null = shared tasks.FIXED_MAPPING. Never used as a sort_language blank/error fallback
   fixed_instruction_first: false  # FLAG. sort_fixed: instruction beats the venue map only when it maps EVERY colour to a bin
+  frozen_rgb_guard: false     # FLAG (frozen rgb). Same head RGB as the previous look after the arms moved > min travel = frozen stream: no picks from it, [frozen_rgb] log, home + retry
+  frozen_rgb_min_arm_travel_rad: 0.05  # sum |dq| over the arm joints since the previous fresh look
+  frozen_rgb_max_consecutive: 3        # consecutive frozen looks -> stop picking for the episode (0 pts, never -1)
   insert_guard: false         # FLAG (insert). insert_shapes (task id or 'hole ... lid' sentence): abstain on every
                               # object. The lid holes are 3-10 cm past the arm's IK reach (probe 2026-11-14), and a
                               # release over the lid bin scores -1 (forced); doing nothing scores 0.

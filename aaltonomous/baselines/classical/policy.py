@@ -25,6 +25,7 @@ import re
 import sys
 import threading
 import time
+import zlib
 from types import MappingProxyType
 
 import numpy as np
@@ -121,6 +122,7 @@ class ClassicalPolicy:
                  profile=None, overlay=None):
         self.cfg = config if isinstance(config, dict) else load_config(
             config, overrides, profile=profile, overlay=overlay)
+        self._rgb_ref = None            # frozen_rgb_guard: (hash, arm_q) of the last fresh look; persists across reset()
         self.held_detector = HeldDetector(self.cfg["grasp"].get("held_detector", "stall"),
                                           self.cfg["grasp"].get("held_threshold_rad", 0.045))
         self.scene = scene if isinstance(scene, Scene) else Scene.load(scene)
@@ -467,6 +469,7 @@ class ClassicalPolicy:
             self._replace_stale_perception(owner.get("perception_state"))
         self._clear_looks = 0
         self._clear_since = None
+        self._frozen_looks = 0          # frozen_rgb_guard: consecutive frozen looks (per episode; the hash ref is NOT reset)
         self._target_cooldowns = []     # [{color, xy, until}], planner.per_target_guard only
         self._latest_t = 0.0            # newest episode clock seen by act(); planning workers use it for cooldown start
         # A stale generation owns its detached snapshot and may finish in the
@@ -1340,6 +1343,8 @@ class ClassicalPolicy:
                 self._note(t, f"attempt cap reached ({self.n_started} >= max_total_attempts {int(cap)}): done")
                 self.state = "done"
                 return self._hold(done=True)
+            if self._job is None and self._frozen_rgb_look(obs, t):
+                return self._frozen_rgb_action(t)
             if self.threaded:
                 self._stale_detect_jobs = [job for job in self._stale_detect_jobs if job["result"] is None]
                 max_inflight = int(self.cfg["perception"].get("detect_max_inflight", 2))
@@ -1464,6 +1469,48 @@ class ClassicalPolicy:
         return True
 
     # ------------------------------------------------------------------ look + plan
+    def _frozen_rgb_look(self, obs, t):
+        """policy.frozen_rgb_guard: True when this look's head RGB is the previous fresh look's frame although the
+        arms travelled > min_arm_travel_rad since then. Runs once per look, in act() before the look is launched
+        (inline and threaded/generation-worker paths alike). Never raises; a fresh look updates the reference."""
+        pol = self.cfg["policy"]
+        if not pol.get("frozen_rgb_guard", False):
+            return False
+        try:
+            rgb, q = obs.get("head_rgb"), obs.get("arm_q")
+            if rgb is None or q is None:
+                return False
+            arr = np.ascontiguousarray(rgb)
+            h = (zlib.crc32(arr), arr.shape)
+            q = np.asarray(q, float).copy()
+            ref = self._rgb_ref
+            frozen = False
+            if ref is not None and ref[0] == h and ref[1].shape == q.shape:
+                travel = float(np.sum(np.abs(q - ref[1])))
+                frozen = travel > float(pol.get("frozen_rgb_min_arm_travel_rad", 0.05))
+            if frozen:
+                self._frozen_looks += 1
+                self._note(t, f"[frozen_rgb] head RGB identical to the previous look after {travel:.2f} rad of arm "
+                              f"travel; look {self._frozen_looks}/{int(pol.get('frozen_rgb_max_consecutive', 3))} "
+                              "discarded")
+                return True
+            self._frozen_looks = 0
+            self._rgb_ref = (h, q)
+            return False
+        except Exception as e:  # never kill the control loop
+            try:
+                self._note(t, f"[frozen_rgb] guard error {e!r}; ignored")
+            except Exception:
+                pass
+            return False
+
+    def _frozen_rgb_action(self, t):
+        if self._frozen_looks >= int(self.cfg["policy"].get("frozen_rgb_max_consecutive", 3)):
+            self._note(t, "[frozen_rgb] head RGB stream frozen: stop picking (0 pts)")
+            self.state = "done"
+            return self._hold(done=True)
+        return self._after_look(("error", "frozen_rgb"), t)   # the existing failed-look path: home, settle, retry
+
     def _look_snapshot(self):
         """Fast copy-on-launch transaction for one look/plan worker."""
         worker = copy.copy(self)
@@ -3695,6 +3742,7 @@ class ClassicalPolicy:
         kind = res[0]
         confirm = bool(self.cfg["policy"].get("done_confirm", False))
         retry_failed = confirm or self.cfg["perception"].get("look_timeout_s") is not None
+        retry_failed = retry_failed or res[:2] == ("error", "frozen_rgb")   # policy.frozen_rgb_guard: retry, never stop on one
         if (confirm or retry_failed or self._target_guard_on()) and t >= self.time_limit:
             self._clear_looks, self._clear_since = 0, None
             self._note(t, "episode time limit reached")
