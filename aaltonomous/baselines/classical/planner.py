@@ -180,9 +180,12 @@ class Planner:
     def _drop_slots0(self, name):
         """Reach-biased release points in the near-inner-wall band of a bin.
 
-        The first point is closest to the robot centre line.  Consecutive
-        points are at least ``drop_slot_spacing`` apart and every object centre
-        keeps ``drop_slot_wall_margin`` from the inner side walls.
+        The first point is closest to the robot centre line.  In legacy mode,
+        consecutive points are at least ``drop_slot_spacing`` apart and every
+        object centre keeps ``drop_slot_wall_margin`` from the inner side walls.  With
+        ``drop_slot_grid`` on, two reach-biased rows use the physical object
+        width plus 1 mm as their collision-free centre spacing; the stock
+        three slots per row therefore become six.
         """
         g = self.cfg["grasp"]
         spacing = float(g.get("drop_slot_spacing", 0.06))
@@ -194,6 +197,15 @@ class Planner:
         xlo, xhi = corners[:, 0].min(), corners[:, 0].max()
         ylo, yhi = corners[:, 1].min() + margin, corners[:, 1].max() - margin
         x = min(xhi, xlo + float(g.get("drop_inset") or 0.0))
+        grid = bool(g.get("drop_slot_grid", False))
+        if grid:
+            # Dense enough for six objects but not for overlap: the extra millimetre avoids a floating-point
+            # equality at exactly one object width.  Start at the wall margin (rather than drop_inset) to keep
+            # row 2 close to the legacy side-bin reach envelope.
+            spacing = float(self.scene.size) + 0.001
+            margin = max(margin, float(self.scene.size) / 2)
+            ylo, yhi = corners[:, 1].min() + margin, corners[:, 1].max() - margin
+            x = xlo + margin
         if ylo > yhi:
             return [self._drop_xy0(name)]
         if ylo <= 0.0 <= yhi:
@@ -205,10 +217,15 @@ class Planner:
             start = ylo if ylo > 0.0 else yhi
             direction = 1.0 if ylo > 0.0 else -1.0
             ys = [start + direction * spacing * k for k in range(count)]
-        out = []
+        row = []
         for y in ys:
-            if ylo - 1e-9 <= y <= yhi + 1e-9 and all(abs(y - p[1]) >= spacing - 1e-9 for p in out):
-                out.append(np.array([x, np.clip(y, ylo, yhi)]))
+            if ylo - 1e-9 <= y <= yhi + 1e-9 and all(abs(y - p[1]) >= spacing - 1e-9 for p in row):
+                row.append(np.array([x, np.clip(y, ylo, yhi)]))
+        if grid:
+            xs = [x0 for x0 in (x, x + spacing) if x0 <= xhi - margin + 1e-9]
+            out = [np.array([x0, p[1]]) for x0 in xs for p in row]
+        else:
+            out = row
         # Slots only (#6 or grasp.drop_slots; never used with both off): drop slots the head camera cannot verify
         excl = [np.asarray(e, float) for e in (g.get("drop_slot_exclude") or [])]
         keep = [p for p in out if all(np.linalg.norm(p - e) > 0.005 for e in excl)]

@@ -272,9 +272,11 @@ grasp:
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)
   drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
   drop_slot_wall_margin: 0.03 # object-centre margin from the inner side walls in the reachable near-wall band
-  drop_slot_count: 3          # one near-wall row; planner checks every selected slot with IK + safety dry-run
+  drop_slot_count: 3          # legacy count / grid slots per row; planner checks each selected slot with IK + safety
   drop_slots: false           # FLAG (23-grasp-failure). Standalone drop slots (no verification): each successive object
                               # in a bin gets the next slot instead of the one fixed drop_xy (STEP 0: 6/30 stacked)
+  drop_slot_grid: false       # FLAG (bin capacity). Two reach-biased rows, separated by object width + 1 mm;
+                              # stock count 3 -> six distinct slots. false preserves the one-row coordinates exactly.
   drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
   drop_height_extra_m: 0.0    # FLAG (finals safe). Raise the bin release by this (capped at the carry height); IK failure -> stock target
   drop_lateral_margin_m: 0.0  # FLAG (finals safe). Move the release this far toward the bin centre (y only); IK failure -> stock target

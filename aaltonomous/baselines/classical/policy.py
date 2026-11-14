@@ -701,11 +701,24 @@ class ClassicalPolicy:
         if self.state == "look" and not self._bv_done and (self.cfg.get("bin") or {}).get("vote", {}).get("enabled"):
             # bin.vote: first n_frames looks at home, before any pick; then freeze the median, never again
             v = self.cfg["bin"]["vote"]
-            self._bv_frames.append({"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth")})
+            if len(self._bv_frames) < int(v["n_frames"]):
+                self._bv_frames.append({"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth")})
             if len(self._bv_frames) < int(v["n_frames"]):
                 return self._hold()
+            if self._shell:   # rim/tape extraction is much slower than the 50 ms control-loop budget
+                r = self._bg("bin_vote", vote_bins, self.perception, self.planner, self._bv_frames, self.cfg,
+                             lambda m: self._note(t, m))
+                if r is None:
+                    return self._hold()
+                if r[0] == "err":
+                    self._note(t, f"[bin.vote] worker failed ({type(r[1]).__name__}: {r[1]}); prior positions")
+                    shift, extra, conf = {}, {}, {}
+                else:
+                    shift, extra, conf = r[1]
+            else:
+                shift, extra, conf = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg,
+                                                log=lambda m: self._note(t, m))
             self._bv_done = True
-            shift, extra, conf = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg, log=lambda m: self._note(t, m))
             self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = shift, extra, conf
             self._bv_frames = []
         if self.state == "look" and self._await_pitch_cal(t):

@@ -60,6 +60,7 @@ flags:
   policy.verify_yellow_unknown: false           # Felix #6r  yellow in-bin detection = unknown (needs verify)
   policy.max_corrections_per_episode: null      # Felix #6r  e.g. 1; set = counter picks first (needs verify)
   grasp.drop_slots: false                       # Timi 23    standalone drop slots (no verify needed)
+  grasp.drop_slot_grid: false                   # bin capacity two object-separated rows (finals opt-in only)
   grasp.drop_slot_overflow: counter             # Felix #6r  counter | stack, when the slots are used up
   grasp.drop_height_extra_m: 0.0                # finals safe extra release height; IK fallback to stock
   grasp.drop_lateral_margin_m: 0.0              # finals safe release toward bin centre; IK fallback to stock
