@@ -612,7 +612,10 @@ class Planner:
         if bin_name is None:
             return last
         reasons, good = [], []
-        for side in (side0, "right" if side0 == "left" else "left"):
+        order = (side0, "right" if side0 == "left" else "left")
+        if g.get("prefer_right_arm", False):   # FLAG grasp.prefer_right_arm: right arm first, left only as the fallback
+            order = ("right", "left")
+        for side in order:
             p = self._plan_side_hints(det, side, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float),
                                       drop_slot=drop_slot, source_bin=source_bin)
             if p.ok:

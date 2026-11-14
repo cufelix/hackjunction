@@ -402,6 +402,7 @@ grasp:
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   close_posture: closed       # FLAG (pinch fix): hand posture for the grasp, closed | closed_tight (hand.closed_tight)
   release_posture: release     # hand posture for letting go (hand.<name>); back to `open` on the way home
+  prefer_right_arm: false     # FLAG (left-hand): right arm first for every pick; left only when the right cannot plan
   arm: by_y                   # by_y = preferred arm first (bin side; centre bin: object side), other on failure | best = plan both, keep the faster
   relocate:                   # cross-body: no arm can do object -> bin; pick with one arm, put down where the other can finish
     enabled: true
