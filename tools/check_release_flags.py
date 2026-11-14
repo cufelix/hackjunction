@@ -69,7 +69,8 @@ R23_FLAGS = frozenset({
 })
 # brain/universal layer: tuning values (present, non-default, in every universal-derived overlay incl. *_classic) ...
 BRAIN_PARAMS = frozenset({"brain.backend", "brain.call_timeout_s", "brain.find_n_predict", "brain.image_max_side_px",
-                          "brain.plan_timeout_s", "perception.novel.max_area_px"})
+                          "brain.plan_timeout_s", "perception.novel.max_area_px",
+                          "perception.novel.fp_filter"})   # fp_filter: stock ON, shipped OFF (SHA2)
 # ... and the switches (ON only in finals_r24 / finals_r23_universal)
 BRAIN_SWITCHES = frozenset({"brain.closed_loop", "brain.enabled", "brain.ev_gate", "brain.find",
                             "brain.find_to_detection", "brain.grounded_picks", "brain.planner", "grasp.generic",
