@@ -88,6 +88,8 @@ calib:
     depth_tolerance_m: 0.15   # optional rejection cue only; invalid/missing depth is ignored
 
 perception:
+  look_timeout_s: null     # FLAG (finals done). null = off; e.g. 5.0 bounds one async detector call
+  detect_max_inflight: 2      # bounded retry: at most this many detector calls may remain wedged concurrently
   camera: head
   assoc_radius_m: 0.06       # FLAG. Same-colour detection-to-retry association across frames; finals uses 0.10
   # OpenCV HSV (H 0-180, S/V 0-255). Each colour = list of [lo, hi] ranges (red wraps around H=0).
@@ -334,6 +336,18 @@ grasp:
   # tips are 57 mm apart (URDF): centred between them (auto) a 45 mm object wedges between the two fingers and is
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
+  # grasp.cage_mode (FLAG, default off): three-contact closure for confidently classified metric cylinders and
+  # standing triangle prisms. URDF FK at hand.closed puts the index/middle pad midpoint at [100.927,-88.917,0] mm.
+  # A nominal 50 mm object centre is half its width behind the pads: [75.927,-88.917,0], rounded here to 1 mm.
+  # cage_finger_posture is finals_r21 closed_tight plus -0.109 rad at each finger_0: FK moves both pads 10.0 mm
+  # inward. cage_thumb_extra_rad is measured from hand.closed thumb_1. FK plus each contact normal gives 10.0 mm
+  # surface penetration at 0.152 rad for a cylinder (normal x=1) and 0.177 rad for a vertex-aligned equilateral
+  # prism side (normal x=cos(30 deg)). Generated commands are clipped to the URDF limits; cube=0 keeps its path.
+  cage_mode: false
+  cage_point_in_palm: [0.076, -0.089, 0.0]
+  cage_thumb_extra_rad: {cube: 0.0, cylinder: 0.152, triangle: 0.177}
+  cage_finger_posture: [0.0, 0.0, 1.2, -1.109, -0.6, -1.109, -0.6]
+  cage_shape_min_conf: 0.5
   held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
   release_wait_s: null        # FLAG (lag R44): null = today (open_hold_s); s = hold >= this after the open command before the retreat starts
   release_confirm: false      # FLAG (lag R49): after open + wait the finger state must read empty (held detector); not empty -> re-open once, then home and stop picking
@@ -393,6 +407,11 @@ grasp:
   yaw_max_hints: 2
   yaw_min_conf: 0.5
   yaw_tri_shift: true         # move the grasp point to the midpoint of the object's extent along the finger direction
+  # grasp.tri_vertex_align (FLAG, default off): for a standing triangle, use its vertex estimate (or the blob's
+  # minimum-area rectangle when no pose estimate exists) and rotate palm x by +/-90 deg so the index-middle gap,
+  # palm z, lies on a vertex line. The three equivalent vertex directions are tried nearest the natural arm yaw.
+  tri_vertex_align: false
+  tri_vertex_phi_deg: 90.0
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
@@ -515,6 +534,10 @@ motion:
   hold_ticks: 6               # ticks per hold while planning / waiting (fewer requests; <= 0.2 s extra latency)
   counter_clearance: 0.03     # hand points above the counter footprint stay this high during transit
 
+planner:
+  per_target_guard: false     # FLAG (finals done). A failed/raising target cannot stop planning for other detections
+  per_target_cooldown_s: 2.0  # after a target fails planning, wait this long before offering it again
+
 # Arms out of the head camera's view of the cube region and above counter height. TUNE on the robot
 # (start = where teleop leaves the arms; the first move goes there at arm_max_vel).
 # Default (2026-11-11, layout v1): hands ~22 cm above pelvis height at y = +-0.22 m, all hand points >= 6 cm above
@@ -553,6 +576,9 @@ policy:
   generation_workers: false   # H7 FLAG: immutable generation-tagged look results; reset invalidates without waiting
   chunk_ticks: null          # FLAG. null = motion.chunk; int >= 1 overrides trajectory ticks returned per act()
   hold_ticks: null           # FLAG. null = motion.hold_ticks; int >= 1 overrides waiting/settled hold reply ticks
+  done_confirm: false         # FLAG (finals done). Empty/error look is not enough to end; confirm below before done
+  done_confirm_looks: 2       # minimum consecutive empty detector results (must be >= 2)
+  done_confirm_span_s: 10.0   # first-to-last empty-look span required before declaring the counter clear
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   fixed_mapping: null         # FLAG (organisers P0). explicit sort_fixed scene metadata passed at server reset;
                               # null = shared tasks.FIXED_MAPPING. Never used as a sort_language blank/error fallback
@@ -597,6 +623,15 @@ policy:
   # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
   # lazily; the episode ends only when nothing fits. Plans are NOT computed for every candidate (IK 0.3-6 s each).
   time_triage: false
+  score_order: false          # FLAG (r22). Next target = max EV/s, EV = ps*(2(1-pw)-pw); EV<=0 never; time-budget + endgame stop
+  score_safety_s: 3.0         # score_order: a pick must end this long before the time limit
+  score_endgame_s: 25.0       # score_order: with less time than this left, only the quickest certain object
+  score_certain_pw: 0.1       # score_order: "certain" = p_wrong at most this
+  score_overhead_s: 8.0       # score_order t_cost: fixed grasp/release seconds
+  score_speed_mps: 0.12       # score_order t_cost: effective hand path speed
+  score_arm_y_m: 0.2          # score_order: arm anchor y (+left/-right) for reach distance
+  score_reach_m: 0.55         # score_order: comfortable reach; beyond it p_success falls off
+  score_p_success: {cube: 0.9, cylinder: 0.8, triangle: 0.65, unknown: 0.5}   # score_order prior by shape
   triage_order: duration      # duration = cheap-estimate order only | priority = estimate ties (within triage_tie_m) go by
                               # shape cost (policy.shape_cost, detection.shape) then mapping confidence
   triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority

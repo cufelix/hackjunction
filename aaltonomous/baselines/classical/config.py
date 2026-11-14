@@ -27,7 +27,8 @@ CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_postur
            "perception.topface_mode": ("top35", "whole_blob"),
            "perception.principal_point": ("file", "center"),
            "perception.online_pitch_cal": (False, True, "table"), "brain.backend": ("stub", "llamacpp")}
-VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2, "grasp.soft_overshoot": 7}
+VECTORS = {"grasp.point_in_palm": 3, "grasp.cage_point_in_palm": 3, "grasp.cage_finger_posture": 7,
+           "hand.closed_tight": 7, "perception.y_affine": 2, "grasp.soft_overshoot": 7}
 
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
@@ -58,6 +59,9 @@ FLAGS = {
     "policy.fixed_mapping": ("organisers P0", None, "explicit sort_fixed scene metadata passed by server reset (null = shared FIXED_MAPPING; finals venue: yellow left, blue center, red right); never a language fallback"),
     "policy.chunk_ticks": ("finals rate", None, "override motion.chunk; null keeps the profile value"),
     "policy.hold_ticks": ("finals rate", None, "override motion.hold_ticks; null keeps the profile value"),
+    "policy.done_confirm": ("finals done", False, "finish only after configured consecutive empty looks spanning the confirmation window; failed looks retry until the episode limit"),
+    "perception.look_timeout_s": ("finals done", None, "wall-clock deadline for one asynchronous detector call; timeout is a failed look, never evidence that the scene is clear"),
+    "planner.per_target_guard": ("finals done", False, "contain a planning exception or infeasible result to that target, cool it down, and continue with other detections"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
     "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
@@ -106,7 +110,10 @@ FLAGS = {
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
+    "grasp.tri_vertex_align": ("finals cage", False,
+                                 "standing triangle: align the index-middle gap with a vertex yaw"),
     "policy.time_triage": ("Oliver #3", False, "skip plans that do not fit the time left, try the next object"),
+    "policy.score_order": ("r22", False, "pick by expected value per second (p_success, p_wrong, t_cost); never EV <= 0; time-budget + endgame stop"),
     "policy.max_total_attempts": ("Oliver #3", None, "global per-episode cap on started picks"),
     "policy.max_attempts": ("stock param", 2, "tries per object before it is skipped (stock 2)"),
     "policy.retry_pass": ("Oliver #3", False, "once per episode: max_attempts-skipped objects get retry_extra_attempts"),
@@ -151,6 +158,8 @@ FLAGS = {
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),
     "motion.lift_on_stall.timeout_s": ("round 9", STOCK, "lift_on_stall: longest close hold (stock 1.2 s)"),
     "grasp.point_in_palm": ("pinch fix", STOCK, "object centre in the LEFT palm frame (right = [1,-1,1] mirror)"),
+    "grasp.cage_mode": ("finals cage", False,
+                         "three-contact cage for metric cylinders/standing triangles; cubes keep their configured grasp"),
     "grasp.close_posture_by_shape": ("hybrid", False, "per pick: demo posture only for a confident metric triangle, else the configured one"),
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
     "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
@@ -388,6 +397,27 @@ def check_flag_values(cfg):
         v = _get(cfg, k)
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
             raise ValueError(f"{k} = {v!r}: want null or an int >= 1")
+    if not isinstance(_get(cfg, "policy.done_confirm"), bool):
+        raise ValueError("policy.done_confirm: want true or false")
+    looks = _get(cfg, "policy.done_confirm_looks")
+    if not isinstance(looks, int) or isinstance(looks, bool) or looks < 2:
+        raise ValueError(f"policy.done_confirm_looks = {looks!r}: want an int >= 2")
+    span = _get(cfg, "policy.done_confirm_span_s")
+    if isinstance(span, bool) or not isinstance(span, (int, float)) or not np.isfinite(span) or span < 0.0:
+        raise ValueError(f"policy.done_confirm_span_s = {span!r}: want finite seconds >= 0")
+    deadline = _get(cfg, "perception.look_timeout_s")
+    if deadline is not None and (isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+                                 or not np.isfinite(deadline) or deadline <= 0.0):
+        raise ValueError(f"perception.look_timeout_s = {deadline!r}: want null or finite seconds > 0")
+    max_inflight = _get(cfg, "perception.detect_max_inflight")
+    if not isinstance(max_inflight, int) or isinstance(max_inflight, bool) or max_inflight < 1:
+        raise ValueError(f"perception.detect_max_inflight = {max_inflight!r}: want an int >= 1")
+    if not isinstance(_get(cfg, "planner.per_target_guard"), bool):
+        raise ValueError("planner.per_target_guard: want true or false")
+    cooldown = _get(cfg, "planner.per_target_cooldown_s")
+    if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)) \
+            or not np.isfinite(cooldown) or cooldown <= 0.0:
+        raise ValueError(f"planner.per_target_cooldown_s = {cooldown!r}: want finite seconds > 0")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
@@ -479,6 +509,16 @@ def check_flag_values(cfg):
         raise ValueError("grasp.generic_yaw_max_dev_deg must be in [0, 90]")
     if not float(g.get("generic_yaw_hint_weight", 3.0)) > 0.0:
         raise ValueError("grasp.generic_yaw_hint_weight must be positive")
+    thumb_extra = g.get("cage_thumb_extra_rad") or {}
+    if set(thumb_extra) != {"cube", "cylinder", "triangle"}:
+        raise ValueError("grasp.cage_thumb_extra_rad must contain cube/cylinder/triangle")
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or v < 0.0
+           for v in thumb_extra.values()):
+        raise ValueError("grasp.cage_thumb_extra_rad values must be finite non-negative radians")
+    if not 0.0 <= float(g.get("cage_shape_min_conf", 0.5)) <= 1.0:
+        raise ValueError("grasp.cage_shape_min_conf must be in [0, 1]")
+    if not 0.0 <= float(g.get("tri_vertex_phi_deg", 90.0)) <= 180.0:
+        raise ValueError("grasp.tri_vertex_phi_deg must be in [0, 180]")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}
@@ -660,6 +700,21 @@ def hand_postures(cfg, spec: JointSpec | None = None):
         if bad:
             raise ValueError(f"hand posture {name!r} outside joint_spec limits: {bad}")
         out[name] = v
+    if cfg.get("grasp", {}).get("cage_mode", False):
+        # These are commands, not measured contact poses. Start with the FK-derived finger posture, then put thumb_1
+        # at the requested flexion past our existing closed posture. The soft hand stops on contact; clip both hands
+        # to the same URDF-backed limits as the safety filter.
+        g = cfg["grasp"]
+        base = np.asarray(g["cage_finger_posture"], float)
+        closed = np.asarray(h["closed"], float)
+        for shape, extra in g["cage_thumb_extra_rad"].items():
+            if float(extra) <= 0.0:  # cube=0 by default: no alternate cube posture or planning path
+                continue
+            left = base.copy()
+            left[1] = closed[1] + float(extra)
+            left = np.clip(left, spec.hand_lower[:7], spec.hand_upper[:7])
+            right = np.clip(mirror_left_to_right(left), spec.hand_lower[7:], spec.hand_upper[7:])
+            out[f"cage_{shape}"] = np.r_[left, right]
     return out
 
 
