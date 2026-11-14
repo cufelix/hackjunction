@@ -724,9 +724,35 @@ class Planner:
     def _yaw_align_on(self, det):
         g = self.cfg["grasp"]
         ya = getattr(det, "apex_yaw", None)
-        return (bool(g.get("yaw_align", False)) and getattr(det, "shape", None) == "triangle"
-                and ya is not None and np.isfinite(ya)
-                and float(getattr(det, "apex_conf", 1.0)) >= float(g.get("yaw_min_conf", 0.5)))
+        pose_ok = (ya is not None and np.isfinite(ya)
+                   and float(getattr(det, "apex_conf", 1.0)) >= float(g.get("yaw_min_conf", 0.5)))
+        if getattr(det, "shape", None) != "triangle":
+            return False
+        if g.get("tri_vertex_align", False):
+            if getattr(det, "shape_path", None) != "metric":  # standing top face only
+                return False
+            fallback = getattr(det, "vertex_yaw", None)
+            if fallback is None or not np.isfinite(fallback):
+                fallback = getattr(det, "yaw", None)
+            return bool(pose_ok or (fallback is not None and np.isfinite(fallback)))
+        return bool(g.get("yaw_align", False) and pose_ok)
+
+    def _triangle_yaw(self, det):
+        """(vertex yaw, vertex-gap mode). The robust pose wins; rectangle/top-face yaw is the bounded fallback."""
+        g = self.cfg["grasp"]
+        ya = getattr(det, "apex_yaw", None)
+        pose_ok = (ya is not None and np.isfinite(ya)
+                   and float(getattr(det, "apex_conf", 1.0)) >= float(g.get("yaw_min_conf", 0.5)))
+        if g.get("tri_vertex_align", False):
+            if getattr(det, "shape_path", None) != "metric":
+                return None, False
+            if pose_ok:
+                return float(ya), True
+            for name in ("vertex_yaw", "yaw"):
+                value = getattr(det, name, None)
+                if value is not None and np.isfinite(value):
+                    return float(value) % (2.0 * np.pi / 3.0), True
+        return (float(ya), False) if pose_ok and g.get("yaw_align", False) else (None, False)
 
     def yaw_hint_angles(self, apex_yaw, side):
         """Candidate finger directions (pelvis-frame angle, rad), best first, for an equilateral triangle whose apex
@@ -742,6 +768,20 @@ class Planner:
         for k in range(3):
             a = apex_yaw + phi + 2 * np.pi * k / 3
             da = abs((a - ref + np.pi) % (2 * np.pi) - np.pi)
+            if da <= np.radians(float(g.get("yaw_max_dev_deg", 75.0))):
+                out.append((da, a))
+        return [a for _, a in sorted(out)][: int(g.get("yaw_max_hints", 2))]
+
+    def vertex_hint_angles(self, vertex_yaw, side):
+        """Palm-x headings whose index-middle gap (palm-z) lies on a triangle vertex line."""
+        g = self.cfg["grasp"]
+        s = 1.0 if side == "left" else -1.0
+        ref = -s * np.radians(float(g.get("yaw_ref_deg", 25.0)))
+        phi = s * np.radians(float(g.get("tri_vertex_phi_deg", 90.0)))
+        out = []
+        for k in range(3):
+            a = float(vertex_yaw) + phi + 2.0 * np.pi * k / 3.0
+            da = abs((a - ref + np.pi) % (2.0 * np.pi) - np.pi)
             if da <= np.radians(float(g.get("yaw_max_dev_deg", 75.0))):
                 out.append((da, a))
         return [a for _, a in sorted(out)][: int(g.get("yaw_max_hints", 2))]
@@ -811,19 +851,24 @@ class Planner:
         """Try the yaw-derived finger directions (strong hint weight, grasp point moved to the pinch midpoint).
         Returns the first Plan whose achieved finger direction is within yaw_tol_deg, else None (-> legacy hints)."""
         g = self.cfg["grasp"]
+        tri_yaw, vertex_mode = self._triangle_yaw(det)
+        if tri_yaw is None:
+            return None
         saved = (self.kin.hint, self.kin.w_hint)
         try:
-            for a in self.yaw_hint_angles(float(det.apex_yaw), side):
+            angles = self.vertex_hint_angles(tri_yaw, side) if vertex_mode else self.yaw_hint_angles(tri_yaw, side)
+            for a in angles:
                 f = np.array([np.cos(a), np.sin(a), 0.0])
                 d2 = copy.copy(det)
-                if g.get("yaw_tri_shift", True):  # pinch midpoint along f is not the centroid
-                    d2.top = det.top + self._tri_shift(a - float(det.apex_yaw), 2.0 / 3.0 * float(self.scene.size)) * f
+                if not vertex_mode and g.get("yaw_tri_shift", True):  # pinch midpoint along f is not the centroid
+                    d2.top = det.top + self._tri_shift(a - tri_yaw, 2.0 / 3.0 * float(self.scene.size)) * f
                 self.kin.hint, self.kin.w_hint = f, float(g.get("yaw_hint_weight", 3.0))
                 p = self._plan_side(d2, side, bin_name, arm_q, hand_q, **kw)
                 if p.ok:
                     err = self._finger_err(p, side, a)
                     if err <= float(g.get("yaw_tol_deg", 12.0)):
-                        p.reason = f"yaw-aligned ({np.degrees(a):.0f} deg, err {err:.0f})"
+                        mode = "vertex-aligned" if vertex_mode else "yaw-aligned"
+                        p.reason = f"{mode} ({np.degrees(a):.0f} deg, err {err:.0f})"
                         return p
         finally:
             self.kin.hint, self.kin.w_hint = saved
@@ -871,6 +916,17 @@ class Planner:
             if float(width) <= float(g.get("generic_narrow_width", 0.035)):
                 return "closed_demo", np.asarray(g["point_in_palm_demo"], float), None, conf, "generic_width"
             return g.get("close_posture", "closed"), None, None, conf, "generic_width"
+        thumb_extra = float((g.get("cage_thumb_extra_rad") or {}).get(label, 0.0))
+        cage_ok = (g.get("cage_mode", False) and thumb_extra > 0.0 and path == "metric"
+                   and conf >= float(g.get("cage_shape_min_conf", 0.5)))
+        if cage_ok and label == "triangle" and g.get("posture_apex_gate", False):
+            from .apex_gate import apex_gate_pass
+            ac, ang = getattr(det, "apex_gate", None) or (0.0, None)
+            cage_ok = apex_gate_pass(ac, ang, float(g.get("posture_apex_min_conf", 0.5)),
+                                     float(g.get("posture_apex_max_angle_deg", 75.0)))
+            self._apex = (cage_ok, ac, ang)
+        if cage_ok:
+            return f"cage_{label}", np.asarray(g["cage_point_in_palm"], float), label, conf, path
         if label == "triangle" and path == "metric" and conf >= float(g.get("posture_by_shape_min_conf", 0.5)):
             if not g.get("posture_apex_gate", False):
                 return "closed_demo", np.asarray(g["point_in_palm_demo"], float), label, conf, path
@@ -889,7 +945,8 @@ class Planner:
         vp = (self.vary or {}).get("posture")
         border = self._border_posture(det)
         generic = self._generic_on(det)
-        if not g.get("close_posture_by_shape", False) and vp is None and border is None and not generic:
+        if not (g.get("close_posture_by_shape", False) or g.get("cage_mode", False)) \
+                and vp is None and border is None and not generic:
             self._posture = None
             return self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin)
         self._apex = None
@@ -934,7 +991,12 @@ class Planner:
                 plan.reason = f"generic object height {1000 * H:.0f} mm outside safe range"
                 return plan
         hand_pre = hand_q.copy(); hand_pre[sl] = post["preshape"][sl]
-        hand_cls = hand_q.copy(); hand_cls[sl] = post[self._posture or g.get("close_posture", "closed")][sl]  # grasp.close_posture
+        hand_cls = hand_q.copy()
+        posture_name = self._posture or g.get("close_posture", "closed")
+        target = post[posture_name][sl]
+        if posture_name.startswith("cage_"):  # generated targets are clipped once more at the command seam
+            target = np.clip(target, self.spec.hand_lower[sl], self.spec.hand_upper[sl])
+        hand_cls[sl] = target
         hand_open = hand_q.copy(); hand_open[sl] = post["open"][sl]
         hand_rel = hand_q.copy(); hand_rel[sl] = post[g.get("release_posture", "preshape")][sl]
 

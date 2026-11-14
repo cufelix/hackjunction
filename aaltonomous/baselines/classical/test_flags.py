@@ -204,6 +204,7 @@ class TestFlags(unittest.TestCase):
             "perception.color_gate.fk_silhouette", "perception.sim_center_principal_point", "perception.aim_z_frac",
             "perception.still_vote"}   # gatefix A/B
         expect["finals_r22_chunk"] = expect["finals_r22"] | {"policy.chunk_ticks", "policy.hold_ticks"}   # handin rate A/B
+        expect["finals_r22_cage"] = expect["finals_r22"] | {"grasp.cage_mode", "grasp.tri_vertex_align"}   # cage A/B
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -212,9 +213,10 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
-                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):
+                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk",
+                  "finals_r22_cage"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
-        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_cage"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
@@ -282,10 +284,10 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_r22", "finals_r22_cal",
-                                      "finals_r22_chunk", "finals_r22_gate", "finals_r22_grasp",
-                                      "finals_r22_recall", "finals_real", "rc1", "rc1_strict",
-                                      "safe_profile"})
+                                      "finals_r21", "finals_r22", "finals_r22_cage",
+                                      "finals_r22_cal", "finals_r22_chunk", "finals_r22_gate",
+                                      "finals_r22_grasp", "finals_r22_recall", "finals_real", "rc1",
+                                      "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
@@ -325,6 +327,16 @@ class TestFlags(unittest.TestCase):
                          ("relook_before_done", False)):
             recall["perception"][key] = off
         self.assertEqual(recall, base)
+
+    def test_finals_r22_cage_is_r22_plus_only_the_two_cage_flags(self):
+        r22 = load_config(overlay="finals_r22")
+        cage = load_config(overlay="finals_r22_cage")
+        self.assertEqual((r22.pop("overlay"), cage.pop("overlay")), ("finals_r22", "finals_r22_cage"))
+        self.assertFalse(r22["grasp"]["cage_mode"])
+        self.assertFalse(r22["grasp"]["tri_vertex_align"])
+        cage["grasp"]["cage_mode"] = False
+        cage["grasp"]["tri_vertex_align"] = False
+        self.assertEqual(cage, r22)
 
     def test_cand_r17_differs_from_historical_r16_nopp_only_in_max_total_attempts(self):
         r16, r17 = load_config(overlay="cand_r16_nopp"), load_config(overlay="cand_r17")
