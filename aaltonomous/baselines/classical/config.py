@@ -22,6 +22,7 @@ STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config
 # Limits an overlay may never exceed (hard rule: nothing may move faster than the stock sim profile).
 LIMITS = {"motion.carry_scale": (0.0, 1.0)}
 CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight"),
+           "grasp.held_detector": ("stall", "finger_sum"),
            "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust"),
            "perception.principal_point": ("file", "center"),
            "perception.online_pitch_cal": (False, True, "table"), "brain.backend": ("stub", "llamacpp")}
@@ -78,6 +79,7 @@ FLAGS = {
     "policy.place_gate_bin_min": ("EV gate", 0.5, "minimum residual-derived bin confidence (used only by place_gate)"),
     "policy.object_time_budget_s": ("EV gate", None, "cumulative planned motion budget per tracked object; null = off"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
+    "grasp.held_detector": ("real held", "stall", "stall (legacy max error) | finger_sum (bias-corrected Dex3 fingers)"),
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),

@@ -34,6 +34,7 @@ from aaltonomous.scene.scene import Scene
 from . import decision as dec
 from .bin_vote import vote_bins
 from .config import hand_postures, home_arm, load_config
+from .held import HeldDetector
 from .kinematics import ArmKinematics
 from .perception import Perception
 from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
@@ -55,9 +56,17 @@ def _lower_thread_priority(nice=10):
 
 
 class ClassicalPolicy:
+    @staticmethod
+    def _safety_hand_limits(spec, safety):
+        """SafetyFilter._shrink for the hand, kept read-only and Pinocchio-free."""
+        margin = np.minimum(safety.hand_pos_margin, 0.25 * (spec.hand_upper - spec.hand_lower))
+        return spec.hand_lower + margin, spec.hand_upper - margin
+
     def __init__(self, config=None, scene=None, calibration=None, safety: SafetyConfig | None = None,
                  require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None):
         self.cfg = config if isinstance(config, dict) else load_config(config, overrides)
+        self.held_detector = HeldDetector(self.cfg["grasp"].get("held_detector", "stall"),
+                                          self.cfg["grasp"].get("held_threshold_rad", 0.045))
         self.scene = scene if isinstance(scene, Scene) else Scene.load(scene)
         self.cal = calibration if isinstance(calibration, Calibration) else Calibration.load(calibration)
         self.spec = JointSpec()
@@ -65,6 +74,10 @@ class ClassicalPolicy:
         self.home = home_arm(self.cfg, self.spec)
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
+        # Mirror SafetyFilter's hand position clamp without constructing or
+        # mutating a filter. The detector must compare hand_q with the command
+        # that the runner actually accepts at the URDF-margin stage.
+        self._held_hand_lo, self._held_hand_hi = self._safety_hand_limits(self.spec, self.safety)
         self.perception = Perception(self.cfg, self.scene, self.cal, log=log or (lambda *a: None))
         # perception.hand_calibration (default OFF): head-camera pose from the arms in depth. The arm model + URDF load
         # here (~0.5 s, outside any episode); a load failure only disables the feature.
@@ -192,6 +205,7 @@ class ClassicalPolicy:
         self.slot_used = {name: set() for name in self.scene.bin_names}   # grasp.drop_slots standalone
         self.slot_pending = None    # (bin, slot, grasp xy, colour) of the last standalone-slot placement
         self._gdiag = None          # policy.grasp_diag_log: the pick being watched
+        self.held_detector.reset()
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
@@ -432,14 +446,29 @@ class ClassicalPolicy:
                      f"exceptions={st['exception']} budget={self._shell_budget:.2f}s")
         return self._shell_hold(obs)
 
+    def _held_command(self):
+        """Policy's last hand target, with the safety filter's position clamp."""
+        if self.held_detector.mode == "finger_sum":
+            return np.clip(np.asarray(self.hand_cmd, float), self._held_hand_lo, self._held_hand_hi)
+        return self.hand_cmd
+
     def _act(self, obs):
-        if self.arm_cmd is None:  # first call: start from the measured pose
+        first = self.arm_cmd is None
+        if first:  # first call: start from the measured pose
             # Clamp into the URDF limits: real Dex3 fingers at rest read slightly past 0 (2026-11-11), and holding
             # that measured pose would be clipped every tick -> safety abort before the first move.
             sp = self.spec
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        if self.held_detector.mode == "finger_sum":
+            if first:
+                # The first command is synthesized from this same measurement,
+                # so it carries no tracking-bias information. Start the window
+                # now and sample subsequent actual command/measurement pairs.
+                self.held_detector.start(t)
+            elif obs.get("hand_q") is not None:
+                self.held_detector.observe(t, self._held_command(), obs["hand_q"])
         if (not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False)
                 and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
             self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
@@ -1876,10 +1905,12 @@ class ClassicalPolicy:
                            "min": int(round(float(self.cfg["motion"]["close_hold_s"]) * HZ)),
                            "rad": float(ls.get("stall_rad", 0.01)), "need": int(ls.get("settle_ticks", 3)),
                            "last": None, "still": 0, "t": t}
-        if self.cfg["policy"].get("grasp_diag_log", False) and plan.side in ("left", "right"):
+        if (self.cfg["policy"].get("grasp_diag_log", False) or self.held_detector.mode == "finger_sum") \
+                and plan.side in ("left", "right"):
             ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
             if "close" in ph and "lift" in ph:
-                self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1],
+                check = self.held_detector.evaluation_tick(*ph["close"], HZ)
+                self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": check,
                                "lift_end": ph["lift"][1], "t": t, "samples": {}}
         if self._vary_on() and plan.side in ("left", "right"):
             key = plan.grasp_key or (np.asarray(xy, float).copy(), None, self._posture_of(plan))
@@ -1903,20 +1934,49 @@ class ClassicalPolicy:
     def _enqueue(self, a, h):
         self.queue_a, self.queue_h = np.asarray(a, float), np.asarray(h, float)
 
+    def _held_abort_due(self, g, hq, hc):
+        """grasp.held_detector=finger_sum only: the close sample is clearly empty. Unsure (no bias reference, missing
+        or non-finite joint data) is never empty, so the placement runs as before."""
+        det = self.held_detector
+        if not det.ready or hq.shape != (14,) or hc.shape != (14,):
+            return False
+        if not (np.all(np.isfinite(hq)) and np.all(np.isfinite(hc))):
+            return False
+        return not det.held(g["plan"].side, hc, hq)[0]
+
+    def _abort_empty_grasp(self, g):
+        """Skip the carry of an empty grasp: open and return home. The pick counts as a miss (attempt counted at
+        start, vary_hist held=False), so the next look sees the object still on the table and retry-vary runs.
+        Standalone-slot bookkeeping is left to _settle_slot, which frees the slot when the object remains."""
+        plan = g["plan"]
+        self._gdiag = None
+        self._stall = self._exec = None      # per-plan watchers: their indices no longer match the queue
+        if self._vary_on() and self.vary_hist:   # the entry _start appended for this plan
+            self.vary_hist[-1]["held"] = False
+        self.log(f"[held_abort] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
+                 f"close sample empty: carry skipped, object remains")
+        home = self.arm_cmd.copy()
+        home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
+        a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
+        self._enqueue(a, h)
+
     def _grasp_diag(self, obs):
         """policy.grasp_diag_log (passive, never changes a command): once per pick, measured hand_q vs commanded
-        hand_cmd vs the `closed` posture at the end of the close hold and at the end of the lift. held = the active
-        hand still lags its command by >= 0.010 rad (fingers stalled on an object); no = they reached the target
-        (closed on nothing)."""
+        hand_cmd vs the `closed` posture at the detector's close-check tick and at the end of the lift."""
         g = self._gdiag
         q = obs.get("hand_q")
         left = 0 if self.queue_a is None else len(self.queue_a)
         done = g["n"] - left
         if q is not None:
+            cmd = self._held_command()
             for key, at in (("close", g["close_end"]), ("lift", g["lift_end"])):
                 if key not in g["samples"] and done >= at:
-                    g["samples"][key] = (done, np.asarray(q, float).copy(), np.asarray(self.hand_cmd, float).copy())
-        if "lift" not in g["samples"] and left > 0:
+                    g["samples"][key] = (done, np.asarray(q, float).copy(), np.asarray(cmd, float).copy())
+                    if key == "close" and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
+                        self._abort_empty_grasp(g)   # queue replaced; _act pops it on this same tick
+                        return
+        need = ("close", "lift") if self.held_detector.mode == "finger_sum" else ("lift",)
+        if any(key not in g["samples"] for key in need) and left > 0:
             return
         self._gdiag = None
         plan = g["plan"]
@@ -1924,15 +1984,27 @@ class ClassicalPolicy:
         closed = self.post[(plan.posture[0] if plan.posture else self.cfg["grasp"].get("close_posture", "closed"))][sl]
         parts = []
         held = None
+        close_held = None
         for key in ("close", "lift"):
             if key not in g["samples"]:
                 parts.append(f"{key}=n/a")
                 continue
             tick, hq, hc = g["samples"][key]
-            err = np.abs(hc[sl] - hq[sl])
-            held = bool(err.max() >= 0.010)
-            parts.append(f"{key}@{tick}: track_err_max={err.max():.3f} stall_vs_closed="
-                         f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
+            held, scores = self.held_detector.held(plan.side, hc, hq)
+            if key == "close":
+                close_held = held
+            if self.held_detector.mode == "stall":
+                # Preserve the legacy diagnostic bytes when the new flag is off.
+                parts.append(f"{key}@{tick}: track_err_max={scores['track_err_max']:.3f} stall_vs_closed="
+                             f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
+            else:
+                parts.append(f"{key}@{tick}: finger_sum={scores['finger_sum']:.3f} "
+                             f"index_sum={scores['index']:.3f} middle_sum={scores['middle']:.3f} "
+                             f"threshold={self.held_detector.threshold_rad:.3f} sample_held={'yes' if held else 'no'} "
+                             f"stall_vs_closed="
+                             f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
+        if self.held_detector.mode == "finger_sum" and close_held is not None:
+            held = close_held       # headline is the post-wait close sample; lift stays separately labelled above
         self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
                  f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
 
