@@ -77,6 +77,13 @@ ik:
   max_step: 0.2
   random_restarts: 8
 
+# Rung 2 (sort_language): resolve the instruction TEXT to a mapping instead of using FIXED_MAPPING.
+# Off by default so the step-0 reference run is unchanged. The mapping is never sent over the wire
+# (reset info carries only {"instruction": ...}), so with this off a language episode silently
+# sorts by the fixed colour->bin mapping.
+instruction:
+  resolve: false
+
 motion:
   arm_max_vel: 0.5            # rad/s per joint (safety filter allows 1.0)
   arm_max_acc: 1.5            # rad/s^2

@@ -66,11 +66,31 @@ class ClassicalPolicy:
         self.reset()
 
     # ------------------------------------------------------------------ API
+    def _instruction_mapping(self, info):
+        """Instruction text -> mapping for `scene.resolve_bin`, or None to fall back to FIXED.
+
+        Off unless `instruction.resolve` is true in config.yaml, so the reference measurement is
+        unchanged by default. NEVER raises: reset() is under a 1.0 s watchdog (safety.py:69) and an
+        exception here would end the episode as a BAD_END, which is worse than any wrong mapping.
+        The resolver is pure stdlib and measured at ~0.13 ms per sentence.
+        """
+        try:                                        # the WHOLE body, not just the resolve call
+            if not (self.cfg.get("instruction") or {}).get("resolve", False):
+                return None
+            text = (info or {}).get("instruction") or ""
+            if not text:
+                return None
+            from .instruction import resolve
+            return resolve(text) or None
+        except Exception as e:                      # a parse bug must not cost the whole episode
+            self.log(f"instruction resolve failed ({e}), using FIXED_MAPPING")
+            return None
+
     def reset(self, info=None):
         if isinstance(info, str):
             info = {"instruction": info}
         info = info or {}
-        self.mapping = info.get("mapping") or dict(FIXED_MAPPING)
+        self.mapping = info.get("mapping") or self._instruction_mapping(info) or dict(FIXED_MAPPING)
         self.planner.mapping = self.mapping
         self.time_limit = info.get("time_limit", self.time_limit)
         self.state = "init"
