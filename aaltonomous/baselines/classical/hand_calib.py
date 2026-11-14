@@ -139,17 +139,21 @@ class ArmSurface:
 
     def posed(self, arm_q, hand_q=None):
         """-> points (N, 3), normals (N, 3) in the pelvis frame."""
+        links = self.posed_links(arm_q, hand_q)
+        return np.concatenate([p for p, _ in links]), np.concatenate([n for _, n in links])
+
+    def posed_links(self, arm_q, hand_q=None):
+        """One ``(points, normals)`` pair per link, in the pelvis frame."""
         with self._lock:
             self.q[self.arm_iq] = np.asarray(arm_q, float)
             if hand_q is not None:
                 self.q[self.hand_iq] = np.asarray(hand_q, float)
             self.pin.framesForwardKinematics(self.model, self.data, self.q)
-            P, N = [], []
+            out = []
             for f, p, n in zip(self.frames, self.pts, self.nrm):
                 M = self.data.oMf[f]
-                P.append(p @ M.rotation.T + M.translation)
-                N.append(n @ M.rotation.T)
-        return np.concatenate(P), np.concatenate(N)
+                out.append((p @ M.rotation.T + M.translation, n @ M.rotation.T))
+        return out
 
 
 # ---------------------------------------------------------------------------------------------- solver

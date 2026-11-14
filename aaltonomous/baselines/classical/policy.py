@@ -794,10 +794,13 @@ class ClassicalPolicy:
             job["result"] = ("error", repr(e))
 
     def _detect_kw(self):
-        """Only with perception.colour_kmeans: tell detect() whether the arm is out of view (parked at home)."""
-        if not self.cfg["perception"].get("colour_kmeans", False):
-            return {}
-        return {"arm_clear": bool(np.abs(self.arm_cmd - self.home).max() < 0.05)}
+        """Optional context for a settled policy look."""
+        out = {}
+        if self.cfg["perception"].get("colour_kmeans", False):
+            out["arm_clear"] = bool(np.abs(self.arm_cmd - self.home).max() < 0.05)
+        if self.cfg["perception"].get("still_vote", False):
+            out["still_frame"] = True
+        return out
 
     def _fk_kw(self, obs):
         """Only with perception.color_gate.fk_mask: the measured arm / hand pose for detect()'s arm mask."""
@@ -810,11 +813,15 @@ class ClassicalPolicy:
         verify = self._verify_on()
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
             dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs))
+            if dets is None:
+                return ("still_vote_pending",)
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
             return self._choose_retry(dets, obs, verify=False)
         dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
                                                    **self._detect_kw(), **self._fk_kw(obs))
+        if dets is None:
+            return ("still_vote_pending",)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -2077,6 +2084,8 @@ class ClassicalPolicy:
         return corrections
 
     def _after_look(self, res, t):
+        if res[0] == "still_vote_pending":
+            return self._hold()
         if self.last_verification is not None:
             status, pending = self.last_verification
             if status == "ok":
