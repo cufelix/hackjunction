@@ -102,6 +102,7 @@ grasp:
   drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
+  close_posture: closed       # FLAG (pinch fix): hand posture for the grasp, closed | closed_tight (hand.closed_tight)
   release_posture: release     # hand posture for letting go (hand.<name>); back to `open` on the way home
   arm: by_y                   # by_y = preferred arm first (bin side; centre bin: object side), other on failure | best = plan both, keep the faster
   relocate:                   # cross-body: no arm can do object -> bin; pick with one arm, put down where the other can finish
@@ -159,6 +160,8 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
                                                          # palm frame: 3.6 cm gap = 0.9 cm squeeze on a 4.5 cm object. TUNE
                                                          # (old [0, 0.5, 0.8, ...] closed the tips onto ONE point = the object
                                                          # centre: in the sim the cube got wedged between index and middle)
+  closed_tight: [0.0, -0.1, 1.2, -1.0, -0.6, -1.0, -0.6]  # FLAG value (pinch fix, round 4): = closed until Oliver's FK
+                                                         # values (jaw 41 mm, midpoint) arrive; used with grasp.close_posture
   release:  [0.0, -0.5, 1.5, -0.05, -0.05, -0.05, -0.05] # let go: thumb back + up, fingers straight (sim: the cube
                                                          # stayed hooked in half-bent fingers with `open`/`preshape`)
   right: null                  # optional explicit right-hand postures {open, preshape, closed} in RIGHT DDS order

@@ -1,0 +1,11 @@
+# A/B overlay: pinch fix v1 (round 4). PLACEHOLDER: load_config refuses it until the values are filled in
+# (Oliver's FK job: jaw 41 mm, grasp point at the jaw midpoint; Felix verifies). Then delete `placeholder: true`.
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_pinch_v1 <image>.
+placeholder: true
+name: ab_pinch_v1
+flags:
+  grasp.close_posture: closed_tight
+  hand.closed_tight: [0.0, -0.1, 1.2, -1.0, -0.6, -1.0, -0.6]   # TBD (Oliver FK): currently = closed
+  grasp.point_in_palm: [0.099, -0.084, 0.015]                   # TBD (Oliver FK, jaw midpoint): currently = stock
+  motion.close_hold_s: 1.2
+  policy.grasp_diag_log: true

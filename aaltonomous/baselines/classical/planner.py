@@ -478,7 +478,7 @@ class Planner:
         sl = ArmKinematics.sl(side)
         H, post = self.height, self.post
         hand_pre = hand_q.copy(); hand_pre[sl] = post["preshape"][sl]
-        hand_cls = hand_q.copy(); hand_cls[sl] = post["closed"][sl]
+        hand_cls = hand_q.copy(); hand_cls[sl] = post[g.get("close_posture", "closed")][sl]  # grasp.close_posture
         hand_open = hand_q.copy(); hand_open[sl] = post["open"][sl]
         hand_rel = hand_q.copy(); hand_rel[sl] = post[g.get("release_posture", "preshape")][sl]
 

@@ -67,6 +67,19 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(load_config(overlay="ab_hold12")["motion"]["close_hold_s"], 1.2)
         self.assertEqual(load_config(overlay="none")["motion"]["close_hold_s"], 0.25)   # sim profile
 
+    def test_placeholder_overlay_is_refused(self):
+        with self.assertRaises(ValueError):
+            load_config(overlay="ab_pinch_v1")          # values TBD (Oliver FK / Felix): must not run by accident
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "pinch.yaml"
+            p.write_text("flags:\n  grasp.close_posture: closed_tight\n  grasp.point_in_palm: [0.099, -0.084, 0.0]\n"
+                         "  hand.closed_tight: [0.0, -0.1, 1.2, -1.1, -0.7, -1.1, -0.7]\n")
+            cfg = load_config(overlay=str(p))
+            self.assertEqual(cfg["grasp"]["close_posture"], "closed_tight")
+            p.write_text("flags:\n  grasp.point_in_palm: [0.1, 0.0]\n")
+            with self.assertRaises(ValueError):
+                load_config(overlay=str(p))
+
     def test_unknown_overlay_key_fails_loudly(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "typo.yaml"

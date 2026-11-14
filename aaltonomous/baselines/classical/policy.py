@@ -642,7 +642,7 @@ class ClassicalPolicy:
         self._gdiag = None
         plan = g["plan"]
         sl = ArmKinematics.sl(plan.side)
-        closed = self.post["closed"][sl]
+        closed = self.post[self.cfg["grasp"].get("close_posture", "closed")][sl]
         parts = []
         held = None
         for key in ("close", "lift"):

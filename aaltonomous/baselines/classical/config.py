@@ -21,7 +21,8 @@ POSTURES = ("open", "preshape", "closed")
 STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config value (base + profile, no overlay)
 # Limits an overlay may never exceed (hard rule: nothing may move faster than the stock sim profile).
 LIMITS = {"motion.carry_scale": (0.0, 1.0)}
-CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack")}
+CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight")}
+VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7}
 
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
@@ -49,6 +50,9 @@ FLAGS = {
     "grasp.drop_slot_overflow": ("Felix #6 rev", "counter", "slots used up: counter (leave it) | stack (slot 0)"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
+    "grasp.point_in_palm": ("pinch fix", STOCK, "object centre in the LEFT palm frame (right = [1,-1,1] mirror)"),
+    "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
+    "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
 }
 
 
@@ -95,6 +99,8 @@ def load_overlay(path):
     """{name, flags} of an overlay file. flags = dotted keys (like profiles); only FLAGS keys may be set, so an overlay
     cannot silently retune anything else and a typo fails at load time (= at docker build), not in the finals."""
     data = yaml.safe_load(Path(path).read_text()) or {}
+    if data.get("placeholder"):
+        raise ValueError(f"overlay {path} is a placeholder (values TBD): fill it in and drop `placeholder: true`")
     flags = data.get("flags") or {}
     bad = sorted(set(flags) - set(FLAGS))
     if bad:
@@ -138,6 +144,10 @@ def check_flag_values(cfg):
     for k, ok in CHOICES.items():
         if _get(cfg, k) not in ok:
             raise ValueError(f"{k} = {_get(cfg, k)!r}, want one of {ok}")
+    for k, n in VECTORS.items():
+        v = _get(cfg, k)
+        if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
+            raise ValueError(f"{k} = {v!r}: want {n} numbers")
 
 
 def effective_flags(cfg):

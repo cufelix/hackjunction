@@ -619,6 +619,23 @@ class TestRound3Flags(unittest.TestCase):
         self.assertEqual(len(runs[True][1]), runs[True][2])      # one line per started pick
         self.assertTrue(all("held=" in m and "stall_vs_closed=" in m for m in runs[True][1]), runs[True][1][:1])
 
+    def test_close_posture_closed_tight_is_what_the_hand_closes_to(self):
+        from .kinematics import ArmKinematics
+        from .perception import Detection
+        L = SC.cfg["layout"]
+        top = SC.mat_to_pelvis([np.mean(L["region_x"]), np.mean(L["region_y"]), SC.object_height()])
+        tight = [0.0, -0.1, 1.2, -1.1, -0.7, -1.1, -0.7]
+        for posture in ("closed", "closed_tight"):
+            cfg = load_config(overrides={"grasp.close_posture": posture, "hand.closed_tight": tight})
+            post, home = hand_postures(cfg), home_arm(cfg)
+            p = Planner(cfg, SC, post, home).plan(Detection("red", top, 1000, 1000, "depth"), home, post["open"],
+                                                  relocate=False)
+            self.assertTrue(p.ok, p.reason)
+            e = next(e for name, s_, e in p.phases if name == "close")
+            sl = ArmKinematics.sl(p.side)
+            np.testing.assert_allclose(p.hand[e - 1][sl], post[posture][sl], atol=1e-9)
+            self.assertEqual(p.safety_clips, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

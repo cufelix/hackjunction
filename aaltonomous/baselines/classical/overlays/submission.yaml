@@ -29,3 +29,6 @@ flags:
   policy.grasp_diag_log: false                  # passive    [grasp_diag] per pick (held yes/no)
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.close_hold_s: 0.25                     # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
+  grasp.point_in_palm: [0.099, -0.084, 0.015]   # pinch fix  stock; LEFT palm frame, right mirrored
+  grasp.close_posture: closed                   # pinch fix  closed | closed_tight
+  hand.closed_tight: [0.0, -0.1, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  = closed until FK values arrive
