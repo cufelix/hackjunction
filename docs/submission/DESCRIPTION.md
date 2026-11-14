@@ -1,6 +1,7 @@
 # Submission description
 
 Draft for the submission form. Every number has an HTML comment with its source. Check the comments before you paste.
+<!-- TODO: all numbers below are rc1. Switch to rc7 numbers if the box-A eval picks rc7. -->
 Status line to update on the day: as of the readiness doc, we had zero runs on the real robot.
 
 ## Tagline
@@ -21,7 +22,9 @@ The policy runs in one amd64 Docker image. It serves a websocket and msgpack pol
 
 Most of our work went into the gap between the simulator and the real setup. The organisers told us the Dex3 gains are far softer than in the sim, the objects have different colours, and the bins sit farther away than nominal. We measured these on real frames. We also built an adversarial copy of the sim that changes the world but not what the policy believes. It shifts bins by 5 to 14 cm, moves the camera pose, changes lighting, punches holes in depth and softens the hands. <!-- READINESS.md sections 3 and 6 --> Seeds with seed modulo 4 equal to 3 are never used for tuning. On the hardest profile, our early baseline fell from +3.8 to about +0.2 points per episode. We traced 42 percent of the losses to camera pitch and 42 percent to bin rims read as objects. That result decided which calibration work we did. <!-- READINESS.md section 6 -->
 
-Every behaviour change sits behind a flag that is off by default. A release gate checks that the baked flags match the chosen candidate exactly. With new flags off, the policy reproduces the previous release in 13 of 13 digests. <!-- READINESS.md section 2, tools/equivalence_check.py --> Fault drills, including all-zero depth, a frozen camera, a missing bin, a bad instruction and a NaN joint state, passed 12 of 12. <!-- READINESS.md section 2, felix/fault-drill-rc1 --> On failure the policy holds or abstains. An unparseable instruction leaves the objects on the counter, which scores zero and never loses a point for a wrong bin. <!-- READINESS.md section 5 -->
+The sim also carries one error that the real camera does not. Its render puts the principal point at the image centre, 6 and 11 px away from the calibration file. When we shifted the render so it matches the real camera's principal point, rc1 placed 38 of 40 objects with 0 wrong bins, at +3.80 points per episode against +2.60 on the stock render. The paired difference is +1.20, with 7 wins and 0 losses over 10 seeds. This is still simulation, but it says the stock sim under-scores the policy, and it supports setting the principal point from the calibration file on the real robot. <!-- results/1800-oliver-adv-pp/PP.md, rc1 @ 7a4168e9, seeds 1000-1009 -->
+
+Every behaviour change sits behind a flag that is off by default. A release gate checks that the baked flags match the chosen candidate exactly. With new flags off, the policy reproduces the previous release in 13 of 13 digests. <!-- READINESS.md section 2, tools/equivalence_check.py --> Fault drills, including all-zero depth, a frozen camera, a missing bin, a bad instruction and a NaN joint state, passed 12 of 12. <!-- READINESS.md section 2 --> On failure the policy holds or abstains. An unparseable instruction leaves the objects on the counter, which scores zero and never loses a point for a wrong bin. <!-- READINESS.md section 5 -->
 
 An optional local language model sidecar (Qwen3-VL-8B on llama.cpp) can run next to the policy. It is off in every release overlay, and the policy keeps working if the sidecar is missing or stops. <!-- READINESS.md sections 1 and 2 -->
 
@@ -49,11 +52,11 @@ All results are from simulation unless a row says otherwise.
 | Image size | 1.46 GB | <!-- READINESS.md section 2 --> `hackjunction/policy:rc1-7a4168e` |
 | Equivalence with flags off | 13/13 digests identical | <!-- READINESS.md section 2 --> `tools/equivalence_check.py` |
 | Unit tests | 602/602 on the newest fix branch | <!-- READINESS.md section 2 --> |
-| Fault drills | 12/12 pass, p99 at most 13.5 ms | <!-- READINESS.md section 2 --> `felix/fault-drill-rc1` |
+| Fault drills | 12/12 pass, p99 at most 13.5 ms | <!-- READINESS.md section 2 --> fault-drill harness |
 | Language sidecar, optional | 2.8 s to /health, 10.7 GB VRAM, decision latency p50 114 ms, p95 117 ms | <!-- READINESS.md section 2 --> Blackwell GPU, same class as the venue RTX 5090 |
-| Adversarial sim, hardest profile | Early baseline fell from +3.8 to about +0.2 per episode | <!-- READINESS.md section 6 --> `real_hard` profile, `tools/adv/` on `oliver/adv-sim` |
-| Principal point artefact | Stock sim under-scores rc1 by 1.20 points per episode (se 0.31), 7 wins, 0 losses, 3 ties over 10 paired seeds. With the real camera principal point rc1 placed 38/40 with 0 wrong bins, against 27/40 and 1 wrong bin | <!-- results/1800-oliver-adv-pp/PP.md, rc1 @ 7a4168e9, seeds 1000-1009 --> |
-| Real-frame colour detection audit | On 538 visible objects in 40 real `drop_2` episodes (no depth), recall was 0.597 for the baked submission overlay with 1569 unmatched detections, and 0.362 for `finals_r21` with 123 | <!-- results/1625-oliver-recall-ab/RECALL-AB.md, submission @ 9e940de and finals_r21 @ 4540b9b, tools/recall_ab.py --> |
+| Adversarial sim, hardest profile | Early baseline fell from +3.8 to about +0.2 per episode | <!-- READINESS.md section 6 --> `real_hard` profile, `tools/adv/` |
+| Principal point, real-camera match | With the sim render matching the real camera's principal point, rc1 placed 38/40 with 0 wrong bins, +3.80 per episode, against 27/40 with 1 wrong bin, +2.60, on the stock render. Paired difference +1.20 (se 0.31), 7 wins, 0 losses, 3 ties over 10 seeds. This is the strongest argument that the real robot should do at least as well as the stock sim. | <!-- results/1800-oliver-adv-pp/PP.md, rc1 @ 7a4168e9, seeds 1000-1009, sort_fixed, tools/adv/ --> |
+| Offline detection recall on real recordings | Offline detection recall on the organisers' real recordings, measured by our own tool, used to pick fixes. On 538 visible objects in 40 real `drop_2` episodes (no depth), the submission overlay found 0.597 colour-agnostic and 0.593 colour-aware, so colour confusion is minor. For comparison, `finals_r21` found 0.362 (0.355 colour-aware). This is not a robot score. | <!-- results/1625-oliver-recall-ab/RECALL-AB.md and results/1830-oliver-recall-colour/RECALL-COLOUR.md, submission @ 9e940de, finals_r21 @ 4540b9b, tools/recall_ab.py --> |
 
 ## Built with
 

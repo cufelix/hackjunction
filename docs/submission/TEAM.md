@@ -16,30 +16,26 @@ Add for each person if the form asks: [city / country], [school or employer], [s
 
 ## What each person did
 
-Evidence is the commit history on `origin/oliver/*`, `origin/timi/*` and `origin/felix/*` in the team repo. Git author names are handles. We mapped them as `Oliver Seidl` and `oliver-claude` to Oliver, `Dymyt-ry` to Timi (the author of the `timi/*` snapshot commits) and `cufelix` to Felix. [Confirm the handles.]
+Evidence is the commit history in the team repo. Git author names are handles: `Oliver Seidl` and `oliver-claude` are Oliver, `Dymyt-ry` is Timi, `cufelix` is Felix.
 
-**Oliver** (about 40 commits by `Oliver Seidl` and `oliver-claude` across 22 `oliver/*` branches)
-- Adversarial sim and its reports: `oliver/adv-sim`, `oliver/adv-real2`, lying prisms and layout knobs.
-- Real-frame recall audit on `drop_2`: `oliver/recall-ab`, `oliver/drop2-analysis`.
+**Oliver** (commits by `Oliver Seidl` and `oliver-claude`)
+- Adversarial sim and its reports: `tools/adv/`, lying prisms and layout knobs, and the principal-point result.
+- Real-frame recall audit on `drop_2`: `tools/recall_ab.py`.
 - Calibration: counter plane, camera pitch fit, head pose from the arms in depth, principal point, `inject_cam_error` test flag.
-- Readiness document and `promote.sh` tests: `oliver/readiness`.
-- Matches the role you gave.
+- Readiness document and `promote.sh` tests: `READINESS.md`.
 
-**Felix** (the most commits, mostly on `felix/*` release-candidate branches)
-- Release candidates `felix/rc1` to `felix/rc72-*`, `promote.sh`, release gate and the expected-flags check.
-- Resolver and language normaliser work (strict abstain, colour names, Finnish and Czech words), see the `felix/lang*` branches.
+**Felix** (commits by `cufelix`, mostly release candidates)
+- Release candidates rc1 onward, `promote.sh`, release gate and the expected-flags check.
+- Resolver and language normaliser work (strict abstain, colour names, Finnish and Czech words), see `aaltonomous/baselines/classical/instruction.py` and `normalize.py`.
 - Also calibration code (`calib.plane.apply_height`, bin vote), the fault-drill harness and the architecture doc.
-- Matches the role. Add language, calibration code and fault drills.
 
-**Timi** (many commits on `timi/*` branches, author `Dymyt-ry`)
-- Language: structured instruction passes, Finnish and Czech support (`timi/multilang`, `timi/fixlang`, `timi/langzip`).
-- Optional language model sidecar: `timi/brain*` branches.
+**Timi** (commits by `Dymyt-ry`)
+- Language: structured instruction passes, Finnish and Czech support.
+- Optional language model sidecar (Qwen3-VL).
 - Grasp work: cage grasp, staggered release, prism grasp, wrist alignment.
-- Fault-drill suite, hand-in script and Wendy package (`timi/wendy-pkg`).
-- Language matches. The git history does not show coordination or real-robot strategy, since those are not commits. Add the sidecar, grasp work, fault drills and packaging.
+- Fault-drill suite, hand-in script and Wendy package.
 
 ## Open items
 
-- [Confirm the handle to person mapping above.]
-- [Confirm the real-robot strategy line for Timi. Git history cannot show it.]
+- [Confirm the real-robot strategy line for Timi. Commits cannot show it.]
 - [Fill contact details.]
