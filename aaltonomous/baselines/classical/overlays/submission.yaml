@@ -80,6 +80,10 @@ flags:
   grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
+  perception.novel_objects: false               # R22 novel depth candidates (off in shipped submission)
+  grasp.generic: false                          # R22 novel geometry grasp (off in shipped submission)
+  instruction.novel_objects: false              # R22 novel instruction grounding (off in shipped submission)
+  policy.novel_obstacles: false                 # R22 novel collision keep-outs (off in shipped submission)
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
   debug.log_joint_offset: false                 # passive    first-second steady cmd-vs-measured diagnostic
   policy.confidence_order: false                # D1/D2      order by 2*p/est_time, never the hardest first

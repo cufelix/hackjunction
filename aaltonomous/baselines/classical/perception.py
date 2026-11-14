@@ -116,6 +116,11 @@ class Detection:
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
     sat_med: float | None = None  # perception.color_gate.sat_floor only: median HSV S (0-255) over the blob mask
+    novel: bool = False  # novel objects only: built from a depth blob, never a known colour/shape detection
+    label: str | None = None  # novel only: query phrase / label
+    footprint: tuple | None = None  # novel only: (major, minor) extents of the blob in m
+    height_m: float | None = None  # novel only: top height above the counter plane in m
+    ungraspable: bool = False  # novel only: too wide / flat / unsupported -> the policy skips it
 
     def __repr__(self):
         x, y, z = self.top
@@ -171,6 +176,7 @@ class PitchCalibration:
 
 class Perception:
     def __init__(self, cfg, scene, calibration, log=None):
+        self._root_cfg = cfg
         self.cfg = cfg["perception"]
         self.scene = scene
         self.cal = calibration
@@ -274,6 +280,10 @@ class Perception:
         self.bin_shift_src = None  # live_bins: object with .bin_shift {bin: pelvis dxy} (the policy's planner, bin.vote)
         self.geometry_runtime = False   # bin.geometry_runtime flag, set by policy.py: every bin consumer follows bin_shift_src.bin_shift
         self.bin_vote_on = False   # bin.vote flag, set by policy.py: bin footprints follow bin_shift_src.bin_shift
+        # R22 novel objects.  Keeping the switch here (rather than merely in
+        # the policy) makes the disabled detect() path instruction-for-
+        # instruction identical through the existing return below.
+        self.novel_objects = bool(self.cfg.get("novel_objects", False))
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
@@ -1082,6 +1092,14 @@ class Perception:
             dets, rejected = self._hue_guard(dets, rejected)
         if self.color_gate:
             dets = self._color_gate(dets, rejected)
+        if self.novel_objects:
+            try:
+                from .novel_objects import augment_detections
+                dets = augment_detections(self, rgb, depth, dets, robot_q=robot_q)
+            except Exception as exc:
+                # Novel perception is optional.  A bad frame/classifier must
+                # retain the known, already safety-gated detections.
+                self.log(f"[novel] perception failed closed: {type(exc).__name__}: {exc}")
         return (dets, rejected) if debug else dets
 
     def _hue_guard_items(self, masks, hsv):
