@@ -1,0 +1,9 @@
+# adv-real2: organiser-confirmed layout variation. nominal + real principal point + lying prisms + random count/shapes/colours.
+# Layout knobs are applied in the sim (own seed stream 0xAD9), also to the client-generated layout of `reset`.
+name: layout_var
+adv:
+  pp_px: [325.042, 250.927]                  # real D435i principal point (calibration.yaml)
+  prism_lying_frac: 0.5                      # each triangle prism lies on a rectangular face with p = 0.5 (else standing)
+  n_objects: [3, 6]                          # objects per episode (capped at what exists / fits the spawn region)
+  shape_weights: {cube: 1.0, cylinder: 1.0, triangle: 1.0}
+  colour_weights: {red: 1.0, yellow: 1.0, blue: 1.0}

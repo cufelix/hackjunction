@@ -1,6 +1,6 @@
 --- a/aaltonomous/sim/aalto_task/dr.py
 +++ b/aaltonomous/sim/aalto_task/dr.py
-@@ -104,9 +104,98 @@
+@@ -104,9 +104,198 @@
          "rot_offset_rad": [float(rc.uniform(-aj, aj)) if aj else 0.0 for _ in range(3)],
          "stream_seed": int(rc.integers(2 ** 31)),
      }
@@ -60,6 +60,106 @@
 +        "ensure_object": A.get("ensure_object"), "object_region": A.get("object_region"),
 +    }
 +    out.update(_sample_adv2(A, np.random.default_rng(np.random.SeedSequence([int(seed) if seed is not None else 0, 0xAD8])), img))
++    if any(A.get(k) is not None for k in _VAR_KEYS):       # absent for every pre-existing profile (params stay identical)
++        out["var"] = _sample_adv3(A, np.random.default_rng(np.random.SeedSequence([int(seed) if seed is not None else 0, 0xAD9])))
++    return out
++
++
++_VAR_KEYS = ("prism_lying_frac", "n_objects", "shape_weights", "colour_weights")
++_VAR_SLOTS = 32          # per-episode pre-drawn uniforms for the lying decision / yaw (one slot per triangle in the layout)
++
++
++def _sample_adv3(A, r):
++    """Layout-variation knobs (own seed stream 0xAD9; organiser-confirmed variation).
++      prism_lying_frac  p (scalar | [lo, hi] drawn per episode): each triangle prism is placed LYING (rotated 90 deg about a
++                        horizontal axis, resting on a rectangular face, random yaw) with probability p, else standing
++      n_objects         [lo, hi] (or int): number of objects placed (capped at what exists: colours x shapes x copies)
++      shape_weights     {cube: w, cylinder: w, triangle: w}   relative draw weights (a missing shape = 0)
++      colour_weights    {red: w, yellow: w, blue: w}          (same; british spelling `colour`, `color_weights` also read)
++    Draw order is fixed (frac, lying u, lying yaw, layout seed) whichever knobs are set."""
++    return {"prism_lying_frac": float(_draw(r, A.get("prism_lying_frac"), 0.0)),
++            "lying_u": [float(x) for x in r.uniform(size=_VAR_SLOTS)],
++            "lying_yaw": [float(x) for x in r.uniform(-np.pi, np.pi, size=_VAR_SLOTS)],
++            "layout_seed": int(r.integers(2 ** 31)),
++            "n_objects": A.get("n_objects"),
++            "shape_weights": A.get("shape_weights"),
++            "colour_weights": A.get("colour_weights") or A.get("color_weights")}
++
++
++def lying_quat(yaw):
++    """xyzw quaternion of a LYING triangle prism: mesh frame has the prism axis along z and the apex along +y; Rx(+90 deg) puts
++    the apex up (+z), the prism axis horizontal and a rectangular face down; then a world yaw about z."""
++    a = np.pi / 4
++    qx = np.array([np.sin(a), 0.0, 0.0, np.cos(a)])
++    qz = np.array([0.0, 0.0, np.sin(yaw / 2), np.cos(yaw / 2)])
++    x1, y1, z1, w1 = qz
++    x2, y2, z2, w2 = qx
++    return np.array([w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2, w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
++                     w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2, w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2])
++
++
++def lying_layout_slots(layout, V):
++    """-> {layout index: yaw} for the triangles of `layout` that lie (slot k = k-th triangle of the layout)."""
++    out, k = {}, 0
++    for i, o in enumerate(layout):
++        if o.get("shape", "cube") != "triangle":
++            continue
++        if V["lying_u"][k % _VAR_SLOTS] < V["prism_lying_frac"]:
++            out[i] = V["lying_yaw"][k % _VAR_SLOTS]
++        k += 1
++    return out
++
++
++def layout_geom(cfg):
++    """scene.yaml dict -> the geometry vary_layout needs."""
++    L, o = cfg["layout"], cfg["objects"]
++    return {"region": (tuple(L["region_x"]), tuple(L["region_y"])), "min_spacing": float(L["min_spacing"]),
++            "yaw_range": tuple(np.radians(L["yaw_range_deg"])), "colors": list(o["colors"]), "shapes": list(o["shapes"]),
++            "copies": int(o["copies_per_type"])}
++
++
++def vary_layout(layout, V, geom):
++    """Apply n_objects / shape_weights / colour_weights to a layout (mat coords). Deterministic for V['layout_seed'].
++    Never returns more objects of a (colour, shape) type than the scene has (copies) nor more than exist in total."""
++    layout = [dict(o) for o in layout]
++    if not V or not (V.get("n_objects") or V.get("shape_weights") or V.get("colour_weights")):
++        return layout
++    rng = np.random.default_rng(V["layout_seed"])
++    cols, shps, cop = geom["colors"], geom["shapes"], geom["copies"]
++    cap = len(cols) * len(shps) * cop
++    n = V.get("n_objects")
++    if n is not None:
++        lo, hi = (int(n), int(n)) if isinstance(n, (int, float)) else (int(n[0]), int(n[1]))
++        n = int(np.clip(rng.integers(lo, hi + 1), 1, cap))
++        if n < len(layout):
++            keep = sorted(rng.permutation(len(layout))[:n].tolist())
++            layout = [layout[i] for i in keep]
++        (x0, x1), (y0, y1) = geom["region"]
++        while len(layout) < n:                       # add objects at free spots (spacing as in sample_layout)
++            for _ in range(500):
++                x, y = float(rng.uniform(x0, x1)), float(rng.uniform(y0, y1))
++                if all(np.hypot(x - o["x"], y - o["y"]) >= geom["min_spacing"] for o in layout):
++                    layout.append({"color": None, "shape": None, "x": round(x, 3), "y": round(y, 3),
++                                   "yaw": round(float(rng.uniform(*geom["yaw_range"])), 3)})
++                    break
++            else:
++                break                                # region full: fewer than asked
++    sw, cw = V.get("shape_weights"), V.get("colour_weights")
++    used = {}
++    for o in layout:                                 # entries that keep their type consume capacity first
++        if o["color"] is not None and not (sw or cw):
++            used[(o["color"], o["shape"])] = used.get((o["color"], o["shape"]), 0) + 1
++    out = []
++    for o in layout:
++        if o["color"] is None or sw or cw:
++            ok = [(c, s) for c in cols for s in shps if used.get((c, s), 0) < cop]
++            wt = [float((cw or {}).get(c, 0.0) if cw else 1.0) * float((sw or {}).get(s, 0.0) if sw else 1.0) for c, s in ok]
++            if not ok or sum(wt) <= 0:
++                continue                             # nothing of an allowed type left: drop the object
++            c, s = ok[int(rng.choice(len(ok), p=np.array(wt) / sum(wt)))]
++            o["color"], o["shape"] = c, s
++            used[(c, s)] = used.get((c, s), 0) + 1
++        out.append(o)
 +    return out
 +
 +
@@ -99,7 +199,7 @@
  def jitter_layout(layout, params):
      """Apply pose jitter (mat coords) to a layout copy. Deterministic for the params' stream seed."""
      P = (params or {}).get("pose") or {}
-@@ -125,23 +214,59 @@
+@@ -125,23 +314,59 @@
      return out
  
  
@@ -186,18 +286,52 @@
          self.dr_params, self._dr_base, self._cam_rng = None, None, None
          cp = int(os.environ.get("AALTO_CLOCK_PORT", str(sp + 1 if sp else 0)))
          self.clock = None
-@@ -94,6 +106,7 @@
+@@ -94,7 +106,9 @@
      def place(self, env, layout):
          if self.dr_params:
              layout = dr.jitter_layout(layout, self.dr_params)
 +            layout = self._remap_region(layout)
          poses, active = assign(self.sc, layout)
++        self._lie_prisms(layout, poses, active)
          origin = _t(env.scene.env_origins)[0]
          dev = origin.device
-@@ -122,12 +135,50 @@
+         for n in self.names:
+@@ -122,12 +136,82 @@
                          "speed": round(float(np.linalg.norm(v)), 5)})
          return out
  
++    def _lie_prisms(self, layout, poses, active):
++        """adv `prism_lying_frac`: some triangle prisms lie on a rectangular face (pose edit after assign; names, xy and
++        scoring unchanged). Isaac-side effect untested offline: guarded, result reported in params['applied']."""
++        V = ((self.dr_params or {}).get("adv") or {}).get("var")
++        if not V or not V.get("prism_lying_frac"):
++            return
++        ap = (self.dr_params or {}).setdefault("applied", {})
++        try:
++            ap["prism_lying"] = []
++            d = self.sc.object_dims("triangle")
++            for i, yaw in dr.lying_layout_slots(layout, V).items():
++                n = active[i]
++                p = np.array(poses[n][0], float)
++                p[2] -= d["height"] / 2 - d["apothem"]          # centre drops from h/2 to the apothem above the surface
++                poses[n] = (p, dr.lying_quat(yaw))
++                ap["prism_lying"].append(n)
++        except Exception as e:
++            ap["prism_lying"] = f"{type(e).__name__}: {e}"
++            print(f"[aalto] adv: prism_lying failed: {e}")
++
++    def _vary_layout(self, layout):
++        """adv `n_objects` / `shape_weights` / `colour_weights`: re-draw count / types of the layout (applied to the client's
++        layout in `reset` too, since evaluate.py generates layouts client-side). Falls back to the layout on any error."""
++        V = ((self.dr_params or {}).get("adv") or {}).get("var")
++        if not V:
++            return layout
++        try:
++            return dr.vary_layout(layout, V, dr.layout_geom(self.sc.cfg))
++        except Exception as e:
++            print(f"[aalto] adv: vary_layout failed: {e}")
++            return layout
++
 +    def _remap_region(self, layout):
 +        """adv profile `object_region` (pelvis frame, real grasp distribution): affine remap of the stock spawn region
 +        (x 0.26-0.33 m, y +-0.17 m) -> x_c + kx*(x - 0.295), y_c + ky*y. Applied in the sim so the client layout is unchanged."""
@@ -241,21 +375,21 @@
 +            return {"ok": True, "dr": {"name": cfg.get("name"), "path": cfg["_path"]}}
          if cmd == "reset":
 -            return {"ok": True, "active": self.place(env, req["layout"]), "layout": req["layout"]}
-+            lay = self._ensure_object(req["layout"])
++            lay = self._ensure_object(self._vary_layout(req["layout"]))
 +            return {"ok": True, "active": self.place(env, lay), "layout": lay}
          if cmd == "info":
              d = None if not self.dr_cfg else {"name": self.dr_cfg.get("name"), "path": self.dr_cfg["_path"]}
              return {"ok": True, "dr": d, "ports": self.ports, "n_objects": len(self.names), **self.clock_info()}
-@@ -136,7 +187,7 @@
+@@ -136,7 +220,7 @@
          if cmd == "reset_random":
              if self.dr_cfg:
                  self.randomize(env, req.get("seed"))
 -            lay = random_layout(self.sc, req.get("seed"))
-+            lay = self._ensure_object(random_layout(self.sc, req.get("seed")))
++            lay = self._ensure_object(self._vary_layout(random_layout(self.sc, req.get("seed"))))
              return {"ok": True, "active": self.place(env, lay), "layout": lay}
          if cmd == "state":
              return {"ok": True, "objects": self.state(env), "layout": self.layout}
-@@ -254,9 +305,22 @@
+@@ -254,9 +338,22 @@
                                  "color": tuple(p.GetAttribute("inputs:color").Get() or (1, 1, 1)),
                                  "translate": tuple(t.Get()) if t and t.Get() is not None else None}
      roots = {"Counter": "/World/envs/env_0/Counter"}
@@ -278,7 +412,7 @@
      for n in rt.names:
          roots[f"obj:{n}"] = _env0(env.scene[n].cfg.prim_path)
      for k, r in roots.items():
-@@ -303,12 +367,22 @@
+@@ -303,12 +400,22 @@
          T, O = P["textures"], P["objects"]
          for k, lst in base["colors"].items():
              for sh, rgb in lst:
@@ -301,7 +435,7 @@
                      new = dr.jitter_color(rgb, o["dh"], o["s"], o["v"])
                  sh.GetInput("diffuseColor").Set(Gf.Vec3f(*[float(min(max(c, 0.0), 1.0)) for c in new]))
          tex = stage.GetPrimAtPath("/World/envs/env_0/Mat/material/texture")
-@@ -344,14 +418,110 @@
+@@ -344,14 +451,110 @@
              C = P["camera"]
              q = (R.from_rotvec(C["rot_offset_rad"]) * R.from_quat(q0[0].cpu().numpy())).as_quat()   # xyzw
              pos = pos0[0].cpu().numpy() + np.asarray(C["pos_offset"])

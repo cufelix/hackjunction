@@ -81,6 +81,22 @@ def parse_dets(lines):
     return dets
 
 
+def _dr_module():
+    """The PATCHED dr.py (has vary_layout): $ADV_TREE/aaltonomous/sim/aalto_task/dr.py, else the checkout's if it is patched."""
+    import importlib.util
+    import os
+    cands = [Path(os.environ["ADV_TREE"]) / "aaltonomous/sim/aalto_task/dr.py"] if os.environ.get("ADV_TREE") else []
+    cands.append(Path(__file__).resolve().parents[2] / "aaltonomous/sim/aalto_task/dr.py")
+    for c in cands:
+        if c.exists():
+            spec = importlib.util.spec_from_file_location("adv_dr", c)
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            if hasattr(m, "vary_layout"):
+                return m
+    return None
+
+
 def start_positions(trial):
     """name -> (colour, shape, true start xy pelvis) incl. the sim's object_region remap."""
     R = (((trial.get("dr_params") or {}).get("adv")) or {}).get("object_region")
@@ -91,6 +107,14 @@ def start_positions(trial):
         pool[(c, s)].append(n)
     out = {}
     layout = [dict(o) for o in trial["layout"]]
+    V = (((trial.get("dr_params") or {}).get("adv")) or {}).get("var")
+    if V and (V.get("n_objects") or V.get("shape_weights") or V.get("colour_weights")):   # sim re-drew count / types
+        dr = _dr_module()
+        if dr is None:
+            print("loss_breakdown: profile has layout variation but no patched dr.py found (set ADV_TREE); start positions may be wrong",
+                  file=sys.stderr)
+        else:
+            layout = dr.vary_layout(layout, V, dr.layout_geom(SC.cfg))
     eo = (((trial.get("dr_params") or {}).get("adv")) or {}).get("ensure_object")
     if eo and layout and not any(o["color"] == eo[0] and o.get("shape", "cube") == eo[1] for o in layout):
         layout[0]["color"], layout[0]["shape"] = eo       # the sim swapped the first object (adv ensure_object)

@@ -37,7 +37,7 @@ If the stock tree differs from the one the patch was cut from, `patch` fails lou
 New knobs in the same patch (rebuild the tree with `make_adv_tree.sh` after pulling; the old profiles draw exactly the
 same values per seed as before, because the new knobs use their own seed stream):
 `table_dy_cm`, `counter_dz_mm`, `pp_px`, `dark_near_keep` (+ `dark_lum_max`, `dark_near_mm`), `hand_kp` / `hand_kd` /
-`hand_gain_scale`, `start_arm_jitter_rad` / `start_arm_q` / `start_hand_open`. The evaluator now calls `randomize`
+`hand_gain_scale`, `prism_lying_frac`, `n_objects`, `shape_weights`, `colour_weights` (layout variation; also applied to the client layout of `reset`), `start_arm_jitter_rad` / `start_arm_q` / `start_hand_open`. The evaluator now calls `randomize`
 BEFORE homing the arms, so a profile's start pose applies (it changes nothing for profiles without one).
 
 | profile | what it adds (on top of nominal unless noted) | decides |
@@ -47,7 +47,8 @@ BEFORE homing the arms, so a profile's start pose applies (it changes nothing fo
 | `displaced` | + pp, bins +5..14 cm, counter +0..20 mm, head pitch -1.5..-9 deg, table y +-4 cm | timi/handcal, timi/gatefix, calibration |
 | `dark_links` | + pp, depth kept on dark near-field pixels: 80 / 40 / 0 % (one per episode) | timi/handcal (hand ICP) |
 | `start_pose` | + pp, arm start +-0.2 rad per joint around ARM_HOME, hands exactly open | anything calibrating before motion |
-| `real2_all` | real_hard + all of the above (worst case, report only) | readiness story |
+| `layout_var` | + pp, `prism_lying_frac` 0.5 (triangle prisms lie on a rectangular face, random yaw), `n_objects` [3,6], uniform `shape_weights` / `colour_weights` (all sim-side, seed stream 0xAD9, capped at the 2 copies per type) | organiser variation: lying prisms, random count/shapes/colours |
+| `real2_all` | real_hard + all of the above (incl. `prism_lying_frac` 0.5) (worst case, report only) | readiness story |
 
 **Held-out rule:** seeds with `seed % 4 == 3` are never used for tuning. With 10 seeds from 1000, that is 1003 and 1007.
 `adv_report.py compare` prints them on their own line; a change ships only if the held-out delta is not negative.
