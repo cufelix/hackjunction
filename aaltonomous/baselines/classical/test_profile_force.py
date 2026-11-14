@@ -123,7 +123,7 @@ class TestProfileForce(unittest.TestCase):
             self.assertIsNone(c["profile_auto"]["force"])
             self.assertFalse(c["profile_auto"]["require_rgb_cue"])
             self.assertEqual(c["grasp"]["left_hand_fix"]["shift_z"], 0.01)   # A102 decision
-            self.assertEqual(c["scene"]["counter_z_prior"], 0.15)   # unchanged until the drop_3 reconciliation
+            self.assertEqual(c["scene"]["counter_z_prior"], 0.03)   # real FK, drop_3
             self.assertEqual(c["grasp"]["arm_xy_offset"], {"left": [0.0, 0.0], "right": [0.0, 0.0]})
             for k in ("retry_cross_relocate", "late_sweep", "retry_repeat_ok", "late_regrant", "frozen_rgb_guard"):
                 self.assertFalse(c["policy"][k], k)
@@ -158,6 +158,12 @@ class TestRealDemoValues(unittest.TestCase):
             self.assertFalse(self._g(real, "grasp.close_posture_by_shape"))
             self.assertEqual(self._g(real, "grasp.drop_height_extra_m"), 0.06)
             self.assertEqual(self._g(real, "grasp.approach_slow_mps"), 0.05)
+            self.assertEqual(self._g(real, "perception.online_pitch_cal"), "table")
+            self.assertEqual(self._g(real, "calib.plane.apply_height"), True)
+            self.assertEqual(self._g(real, "bin.vote.max_shift_m"), 0.18)
+            self.assertEqual(self._g(real, "scene.counter_z_prior"), 0.03)
+            self.assertIsNone(self._g(sim, "scene.counter_z_prior"))
+            self.assertIs(self._g(sim, "perception.online_pitch_cal"), False)
             for k, v in self.OLD.items():
                 self.assertEqual(self._g(sim, k), v, k)
 

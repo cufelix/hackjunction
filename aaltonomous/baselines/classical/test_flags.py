@@ -132,7 +132,8 @@ class TestFlags(unittest.TestCase):
                                                   "policy.retry_cross_relocate", "policy.late_sweep",
                                                   "policy.frozen_rgb_guard", "grasp.arm_xy_offset",
                                                   "perception.prism_speckle_floor", "perception.real_border_partial",
-                                                  "perception.real_merge_split"})
+                                                  "perception.real_merge_split", "grasp.approach_slow_mps", "grasp.approach_slow_dist_m",
+                                                  "policy.retry_repeat_ok", "policy.late_regrant", "profile_auto.force"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):
