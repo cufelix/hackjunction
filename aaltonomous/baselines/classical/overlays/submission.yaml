@@ -25,6 +25,9 @@ flags:
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
   perception.hue_guard.enabled: false           # tech lead  per-frame orange/yellow hue judge (hue_guard.py); OFF until its A/B
+  perception.glare_reject.enabled: false        # bare table  specular highlights off the colour masks
+  perception.reflection_reject.enabled: false   # bare table  mirror blobs below an object
+  perception.local_bg.enabled: false            # bare table  blob colour == local ring colour -> table
   perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
   perception.online_pitch_cal: false            # Timi pitch per-episode optical-x fit from orange far rims
   perception.hand_calibration.enabled: false    # Oliver     head-camera 6-DOF pose from the arms (ICP vs FK)
