@@ -13,6 +13,7 @@ flags:
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
   perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
+  perception.hand_calibration.enabled: false    # Oliver     head-camera 6-DOF pose from the arms (ICP vs FK)
   perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
   perception.counter_plane.enabled: false      # Oliver     per-episode counter z from the head depth (RANSAC)
   perception.detect_bins: false                # Oliver bins  per-episode bin row detection (Perception.bin_layout)

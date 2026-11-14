@@ -93,6 +93,7 @@ class Perception:
         self.nominal_scene = scene  # perception.counter_plane may swap self.scene for a per-episode measured copy
         self.counter_plane = None
         self.cal = calibration
+        self.cal_nominal = calibration   # perception.hand_calibration swaps self.cal for a corrected COPY per episode
         self.cam = self.cfg["camera"]
         # perception.principal_point (Oliver lane 3): "file" = calibration.yaml K (stock, right for the real D435i);
         # "center" = cx, cy at the image centre and fx = fy = mean, which is what Isaac renders: IsaacLab drops
@@ -178,6 +179,7 @@ class Perception:
         self.scene = self.nominal_scene
         self.counter_plane = None
         self._reset_bins()
+        self.cal = self.cal_nominal
 
     def estimate_counter_plane(self, depth, rgb=None):
         """perception.counter_plane: RANSAC plane through the head depth over the mat (bins and coloured blobs
@@ -329,6 +331,12 @@ class Perception:
     def _perceived_bin_hits(self, xy, margin):
         """{name: (N,) bool} pelvis xy inside each PERCEIVED bin footprint + margin (only when _bins_perceived)."""
         return bin_detect.in_footprints(self.bin_layout, self._bin_half, xy, margin)
+
+    def set_camera_pose(self, T):
+        """perception.hand_calibration: use T as this camera's T_pelvis_optical until the next reset, on a copy of the
+        calibration (the shared object stays nominal)."""
+        from .hand_calib import corrected_calibration
+        self.cal = corrected_calibration(self.cal_nominal, self.cam, T)
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""

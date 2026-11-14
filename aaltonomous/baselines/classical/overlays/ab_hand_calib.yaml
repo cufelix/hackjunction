@@ -1,0 +1,10 @@
+# A/B overlay: per-episode head-camera 6-DOF pose refinement from the robot's own forearms/hands in the depth image
+# (hand_calib.py: FK-posed arm surface model, robust point-to-plane ICP, capped 3 cm / 3 deg, gated -> else nominal).
+# Once per episode on the first still frame with the arms in view the policy logs
+# "hand calibration accepted|fallback: dt=(..) mm drot=.. deg, inliers=.., rms=a->b mm, .. ms (reason)".
+# Synthetic: +-1 cm/+-1 deg head jitter -> ~1.3 mm / 0.13 deg pose error, object xy ~1.6 mm (from 7-11 mm median).
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_hand_calib <image>.
+name: ab_hand_calib
+flags:
+  perception.hand_calibration.enabled: true
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes
