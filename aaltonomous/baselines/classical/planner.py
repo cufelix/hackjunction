@@ -1252,6 +1252,9 @@ class Planner:
         # grasp height: object mid-height, raised until the preshaped fingers clear the counter
         xy = det.top[:2] + np.asarray((g.get("arm_xy_offset") or {}).get(side, [0.0, 0.0]), float)  # per-arm, TUNE
         z = (det.top[2] - H / 2) if source_bin is not None else (zc + hfrac * H)
+        lhf = g.get("left_hand_fix") or {}   # grasp.left_hand_fix.shift_z: left-arm triangle grasp height sweep
+        if side == "left" and getattr(det, "shape", None) == "triangle" and float(lhf.get("shift_z", 0.0) or 0.0):
+            z += float(lhf["shift_z"])
         for _ in range(4):
             qg, ok = self._ik(side, np.r_[xy, z], arm_q, "grasp", plan)
             if not ok:

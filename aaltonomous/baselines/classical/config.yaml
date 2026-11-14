@@ -486,6 +486,7 @@ grasp:
   drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
   drop_height_extra_m: 0.0    # FLAG (finals safe). Raise the bin release by this (capped at the carry height); IK failure -> stock target
   drop_lateral_margin_m: 0.0  # FLAG (finals safe). Move the release this far toward the bin centre (y only); IK failure -> stock target
+  left_hand_fix: {shift_z: 0.0}  # FLAG (left-hand sweep). Left arm + triangle only: grasp z += shift_z (m, |v| <= 0.05) before the fingertip raise; 0 = off
   drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
   border_posture: false       # FLAG (retry-vary). Label None from abstain_border (blob cut by the image border, near
                               # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
