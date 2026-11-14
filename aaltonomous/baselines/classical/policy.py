@@ -121,6 +121,10 @@ class ClassicalPolicy:
         self.queue_a = self.queue_h = None
         self.arm_cmd = self.hand_cmd = None
         self.attempts = []          # (position, count) of objects we tried to pick
+        self.attempt_tracks = []    # retry-vary: {color, latest xy, cumulative count} stable pushed-object tracks
+        self.object_time_tracks = []  # EV budget: {color, latest xy, cumulative planned motion seconds}
+        self.budget_abandoned = []  # (color, xy) objects whose hard per-object budget was exhausted
+        self.gate_skipped = []      # (color, xy) objects deliberately left on the counter by place_gate
         self.failed = []            # positions whose plans failed
         self.pending = None         # Plan waiting for the operator
         self.pending_text = ""      # what the operator is asked to confirm
@@ -142,7 +146,6 @@ class ClassicalPolicy:
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
-        self._abort = None          # policy.retry_vary_grasp: the close being watched for held=no
         self._summary_logged = False
         self.perception.reset_calibration()
         self.calibration = None
@@ -194,8 +197,6 @@ class ClassicalPolicy:
             self._grasp_diag(obs)
         if self._stall is not None:
             self._lift_on_stall(obs)
-        if self._abort is not None:
-            self._abort_watch(obs)
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":
@@ -326,16 +327,34 @@ class ClassicalPolicy:
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
         for d, source_bin, target_bin in corrections:
+            if not self._place_gate_allows(d, target_bin):
+                continue
+            n = self._attempt_count(d.top[:2], d.color)
+            limit = self._attempt_limit(d.top[:2])
+            varied = self._max_attempts_vary()
+            if n >= (max(limit, varied) if varied is not None else limit):
+                self.log(f"[classical] correction attempt limit reached for {d.color} in {source_bin}")
+                continue
+            budget_blocked = False
             for slot in self._free_drop_slots(target_bin) or self._overflow_slots(target_bin):
-                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, relocate=False,
-                                      drop_slot=slot, source_bin=source_bin)
+                p = self._plan_pick(d, dict(bin_name=target_bin, relocate=False,
+                                            drop_slot=slot, source_bin=source_bin))
                 self.plans.append(p)
+                if p.ok and not self._object_time_allows(d, p.duration):
+                    budget_blocked = True
+                    break
                 if p.ok:
                     return ("plan", p, len(dets))
                 self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
-            p = self.planner.plan_to_counter(d, self.arm_cmd, self.hand_cmd, source_bin,
-                                             obstacles=[o.top[:2] for o in dets])
+            if budget_blocked:
+                continue
+            def cleanup(det, arm, hand, **_):
+                return self.planner.plan_to_counter(det, arm, hand, source_bin,
+                                                    obstacles=[o.top[:2] for o in dets])
+            p = self._plan_pick(d, {}, plan_fn=cleanup)
             self.plans.append(p)
+            if p.ok and not self._object_time_allows(d, p.duration):
+                continue
             if p.ok:
                 return ("plan", p, len(dets))
             self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
@@ -357,13 +376,17 @@ class ClassicalPolicy:
             # Retry pass (once per episode): objects excluded only by max_attempts get retry_extra_attempts more
             # tries. `failed` (IK failure / operator skip) stays excluded. The time check is the normal one on the
             # real plan duration: triage skips misfits, without triage _after_look refuses a plan that does not fit.
-            rad = pol["same_object_radius"]
-            excl = [d.top[:2] for d in dets if self._attempt_excluded(d.top[:2])]
+            rad = self._attempt_radius()
+            excluded = [(d.color, d.top[:2]) for d in dets if self._attempt_excluded(d.top[:2], d.color)]
+            excl = [xy for _, xy in excluded]
             if excl:
                 self.retry_pass_used = True
                 extra = int(pol.get("retry_extra_attempts", 2))
                 self.attempts = [(p, c) for p, c in self.attempts
                                  if not any(np.linalg.norm(xy - p) < rad for xy in excl)]
+                self.attempt_tracks = [tr for tr in self.attempt_tracks
+                                       if not any(tr["color"] == color and np.linalg.norm(xy - tr["xy"]) < rad
+                                                  for color, xy in excluded)]
                 self.retry_allow += [(xy, extra) for xy in excl]
                 self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
                 res = self._choose(dets, obs, verify)
@@ -396,17 +419,105 @@ class ClassicalPolicy:
         if any(d.color == color and np.linalg.norm(d.top[:2] - xy) < rad for d in dets):
             self.slot_used[bin_name].discard(slot)
 
-    def _attempt_excluded(self, xy):
+    def _attempt_excluded(self, xy, color=None):
         """True when the object at xy is skipped for its attempt count only (not in `failed`)."""
-        rad = self.cfg["policy"]["same_object_radius"]
+        rad = self._attempt_radius()
         if any(np.linalg.norm(xy - f) < rad for f in self.failed):
             return False
-        n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < rad)
-        return n >= self._attempt_limit(xy)
+        return self._attempt_count(xy, color) >= self._attempt_limit(xy)
+
+    def _tracked_here(self, tracks, color, xy):
+        """Nearest same-colour tracked item inside the existing attempt association radius."""
+        xy = np.asarray(xy, float)
+        near = [item for item in tracks if item[0] == color and np.linalg.norm(xy - item[1]) < self._attempt_radius()]
+        return None if not near else min(near, key=lambda item: np.linalg.norm(xy - item[1]))
+
+    def _bin_confidence(self, d):
+        """Confidence in the destination: instruction mapping and bin geometry."""
+        mapping = float(self.mapping_conf.get(d.color, 1.0))
+        calibration = 1.0 if self.calibration is None else float(self.calibration.confidence)
+        return float(np.clip(min(mapping, calibration), 0.0, 1.0))
+
+    def _place_gate_allows(self, d, target_bin, remember=True):
+        """EV placement decision for a counter object.  Off is an unconditional pass."""
+        pol = self.cfg["policy"]
+        if not pol.get("place_gate", False):
+            return True
+        color_conf = float(getattr(d, "color_conf", 1.0))
+        bin_conf = self._bin_confidence(d)
+        color_min = float(pol.get("place_gate_colour_min", 0.6))
+        bin_min = float(pol.get("place_gate_bin_min", 0.5))
+        ok = np.isfinite(color_conf) and color_conf >= color_min and np.isfinite(bin_conf) and bin_conf >= bin_min
+        if not ok and remember:
+            xy = np.asarray(d.top[:2], float).copy()
+            if self._tracked_here(self.gate_skipped, d.color, xy) is None:
+                self.gate_skipped.append((d.color, xy))
+                reason = "colour" if not np.isfinite(color_conf) or color_conf < color_min else "bin"
+                self.log(f"[gate] skip {d.color} target={target_bin} reason={reason} "
+                         f"colour_conf={color_conf:.3f} min={color_min:.3f} "
+                         f"bin_conf={bin_conf:.3f} min={bin_min:.3f}")
+        return bool(ok)
+
+    def _object_time_spent(self, color, xy):
+        tr = self._tracked_here([(item["color"], item["xy"], item) for item in self.object_time_tracks], color, xy)
+        return 0.0 if tr is None else float(tr[2]["spent_s"])
+
+    def _object_time_allows(self, d, duration, remember=True):
+        """Whether another plan fits the object's cumulative hard motion budget."""
+        budget = self.cfg["policy"].get("object_time_budget_s")
+        if budget is None:
+            return True
+        budget = float(budget)
+        spent = self._object_time_spent(d.color, d.top[:2])
+        ok = spent + float(duration) <= budget + 1e-9
+        if not ok and remember:
+            xy = np.asarray(d.top[:2], float).copy()
+            if self._tracked_here(self.budget_abandoned, d.color, xy) is None:
+                self.budget_abandoned.append((d.color, xy))
+                self.log(f"[time_budget] abandon {d.color}: spent={spent:.1f}s + plan={float(duration):.1f}s "
+                         f"> budget={budget:.1f}s")
+        return bool(ok)
+
+    def _record_object_time(self, color, xy, duration):
+        if self.cfg["policy"].get("object_time_budget_s") is None:
+            return
+        xy = np.asarray(xy, float).copy()
+        tr = self._tracked_here([(item["color"], item["xy"], item) for item in self.object_time_tracks], color, xy)
+        if tr is None:
+            self.object_time_tracks.append({"color": color, "xy": xy, "spent_s": float(duration)})
+        else:
+            tr[2]["xy"] = xy
+            tr[2]["spent_s"] += float(duration)
+
+    def _attempt_radius(self):
+        """Association radius for executed attempts. Retry-vary uses its wider pushed-object track."""
+        pol = self.cfg["policy"]
+        return float(pol.get("retry_assoc_radius", 0.06) if self._vary_on() else pol["same_object_radius"])
+
+    def _attempt_count(self, xy, color=None):
+        rad = self._attempt_radius()
+        if self._vary_on():
+            tracks = [tr for tr in self.attempt_tracks if color is None or tr["color"] == color]
+            near = [tr for tr in tracks if np.linalg.norm(xy - tr["xy"]) < rad]
+            return 0 if not near else min(near, key=lambda tr: np.linalg.norm(xy - tr["xy"]))["count"]
+        return sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < rad)
+
+    def _track_attempt(self, color, xy):
+        """Advance the nearest same-colour retry track, preserving count through successive <radius pushes."""
+        if not self._vary_on():
+            return
+        xy = np.asarray(xy, float).copy()
+        same = [tr for tr in self.attempt_tracks if tr["color"] == color]
+        near = [tr for tr in same if np.linalg.norm(xy - tr["xy"]) < self._attempt_radius()]
+        if near:
+            tr = min(near, key=lambda item: np.linalg.norm(xy - item["xy"]))
+            tr["xy"], tr["count"] = xy, tr["count"] + 1
+        else:
+            self.attempt_tracks.append({"color": color, "xy": xy, "count": 1})
 
     def _attempt_limit(self, xy):
         """max_attempts, or the retry pass's extra attempts for an object it re-admitted."""
-        rad = self.cfg["policy"]["same_object_radius"]
+        rad = self._attempt_radius()
         for p, extra in self.retry_allow:
             if np.linalg.norm(xy - p) < rad:
                 return extra
@@ -416,11 +527,17 @@ class ClassicalPolicy:
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
         cands, extra = [], []
         mav = self._max_attempts_vary()
+        pol = self.cfg["policy"]
         for d in dets:
             xy = d.top[:2]
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
                 continue
-            n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < self.cfg["policy"]["same_object_radius"])
+            if pol.get("place_gate", False) and self._tracked_here(self.gate_skipped, d.color, xy) is not None:
+                continue
+            if pol.get("object_time_budget_s") is not None and self._tracked_here(
+                    self.budget_abandoned, d.color, xy) is not None:
+                continue
+            n = self._attempt_count(xy, d.color)
             if n >= self._attempt_limit(xy):
                 if mav is not None and n < mav:
                     extra.append(d)   # policy.max_attempts_vary: one more varied try, after every other candidate
@@ -441,7 +558,6 @@ class ClassicalPolicy:
             retry_key = min(retry) if retry else (0.0 if d.color in self.retry_colors else np.inf)
             return (not np.isfinite(retry_key), retry_key)
 
-        pol = self.cfg["policy"]
         triage = bool(pol.get("time_triage", False))
         if triage and pol.get("triage_order", "duration") == "priority":
             eps = float(pol.get("triage_tie_m", 0.02))   # candidates with ~equal cheap estimate: cheaper shape first
@@ -466,6 +582,8 @@ class ClassicalPolicy:
             target_bin = self._bin_of(d)
             if target_bin is None:
                 continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
+            if not self._place_gate_allows(d, target_bin):
+                continue
             if verify:  # #6: explicit target bin + a free, verified drop slot
                 slot = self._next_drop_slot(target_bin)
                 if slot is None:
@@ -485,6 +603,8 @@ class ClassicalPolicy:
             else:
                 p = self._plan_pick(d, dict(obstacles=others))
             self.plans.append(p)
+            if p.ok and not self._object_time_allows(d, p.duration):
+                continue
             if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
                 self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")
                 continue
@@ -569,22 +689,29 @@ class ClassicalPolicy:
             out = ([{"posture": v1, "yaw": None}] if p0 == demo else []) + [{"posture": v1, "yaw": a} for a in yaws]
         return out[: int(pol.get("retry_max_variants", 3))]
 
-    def _plan_pick(self, d, kw):
+    def _plan_pick(self, d, kw, plan_fn=None):
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
         differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""
+        def plan(relocate=None):
+            args = dict(kw)
+            if relocate is not None and plan_fn is None:
+                args["relocate"] = relocate
+            fn = self.planner.plan if plan_fn is None else plan_fn
+            return fn(d, self.arm_cmd, self.hand_cmd, **args)
+
         if not self._vary_on():
-            return self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
+            return plan()
         hist = self._hist_for(d)
         if not hist:
-            p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
+            p = plan()
             if p.ok:
                 p.grasp_key = self._grasp_key(p)
             return p
         for v in self._variants(d, hist):
             self.planner.vary = v
             try:
-                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, relocate=False, **kw)
+                p = plan(relocate=False)
             finally:
                 self.planner.vary = None
             if not p.ok:
@@ -599,7 +726,7 @@ class ClassicalPolicy:
                      f"{self._vary_txt(v)} -> {self._key_txt(key)} (before: "
                      + ", ".join(self._key_txt((h["xy"], h["yaw"], h["posture"])) for h in hist) + ")")
             return p
-        p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
+        p = plan()
         if p.ok:
             p.grasp_key = self._grasp_key(p)
             if any(self._same_grasp(p.grasp_key, h) for h in hist):
@@ -616,45 +743,6 @@ class ClassicalPolicy:
         xy, yaw, posture = k
         y = "n/a" if yaw is None else f"{np.degrees(yaw):.0f}"
         return f"({xy[0]:+.3f},{xy[1]:+.3f}) yaw={y} {posture}"
-
-    def _abort_watch(self, obs):
-        """policy.retry_vary_grasp: at the end of the close hold, held = the active hand still lags its command by
-        >= 0.010 rad (the [grasp_diag] criterion). held=no -> the rest of the plan (carry to the bin, release) is
-        replaced by its abort branch: finish the lift, straight home. Only removes motion, never adds speed."""
-        w = self._abort
-        left = 0 if self.queue_a is None else len(self.queue_a)
-        if w["n"] - left < w["close_end"]:
-            return
-        self._abort = None
-        q = obs.get("hand_q")
-        if q is None:
-            return
-        sl = ArmKinematics.sl(w["plan"].side)
-        held = bool(np.abs(np.asarray(self.hand_cmd, float)[sl] - np.asarray(q, float)[sl]).max() >= 0.010)
-        w["hist"]["held"] = held
-        if held or w["plan"].abort is None or left == 0:
-            return
-        ls, arm, hand = w["plan"].abort
-        k = (w["n"] - ls) - left            # lift ticks already sent (also after a lift_on_stall cut of the hold)
-        nl = w["lift_len"]
-        if not 0 <= k < nl:
-            return
-        new_a, new_h = arm[k:], hand[k:]
-        t = float(obs.get("t", 0.0))
-        g = self._gdiag
-        if g is not None and g["plan"] is w["plan"]:
-            g["n"] = (g["n"] - left) + len(new_a)
-        self.queue_a, self.queue_h = new_a, new_h
-        plan = w["plan"]
-        if self.slot_pending is not None and self.slot_pending[1] == plan.drop_slot:
-            self.slot_used[self.slot_pending[0]].discard(plan.drop_slot)
-            self.slot_pending = None
-        vp = self.verification_pending
-        if vp is not None and vp["target_bin"] == plan.target_bin and vp["drop_slot"] == plan.drop_slot:
-            self.reserved_drop_slots[plan.target_bin].discard(plan.drop_slot)
-            self.verification_pending = None
-        self._note(t, f"held=no after the close: abort {plan.color} carry, back home "
-                      f"({len(new_a) / HZ:.1f} s instead of {left / HZ:.1f} s)")
 
     def _priority(self, d):
         """Triage tie-break tuple (lower = first): shape cost (cube < cylinder < triangle; `shape` attribute of the
@@ -798,6 +886,8 @@ class ClassicalPolicy:
     def _start(self, plan, t):
         xy = plan.waypoints["grasp"][:2]
         self.attempts.append((xy, 1))
+        self._track_attempt(plan.color, xy)
+        self._record_object_time(plan.color, xy, plan.duration)
         self.n_started += 1
         if plan.corrective:
             self.n_corrections += 1
@@ -827,11 +917,6 @@ class ClassicalPolicy:
             h = {"color": plan.color, "xy": np.asarray(key[0], float), "yaw": key[1], "posture": key[2],
                  "side": plan.side, "held": None}
             self.vary_hist.append(h)
-            ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
-            self._abort = None
-            if "close" in ph and "lift" in ph:
-                self._abort = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1], "hist": h,
-                               "lift_len": ph["lift"][1] - ph["lift"][0]}
         self._enqueue(plan.arm, plan.hand)
         if self._slots_on() and plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
             self.slot_used[plan.target_bin].add(plan.drop_slot)

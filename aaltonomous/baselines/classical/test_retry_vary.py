@@ -40,7 +40,7 @@ class FakePlanner:
     def finger_heading(self, plan):
         return plan._heading
 
-    def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=None):
+    def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=None, source_bin=None):
         v = dict(self.vary or {})
         self.calls.append(v)
         posture = v.get("posture") or self.stock
@@ -51,8 +51,14 @@ class FakePlanner:
         p = Plan(True, side="left", color=det.color, target_bin="left", arm=np.zeros((n, 14)), hand=np.zeros((n, 14)),
                  waypoints={"grasp": det.top.copy(), "drop": det.top.copy()}, ik={"g": (True, 0.0, 0.0)},
                  safety_clips=0, posture=(posture, getattr(det, "shape", None), 1.0, "metric"),
+                 source_bin=source_bin, corrective=source_bin is not None,
                  phases=[("descend", 0, 10), ("close", 10, 20), ("lift", 20, 30), ("carry", 30, 60)])
         p._heading = yaw
+        return p
+
+    def plan_to_counter(self, det, arm_q, hand_q, source_bin, obstacles=()):
+        p = self.plan(det, arm_q, hand_q, source_bin=source_bin)
+        p.target_bin = "counter"
         return p
 
 
@@ -72,10 +78,8 @@ def make(dets, overrides=None, **kw):
 
 
 def miss(pol, plan):
-    """Record `plan` as started and missed (held=no)."""
+    """Record `plan` as started; its object remains visible in the next camera frame."""
     pol._start(plan, 0.0)
-    pol._abort = None
-    pol.vary_hist[-1]["held"] = False
     pol.queue_a = pol.queue_h = None
 
 
@@ -135,6 +139,15 @@ class TestVariants(unittest.TestCase):
         d2 = det("red", 0.33, shape="cube")                 # pushed 3 cm: same object (assoc 6 cm), other point
         self.assertTrue(pol._plan_pick(d2, {}).ok)
 
+    def test_pushed_object_keeps_attempt_count_within_retry_track(self):
+        pol = make([], overrides={"policy.max_attempts": 2})
+        for x in (0.30, 0.345):                        # each push exceeds the stock 3 cm association radius
+            d = det("red", x, shape="cube")
+            miss(pol, pol._plan_pick(d, {}))
+        moved = det("red", 0.39, shape="cube")         # >6 cm from first try, <6 cm from the stable track's latest xy
+        self.assertEqual(pol._attempt_count(moved.top[:2], moved.color), 2)
+        self.assertEqual(pol._choose([moved], obs(), verify=False)[0], "none")
+
     def test_held_yes_or_other_colour_does_not_vary(self):
         d = det("red", 0.30, shape="cube")
         pol = make([d])
@@ -166,67 +179,68 @@ class TestVariants(unittest.TestCase):
         self.assertEqual(res[1].color, "blue")
 
 
-class TestAbort(unittest.TestCase):
-    def _plan(self, pol):
-        p = pol._plan_pick(det("red", 0.30, shape="cube"), {})
-        arm = np.zeros((25, 14)); arm[:, 0] = np.arange(25)     # lift ticks 20..29 + 15 ticks home
-        p.abort = (20, arm, np.zeros((25, 14)))
-        return p
+class TestNoEarlyAbort(unittest.TestCase):
+    def test_servo_error_never_rewrites_the_carry(self):
+        for measured in (0.5, 0.3):
+            pol = make([])
+            plan = pol._plan_pick(det("red", 0.30, shape="cube"), {})
+            plan.abort = (20, np.ones((5, 14)), np.ones((5, 14)))  # even a legacy populated field is ignored
+            pol._start(plan, 0.0)                                  # sends ticks 0..9
+            pol.act({**obs(), "hand_q": np.zeros(14)})             # sends ticks 10..19
+            pol.hand_cmd = np.full(14, 0.5)
+            pol.act({**obs(), "hand_q": np.full(14, measured)})    # sends ticks 20..29, irrespective of tracking
+            self.assertEqual(len(pol.queue_a), 30)
+            self.assertIsNone(pol.vary_hist[-1]["held"])
+            self.assertFalse(any("abort" in m for _, m in pol.events))
 
-    def _run_to_close_end(self, pol, plan, hand_q):
-        pol._start(plan, 0.0)                               # pops ticks 0..9
-        pol.act({**obs(), "hand_q": np.zeros(14)})          # ticks 10..19 (close)
-        pol.hand_cmd = np.full(14, 0.5)
-        return pol.act({**obs(), "hand_q": hand_q})         # done = 20 = close end -> held check
 
-    def test_held_no_aborts_the_carry(self):
+class TestCorrectiveRetry(unittest.TestCase):
+    def test_correction_uses_a_varied_grasp(self):
+        d = det("red", 0.30, shape="cube")
         pol = make([])
-        plan = self._plan(pol)
-        a = self._run_to_close_end(pol, plan, np.full(14, 0.5))   # fingers reached the command: closed on air
-        self.assertFalse(pol.vary_hist[-1]["held"])
-        self.assertEqual(list(a["arm_q_target"][:, 0]), list(range(10)))   # abort ticks 0..9 = the lift
-        self.assertEqual(len(pol.queue_a), 15)                           # straight home, no carry/release
-        self.assertTrue(any("abort" in m for _, m in pol.events))
+        miss(pol, pol._plan_pick(d, {}))
+        result = pol._plan_corrections([(d, "center", "left")], [])
+        self.assertEqual(result[0], "plan")
+        self.assertTrue(result[1].corrective)
+        self.assertAlmostEqual(abs(np.degrees(result[1]._heading)), 90.0)
 
-    def test_held_yes_keeps_the_plan(self):
+    def test_correction_respects_per_object_attempt_limit(self):
+        d = det("red", 0.30, shape="cube")
         pol = make([])
-        plan = self._plan(pol)
-        self._run_to_close_end(pol, plan, np.full(14, 0.3))       # fingers stalled on the object
-        self.assertTrue(pol.vary_hist[-1]["held"])
-        self.assertEqual(len(pol.queue_a), 30)                    # original 60 - 30 sent
+        for _ in range(2):
+            miss(pol, pol._plan_pick(d, {}))
+        calls = len(pol.planner.calls)
+        self.assertIsNone(pol._plan_corrections([(d, "center", "left")], []))
+        self.assertEqual(len(pol.planner.calls), calls)
 
-    def test_no_abort_branch_keeps_the_plan(self):
+    def test_cleanup_to_counter_uses_a_varied_grasp(self):
+        d = det("red", 0.30, shape="cube")
         pol = make([])
-        plan = self._plan(pol)
-        plan.abort = None
-        self._run_to_close_end(pol, plan, np.full(14, 0.5))
-        self.assertFalse(pol.vary_hist[-1]["held"])
-        self.assertEqual(len(pol.queue_a), 30)
+        pol.used_drop_slots["left"].update(range(len(pol.planner.drop_slots("left"))))
+        first = pol._plan_corrections([(d, "center", "left")], [])[1]
+        self.assertEqual(first.target_bin, "counter")
+        miss(pol, first)
+        retry = pol._plan_corrections([(d, "center", "left")], [])[1]
+        self.assertEqual(retry.target_bin, "counter")
+        self.assertAlmostEqual(abs(np.degrees(retry._heading)), 90.0)
 
 
 class TestRealPlanner(unittest.TestCase):
-    """Real IK + safety: the abort branch obeys the speed limits, the heading variant reaches its heading."""
+    """Real IK + safety checks for retry-vary planning."""
 
-    def test_abort_branch_and_heading_variant(self):
+    def test_no_abort_branch_and_heading_variant(self):
         from .config import hand_postures, home_arm
         from .planner import Planner
         from aaltonomous.scene.scene import Scene
         cfg = load_config(overlay="cand_r14", overrides={"policy.retry_vary_grasp": True})
         sc = Scene.load()
         pl = Planner(cfg, sc, hand_postures(cfg), home_arm(cfg))
-        mo = cfg["motion"]
         L = sc.cfg["layout"]
         d = Detection("yellow", sc.mat_to_pelvis([np.mean(L["region_x"]) + 0.08, np.mean(L["region_y"]),
                                                   sc.object_height()]), 0, 0, "depth")
         p = pl.plan(d, pl.home.copy(), pl.post["open"].copy())
         self.assertTrue(p.ok, p.reason)
-        self.assertIsNotNone(p.abort)
-        ls, arm, hand = p.abort
-        full = np.vstack([p.arm[:ls], arm])
-        self.assertLessEqual(np.abs(np.diff(full, axis=0)).max() * 30.0, mo["arm_max_vel"] + 1e-6)
-        self.assertLess(len(arm), len(p.arm) - ls)               # shorter than carry + release + home
-        np.testing.assert_allclose(arm[-1], pl.home, atol=1e-9)   # ends at home (started there)
-        self.assertEqual(pl.dry_run_safety(pl.home, pl.post["open"], full, np.vstack([p.hand[:ls], hand])), 0)
+        self.assertIsNone(p.abort)
         h0 = pl.finger_heading(p)
         pl.vary = {"posture": None, "yaw": h0 - np.radians(60.0)}
         q = pl.plan(d, pl.home.copy(), pl.post["open"].copy(), relocate=False)

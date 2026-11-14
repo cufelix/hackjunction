@@ -41,6 +41,7 @@ FLAGS = {
     "perception.no_blob_shape": ("Oliver #5/#7", False, "no metric top face -> shape None, never the 2D blob ratio"),
     "perception.shape_diag": ("Oliver #5/#7", False, "passive [shape_diag] log line per detection (no action change)"),
     "perception.hsv_set": ("real colour", "stock", "stock | robust: one HSV set for sim + the real head cam (hsv_robust)"),
+    "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),
     "perception.principal_point": ("Oliver lane 3", "file", "file | center: Isaac renders cx,cy at the image centre"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
@@ -52,10 +53,14 @@ FLAGS = {
     "policy.retry_pass": ("Oliver #3", False, "once per episode: max_attempts-skipped objects get retry_extra_attempts"),
     "policy.time_margin_s": ("Oliver #3", 0.0, "plans must end this long before the time limit"),
     "policy.episode_summary_log": ("Oliver #3", False, "one log line per episode end"),
-    "policy.retry_vary_grasp": ("retry-vary", False, "retry after held=no with another grasp (posture/heading), "
-                                                     "never an identical one; held=no -> abort the carry"),
+    "policy.retry_vary_grasp": ("retry-vary", False, "retry after the object remains in the next frame with another "
+                                                     "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
+    "policy.place_gate": ("EV gate", False, "require colour and target-bin confidence before planning a placement"),
+    "policy.place_gate_colour_min": ("EV gate", 0.6, "minimum HSV/blob colour confidence (used only by place_gate)"),
+    "policy.place_gate_bin_min": ("EV gate", 0.5, "minimum residual-derived bin confidence (used only by place_gate)"),
+    "policy.object_time_budget_s": ("EV gate", None, "cumulative planned motion budget per tracked object; null = off"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
@@ -171,6 +176,15 @@ def check_flag_values(cfg):
             continue
         if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
             raise ValueError(f"{k} = {v!r}: want {n} numbers")
+    for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
+        v = float(_get(cfg, k))
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"{k} = {v}: want a confidence in [0, 1]")
+    budget = _get(cfg, "policy.object_time_budget_s")
+    if budget is not None:
+        budget = float(budget)
+        if not np.isfinite(budget) or budget <= 0.0:
+            raise ValueError(f"policy.object_time_budget_s = {budget}: want null or a finite positive number of seconds")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}
