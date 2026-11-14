@@ -1,0 +1,8 @@
+# A/B overlay (GPU only, never baked): docker run ... -e AALTO_OVERLAY=<name> <image>. Arm B of one A/B vs flags-off;
+# everything not listed stays at the config.yaml OFF value. See knowledge/humanoid/21-submission-pipeline.md §7.
+name: ab_verify_lang
+flags:
+  policy.verify_placement: true
+  policy.verify_yellow_unknown: true
+  policy.max_corrections_per_episode: 1
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes

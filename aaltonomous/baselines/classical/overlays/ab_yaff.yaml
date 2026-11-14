@@ -1,0 +1,7 @@
+# A/B overlay: perceived-y affine correction (23-grasp-failure §11b/§13: perceived - true y = -0.0326*y + 0.0039 m,
+# pelvis frame; right side +6.6 mm, first-attempt success right 40 % vs left 70 %). y_corrected = y - (a*y + b).
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_yaff <image>.
+name: ab_yaff
+flags:
+  perception.y_affine: [-0.0326, 0.0039]
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes
