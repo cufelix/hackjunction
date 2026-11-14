@@ -199,6 +199,7 @@ FLAGS = {
     "grasp.staggered_release": ("finals grasp", False, "release thumb and first finger before DDS slots 5/6"),
     "grasp.staggered_release_delay_s": ("finals grasp", 0.30, "delay before DDS slots 5/6 begin opening when staggered_release is on"),
     "bin.geometry_runtime": ("bin geo", False, "every bin consumer (perception masks/hulls/near_bin/in_bin/gate, planner drop/slots/collision) follows bin_geometry(): nominal + the voted shift"),
+    "bin.vote.max_shift_m": ("bin vote", 0.10, "a bin vote result further than this from the prior is discarded (prior kept); real venue bins measure +8..+15 cm vs nominal"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "bin.vote.signed_rim_fit": ("C3", False, "fit physical rim displacement with its signed +x/+y direction"),
     "bin.vote.async_extract": ("H5", False, "extract bin votes in the low-priority look worker; act only polls/holds"),

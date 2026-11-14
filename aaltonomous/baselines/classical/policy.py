@@ -1265,8 +1265,10 @@ class ClassicalPolicy:
                     return self._hold()
                 self._stg = None
                 if route is None:   # never deadlock: the rc6 home route replaces a forever staging_hold
-                    if self.planner._lift_from_contact_on():   # never the joint-space go_to through the table
-                        self._note(t, "[stage] lift_from_contact: hold")
+                    c_now = min(self.planner.clearance(sd, self.arm_cmd, self.hand_cmd) for sd in ("left", "right")) \
+                        if self.planner._lift_from_contact_on() else 1.0
+                    if c_now <= 0.003:   # in contact: never the joint-space go_to through the table; retry the lift
+                        self._note(t, f"[stage] lift_from_contact: hold (clearance {c_now * 1000:.1f} mm)")
                         self._stg = None
                         return self._hold()
                     self._note(t, f"[staging] fallback rc6 home route: {reason}")
