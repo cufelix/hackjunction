@@ -292,7 +292,7 @@ ik:
 # sorts by the fixed colour->bin mapping.
 skills:
   memory: false                 # FLAG. Learn the best already-validated retry-vary grasp per shape/colour/hand
-  memory_path: /tmp/aalto_skills.sqlite  # FLAG. AALTO_SKILLS_DB overrides; persistence failure falls back in-memory
+  memory_path: null             # FLAG. Unset = in-memory (no file). AALTO_SKILLS_DB overrides; unusable path falls back in-memory
 
 instruction:
   resolve: false

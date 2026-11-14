@@ -29,23 +29,28 @@ ARMS = (
 )
 OUTCOMES = ("held", "miss", "dropped", "placed")
 REWARDS = {"held": 0.3, "miss": 0.0, "dropped": 0.0, "placed": 1.0}
-DEFAULT_PATH = "/tmp/aalto_skills.sqlite"
 
 
 class SkillMemory:
     """Beta-Bernoulli Thompson sampler with asynchronous SQLite persistence."""
 
-    def __init__(self, path=DEFAULT_PATH, seed=0, log=None):
-        self.path = os.environ.get("AALTO_SKILLS_DB") or path or DEFAULT_PATH
+    def __init__(self, path=None, seed=0, log=None):
+        # In-memory unless a path is configured (AALTO_SKILLS_DB wins). No path = no file, no thread.
+        self.path = os.environ.get("AALTO_SKILLS_DB") or path or None
         self.rng = random.Random(seed)
         self.log = log
         self._lock = threading.Lock()
         self._stats = defaultdict(lambda: defaultdict(self._empty_stats))
         self._warned = False
-        self._db_ok = True
+        self._db_ok = self.path is not None
         self._writes = queue.Queue()
-        self._load()
         self._writer = None
+        if self.path is not None:
+            problem = self._path_problem()
+            if problem is None:
+                self._load()
+            else:
+                self._disable_db(OSError(problem))
         if self._db_ok:
             self._writer = threading.Thread(target=self._write_loop, name="skill-memory-db", daemon=True)
             self._writer.start()
@@ -64,6 +69,18 @@ class SkillMemory:
     def reseed(self, seed):
         """Start the episode's deterministic Thompson-sampling stream."""
         self.rng.seed(0 if seed is None else int(seed))
+
+    def _path_problem(self):
+        """Why the configured path cannot hold a DB (missing/unwritable directory, or a directory), else None."""
+        path = os.path.abspath(self.path)
+        directory = os.path.dirname(path)
+        if os.path.isdir(path):
+            return f"{path} is a directory"
+        if not os.path.isdir(directory):
+            return f"directory {directory} does not exist"
+        if not os.access(directory, os.W_OK | os.X_OK):
+            return f"directory {directory} is not writable"
+        return None
 
     def _connect(self):
         return sqlite3.connect(self.path, timeout=0.05)

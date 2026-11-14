@@ -21,7 +21,7 @@ class TestFlags(unittest.TestCase):
     def test_skill_memory_flags_default_off(self):
         cfg = load_config(overlay="none")
         self.assertFalse(cfg["skills"]["memory"])
-        self.assertEqual(cfg["skills"]["memory_path"], "/tmp/aalto_skills.sqlite")
+        self.assertIsNone(cfg["skills"]["memory_path"])   # unset: in-memory, no /tmp file
 
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
