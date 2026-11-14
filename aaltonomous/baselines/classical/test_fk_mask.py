@@ -96,7 +96,12 @@ class TestFkMask(unittest.TestCase):
     def test_finals_rendered_arm_silhouette_has_zero_self_candidates_and_keeps_nearby_objects(self):
         import cv2
 
-        cfg = load_config(profile="sim", overlay="finals_r21")
+        # The finals overlay's real-robot no-depth prior (0.15 m) is wrong for the mock table (0.01 m).  Until apply_height
+        # commits, a single look would use it and mask every spawn object, so the mock run overrides it.  Perception also
+        # commits counter_z_runtime onto the shared Scene, so both shared fields are restored for the other tests.
+        self.addCleanup(setattr, SC, "counter_z_prior", SC.counter_z_prior)
+        self.addCleanup(setattr, SC, "counter_z_runtime", SC.counter_z_runtime)
+        cfg = load_config(profile="sim", overlay="finals_r21", overrides={"scene.counter_z_prior": None})
         arm = home_arm(cfg)
         hand = hand_postures(cfg)["open"]
         p = Perception(cfg, SC, CAL, log=lambda *_: None)
@@ -105,7 +110,7 @@ class TestFkMask(unittest.TestCase):
         rgb, depth = Renderer(SC, CAL).render([])
         rendered = _render_arm_links(p, rgb, depth, arm, hand)
         self.assertGreater(int(rendered.sum()), 1000)
-        unmasked = _perception(False, "finals_r21").detect(rgb, depth, debug=True)
+        unmasked = _perception(False, "finals_r21", {"scene.counter_z_prior": None}).detect(rgb, depth, debug=True)
         self.assertGreater(len(unmasked[0]) + len(unmasked[1]), 0)   # meaningful: coloured self pixels form candidates
         mask = p._fk_arm_mask(rendered.shape, arm, hand)
         self.assertEqual(int(np.count_nonzero(rendered & ~mask)), 0)
