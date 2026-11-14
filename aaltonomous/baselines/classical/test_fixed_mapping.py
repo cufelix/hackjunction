@@ -81,6 +81,7 @@ class TestFixedMapping(unittest.TestCase):
                 self.info = info
 
         server = ClassicalServerPolicy.__new__(ClassicalServerPolicy)
+        server._auto_buf, server._pending_reset, server.probe_cfg = None, None, None
         server.pol = Stub()
         server.reset("ignored", task="sort_fixed", seed=7)
         self.assertEqual(server.pol.info["mapping"], REAL)

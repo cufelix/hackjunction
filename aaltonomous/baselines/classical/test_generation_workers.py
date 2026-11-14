@@ -56,6 +56,7 @@ class TestGenerationWorkers(unittest.TestCase):
 
     def test_server_reset_with_flag_never_sleeps_for_pending_job(self):
         server = ClassicalServerPolicy.__new__(ClassicalServerPolicy)
+        server._auto_buf, server._pending_reset, server.probe_cfg = None, None, None
         server.pol = SimpleNamespace(
             cfg={"policy": {"generation_workers": True}},
             _job={"result": None},
