@@ -975,13 +975,13 @@ run in parallel and the GPU box is never the bottleneck for logic work.
 | # | What | Lane | Why it sits here |
 |---|---|---|---|
 | **0** | **Measure the unmodified baseline on the sim clock** | 🖥 GPU | Three unknowns, one run. Everything else is measured against it |
-| **1** | **Instruction → mapping** | 💻 CPU | 83 % of the final; baseline scores 0; immune to every clock and physics question |
+| **1** | ✅ **Instruction → mapping** — **DONE** `ae2416f` | 💻 CPU | 83 % of the final; the baseline has no mechanism for it; immune to every clock and physics question |
 | **2** | **Take the oracle's free constants** | 🖥 GPU to verify | A one-line fix for a named failure, already written and MIT |
 | **3** | **Time triage: shortest-fitting candidate, never give up** | 💻 CPU logic, 🖥 verify | A few lines against a silent episode truncation |
 | **4** | **Endgame: settle, and release rather than carry** | 💻+🖥 | The sim's 3 s grace does not exist on stage |
 | **5** | **Yaw-aligned prism grasp** | 🖥 GPU | The organisers' own named blocker, and the real robot grips *worse* |
 | **6** | **Post-placement verification** | 🖥 GPU | Largest per-object swing available: −1 → +2 |
-| **7** | **Shape classifier + border guard** | 💻 CPU | Insurance against shape-keyed finals instructions |
+| **7** | ✅ **Shape classifier + border guard** — **DONE on CPU** `c81360f` | 💻 CPU | Insurance against shape-keyed finals instructions. The win was finding the feature was on the wrong data: **61 % → 100 %** |
 | 8 | Stretch: relay hand-over · DR fitted to Drop 1 | both | Generality story, 25 % |
 
 ### 0. Measure the baseline on the sim clock 🖥 **before anything else**
@@ -1001,7 +1001,37 @@ every "improvement" is measured against an unknown and we cannot tell a gain fro
 **Done when:** we have a number for rung 1 on the sim clock, with and without settle, and a measured
 seconds-per-pick. **Owner: Timi** (Verda RTX PRO 6000, running).
 
-### 1. Instruction → mapping 💻 **highest value, no GPU, start now**
+### 1. Instruction → mapping 💻 ✅ **DONE, 14 Nov 00:50** — `policy/instruction.py`, commit `ae2416f`
+
+**Measured:** 288/288 regenerated training sentences (8 verbatim templates × 6 colour orders ×
+6 bin orders), 294/294 of Oliver's held-out corpus, 23/23 adversarial sentences written against
+this file by an audit agent.
+
+> ⚠️ **The 294/294 is NOT an out-of-sample score.** That corpus found two real bugs in this file —
+> `"blocks"` parsed as a shape word, and `"the remaining bin"` read as the catch-all when it means
+> the exact opposite — so the resolver has been tuned against it. A **second blind batch** has been
+> requested from Oliver (different seed, categories he has not used, not shown to us) for a real
+> out-of-sample number. Until that lands, treat 294/294 as a regression suite, not a result.
+
+**What it handles that the baseline cannot:** ordinals and numbered bins (`bin 1/2/3`,
+`first/second/third`, `box A/B/C`), `"the one in between"`, many-to-one (`"red and yellow go in the
+left bin"` — `resolve_bin` is a dict lookup, so the mapping is a **function, not a bijection**, and
+two colours sharing a bin has to survive), the catch-all (`"everything else"`), naming a bin by
+**elimination** (`"the remaining bin"`), and shape-keyed mappings.
+
+**Architecture:** the sentence is split into **clauses** and each is resolved on its own, because a
+single global min-distance pairing breaks on four real sentence shapes (all four found by the
+audit, all four in the commit message). Two rules decide where a clause ends — both sides must bind
+a key and a bin, so a comma inside a list does not cut the list; and a clause with more keys than
+bins keeps reading when what remains has more bins than keys, which is what separates many-to-one
+from a list cut short.
+
+**It never abstains**, and that is deliberate: at +2/−1/0 a random bijection is worth
+(1/3)(+2) + (2/3)(−1) = 0 per object, exactly what abstaining is worth, so a guess is never worse
+in expectation. See §3.9.
+
+The original reasoning for why this item is first:
+
 
 **Why:** §1.1. This is 83 % of the final, the baseline scores zero, and the wiring gap is one line.
 
@@ -1099,12 +1129,74 @@ Scoring is **final state, not on touch**, so a misplaced object **can be moved a
 ✅ nothing checks today. A wrong bin is −1 and a correction turns it into +1 or +2 — **the largest
 per-object swing in the challenge, on a mistake we have already made.**
 
-### 7. Shape classifier + border guard 💻
+### 7. Shape classifier + border guard 💻 ✅ **DONE on CPU, 14 Nov 01:15**
 
 §3.2.3 and §3.6.2. Free (area ÷ rect area), no training, and it is insurance against ✅ the
-organisers' *"shape-based instructions may also be tested"*. The border guard is one line and
-protects the ratio from a clipped blob. Validate against `mock_world.Renderer`, which ✅ the
-organisers ship and `test_classical.py:56` already drives with depth noise and 15 % holes.
+organisers' *"shape-based instructions may also be tested"*.
+
+✅ **Oliver's session got there first** (`prism_pose.classify_blob`, branch `feat/grasp-yaw`) and
+picked the same discriminator: silhouette area ÷ minAreaRect area, which is **1.000 for a square,
+π/4 = 0.785 for a circle, 0.500 for a triangle** — scale-free and rotation-free. So the work left
+was not a second implementation. It was finding that **the feature is computed on the wrong data.**
+
+> 🔴 **A colour blob is not a top face.** `classify_blob` is fed the 2D colour blob, and the head
+> camera's optical axis is **42.4° off vertical** (`calibration.yaml` head `T_pelvis_optical`:
+> 47.6° below horizontal). The visible **side faces add area** the ratio was never meant to see.
+
+Measured on the real pipeline — rasterise → z-buffer → `train.yaml` depth noise and holes →
+`erode_px 2` → `top_percentile 92` / `top_band 0.006` → deproject — over the real sampling region
+(`scene.yaml` layout: pelvis x 0.26–0.35, y ±0.17, yaw ±45°), **105 poses per shape**:
+
+| shape | 2D pixel blob | → | metric top-face points | → |
+|---|---|---|---|---|
+| cube | 0.806–0.982 | **62.9 %** | 0.942–0.987 | **100 %** |
+| cylinder | 0.822–0.859 | **100 %** | 0.792–0.858 | **100 %** |
+| triangle | 0.624–0.730 | **21.0 %** | 0.542–0.608 | **100 %** |
+
+**A triangle reads as a cylinder 79 % of the time on the blob.** On the metric points all three are
+clean and the bands separate with room to spare. Mean **61 % → 100 %**, same feature, right input.
+
+✅ **The fix is ~3 lines and the array already exists.** `_from_depth` computes `top`, the metric
+top-face points it hands to `_yaw` (`perception.py:149`). Deprojected to the pelvis frame those are
+the **true top face in metres** — no perspective, no shear. Keep `classify_blob` for the
+`_from_plane` fallback, where there are no 3D points at all and 61 % beats nothing.
+
+**Thresholds 0.70 / 0.90**, the measured gap midpoints, so both boundaries carry equal margin.
+Oliver's 0.66 / 0.88 also separate the measured bands but leave the **cylinder only 0.022 of
+headroom** against 0.092 on the triangle side, and the held-out DR is harsher than `train.yaml` by
+an unknown amount (A.2 correction 11). Module owner's call.
+
+Two properties worth having on the record:
+
+- ✅ **This feature is immune to the dominant error term.** The per-episode camera pose bias
+  (§3.6.7, ±10 mm and ±1° drawn once per episode at `dr.py:102-105`) is a **rigid transform**, and
+  an area **ratio** is invariant under rigid transforms. It is the one quantity in the perception
+  stack that the camera-pose problem can neither hurt nor help — so it is independent of Timi's
+  `xy_offset` work, confirmed by him.
+- ✅ **Blobs should not merge.** `scene.yaml` `layout.min_spacing` is 0.08 m against 0.045 m
+  objects — ~35 mm of gap, ~43 px at this range. Touching objects would break any shape feature;
+  the scene generator does not produce them.
+
+**Border guard.** 🔴 `perception.py:74` reads **only `CC_STAT_AREA`** — there is **no border check
+anywhere in the baseline today**. `connectedComponentsWithStats` already returns
+`CC_STAT_LEFT/TOP/WIDTH/HEIGHT` in the same row, so the check is free. Oliver's abstain inside
+`classify_blob` is right as far as it goes, but the flag belongs on the `Detection`: a clipped blob
+biases the **position** as well as the shape, and a biased grasp target is **−1** while refusing the
+object is **0**.
+
+> ⚠️ **Flag only, no reject, until the rate is measured.** How often an object actually clips the
+> frame is unknown, and rejecting one costs a guaranteed 0. Queued as an offline job on a GPU box.
+
+**Code:** `policy/shape_from_top.py`, `scripts/measure_shape_feature.py`,
+`artifacts/item7-shape-feature.log` (commits `c81360f`, `eb9b823`).
+
+> ⚠️ **The 100 % is from our own synthetic rasteriser, not an Isaac render.** It uses the real
+> intrinsics, extrinsics, object sizes, sampling region, yaw range, erode/top_band/top_percentile
+> and `train.yaml` noise; it does **not** model HSV segmentation error on the mask boundary,
+> object–object occlusion, or renderer artifacts. The 61 → 100 gap is far too large to be an
+> artifact of those, and the *direction* is arithmetic from `T_pelvis_optical` — but **the absolute
+> 100 % is not verified** until it runs against `mock_world.Renderer` (which ✅ the organisers ship
+> and `test_classical.py:56` already drives with depth noise and 15 % holes) or a real render.
 
 ### 8. Stretch
 
