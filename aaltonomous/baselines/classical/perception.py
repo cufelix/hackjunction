@@ -63,7 +63,6 @@ class Perception:
         self.cfg = cfg["perception"]
         self.scene = scene
         self.cal = calibration
-        self.cal_nominal = calibration   # perception.hand_calibration swaps self.cal for a corrected COPY per episode
         self.cam = self.cfg["camera"]
         # perception.principal_point (Oliver lane 3): "file" = calibration.yaml K (stock, right for the real D435i);
         # "center" = cx, cy at the image centre and fx = fy = mean, which is what Isaac renders: IsaacLab drops
@@ -81,6 +80,9 @@ class Perception:
             self.cal = copy.copy(calibration)
             self.cal.cams = dict(calibration.cams)
             self.cal.cams[self.cam] = dataclasses.replace(cam, K=K)
+        # what reset_calibration() restores: AFTER every construction step above (principal_point copy), so a reset never
+        # reverts perception to the file K. perception.hand_calibration swaps self.cal for a corrected COPY per episode.
+        self.cal_nominal = self.cal
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
