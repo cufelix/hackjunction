@@ -21,9 +21,11 @@ SHAPE_WORDS = {
     "round": ("ball", "sphere", "orb", "round"),
     "elongated": ("marker", "pen", "pencil", "rod", "stick", "wand", "spoon", "spatula", "bar"),
     "with-handle": ("pan", "cup", "mug", "handled", "handle", "skillet", "saucepan", "pot", "jug", "kettle", "ladle"),
-    "box-like": ("box", "carton", "packet", "block"),
+    "box-like": ("box", "carton", "packet"),
 }
-_GENERIC_NOUNS = {"object", "item", "thing", "piece", "one"}
+_GENERIC_NOUNS = {"object", "item", "thing", "piece", "one", "ones", "objects", "items", "things", "pieces",
+                  "blocks", "block", "shapes", "shape", "stuff", "cube", "cubes", "cylinder", "cylinders",
+                  "triangle", "triangles", "prism", "prisms"}
 _KNOWN_FAMILY = ("red", "orange", "yellow", "blue", "purple")   # known-task colours the existing detector owns
 _KNOWN_SHAPES = ("cube", "cylinder", "triangle")
 _BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+bin)?\b", re.I)
@@ -37,6 +39,14 @@ _FILLER = frozenset(set(PALETTE) | _GENERIC_NOUNS | {
     "can", "could", "would", "you", "kindly", "it", "of", "with", "onto", "inside", "over", "there", "that",
     "this", "now", "then", "go", "should", "frying", "sauce", "metal", "wooden", "plastic", "kitchen", "my", "its"})
 _RESERVED = _FILLER | frozenset(w for ws in SHAPE_WORDS.values() for w in ws)
+
+
+def novel_noun_named(text):
+    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) or an unknown word."""
+    low = str(text or "").lower().replace("gray", "grey")
+    words = set(_WORDS.findall(low))
+    named = any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
+    return named or bool(_unknown(words))
 
 
 def _unknown(words):
