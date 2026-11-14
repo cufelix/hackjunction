@@ -343,15 +343,17 @@ class Planner:
         return [a for _, a in sorted(out)][: int(g.get("yaw_max_hints", 2))]
 
     @staticmethod
-    def _tri_shift(phi, r=0.030):
+    def _tri_shift(phi, r):
         """Midpoint (m, along f) of the triangle's extent in direction f at angle phi from the apex direction
-        (vertices r from the centroid): phi=0 -> +7.5 mm towards the apex, phi=60 deg -> -7.5 mm."""
+        (vertices r = 2/3 altitude from the centroid): phi=0 -> +7.5 mm towards the apex, phi=60 deg -> -7.5 mm."""
         v = np.radians([0.0, 120.0, 240.0])
         return 0.5 * (r * np.cos(phi - v).max() - r * np.cos(phi + np.pi - v).max())
 
     def _finger_err(self, plan, side, a):
         """Angle (deg) between the palm x axis (finger direction) at the end of the descend and the heading a."""
-        e = next(e for name, s, e in plan.phases if name == "descend")
+        e = next((e for name, s, e in plan.phases if name == "descend"), None)
+        if e is None:
+            return float("inf")   # no descend phase to measure -> never counts as aligned
         self.kin._fk(plan.arm[e - 1])
         x = self.kin.data.oMf[self.kin.palm[side]].rotation[:, 0]
         d = np.arctan2(x[1], x[0]) - a
@@ -367,7 +369,7 @@ class Planner:
                 f = np.array([np.cos(a), np.sin(a), 0.0])
                 d2 = copy.copy(det)
                 if g.get("yaw_tri_shift", True):  # pinch midpoint along f is not the centroid
-                    d2.top = det.top + self._tri_shift(a - float(det.apex_yaw)) * f
+                    d2.top = det.top + self._tri_shift(a - float(det.apex_yaw), 2.0 / 3.0 * float(self.scene.size)) * f
                 self.kin.hint, self.kin.w_hint = f, float(g.get("yaw_hint_weight", 3.0))
                 p = self._plan_side(d2, side, bin_name, arm_q, hand_q, **kw)
                 if p.ok:

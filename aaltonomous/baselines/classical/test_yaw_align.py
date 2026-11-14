@@ -10,7 +10,9 @@ from aaltonomous.interface.calibration import Calibration
 from aaltonomous.scene.scene import Scene
 
 from .config import hand_postures, home_arm, load_config
+from . import perception
 from .perception import Detection, Perception
+from .prism_pose import TRIANGLE_MIN_POINTS
 from .planner import Planner
 
 SC = Scene.load()
@@ -126,18 +128,38 @@ class TestPerceptionWiring(unittest.TestCase):
         xy = V[0] + u[:, :1] * (V[1] - V[0]) + u[:, 1:] * (V[2] - V[0]) + np.array([0.3, 0.1])
         return xy
 
-    def _det(self, perc, shape):
-        xy = self._cloud()
+    def _det(self, perc, label=None, xy=None, conf=0.9):
+        """_from_depth with the shape seam answering (label, conf): the only way a shape enters perception."""
+        xy = self._cloud() if xy is None else xy
         # pixel_to_pelvis stub takes (u, v, d); d is z in "metres" here, depth weight uses d/1000 (uniform)
-        return perc._from_depth("red", xy[:, 0], xy[:, 1], np.full(len(xy), 0.9), 500, shape)
+        with mock.patch.object(perception, "classify_top_face", return_value=(label, conf)) as seam:
+            d = perc._from_depth("red", xy[:, 0], xy[:, 1], np.full(len(xy), 0.9), 500, None)
+        self.seam_args = seam.call_args
+        return d
 
     def test_flags_off_unchanged(self):
         p = self._perc()
-        d = self._det(p, None)
+        with mock.patch.object(perception, "classify_top_face", side_effect=AssertionError("seam called")):
+            d = p._from_depth("red", *self._cloud().T, np.full(400, 0.9), 500, None)
+            self.assertIsNone(p._shape_of(None, np.ones((10, 10), np.uint8)))
         self.assertIsNone(d.shape)
         self.assertIsNone(d.apex_yaw)
         self.assertEqual(d.apex_conf, 0.0)
-        self.assertIsNone(p._shape_of(np.ones((10, 10), np.uint8)))
+
+    def test_seam_receives_top_face_and_blob(self):
+        p = self._perc(classify_shape=True)
+        blob = np.zeros((20, 30), np.uint8)
+        with mock.patch.object(perception, "classify_top_face", return_value=("cube", 1.0)) as seam:
+            p._from_depth("red", *self._cloud().T, np.full(400, 0.9), 500, blob)
+        top, b, shape = seam.call_args[0]
+        self.assertEqual(top.shape, (400, 2))
+        self.assertIs(b, blob)
+        self.assertEqual(shape, (20, 30))
+
+    def test_label_comes_only_from_seam(self):
+        p = self._perc(classify_shape=True)
+        for lab in ("cube", "cylinder", "triangle", None):
+            self.assertEqual(self._det(p, lab).shape, lab)
 
     def test_triangle_pose_set(self):
         p = self._perc(triangle_pose=True)
@@ -154,15 +176,42 @@ class TestPerceptionWiring(unittest.TestCase):
         np.testing.assert_array_equal(base.top, on.top)
         self.assertIsNone(on.apex_yaw)
 
-    def test_classify_from_blob(self):
-        import cv2
+    def test_wrong_triangle_label_degrades_to_fallback(self):
+        """Seam says triangle for a cube / cylinder: apex_conf stays below yaw_min_conf, planner does not use yaw."""
+        pl = _planner(yaw_align=True)
+        p = self._perc(triangle_pose=True)
+        rng = np.random.default_rng(1)
+        cube = np.array([0.3, 0.1]) + rng.uniform(-0.0225, 0.0225, (400, 2))
+        a, r = rng.uniform(0, 2 * np.pi, 400), 0.0225 * np.sqrt(rng.uniform(0, 1, 400))
+        cyl = np.array([0.3, 0.1]) + np.stack([r * np.cos(a), r * np.sin(a)], -1)
+        for xy in (cube, cyl):
+            d = self._det(p, "triangle", xy=xy)
+            self.assertLess(d.apex_conf, pl.cfg["grasp"]["yaw_min_conf"])
+            self.assertFalse(pl._yaw_align_on(d))
+
+    def test_too_few_points_no_apex(self):
+        p = self._perc(triangle_pose=True)
+        d = self._det(p, "triangle", xy=self._cloud(n=TRIANGLE_MIN_POINTS - 1))
+        self.assertIsNone(d.apex_yaw)
+        self.assertEqual(d.apex_conf, 0.0)
+        self.assertFalse(_planner(yaw_align=True)._yaw_align_on(d))
+
+    def test_plane_fallback_asks_seam_with_blob_only(self):
         p = self._perc(classify_shape=True)
-        p.scene_shape = None
-        m = np.zeros((120, 120), np.uint8)
-        cv2.fillPoly(m, [np.array([[60, 20], [95, 85], [25, 85]])], 1)
-        self.assertEqual(p._shape_of(m), "triangle")
-        m[:] = 0; m[30:90, 30:90] = 1
-        self.assertEqual(p._shape_of(m), "cube")
+        blob = np.zeros((20, 30), np.uint8)
+        with mock.patch.object(perception, "classify_top_face", return_value=("triangle", 0.8)) as seam:
+            lab = p._shape_of(None, blob)
+        self.assertEqual(lab, "triangle")
+        self.assertIsNone(seam.call_args[0][0])
+
+    def test_no_other_shape_logic(self):
+        """classify_blob / area-ratio thresholds exist only in shape_id."""
+        import pathlib
+        d = pathlib.Path(perception.__file__).parent
+        for f in ("perception.py", "planner.py", "prism_pose.py"):
+            src = (d / f).read_text()
+            self.assertNotIn("classify_blob", src, f)
+            self.assertNotIn("RATIO_C", src, f)
 
 
 if __name__ == "__main__":

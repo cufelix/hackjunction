@@ -1,4 +1,4 @@
-"""Synthetic tests for prism_pose (triangle pose, robust centre, blob classifier). Run:
+"""Synthetic tests for prism_pose (triangle pose, robust centre; shape decisions are tested in test_shape_id.py). Run:
     python -m pytest aaltonomous/baselines/classical/test_prism_pose.py -q
     python -m aaltonomous.baselines.classical.test_prism_pose        # prints the full error table (about 1 min)
 Yaw errors are measured modulo 120 deg (equilateral symmetry): 'flip' = error > 30 deg, i.e. the wrong vertex wedge.
@@ -6,7 +6,7 @@ Yaw errors are measured modulo 120 deg (equilateral symmetry): 'flip' = error > 
 import cv2
 import numpy as np
 
-from .prism_pose import (TRIANGLE_MIN_POINTS, classify_blob, robust_center, triangle_pose)
+from .prism_pose import (TRIANGLE_MIN_POINTS, robust_center, triangle_pose)
 
 SIDE = 0.045 / (np.sqrt(3) / 2)          # 0.052 m
 ALT = 0.045
@@ -135,37 +135,32 @@ def test_robust_center_ignores_outliers():
     assert robust_center(xy[:3]) is None
 
 
-def _blob(kind, size=40, shift=(0, 0), canvas=(120, 160), rot=0.3):
-    m = np.zeros(canvas, np.uint8)
-    c = np.array([canvas[1] / 2 + shift[0], canvas[0] / 2 + shift[1]])
+def _wrong_shape_cloud(kind, side, n=400, seed=0, rot=0.4):
+    rng = np.random.default_rng(seed)
     if kind == "cube":
-        pts = size / 2 * np.array([[1, 1], [-1, 1], [-1, -1], [1, -1]])
-    elif kind == "triangle":
-        R = size * 2 / 3
-        pts = R * np.array([[np.cos(a), np.sin(a)] for a in 2 * np.pi * np.arange(3) / 3 + 1.2])
-    if kind == "cylinder":
-        cv2.circle(m, tuple(int(v) for v in c), size // 2, 255, -1)
-    else:
-        Rm = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
-        cv2.fillPoly(m, [np.round(pts @ Rm.T + c).astype(np.int32)], 255)
-    return m
+        p = rng.uniform(-side / 2, side / 2, (n, 2))
+        R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
+        return p @ R.T
+    a, r = rng.uniform(0, 2 * np.pi, n), side / 2 * np.sqrt(rng.uniform(0, 1, n))   # cylinder, diameter = side
+    return np.stack([r * np.cos(a), r * np.sin(a)], -1)
 
 
-def test_classifier_shapes():
-    for kind in ("cube", "cylinder", "triangle"):
-        for size in (30, 40, 60):
-            for rot in (0.0, 0.3, 0.785):
-                lab, ratio = classify_blob(_blob(kind, size, rot=rot))
-                assert lab == kind, (kind, size, rot, ratio)
+def test_wrong_shape_gives_low_triangle_confidence():
+    """A cube / cylinder wrongly labelled triangle must end in conf < the planner's yaw_min_conf (0.5), whatever
+    its size (size term alone is fooled by a 30 mm cube; the fill term is not)."""
+    for kind in ("cube", "cylinder"):
+        for side in (0.03, 0.045, 0.06):
+            for seed in range(3):
+                tp = triangle_pose(_wrong_shape_cloud(kind, side, seed=seed))
+                assert tp is not None and tp[2] < 0.5, (kind, side, seed, tp[2])
 
 
-def test_classifier_border_guard_and_tiny():
-    m = _blob("cube", 40, shift=(70, 0))              # pushed against the right edge
-    assert m[:, -1].any()
-    assert classify_blob(m)[0] is None
-    assert classify_blob(_blob("cube", 40, shift=(-65, 0)))[0] is None   # touches the left edge
-    assert classify_blob(_blob("cube", 6))[0] is None                    # too small
-    assert classify_blob(np.zeros((50, 50), np.uint8))[0] is None
+def test_altitude_param_follows_scene_size():
+    rng = np.random.default_rng(3)
+    xy, c, a = make_cloud(rng, 400, 0.0, 0.0, apex=0.3)
+    xy50 = c + (xy - c) * (0.065 / ALT)
+    assert triangle_pose(xy50, altitude=0.065)[2] > 0.7
+    assert triangle_pose(xy50)[2] < 0.5          # default 45 mm expectation rejects a 65 mm part
 
 
 if __name__ == "__main__":

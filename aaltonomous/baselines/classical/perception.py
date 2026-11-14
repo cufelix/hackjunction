@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
+
 
 @dataclass
 class Detection:
@@ -49,8 +51,6 @@ class Perception:
         # opt-in shape / triangle pose (all default OFF = stock behaviour)
         self.classify_shape = bool(self.cfg.get("classify_shape", False))
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
-        shapes = (getattr(scene, "cfg", None) or {}).get("objects", {}).get("shapes") or []
-        self.scene_shape = shapes[0] if len(shapes) == 1 else None   # only one shape in the scene -> known
 
     def masks(self, rgb):
         import cv2
@@ -91,13 +91,12 @@ class Perception:
                 d = depth[v, u].astype(float) if depth is not None else np.zeros(len(u))
                 ok = (d >= dlo) & (d <= dhi)
                 det = None
-                shape = self._shape_of(blob)
                 if ok.sum() >= c["min_valid_depth_px"]:
-                    det = self._from_depth(color, u[ok], v[ok], d[ok], area, shape)
+                    det = self._from_depth(color, u[ok], v[ok], d[ok], area, blob)
                 if det is None:
                     det = self._from_plane(color, cent[i], area, int(ok.sum()))
                     if det is not None:
-                        det.shape = shape
+                        det.shape = self._shape_of(None, blob)
                 why = self._reject(det)
                 if why:
                     rejected.append((det, why))
@@ -146,16 +145,14 @@ class Perception:
             cv2.fillConvexPoly(keep, hull, 0)
         return keep
 
-    def _shape_of(self, blob):
-        """2D-blob shape label, or None (flags off, abstain). A single-shape scene gives the label directly."""
+    def _shape_of(self, top_xy, blob):
+        """Shape label, or None (flags off / abstain). Delegates to `classify_top_face` and decides nothing itself."""
         if not (self.classify_shape or self.triangle_pose):
             return None
-        if self.scene_shape is not None:
-            return self.scene_shape
-        from .prism_pose import classify_blob
-        return classify_blob(blob)[0]
+        shape = None if blob is None else blob.shape
+        return classify_top_face(top_xy, blob, shape)[0]
 
-    def _from_depth(self, color, u, v, d, area, shape=None):
+    def _from_depth(self, color, u, v, d, area, blob=None):
         P = self.cal.pixel_to_pelvis(self.cam, u, v, d)
         z_top = np.percentile(P[:, 2], self.cfg["top_percentile"])
         top = P[P[:, 2] >= z_top - self.cfg["top_band"]]
@@ -165,10 +162,11 @@ class Perception:
         w = (d[P[:, 2] >= z_top - self.cfg["top_band"]] / 1000.0) ** 2
         xy = (top[:, :2] * w[:, None]).sum(0) / w.sum()
         z = float(np.median(top[:, 2]))
+        shape = self._shape_of(top[:, :2], blob)
         apex_yaw, apex_conf = None, 0.0
         if shape == "triangle" and self.triangle_pose:
             from .prism_pose import robust_center, triangle_pose
-            tp = triangle_pose(top[:, :2])
+            tp = triangle_pose(top[:, :2], altitude=self.size)
             if tp is not None:
                 apex_yaw, apex_conf = float(tp[1]), float(tp[2])
             rc = robust_center(top[:, :2])
