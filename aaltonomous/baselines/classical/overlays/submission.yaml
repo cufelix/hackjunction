@@ -8,6 +8,7 @@
 name: submission
 flags:
   instruction.resolve: false                    # Felix #1   instruction -> mapping
+  policy.bin_lookup: colour                     # round 8    colour | resolve_bin (shape / pair / default keys)
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
   perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
   perception.classify_shape: false              # Oliver #5/#7 shape from the top face

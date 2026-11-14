@@ -21,13 +21,15 @@ POSTURES = ("open", "preshape", "closed")
 STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config value (base + profile, no overlay)
 # Limits an overlay may never exceed (hard rule: nothing may move faster than the stock sim profile).
 LIMITS = {"motion.carry_scale": (0.0, 1.0)}
-CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight")}
+CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight"),
+           "policy.bin_lookup": ("colour", "resolve_bin")}
 VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
 
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
 FLAGS = {
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
+    "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
     "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
     "perception.self_calibration.enabled": ("Timi calib", False,
                                             "per-episode head-camera xy offset from the bin walls (depth)"),

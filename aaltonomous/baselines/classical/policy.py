@@ -31,7 +31,7 @@ from aaltonomous.scene.scene import Scene, resolve_bin
 from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Planner
+from .planner import Planner, lookup_bin
 
 HZ = 30.0
 
@@ -381,7 +381,7 @@ class ClassicalPolicy:
             cands.append(d)
         if self.cfg["policy"]["order"] == "nearest_bin":
             def base(d):
-                b = resolve_bin(self.mapping, d.color, getattr(d, "shape", None))
+                b = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
                 return np.inf if b is None else np.linalg.norm(d.top[:2] - self.planner.bin_xy(b))
         else:
             def base(d):
@@ -414,7 +414,7 @@ class ClassicalPolicy:
                     continue
             others = [o.top[:2] for o in dets if o is not d]
             if verify:  # #6: explicit target bin + a free, verified drop slot
-                target_bin = resolve_bin(self.mapping, d.color, getattr(d, "shape", None))
+                target_bin = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
                 if target_bin is None:
                     continue
                 slot = self._next_drop_slot(target_bin)
@@ -426,7 +426,7 @@ class ClassicalPolicy:
                 p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
                                       drop_slot=slot)
             elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
-                target_bin = resolve_bin(self.mapping, d.color, getattr(d, "shape", None))
+                target_bin = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
                 slot = None
                 if target_bin is not None:
                     free = [i for i in range(len(self.planner.drop_slots(target_bin)))
@@ -438,6 +438,9 @@ class ClassicalPolicy:
                 p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
                                       drop_slot=slot)
             else:
+                if lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None)) is None:
+                    self.log(f"[classical] no bin for {d.color}/{getattr(d, 'shape', None)}: leave it on the counter")
+                    continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
                 p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, obstacles=others)
             self.plans.append(p)
             if p.ok:
@@ -491,7 +494,7 @@ class ClassicalPolicy:
         corrections = []
         yellow_unknown = bool(self.cfg["policy"].get("verify_yellow_unknown", False))
         for d, footprint_bin in bin_dets:
-            target_bin = resolve_bin(self.mapping, d.color)
+            target_bin = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
             score_bin = self._score_bin(d)
             scored.append((d, footprint_bin, score_bin))
             if score_bin is not None and score_bin == target_bin:

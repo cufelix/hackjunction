@@ -28,6 +28,16 @@ from aaltonomous.scene.scene import resolve_bin
 from .kinematics import ArmKinematics
 
 
+def lookup_bin(cfg, mapping, color, shape=None):
+    """Target bin of a detection. policy.bin_lookup: colour (stock: mapping[colour]) | resolve_bin (scene.resolve_bin:
+    (colour, shape) -> colour -> shape -> "default"; shape None = abstain -> only colour / default apply).
+    None or "abstain" = do not pick (the object stays on the counter: 0 points, never -1)."""
+    if (cfg.get("policy") or {}).get("bin_lookup", "colour") != "resolve_bin":
+        return mapping.get(color)
+    b = resolve_bin(mapping, color, shape)
+    return None if b in (None, "abstain") else b
+
+
 @dataclass
 class Plan:
     ok: bool
@@ -289,7 +299,7 @@ class Planner:
         the next look re-detects the object there. obstacles: (n, 2) pelvis xy of the other detected objects.
         Returns the first Plan that passes every check, else the last failure."""
         g = self.cfg["grasp"]
-        bin_name = bin_name or resolve_bin(self.mapping, det.color, getattr(det, "shape", None))
+        bin_name = bin_name or lookup_bin(self.cfg, self.mapping, det.color, getattr(det, "shape", None))
         by = self.bin_xy(bin_name)[1] if bin_name is not None else 0.0
         ref = by if abs(by) > 0.1 else det.top[1]
         side0 = "left" if ref > g["y_split"] else "right"
@@ -368,7 +378,7 @@ class Planner:
         """
         last = Plan(False, color=det.color, source_bin=source_bin, corrective=True,
                     reason="no safe counter cleanup spot")
-        target_bin = resolve_bin(self.mapping, det.color)
+        target_bin = lookup_bin(self.cfg, self.mapping, det.color, getattr(det, "shape", None))
         for spot in self.relocation_spots(det, target_bin, obstacles):
             for side in ("left", "right"):
                 p = self._plan_side_hints(det, side, target_bin, np.asarray(arm_q, float), np.asarray(hand_q, float),

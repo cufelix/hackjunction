@@ -44,6 +44,8 @@ class TestFlags(unittest.TestCase):
                   "ab_slots": {"grasp.drop_slots"}, "ab_hold12_slots": {"motion.close_hold_s", "grasp.drop_slots"},
                   "ab_carry05": {"motion.carry_scale"}, "ab_calib": {"perception.self_calibration.enabled"},
                   "ab_yaff": {"perception.y_affine"},
+                  "ab_lang_full": {"instruction.resolve", "perception.classify_shape", "perception.no_blob_shape",
+                                   "policy.bin_lookup"},
                   "ab_verify_lang": {"policy.verify_placement", "policy.verify_yellow_unknown",
                                      "policy.max_corrections_per_episode"}}
         for name, keys in expect.items():

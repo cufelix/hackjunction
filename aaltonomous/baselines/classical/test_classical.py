@@ -714,5 +714,51 @@ class TestRound3Flags(unittest.TestCase):
                 self.assertEqual(b[c][0], a[c][0])
 
 
+class TestBinLookup(unittest.TestCase):
+    """policy.bin_lookup (round 8): colour (stock) | resolve_bin (shape / (colour, shape) / default / abstain)."""
+    RB = {"policy": {"bin_lookup": "resolve_bin"}}
+    COL = {"policy": {"bin_lookup": "colour"}}
+
+    def test_lookup_rules(self):
+        from .planner import lookup_bin
+        shape_only = {"cube": "left", "cylinder": "center", "triangle": "right"}
+        self.assertEqual(lookup_bin(self.RB, shape_only, "red", "cylinder"), "center")
+        self.assertIsNone(lookup_bin(self.RB, shape_only, "red", None))          # shape abstain: no guess
+        self.assertIsNone(lookup_bin(self.COL, shape_only, "red", "cylinder"))   # stock colour lookup misses it
+        pair = {("red", "cube"): "right", "red": "left", "default": "center"}
+        self.assertEqual(lookup_bin(self.RB, pair, "red", "cube"), "right")      # most specific wins
+        self.assertEqual(lookup_bin(self.RB, pair, "red", "triangle"), "left")
+        self.assertEqual(lookup_bin(self.RB, pair, "red", None), "left")
+        self.assertEqual(lookup_bin(self.RB, pair, "blue", "cube"), "center")    # default ("all but X")
+        self.assertEqual(lookup_bin(self.RB, pair, "blue", None), "center")
+        self.assertIsNone(lookup_bin(self.COL, pair, "blue", "cube"))
+        abst = {"red": "abstain", "blue": "left"}
+        self.assertIsNone(lookup_bin(self.RB, abst, "red", "cube"))
+        self.assertEqual(lookup_bin(self.RB, abst, "blue", None), "left")
+        from aaltonomous.interface.tasks import FIXED_MAPPING
+        for c in FIXED_MAPPING:                                                 # flags-off: identical
+            self.assertEqual(lookup_bin(self.RB, FIXED_MAPPING, c, None), lookup_bin(self.COL, FIXED_MAPPING, c))
+
+    def _look(self, mapping, **ov):
+        pol = ClassicalPolicy(config=load_config(overrides={"policy.bin_lookup": "resolve_bin", **ov}), log=None)
+        pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
+        pol.reset({"mapping": mapping})
+        pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
+        ob = dict(color="red", shape="cube", yaw=0.0, size=SC.size, height=SC.object_height(),
+                  pos=SC.mat_to_pelvis([0.40, 0.15, SC.object_height() / 2]))
+        rgb, depth = Renderer(SC, CAL).render([ob])
+        return pol._look({"head_rgb": rgb, "head_depth": depth, "t": 5.0})
+
+    def test_policy_default_shape_and_abstain(self):
+        res = self._look({"blue": "left", "default": "right"})
+        self.assertEqual((res[0], res[1].target_bin), ("plan", "right"))
+        res = self._look({"cube": "center"}, **{"perception.classify_shape": True})   # shape from the top face
+        self.assertEqual((res[0], res[1].target_bin), ("plan", "center"))
+        res = self._look({"red": "abstain", "blue": "left"})
+        self.assertEqual(res[0], "none")                                        # stays on the counter
+        res = self._look({"cube": "center"})                                    # classify_shape off: shape None
+        self.assertEqual(res[0], "none")
+
+
 if __name__ == "__main__":
     unittest.main()

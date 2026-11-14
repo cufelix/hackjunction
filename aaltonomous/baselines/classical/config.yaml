@@ -182,6 +182,8 @@ policy:
   max_corrections_per_episode: null   # FLAG (Felix #6 review). Cap on corrective picks; set = counter picks first,
                                       # an unplannable correction no longer ends the episode (null = stock #6)
   order: nearest_bin          # nearest_bin | largest
+  bin_lookup: colour          # FLAG (round 8). colour = stock mapping[colour] | resolve_bin = scene.resolve_bin
+                              # ((colour, shape) -> colour -> shape -> default; None/abstain -> stays on the counter)
   # Time triage (default off = old behaviour: the first plan that does not fit the time left ends the episode).
   # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
   # lazily; the episode ends only when nothing fits. Plans are NOT computed for every candidate (IK 0.3-6 s each).
