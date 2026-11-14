@@ -65,15 +65,16 @@ class TestDetectProfile(unittest.TestCase):
         self.assertEqual(profile, "sim")
         self.assertEqual(info["palette"], "inconclusive")
 
-    def test_three_good_frames_beat_two_bad_frames(self):
-        bad = _frame(SIM_OBJS, depth_fn=lambda: _plane_mm(np.random.default_rng(3)))   # moving arm / odd depth
-        profile, info = detect_profile([sim_frame(), bad, sim_frame(), bad, sim_frame()])
-        self.assertEqual(profile, "sim")
-        self.assertEqual(info["votes"], 3)
-
-    def test_two_of_four_is_not_a_majority(self):
+    def test_one_bad_frame_of_five_is_none(self):
+        # unanimity: a single moving-arm / odd-depth frame (counter std 3 mm) sends the whole decision to none
         bad = _frame(SIM_OBJS, depth_fn=lambda: _plane_mm(np.random.default_rng(3)))
-        self.assertEqual(detect_profile([sim_frame(), sim_frame(), bad, bad])[0], "none")
+        profile, info = detect_profile([sim_frame(), sim_frame(), bad, sim_frame(), sim_frame()])
+        self.assertEqual(profile, "none")
+        self.assertEqual(info["votes"], 4)
+
+    def test_four_sim_plus_one_noisy_frame_is_none(self):
+        bad = _frame(SIM_OBJS, depth_fn=lambda: _plane_mm(np.random.default_rng(3)))
+        self.assertEqual(detect_profile([sim_frame()] * 4 + [bad])[0], "none")
 
     def test_real_like_frames_are_none(self):
         profile, info = detect_profile([real_frame(i) for i in range(5)])
@@ -86,8 +87,12 @@ class TestDetectProfile(unittest.TestCase):
         noisy = _frame(SIM_OBJS, depth_fn=lambda: _plane_mm(np.random.default_rng(4), holes=0.05))
         self.assertEqual(detect_profile([noisy] * 5)[0], "none")
 
-    def test_real_palette_vetoes_a_good_depth_frame(self):
-        self.assertEqual(detect_profile([_frame(REAL_OBJS)] * 3)[0], "none")
+    def test_purple_palette_is_log_only(self):
+        # purple (real) measures inside the sim blue band; the palette must not change the vote
+        profile, info = detect_profile([_frame(REAL_OBJS)] * 5)
+        self.assertEqual(info["palette"], "real")
+        self.assertEqual(profile, "sim")
+        self.assertEqual(info["votes"], 5)
 
     def test_missing_depth_on_all_frames_is_none(self):
         frames = []

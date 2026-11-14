@@ -8,8 +8,9 @@ Gate: flag profile_auto.auto_detect (default OFF; ClassicalServerPolicy). Two si
           red / blue / yellow, real ones orange / purple / yellow. Bands from config.yaml perception.hsv (sim DR red H
           0-7 / 170-179, blue H 100-116; real purple H 108-127). Yellow (22-35) is shared and orange (9-21) is neutral:
           sim bins are H ~12 as well, so only purple counts as a real vote. Raised, object-sized blobs only.
-Per-frame vote: sim iff the depth signal says sim AND palette is not "real". An inconclusive palette (e.g. no objects in
-view) does not veto. Missing depth votes none. Decision: sim iff votes_sim > N/2 over the N inspected frames, else none.
+Per-frame vote: sim iff the depth signal says sim (palette is computed for the log only: real purple measures H110,
+inside the sim blue band, so a palette veto never fired on real frames). Missing depth votes none.
+Decision: sim iff EVERY inspected frame votes sim (unanimity, N >= 1), else none.
 """
 from __future__ import annotations
 
@@ -103,7 +104,7 @@ def _frame(obs):
     if rgb is not None and np.ndim(rgb) == 3 and (depth is None or np.ndim(depth) != 2 or np.shape(rgb)[:2] == np.shape(depth)):
         out["palette"], out["sim_px"], out["real_px"] = _palette(
             rgb, depth if depth is not None and np.ndim(depth) == 2 else None, coef, norm)
-    out["sim"] = out["depth_sim"] and out["palette"] != "real"
+    out["sim"] = out["depth_sim"]   # palette is log-only (see module docstring)
     return out
 
 
@@ -118,4 +119,4 @@ def detect_profile(frames):
     votes = sum(p["sim"] for p in per)
     info = {"frames": len(per), "votes": votes, "depth_holes": max(p["holes"] for p in per),
             "plane_std_mm": max(p["plane_std_mm"] for p in per), "palette": palette, "per_frame": per}
-    return ("sim" if votes * 2 > len(per) else "none"), info
+    return ("sim" if votes == len(per) else "none"), info   # unanimity: any non-sim frame -> none

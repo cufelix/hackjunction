@@ -33,8 +33,8 @@ VECTORS = {"grasp.point_in_palm": 3, "grasp.cage_point_in_palm": 3, "grasp.cage_
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
 FLAGS = {
-    "profile_auto.auto_detect": ("profile auto", False, "no AALTO_PROFILE/arg: pick sim | none (real) from the first frames (profile_detect.py); sim only if every frame passes depth + palette"),
-    "profile_auto.auto_frames": ("profile auto", 5, "frames inspected before the profile is chosen (zero-row holds meanwhile), >= 1; sim needs > half of them"),
+    "profile_auto.auto_detect": ("profile auto", False, "no AALTO_PROFILE/arg: pick sim | none (real) from the first frames (profile_detect.py); sim only if EVERY frame passes depth (palette is log-only)"),
+    "profile_auto.auto_frames": ("profile auto", 5, "frames inspected before the profile is chosen (zero-row holds meanwhile), >= 1; sim needs ALL frames; palette is log-only"),
     "profile_auto.sim_overrides": ("profile auto", {}, "auto-detect=sim only: dotted key -> value applied as load_config overrides (sim-breaking finals flags back to rc1); real robot keeps the overlay values"),
     "brain.backend": ("brain", "stub", "stub (= classical choice) | llamacpp (bounded async HTTP + GBNF)"),
     "brain.url": ("brain", "http://127.0.0.1:8080/completion", "llama.cpp server for brain.backend=llamacpp"),
