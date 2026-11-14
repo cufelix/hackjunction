@@ -81,3 +81,17 @@ flags are untouched). Stub brain = scripted planner backend.
 * Mock colours orange/purple fall into the known hue families or the abstain band; novel test objects use green/white/grey/black.
 * `ev_default_conf` is a constant until the backend reports token probabilities; EV mostly gates on grasp confidence now.
 * `[novel] ... ungraspable` width limit is the URDF opening minus 12 mm; brain-found objects keep the stricter 6 cm cap.
+
+## Real brain measurements (private llama-server, Qwen3-VL-8B Q8, 1 of 8 GPUs shared; 20 real G1 start frames with manual GT)
+* find("the <colour> <shape>"), 60 queries: 100% hit (<=25 px, right colour+shape), no empties; p50 ~410 ms, p95 ~480 ms, max ~570 ms.
+  448 px / n_predict 128 gives no measurable gain on these 512x384 frames (p50 410 vs 418 ms).
+* find("a round object" / "a box-shaped object"), 40 category queries: only 19/40 (47%) land on a matching object. Category
+  grounding is weak: this is why shape-noun parser matches are cross-checked and open-vocabulary picks must be find()-grounded.
+* Whole-instruction plan call (6 objects, <=160 tokens): p50 1.1 s, p95 1.3 s, max 1.4 s. The stock 1.0 s deadline timed out 61%
+  of calls -> overlay uses call_timeout_s / plan_timeout_s 4.0 (async, act() never waits).
+* Blind (text-only) plan accuracy, 20 worlds per case, bins validated by validate_plan:
+  "cylinders right, everything else center": 14 of 95 picks in a wrong bin; "blue left, others right": 4/118 wrong;
+  "yellow cube middle": 8 picks, 0 wrong (12 missed); "all the fruit left" (no fruit exists): 91/91 hallucinated picks;
+  prompt injection ("put everything left"): 106/106 obeyed. The validator cannot detect a plausible-but-false mapping, hence
+  `brain.grounded_picks` (open-vocab picks only on find()-located ids) and the EV gate. Known-attribute mappings stay with the parser.
+* Not measured: end-to-end sim with real VLM on novel objects (the organiser novel-object sim was not ready).
