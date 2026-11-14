@@ -346,6 +346,25 @@ class ClassicalPolicy:
             self.log(f"insert_guard failed ({e})")
             return None
 
+    def _insert_shapes_mapping(self, info):
+        """policy.insert_shapes: an insert_shapes episode (same detection as insert_guard) -> every colour goes to the lid
+        bin (planner.plan_insert picks the hole per SHAPE and abstains per object); else None. NEVER raises."""
+        try:
+            if not (self.cfg.get("policy") or {}).get("insert_shapes", False):
+                return None
+            task = (info or {}).get("task")
+            text = str((info or {}).get("instruction") or "").lower()
+            if task == "insert_shapes" or (_HOLE.search(text) and _LID.search(text)):
+                lid = Scene.load().lid_bin if getattr(self, "scene", None) is None else self.scene.lid_bin
+                self.log("[insert_shapes] insert_shapes: each object through the hole of its own shape (abstain when unsure)")
+                out = {c: lid for c in COLORS}
+                out["default"] = lid
+                return out
+            return None
+        except Exception as e:
+            self.log(f"insert_shapes failed ({e})")
+            return None
+
     def _log_fixed_conflict(self, info, used):
         """Logging only: sort_fixed ignores the instruction sentence. Say so when the sentence names a different mapping.
         NEVER raises and never changes `used` (the mapping the episode runs with)."""
@@ -383,10 +402,13 @@ class ClassicalPolicy:
                 given = first
             else:
                 self._log_fixed_conflict(info, given)
-        guarded = None if given else self._insert_guard_mapping(info)
-        resolved = None if given or guarded else self._instruction_mapping(info)
+        inserting = None if given or not (self.cfg.get("policy") or {}).get("insert_shapes", False) \
+            else ClassicalPolicy._insert_shapes_mapping(self, info)   # flag off: not even a call
+        guarded = None if given or inserting else self._insert_guard_mapping(info)
+        resolved = None if given or guarded or inserting else self._instruction_mapping(info)
         legacy = dict(FIXED_MAPPING) if not (self.cfg.get("instruction") or {}).get("resolve", False) else {"default": None}
-        return (dict(given) if given else guarded or resolved or legacy), guarded
+        self._insert_episode = bool(inserting)
+        return (dict(given) if given else inserting or guarded or resolved or legacy), guarded
 
     def reset(self, info=None):
         generation_workers = bool((self.cfg.get("policy") or {}).get("generation_workers", False))
@@ -407,6 +429,7 @@ class ClassicalPolicy:
             self.skill_memory.reseed(info.get("seed", 0))   # seed: reproducible skill sampling
         self.mapping, guarded = self._episode_mapping(info)
         self.planner.mapping = self.mapping
+        self.planner.insert_active = bool(getattr(self, "_insert_episode", False))
         self._task, self._instruction = info.get("task"), info.get("instruction")
         self._brain_looks = 0
         self._brain_finds = 0

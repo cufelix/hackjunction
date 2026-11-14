@@ -257,6 +257,8 @@ class Planner:
         self._neutral_fallback = None   # plan(): first complete plan that only failed the obstacle check
         self.neutral_src = None  # perception.neutral_obstacles: object with .neutral_obstacles (set by the policy); None = off
         self.bin_conf = {}     # bin.vote: bin name -> confidence in bin_shift (1.0 agree, 0.5 prior only, 0.3 disagree)
+        self.insert_active = False   # policy.insert_shapes: the policy turns it on for an insert_shapes episode only
+        self.insert_target = None    # plan_insert: {xy, z_top, gap} of the hole being planned for (None = stock release)
         self.generic_hand_opening = None
         if cfg["grasp"].get("generic", False):
             tips = self.kin.tips_in_palm("left", self.post["open"])
@@ -692,6 +694,8 @@ class Planner:
         """perception.neutral_obstacles: the obstacle-constrained search is bounded by neutral_params.plan_timeout_s. If no
         plan passes the obstacle check in that time, fail OPEN: return the first complete plan that only violated the
         obstacle check (the stock plan) and log one line. No footprint obstacle (or flag off): exactly _plan_core."""
+        if self.insert_active:   # policy.insert_shapes (rung 3), only ever set for an insert_shapes episode
+            return self.plan_insert(det, arm_q, hand_q, obstacles)
         if not self.neutral_boxes():
             return self._plan_core(det, arm_q, hand_q, bin_name, obstacles, relocate, drop_slot, source_bin,
                                    clearance_obstacles)
@@ -747,6 +751,102 @@ class Planner:
                 return r
             last.reason += f"; relocate: {r.reason}"
         return last
+
+    # ------------------------------------------------------------------ rung 3 (policy.insert_shapes)
+    def _heading_at(self, side, q):
+        """Palm-x (finger direction) heading, pelvis rad, of the arm vector q."""
+        self.kin._fk(q)
+        x = self.kin.data.oMf[self.kin.palm[side]].rotation[:, 0]
+        return float(np.arctan2(x[1], x[0]))
+
+    def plan_insert(self, det, arm_q, hand_q, obstacles=()):
+        """Pick `det` and release it centred over the hole of its own shape in the lid (left arm). Abstains (failed Plan,
+        the object stays on the counter: 0 points) unless every check passes: confident metric shape, a grasp whose
+        finger heading matches the object, IK of the carry / lower to the hole centre within insert.max_pos_err_m and
+        the tilt budget, residual yaw <= insert.max_yaw_err_deg, no safety clips. Never a release over solid lid."""
+        from . import insert_shapes as ins
+        ic = self.cfg.get("insert") or {}
+        g = self.cfg["grasp"]
+        lid, side = self.scene.lid_bin, "left"
+        last = Plan(False, side=side, color=det.color, target_bin=lid, reason="insert: no feasible grasp")
+
+        def fail(why):
+            last.reason = f"insert: {why}"
+            return last
+        ok, why = ins.decide(det, ic)
+        if not ok:
+            return fail(why)
+        shape = det.shape
+        zc = self.scene.counter_z
+        z_top = zc + self._wall(self.scene.rim_wall(lid)) + float(self.scene.cfg["lid"]["thickness"])
+        tgt = ins.hole_targets(self.scene, z_lid_top=z_top, offsets_mat=ic.get("hole_offsets_mat"),
+                               margin=ic.get("hole_margin_m"))[shape]
+        oy = ins.object_yaw(det, shape)
+        if shape != "cylinder" and oy is None:
+            return fail(f"{shape} yaw unknown")
+        heads = ins.grasp_headings(shape, oy, side, float(g.get("yaw_ref_deg", 25.0)), float(g.get("yaw_max_dev_deg", 75.0)),
+                                   float(g.get("yaw_phi_deg", 105.0)), int(ic.get("max_headings", 2)))
+        w = float(g.get("yaw_hint_weight", 3.0))
+        saved = (self.kin.hint, self.kin.w_hint)
+        reasons = []
+        try:
+            for a_g in heads:
+                a_d = ins.drop_heading(shape, oy, tgt["yaw"], a_g, side, float(g.get("yaw_ref_deg", 25.0)),
+                                       float(g.get("yaw_max_dev_deg", 75.0)))
+                if a_g is not None and a_d is None:
+                    reasons.append(f"heading {np.degrees(a_g):.0f}: hole yaw out of the wrist range")
+                    continue
+                self.insert_target = {"xy": tgt["xy"], "z_top": z_top, "gap": float(ic.get("release_gap_m", 0.006))}
+                try:
+                    if a_g is None:     # cylinder: any heading holds a round object, stock finger hints
+                        p = self._plan_side_legacy(det, side, lid, np.asarray(arm_q, float), np.asarray(hand_q, float))
+                    else:
+                        self.kin.hint, self.kin.w_hint = np.array([np.cos(a_g), np.sin(a_g), 0.0]), w
+                        self._carry_hint = (np.array([np.cos(a_d), np.sin(a_d), 0.0]), w)
+                        p = self._plan_side(det, side, lid, np.asarray(arm_q, float), np.asarray(hand_q, float))
+                finally:
+                    self.insert_target, self._carry_hint = None, None
+                    self.kin.hint, self.kin.w_hint = saved
+                if not p.ok:
+                    reasons.append(p.reason)
+                    continue
+                bad = self._insert_check(p, side, tgt, shape, oy, a_g, a_d, z_top, ic, g)
+                if bad:
+                    reasons.append(bad)
+                    continue
+                p.reason = f"insert {ins.SHAPE_HOLE[shape]} hole ({tgt['xy'][0]:.3f}, {tgt['xy'][1]:.3f})"
+                return p
+        finally:
+            self.insert_target, self._carry_hint = None, None
+            self.kin.hint, self.kin.w_hint = saved
+        return fail("; ".join(dict.fromkeys(reasons)) or "no grasp heading")
+
+    def _insert_check(self, p, side, tgt, shape, oy, a_g, a_d, z_top, ic, g):
+        """Post-plan precision gates of an insert plan -> reason string, or None when it passes."""
+        from . import insert_shapes as ins
+        carry = next((e for n, s, e in p.phases if n == "carry"), None)
+        if carry is None:
+            return "no carry phase"
+        q_end = p.arm[carry - 1]
+        pt, axis = self.kin.grasp_pose(side, q_end)
+        err = float(np.linalg.norm(pt[:2] - tgt["xy"]))
+        if err > float(ic.get("max_pos_err_m", 0.004)):
+            return f"release {1000 * err:.0f} mm off the hole centre"
+        tilt = float(np.degrees(np.arccos(np.clip(axis @ np.array([0.0, 0.0, -1.0]), -1.0, 1.0))))
+        if tilt > float(ic.get("max_tilt_deg", 8.0)):
+            return f"tilt {tilt:.0f} deg at the release"
+        H = self.height
+        bottom = float(pt[2]) - float(g["height_frac"]) * H
+        if not ins.release_gap_ok(bottom, z_top):
+            return f"release gap {1000 * (bottom - z_top):.0f} mm over the lid"
+        if a_g is not None:
+            ag, ad = self.finger_heading(p), self._heading_at(side, q_end)
+            if ag is None:
+                return "no descend phase"
+            yerr = ins.yaw_error_deg(shape, oy, ag, ad, tgt["yaw"])
+            if yerr > float(ic.get("max_yaw_err_deg", 8.0)):
+                return f"yaw error {yerr:.0f} deg at the release"
+        return None
 
     def plan_place_at(self, det, arm_q, hand_q, table_xy, obstacles=()):
         """Dry-run/produce the existing pick-and-place motion with a table release point.
@@ -1284,9 +1384,13 @@ class Planner:
         else:                  # #6: the assigned drop slot
             slots = self.drop_slots(bin_name)
             bxy = slots[min(int(drop_slot), len(slots) - 1)]
+        if self.insert_target is not None and place_xy is None:   # policy.insert_shapes: release over the hole
+            bxy = np.asarray(self.insert_target["xy"], float)
+            z_drop = float(self.insert_target["z_top"]) + float(self.insert_target["gap"]) + hfrac * H  # bottom = gap over the lid
+            z_drop = min(z_drop, z_carry)
         stock_bxy, stock_z_drop = np.asarray(bxy, float).copy(), float(z_drop)
         drop_adjustment_on, adjusted = False, False
-        if place_xy is None and (g.get("drop_height_extra_m", 0.0) or g.get("drop_lateral_margin_m", 0.0)):
+        if place_xy is None and self.insert_target is None and (g.get("drop_height_extra_m", 0.0) or g.get("drop_lateral_margin_m", 0.0)):
             drop_adjustment_on = True
             bxy, z_drop, adjusted = self._adjusted_drop_target(side, bin_name, bxy, z_drop, qg, z_max=z_carry)
         P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry) + float(g.get("approach_extra_m", 0.0))], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],

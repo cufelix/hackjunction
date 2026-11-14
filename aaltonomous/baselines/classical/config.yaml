@@ -650,6 +650,19 @@ held:
   soft_read_after_s: 0.4      # close read >= this long after lag + settle (after the close ramp ends)
   soft_prior_ratio: 0.15      # empty-close error / travel when the episode-start baseline did not run (fraction of travel)
 
+insert:                       # policy.insert_shapes parameters (read only when the flag is on)
+  min_shape_conf: 0.7         # shape label confidence; below = abstain (a wrong label = the wrong hole)
+  require_metric: true        # shape_path must be 'metric' (top-face point cloud), never the 2D blob
+  release_gap_m: 0.006        # object bottom above the lid plate at the release
+  max_pos_err_m: 0.004        # IK xy error of the release point vs the hole centre (hole margin is 5 mm per side)
+  max_yaw_err_deg: 8.0        # residual yaw of the held object vs the hole (square/triangle)
+  max_tilt_deg: 8.0           # approach axis vs vertical at the release (the object must enter upright)
+  max_headings: 2             # grasp headings tried per object
+  hole_offsets_mat: null      # {cube: [dx, dy], cylinder: [dx, dy]} hole centre offsets (mat axes, m) from the lid-bin centre for a
+                              # physically different lid; null = scene.yaml layout (authoritative in sim). Printed 200 mm lid, if
+                              # +y_lid points away from the robot: {cube: [-0.048, -0.035], cylinder: [0.048, -0.035]}
+  hole_margin_m: null         # per-side object-to-hole clearance override (null = scene lid.hole_clearance / 2)
+
 policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)
   safety_shell_vel_reserve: 0.0  # with safety_shell: >0 slows every plan to <= (1 - this) x the SafetyFilter velocity limit (e.g. 0.2); 0 = plans untouched
@@ -666,6 +679,10 @@ policy:
   insert_guard: false         # FLAG (insert). insert_shapes (task id or 'hole ... lid' sentence): abstain on every
                               # object. The lid holes are 3-10 cm past the arm's IK reach (probe 2026-11-14), and a
                               # release over the lid bin scores -1 (forced); doing nothing scores 0.
+  insert_shapes: false        # FLAG (insert). insert_shapes: shape -> hole, release centred over the matching lid hole with the
+                              # left arm (planner.plan_insert, params: insert: below). Abstains per object when the hole is out of
+                              # reach (always today: grasp point stops at x ~ 0.485, holes at 0.52-0.57) or a budget fails.
+                              # Supersedes insert_guard on an insert_shapes episode.
   same_object_radius: 0.03
   verify_placement: false     # FLAG (#6, Timi). Look into the bins after every release: verify the placement, correct
                               # wrong-bin / unscored objects, distinct drop slots (grasp.drop_slot_*), time reserves below
