@@ -353,10 +353,10 @@ class Drills:
         run, pol, env = self.go(mutate=mut)
         self.assert_safe(run, pol, env, "nan_joints")
 
-    @known("submission", "finals_r21", "finals_r22_robust",
-           reason="residual: whole hand_q NaN on the very FIRST tick has no last action and no earlier reading, so nan_guard "
-                  "falls back to the open posture = a 1.5 rad hand jump the SafetyFilter clips for 7 ticks (safe, but not 0 clips); "
-                  "submission has no nan_guard at all (ValueError). Not fixable without a pose to hold.")
+    @known("submission",
+           reason="submission has safety.nan_guard OFF: a whole-hand NaN on the first tick reaches the planner (ValueError). "
+                  "With the flag on, nan_guard holds the last hand command, or a neutral pose within one safety-filter step "
+                  "of the URDF lower-limit-clamped neutral, so the filter does not clip.")
     def test_02b_nan_whole_hand_on_the_first_tick(self):
         def mut(o, i):
             if i == 0:

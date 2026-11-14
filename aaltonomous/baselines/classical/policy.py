@@ -252,6 +252,8 @@ class ClassicalPolicy:
         self._summary_logged = False
         self._relook_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
+        self._hand_seen = False     # safety.nan_guard: a fully finite hand_q has been observed this episode
+        self._hand_hold = None      # safety.nan_guard: hand command used while no finite hand_q has been seen
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
         # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
         lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
@@ -504,9 +506,48 @@ class ClassicalPolicy:
             return home.copy()
         return np.where(np.isfinite(v), v, home)
 
+    @staticmethod
+    def _hand_vals(q):
+        """(14,) float hand vector, or None when the reading is missing or the wrong shape."""
+        try:
+            v = np.asarray(q, float).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if v.shape != (14,):
+            return None
+        return v
+
+    def _cold_hand(self):
+        """Hand target when no finite hand_q has ever been seen.
+
+        Last command if we already sent one (hand_cmd, else the cold hold). Otherwise hold the neutral/rest
+        posture (neutral inside the filter's position margin), rate-limited from the URDF lower-limit-clamped
+        neutral so no step exceeds the safety filter's per-tick limit. The open posture is 1.5 rad from that
+        neutral. The policy motion cap is tighter than the filter on the sim profile, so the step respects both."""
+        if self.hand_cmd is not None:
+            h = np.asarray(self.hand_cmd, float).reshape(-1)
+            if h.shape == (14,) and np.all(np.isfinite(h)):
+                return h.copy()
+        if self._hand_hold is not None:
+            return np.asarray(self._hand_hold, float).copy()
+        neutral = np.asarray(self.kin.q0, float)[np.asarray(self.kin.hand_iq, int)]
+        lo, hi = np.asarray(self.spec.hand_lower, float), np.asarray(self.spec.hand_upper, float)
+        origin = np.minimum(np.maximum(neutral, lo), hi)   # URDF lower-limit clamp; upper keeps it a legal command
+        # Rest is that neutral inside the filter's position margin. A raw 0 on a joint whose URDF limit is 0 is
+        # silently moved to the margin, and the next real command then leaves the held 0 faster than hand_max_vel.
+        rest = np.clip(origin, self._held_hand_lo, self._held_hand_hi)
+        step = float(self.safety.hand_max_vel) * float(self.safety.dt)
+        step = min(step, float(self.cfg["motion"]["hand_max_vel"]) / HZ)
+        h = origin + np.clip(rest - origin, -step, step)
+        self._hand_hold = h.copy()
+        return h
+
     def _nan_guard(self, obs):
         """Non-finite arm_q / hand_q: skip the planner this tick and hold the last emitted action (before any action this
-        episode: measured-or-home pose, see _fallback_pose). Non-finite head_depth pixels -> 0 = missing depth: perception keeps only
+        episode: measured-or-home pose, see _fallback_pose). A hand_q that is entirely non-finite before any finite
+        reading has no pose to hold: command the last hand command, else a neutral/rest posture within one safety-filter
+        step of the URDF lower-limit-clamped neutral (the open posture would be a 1.5 rad jump). Once a finite hand_q
+        arrives, the ordinary path resumes. Non-finite head_depth pixels -> 0 = missing depth: perception keeps only
         depth_range_mm (config.yaml, 150..2000 mm) so 0 is invalid there (perception.py:369, :336). All-finite obs: returned
         as is. Returns (obs, hold_action or None)."""
         if not isinstance(obs, dict):
@@ -519,6 +560,9 @@ class ClassicalPolicy:
                     bad_q = bad_q or not bool(np.all(np.isfinite(np.asarray(v, float))))
                 except (TypeError, ValueError):
                     pass   # malformed: _act's own handling is unchanged
+        hand = self._hand_vals(obs.get("hand_q"))
+        if hand is not None and bool(np.all(np.isfinite(hand))):
+            self._hand_seen = True
         dep = obs.get("head_depth")
         if isinstance(dep, np.ndarray) and dep.dtype.kind == "f" and not np.isfinite(dep).all():
             obs = {**obs, "head_depth": np.where(np.isfinite(dep), dep, dep.dtype.type(0))}
@@ -528,10 +572,15 @@ class ClassicalPolicy:
         if self._emitted is not None:
             a, h = self._emitted
             what = "last emitted action"
-        else:   # nothing emitted yet: per joint the measured value where finite, else home (never zeros)
+        else:   # nothing emitted yet: per joint the measured value where finite, else home (never zeros for the arm)
             a = self._fallback_pose(obs.get("arm_q"), self.home)
-            h = self._fallback_pose(obs.get("hand_q"), self.post["open"])
-            what = "measured-or-home pose (none emitted yet)"
+            no_hand = hand is None or not bool(np.any(np.isfinite(hand)))
+            if not self._hand_seen and no_hand:
+                h = self._cold_hand()
+                what = "neutral hand (no finite hand_q yet)"
+            else:
+                h = self._fallback_pose(obs.get("hand_q"), self.post["open"])
+                what = "measured-or-home pose (none emitted yet)"
         self._nan_log(f"non-finite arm_q/hand_q: planner skipped, holding {what}")
         k = max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
         return obs, {"arm_q_target": np.repeat(np.asarray(a, float)[None], k, 0),

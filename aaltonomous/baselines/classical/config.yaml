@@ -335,8 +335,9 @@ instruction:
   max_chars: 0                # FLAG (fuzz). >0: cap the text at this many chars, cut at the last sentence/clause boundary
                               # (. ; ! ? newline) else the last space; the resolver is quadratic (50k chars = 19 s). 0 = off
 
-# safety.nan_guard (FLAG, fuzz): non-finite arm_q / hand_q -> no planner tick, hold the last emitted action; non-finite
-# head_depth pixels -> 0 (missing depth). Off = unchanged.
+# safety.nan_guard (FLAG, fuzz): non-finite arm_q / hand_q -> no planner tick, hold the last emitted action. No finite
+# hand_q yet: last hand command, else a neutral pose within one safety-filter step of the URDF-lower-clamped neutral
+# (the open posture is a 1.5 rad jump). Non-finite head_depth pixels -> 0 (missing depth). Off = unchanged.
 safety:
   nan_guard: false
 

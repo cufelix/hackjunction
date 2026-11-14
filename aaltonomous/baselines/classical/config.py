@@ -41,7 +41,7 @@ FLAGS = {
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
-    "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner, hold the last emitted action (zero hold before any); non-finite head_depth -> 0 (missing)"),
+    "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner, hold the last emitted action; no finite hand_q yet -> last hand command, else a neutral pose within one safety-filter step of the URDF-lower-clamped neutral; non-finite head_depth -> 0 (missing)"),
     "instruction.empty_abstain": ("fault drill", False, "with instruction.resolve: empty / whitespace-only instruction abstains (0 pts) instead of the policy.fixed_mapping fallback"),
     "grasp.abort_lift_first": ("fault drill", False, "empty-grasp abort (held_detector finger_sum): open in place, lift along the plan's clearance-checked lift, then go home (stock: straight joint-space line, dips ~16 mm below the counter)"),
     "policy.no_objects_relook": ("fault drill", False, "no detection and nothing picked yet: hold and look again until the time limit instead of done"),

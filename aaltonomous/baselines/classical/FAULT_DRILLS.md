@@ -21,7 +21,7 @@ as an unexpected success. Result key: PASS / KNOWN (recorded failure) / --.
 | 0b | configured `arm_max_acc` honoured | KNOWN (all) | KNOWN | KNOWN | none, see "Not fixed" |
 | 1a/b/c | head depth None / zeros / intermittent | PASS | PASS | PASS | |
 | 2 | NaN/inf in arm_q or hand_q on random ticks | PASS | PASS | PASS | `safety.nan_guard` |
-| 2b | whole hand_q NaN on the very first tick | KNOWN | KNOWN | KNOWN | none, see "Not fixed" |
+| 2b | whole hand_q NaN on the very first tick | KNOWN (no nan_guard) | PASS | PASS | `safety.nan_guard` (last hand command, else rate-limited neutral) |
 | 3 / 3b | stale RGB(+depth) while joints move | PASS | PASS | PASS | attempts stay <= `max_total_attempts` |
 | 4a/b | empty / whitespace instruction abstains | KNOWN picks via fixed mapping | KNOWN | KNOWN | `instruction.empty_abstain` (NOT in r22, see below; test 4g proves it) |
 | 4c/d | 5000-char / injection text abstains | KNOWN picks via FIXED fallback | PASS | PASS | `instruction.strict` (already in r19+) |
@@ -67,8 +67,6 @@ New flags (all default OFF, registered in `config.py` FLAGS, `config.yaml`, `ove
 * **Acceleration cap (0b)**: `planner.ramp()` / `go_to` start at the speed cap in one tick (24-46 rad/s^2 vs
   `arm_max_acc` 7-8); only `time_scale()` honours it and the SafetyFilter has no accel limit. Pre-existing, also in
   the clean episode. A change would alter every trajectory (not flag-small).
-* **First-tick NaN (2b)**: whole `hand_q` NaN before any action: no pose to hold, nan_guard falls back to the open
-  posture (1.5 rad hand jump, the filter clips 7 ticks). Safe but not 0 clips. NaN on any later tick is held correctly.
 * **Mock limits**: the mock world has no contacts (grasps always read empty, hand tracks the command exactly), no
   arm self-occlusion and virtual time. The rate drills vary wall-clock pacing only; env time is virtual.
 * One transient `arm speed 0.978 > cap 0.9` was seen once in the intermittent-depth drill on r22 before the abort fix
