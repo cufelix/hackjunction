@@ -30,6 +30,7 @@ COPY aaltonomous/interface/__init__.py aaltonomous/interface/safety.py aaltonomo
 COPY aaltonomous/scene/__init__.py aaltonomous/scene/scene.py aaltonomous/scene/scene.yaml aaltonomous/scene/
 COPY aaltonomous/baselines/__init__.py aaltonomous/baselines/
 COPY aaltonomous/baselines/classical/*.py aaltonomous/baselines/classical/config.yaml aaltonomous/baselines/classical/
+COPY aaltonomous/baselines/classical/brain/ aaltonomous/baselines/classical/brain/
 COPY aaltonomous/baselines/classical/overlays/ aaltonomous/baselines/classical/overlays/
 # THE flag switch: the submission overlay, baked in where load_config() looks for it.
 COPY aaltonomous/baselines/classical/overlays/submission.yaml aaltonomous/baselines/classical/overlay.yaml

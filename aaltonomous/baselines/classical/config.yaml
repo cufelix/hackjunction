@@ -232,6 +232,30 @@ instruction:
   resolve: false
   normalize: false            # FLAG (Felix). resolve(normalize(text)): fixes typos/synonyms; needs resolve
 
+# AI brain (brain/): closed-set tool choice over the classical planner. Off = byte-identical to before.
+brain:
+  enabled: false              # FLAG. true: at each look the backend picks one of the allowed tool calls (index + conf)
+  backend: stub               # stub (= the classical choice) | llamacpp (HTTP /completion + GBNF; errors -> classical)
+  url: http://127.0.0.1:8080/completion   # llamacpp server; never contacted synchronously at policy startup
+  request_timeout_s: 1.5      # absolute llamacpp HTTP deadline
+  max_response_bytes: 65536   # cap before JSON parsing
+  n_predict: 32               # {"choice": 12, "confidence": 0.999} is ~25 Qwen tokens
+  chatml: true                # llamacpp: wrap the prompt in ChatML (Qwen instruct models)
+  image: false                # llamacpp: send the head RGB as base64 JPEG (needs cv2 + a multimodal model)
+  find: false                 # FLAG. the model may call find(query) (VLM grounding, /data/brain/find/find_tool.py)
+  max_finds: 2                # find calls per episode
+  find_path: /data/brain/find/find_tool.py
+  find_url: null              # null = find_tool's default (127.0.0.1:8080 chat completions)
+  find_timeout_s: 1.5
+  prefetch: true              # ask for the next decision while the current pick runs; state hash must match
+  threshold: 0.8              # a decision needs conf >= this ...
+  override_conf: 0.95         # ... and, when it differs from the classical choice, conf >= this
+  timeout_s: 2.0              # later than this the decision is dropped, the classical planner decides
+  max_steps: 32               # brain decisions per episode
+  max_looks: 2                # brain look() choices per episode (a relook costs time)
+  world_reach: false          # fill objects[].reachable with a planner/IK dry run (slow: one plan per object)
+  debug_wait: false           # TOOLS ONLY (equivalence_check): block until the decision arrived
+
 motion:
   arm_max_vel: 0.5            # rad/s per joint (safety filter allows 1.0)
   arm_max_acc: 1.5            # rad/s^2

@@ -20,11 +20,11 @@ import sys
 import numpy as np
 
 
-def episode_digest(seed, time_limit):
+def episode_digest(seed, time_limit, overrides=None):
     from aaltonomous.baselines.classical.mock_world import make_mock_env
     from aaltonomous.baselines.classical.policy import ClassicalPolicy
     env = make_mock_env(seed=seed)
-    pol = ClassicalPolicy(log=None, safety=env.filter.cfg, time_limit=time_limit)
+    pol = ClassicalPolicy(log=None, safety=env.filter.cfg, time_limit=time_limit, overrides=overrides)
     obs = env.reset()
     pol.reset({"instruction": obs["instruction"], "time_limit": time_limit})
     h, n = hashlib.sha256(), 0
@@ -39,6 +39,9 @@ def episode_digest(seed, time_limit):
             break
     for e in pol.events:
         h.update(repr(e).encode())
+    if pol.brain is not None:   # stderr: the digest itself must not change
+        print(f"# brain seed={seed} tl={time_limit:g} stats={pol.brain.stats} overrides={len(pol.brain.trace)}",
+              file=sys.stderr)
     out = env.backend.outcomes(pol.mapping)
     return (f"episode seed={seed} tl={time_limit:g} acts={n} end={info['end_reason']} "
             f"clips={info['safety_summary']['clipped_steps']} outcomes={out} plans={len(pol.plans)} "
@@ -81,11 +84,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, default=6)
     ap.add_argument("--renders", type=int, default=20)
+    ap.add_argument("--brain", choices=["stub", "llamacpp"], default=None,
+                    help="run with brain.enabled + brain.backend=<x> (+debug_wait); the digest must equal the flags-off one")
     a = ap.parse_args(argv)
+    ov = {"brain.enabled": True, "brain.backend": a.brain, "brain.debug_wait": True} if a.brain else None
     print(perception_digest(a.renders), flush=True)
     for seed in range(a.seeds):
         for tl in (120.0, 25.0):  # 25 s exercises the 'not enough time' end
-            print(episode_digest(seed, tl), flush=True)
+            print(episode_digest(seed, tl, ov), flush=True)
     return 0
 
 
