@@ -293,6 +293,10 @@ perception:
                            rim_z_m: 0.0}   # hint: expose the rim-line bin distance as bin_rim_hint (planner/geometry hint)
   prism_speckle_floor: false  # FLAG: orange/red blob with a triangular outline gets a lower color_gate speckle floor
   prism_speckle_floor_params: {area_frac: 0.08, min_fill: 0.75, min_solidity: 0.85, max_aspect: 2.0, min_short_px: 22, min_px: 60}
+  real_border_partial: false  # FLAG (real only): lower color_gate speckle floor for blobs cut by the image border
+  real_border_partial_params: {area_frac: 0.12, margin_px: 3}
+  real_merge_split: false     # FLAG (real only): split merged same-colour neighbours (cube+cylinder) from a lower area factor
+  real_merge_split_params: {area_factor: 0.9, min_part_frac: 0.3}
   reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
   still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
   still_vote_params: {n_frames: 3, min_hits: 2, match_m: 0.02}

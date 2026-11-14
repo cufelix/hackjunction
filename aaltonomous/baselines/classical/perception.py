@@ -124,6 +124,7 @@ class Detection:
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
     sat_med: float | None = None  # perception.color_gate.sat_floor only: median HSV S (0-255) over the blob mask
     prism_like: bool = False      # perception.prism_speckle_floor only: orange/red blob with a triangular outline
+    border_touch: bool = False    # perception.real_border_partial only: blob touches the left/right/bottom image border
     hue_mixed: bool = False       # H1: a post-split part still contains both red and yellow source-mask pixels
     novel: bool = False  # novel objects only: built from a depth blob, never a known colour/shape detection
     label: str | None = None  # novel only: query phrase / label
@@ -395,6 +396,11 @@ class Perception:
         self.area_floor_geometric = self.color_gate and bool(self.cfg.get("area_floor_geometric", False))
         self.prism_speckle_floor = self.color_gate and bool(self.cfg.get("prism_speckle_floor", False))
         self.prism_speckle_cfg = dict(self.cfg.get("prism_speckle_floor_params") or {})
+        # real-only recall flags (default OFF; finals_r23 profile_auto.sim_overrides keeps them off in sim)
+        self.real_border_partial = self.color_gate and bool(self.cfg.get("real_border_partial", False))
+        self.real_border_cfg = dict(self.cfg.get("real_border_partial_params") or {})
+        self.real_merge_split = bool(self.cfg.get("real_merge_split", False))
+        self.real_merge_cfg = dict(self.cfg.get("real_merge_split_params") or {})
         self.partial_ok_near_hand = bool(self.cfg.get("partial_ok_near_hand", False))
         self.partial_near_hand_cfg = dict(self.cfg.get("partial_ok_near_hand_params") or {})
         # perception.neutral_obstacles (FLAG, default OFF): non-target dark / grey blobs are never detections; they
@@ -2157,6 +2163,11 @@ class Perception:
         if det is not None and hsv is not None and (self.hue_guard or self.hue_guard_yellow_fix):
             det.hsv_med = self._topface_hsv(hsv[blob > 0])   # configured top-face / small-blob hue vote
             det.hue_mixed = bool(hue_mixed)
+        if det is not None and self.real_border_partial:
+            m = int(self.real_border_cfg.get("margin_px", 3))
+            bx, by, bw, bh = cv2.boundingRect(np.asarray(blob, np.uint8))
+            H_, W_ = blob.shape[:2]
+            det.border_touch = bool(bx <= m or bx + bw >= W_ - m or by + bh >= H_ - m)
         if det is not None and self.prism_speckle_floor and color in ("red", "orange"):
             det.prism_like = self._prism_like(blob)
         if det is not None and hsv is not None and self.sat_floor:
@@ -2346,14 +2357,19 @@ class Perception:
         s = self.cfg.get("split") or {}
         whole = [(blob, area, centroid)]
         exp = self.expected_area_px(blob, centroid, depth)
-        if not force and area <= float(s.get("area_factor", 1.5)) * exp:
+        af = float(s.get("area_factor", 1.5))
+        mpf = float(s.get("min_part_frac", 0.3))
+        if self.real_merge_split:   # real head cam: the expected area overshoots a real object ~2x, so merged pairs stay under 1.5x
+            af = float(self.real_merge_cfg.get("area_factor", af))
+            mpf = float(self.real_merge_cfg.get("min_part_frac", mpf))
+        if not force and area <= af * exp:
             return whole
         x, y, w, h = cv2.boundingRect(blob)
         crop = np.ascontiguousarray(blob[y:y + h, x:x + w])
         dist = cv2.distanceTransform(crop, cv2.DIST_L2, 5)
         dmax = float(dist.max())
         min_part = (float(min_part_px) if force and min_part_px is not None
-                    else float(s.get("min_part_frac", 0.3)) * exp)
+                    else mpf * exp)
         for frac in s.get("peak_frac", [0.5, 0.6, 0.7, 0.8]):
             n, lab = cv2.connectedComponents((dist >= frac * dmax).astype(np.uint8), connectivity=8)
             if n < 3:
@@ -2840,6 +2856,8 @@ class Perception:
             frac = g["area_frac"]
             if self.prism_speckle_floor and det.prism_like:
                 frac = min(frac, float(self.prism_speckle_cfg.get("area_frac", 0.08)))   # lying/standing prism: small top
+            if self.real_border_partial and det.border_touch and det.color != "blue":
+                frac = min(frac, float(self.real_border_cfg.get("area_frac", 0.12)))   # cut by the frame edge: partial view
             if not getattr(det, "tentative", False) and det.n_px < frac * speckle_expected:
                 return "color_gate:speckle"
             if g.get("max_area_frac") is not None and det.n_px > g["max_area_frac"] * expected:
