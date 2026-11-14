@@ -32,6 +32,7 @@ FLAGS = {
     "brain.url": ("brain", "http://127.0.0.1:8080/completion", "llama.cpp server for brain.backend=llamacpp"),
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
+    "brain.planner": ("brain", False, "whole-instruction closed-set primitive plan for resolver abstention/relations"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
@@ -68,6 +69,7 @@ FLAGS = {
     "grasp.close_posture_by_shape": ("hybrid", False, "per pick: demo posture only for a confident metric triangle, else the configured one"),
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
     "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
+    "grasp.generic_fallback": ("generic grasp", False, "unknown/low-confidence shape: geometry-only top-down grasp, colour-only bin resolution"),
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
 }
@@ -118,7 +120,16 @@ def load_overlay(path):
     data = yaml.safe_load(Path(path).read_text()) or {}
     if data.get("placeholder"):
         raise ValueError(f"overlay {path} is a placeholder (values TBD): fill it in and drop `placeholder: true`")
-    flags = data.get("flags") or {}
+    flags = {}
+    parent = data.get("extends")
+    if parent:
+        parent_path = Path(parent)
+        if not parent_path.suffix:
+            parent_path = OVERLAY_DIR / f"{parent}.yaml"
+        elif not parent_path.is_absolute():
+            parent_path = Path(path).parent / parent_path
+        flags.update(load_overlay(parent_path)["flags"])
+    flags.update(data.get("flags") or {})
     bad = sorted(set(flags) - set(FLAGS))
     if bad:
         raise ValueError(f"overlay {path}: unknown flag(s) {bad} (known: {sorted(FLAGS)})")
@@ -169,6 +180,20 @@ def check_flag_values(cfg):
             continue
         if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
             raise ValueError(f"{k} = {v!r}: want {n} numbers")
+    g = cfg.get("grasp") or {}
+    for key in ("generic_shape_min_conf", "generic_min_confidence"):
+        if not 0.0 <= float(g.get(key, 0.5)) <= 1.0:
+            raise ValueError(f"grasp.{key} must be in [0, 1]")
+    narrow = float(g.get("generic_narrow_width", 0.035))
+    widest = float(g.get("generic_max_width", 0.060))
+    if not 0.005 <= narrow <= widest <= 0.060:
+        raise ValueError("generic grasp widths must satisfy 0.005 <= narrow <= max <= 0.060 m")
+    if not 0.0 <= float(g.get("generic_yaw_tol_deg", 15.0)) <= 90.0:
+        raise ValueError("grasp.generic_yaw_tol_deg must be in [0, 90]")
+    if not 0.0 <= float(g.get("generic_yaw_max_dev_deg", 45.0)) <= 90.0:
+        raise ValueError("grasp.generic_yaw_max_dev_deg must be in [0, 90]")
+    if not float(g.get("generic_yaw_hint_weight", 3.0)) > 0.0:
+        raise ValueError("grasp.generic_yaw_hint_weight must be positive")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}
@@ -222,4 +247,3 @@ def home_arm(cfg, spec: JointSpec | None = None):
     if bad:
         raise ValueError(f"home_arm_q too close to the joint limits: {bad}")
     return q
-

@@ -13,6 +13,7 @@ flags:
   brain.url: http://127.0.0.1:8080/completion
   brain.find: false
   brain.enabled: false                          # brain    off: closed-set tool choice (stub = classical), not in the submission
+  brain.planner: false                          # planner  off: whole-instruction closed-set plan
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
@@ -48,4 +49,5 @@ flags:
   grasp.close_posture_by_shape: true           # hybrid     demo posture only for a confident metric triangle
   grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
+  grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1

@@ -60,6 +60,7 @@ class TestFlags(unittest.TestCase):
                   "ab_hold06": {"motion.close_hold_s"}, "ab_hold12": {"motion.close_hold_s"},
                   "ab_slots": {"grasp.drop_slots"}, "ab_hold12_slots": {"motion.close_hold_s", "grasp.drop_slots"},
                   "ab_carry05": {"motion.carry_scale"}, "ab_calib": {"perception.self_calibration.enabled"},
+                  "ab_generic_fallback": {"grasp.generic_fallback"},
                   "ab_yaff": {"perception.y_affine"},
                   "ab_pinch_hybrid": {"grasp.close_posture", "hand.closed_tight", "grasp.point_in_palm",
                                       "motion.close_hold_s", "perception.classify_shape",
@@ -88,6 +89,16 @@ class TestFlags(unittest.TestCase):
             self.assertEqual(on, keys, name)
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
+
+    def test_ab_planner_extends_brain_llm_and_adds_two_flags(self):
+        base = load_config(overlay="brain_llm")
+        planner = load_config(overlay="ab_planner")
+        self.assertFalse(base["brain"]["planner"])
+        self.assertFalse(base["grasp"]["generic_fallback"])
+        base["brain"]["planner"] = True
+        base["grasp"]["generic_fallback"] = True
+        base["overlay"] = "ab_planner"
+        self.assertEqual(planner, base)
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm

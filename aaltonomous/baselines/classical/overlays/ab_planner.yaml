@@ -1,0 +1,7 @@
+# Whole-instruction planner arm: inherit the existing local-Qwen brain setup,
+# then enable only the planner and unknown-shape fallback additions.
+name: ab_planner
+extends: brain_llm
+flags:
+  brain.planner: true
+  grasp.generic_fallback: true

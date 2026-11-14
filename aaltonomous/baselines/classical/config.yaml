@@ -97,6 +97,16 @@ grasp:
   # tips are 57 mm apart (URDF): centred between them (auto) a 45 mm object wedges between the two fingers and is
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
+  # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
+  # gates, not independently switchable features. The classifier is consulted even when classify_shape is off.
+  generic_fallback: false
+  generic_shape_min_conf: 0.5    # below this, treat a known label as unreliable and use the generic proposal
+  generic_min_confidence: 0.5    # proposal support/width/border gate
+  generic_max_width: 0.060       # larger objects are not safe for the Dex3 top-down pinch
+  generic_narrow_width: 0.035    # <= this uses closed_demo; wider objects use grasp.close_posture
+  generic_yaw_hint_weight: 3.0   # align fingers with the proposal major axis before trying stock hints
+  generic_yaw_tol_deg: 15.0
+  generic_yaw_max_dev_deg: 45.0  # skip expensive/awkward yaw IK outside the arm's natural range
   # grasp.close_posture_by_shape (FLAG, default off): triangle posture ("demo", Oliver FK a44dd79) used only when the
   # shape is "triangle" AND shape_id path == "metric" AND shape confidence (shape_id._label conf * point-count
   # factor, 0..1) >= posture_by_shape_min_conf; every other pick uses grasp.close_posture + point_in_palm.
@@ -178,11 +188,13 @@ instruction:
 # AI brain (brain/): closed-set tool choice over the classical planner. Off = byte-identical to before.
 brain:
   enabled: false              # FLAG. true: at each look the backend picks one of the allowed tool calls (index + conf)
+  planner: false              # FLAG. whole-instruction closed-set plan for abstentions/order/relations; needs enabled
   backend: stub               # stub (= the classical choice) | llamacpp (HTTP /completion + GBNF; errors -> classical)
   url: http://127.0.0.1:8080/completion   # llamacpp server; never contacted synchronously at policy startup
   request_timeout_s: 1.5      # absolute llamacpp HTTP deadline
   max_response_bytes: 65536   # cap before JSON parsing
   n_predict: 32               # {"choice": 12, "confidence": 0.999} is ~25 Qwen tokens
+  plan_n_predict: 512         # bounded JSON list (at most max_steps validated primitives)
   chatml: true                # llamacpp: wrap the prompt in ChatML (Qwen instruct models)
   image: false                # llamacpp: send the head RGB as base64 JPEG (needs cv2 + a multimodal model)
   find: false                 # FLAG. the model may call find(query) (VLM grounding, /data/brain/find/find_tool.py)
@@ -194,6 +206,8 @@ brain:
   threshold: 0.8              # a decision needs conf >= this ...
   override_conf: 0.95         # ... and, when it differs from the classical choice, conf >= this
   timeout_s: 2.0              # later than this the decision is dropped, the classical planner decides
+  plan_timeout_s: 2.0         # initial whole-plan deadline (async; no wait in the control loop)
+  step_timeout_s: 0.5         # single allowed re-plan deadline after a failed primitive
   max_steps: 32               # brain decisions per episode
   max_looks: 2                # brain look() choices per episode (a relook costs time)
   world_reach: false          # fill objects[].reachable with a planner/IK dry run (slow: one plan per object)

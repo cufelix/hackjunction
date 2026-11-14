@@ -32,10 +32,6 @@ COPY aaltonomous/baselines/__init__.py aaltonomous/baselines/
 COPY aaltonomous/baselines/classical/*.py aaltonomous/baselines/classical/config.yaml aaltonomous/baselines/classical/
 COPY aaltonomous/baselines/classical/brain/ aaltonomous/baselines/classical/brain/
 COPY aaltonomous/baselines/classical/overlays/ aaltonomous/baselines/classical/overlays/
-# Optional sidecar endpoint for the brain_llm overlay. Empty keeps the image byte-for-byte equivalent in behaviour.
-ARG BRAIN_URL=
-RUN if [ -n "${BRAIN_URL}" ]; then sed -i "s#^  brain.url:.*#  brain.url: ${BRAIN_URL}#" \
-      aaltonomous/baselines/classical/overlays/brain_llm.yaml; fi
 # THE flag switch: the submission overlay, baked in where load_config() looks for it.
 COPY aaltonomous/baselines/classical/overlays/submission.yaml aaltonomous/baselines/classical/overlay.yaml
 COPY tools/flags.py tools/
