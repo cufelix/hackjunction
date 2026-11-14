@@ -425,6 +425,8 @@ class ClassicalPolicy:
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
+        self._pg = None             # grasp.pregrasp_relocalise: the pick paused at its pre-grasp pose
+        self._pg_aborts = []        # (colour, xy) of picks aborted at the pre-grasp pose
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
         self._encoder_hold = None    # M2: last complete finite encoder sample; never synthesize an unobserved joint
         self._encoder_latched = False
@@ -1350,6 +1352,8 @@ class ClassicalPolicy:
             self.state = "done"
             self._note(t, "release not confirmed: stop picking")
             return self._hold(done=True)
+        if self.state == "executing" and self._pg is not None:   # grasp.pregrasp_relocalise: paused at the pre-grasp pose
+            return self._pg_step(obs, t)
         if self.state == "executing":  # queue drained -> back home: look again after settling
             self.state = "settle"
             return self._act(obs)
@@ -2502,6 +2506,12 @@ class ClassicalPolicy:
         return pl
 
     def _plan_pick(self, d, kw, plan_fn=None):
+        p = self._plan_pick_inner(d, kw, plan_fn)
+        if plan_fn is None and self._pg_on() and p.ok:
+            p.pg_ctx = {"det": d, "kw": dict(kw)}   # grasp.pregrasp_relocalise: what a corrected re-plan needs
+        return p
+
+    def _plan_pick_inner(self, d, kw, plan_fn=None):
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
         differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""
@@ -2514,7 +2524,10 @@ class ClassicalPolicy:
             with self._decision_motion() as pl:   # D3/D4 speed scale + first-object clearance (stock planner when off)
                 pl = self._first_object_planner(pl)
                 if plan_fn is None:
-                    return pl.plan(plan_detection, self.arm_cmd, self.hand_cmd, **args)
+                    r = pl.plan(plan_detection, self.arm_cmd, self.hand_cmd, **args)
+                    if self._pg_on():
+                        r.pg_vary = getattr(pl, "vary", None)   # the variant that made this plan (re-plan reuses it)
+                    return r
                 if pl is not self.planner:
                     args["planner"] = pl
                 return plan_fn(plan_detection, self.arm_cmd, self.hand_cmd, **args)
@@ -3050,7 +3063,9 @@ class ClassicalPolicy:
     def _has_time(self, plan, t):
         return t + plan.duration + self._time_reserve(plan.corrective) <= self.time_limit
 
-    def _start(self, plan, t):
+    def _start(self, plan, t, pregrasp_done=False):
+        if not pregrasp_done and self._pg_eligible(plan):
+            return self._pg_begin(plan, t)
         xy = plan.waypoints["grasp"][:2]
         self.attempts.append((xy, 1))
         self._track_attempt(plan.color, xy)
@@ -3130,6 +3145,197 @@ class ClassicalPolicy:
                                          "source_xy": plan.waypoints["grasp"][:2].copy()}
         self.state = "executing"
         self._note(t, f"execute {plan.summary()}")
+        return self._pop()
+
+    # ---- grasp.pregrasp_relocalise (FLAG, default OFF). The plan is cut after its to_pregrasp move; at that pose the hand
+    # is above the object, the head camera sees it from close to where the grasp will be, so the position is re-measured
+    # (perception.relocalise) and the grasp re-planned from the corrected point. Everything heavy runs in the look thread
+    # when threaded, and the pause is a hold: act() never blocks. The pick is only *started* (attempt counters, slots,
+    # skill memory, watchers) once it is decided to go: an aborted pre-grasp leaves no trace of a try.
+    PG_MAX_WAIT_S = 1.5    # frames not collected by then: use what there is, else keep the plan
+    PG_MAX_JOB_S = 3.0     # worker not done by then: keep the plan, ignore a late result
+
+    def _pg_on(self):
+        return bool((self.cfg.get("grasp") or {}).get("pregrasp_relocalise", False))
+
+    def _pg_eligible(self, plan):
+        ctx = getattr(plan, "pg_ctx", None)
+        if not self._pg_on() or ctx is None or not plan.ok or plan.side not in ("left", "right"):
+            return False
+        if plan.corrective or plan.source_bin is not None or plan.target_bin not in self.scene.bin_names:
+            return False
+        if self._dflag("object_time_cap"):   # its T-8 s watcher indexes the whole plan
+            return False
+        names = [n for n, _, _ in plan.phases]
+        return len(names) > 1 and names[0] == "to_pregrasp" and "descend" in names and plan.phases[0][2] > 0
+
+    def _pg_begin(self, plan, t):
+        split = plan.phases[0][2]
+        self._pg = {"plan": plan, "split": split, "det": plan.pg_ctx["det"], "t0": None, "frames": [], "job": None,
+                    "t_job": None}
+        self._enqueue(plan.arm[:split], plan.hand[:split])
+        self.state = "executing"
+        self._note(t, f"pre-grasp move {plan.color} {plan.side} ({split / HZ:.1f} s), then re-localise")
+        return self._pop()
+
+    def _pg_step(self, obs, t):
+        pg, p = self._pg, self.cfg["grasp"]["pregrasp"]
+        if pg["t0"] is None:
+            pg["t0"] = t
+        if pg["job"] is None:
+            waited = t - pg["t0"]
+            if waited < float(p["wait_s"]):
+                return self._hold()
+            fr = pg["frames"]
+            if not fr or t > fr[-1]["t"]:   # a fresh frame: a new observation time
+                fr.append({"t": t, "rgb": None if obs.get("head_rgb") is None else np.array(obs["head_rgb"]),
+                           "depth": None if obs.get("head_depth") is None else np.array(obs["head_depth"]),
+                           "arm_q": None if obs.get("arm_q") is None else np.array(obs["arm_q"], float),
+                           "hand_q": None if obs.get("hand_q") is None else np.array(obs["hand_q"], float)})
+            if len(fr) < int(p["frames"]) and waited < self.PG_MAX_WAIT_S:
+                return self._hold()
+            pg["t_job"] = t
+            pg["job"] = {"result": None}
+            if self.threaded:
+                threading.Thread(target=self._pg_job, args=(pg, pg["job"]), daemon=True).start()
+            else:
+                self._pg_job(pg, pg["job"])
+        res = pg["job"]["result"]
+        if res is None:
+            if t - pg["t_job"] > self.PG_MAX_JOB_S:
+                res = {"kind": "timeout"}
+            else:
+                return self._hold()
+        return self._pg_finish(res, t)
+
+    def _pg_job(self, pg, job):
+        if self.threaded:
+            _lower_thread_priority()
+        try:
+            job["result"] = self._pg_run(pg)
+        except Exception as e:   # never kill the control loop: the plan the look made still runs
+            job["result"] = {"kind": "error", "why": repr(e)}
+
+    def _pg_run(self, pg):
+        p, prior, plan = self.cfg["grasp"]["pregrasp"], pg["det"], pg["plan"]
+        ests, kinds = [], []
+        for f in pg["frames"]:
+            if f["rgb"] is None or f["depth"] is None:
+                kinds.append("unsupported")
+                continue
+            rq = None if f["arm_q"] is None else (f["arm_q"], f["hand_q"])
+            r = self.perception.relocalise(
+                f["rgb"], f["depth"], prior, robot_q=rq, gate_m=float(p["gate_m"]),
+                occluded_frac=float(p["occluded_frac"]), hidden_frac=float(p["hidden_frac"]),
+                min_visible_frac=float(p["min_visible_frac"]), arm_dilate_px=int(p["arm_dilate_px"]))
+            kinds.append(r["kind"])
+            if r["kind"] == "found":
+                ests.append(r)
+        if not ests:
+            return {"kind": "gone" if kinds and all(k == "gone" for k in kinds) else "hidden"}
+        xy = np.median([e["top"][:2] for e in ests], axis=0)
+        d = xy - np.asarray(prior.top[:2], float)
+        out = {"dx": float(d[0]), "dy": float(d[1]), "shift": float(np.linalg.norm(d)),
+               "occluded": any(e["occluded"] for e in ests), "dyaw": 0.0}
+        yaws = [e["yaw"] for e in ests if e["yaw"] is not None]
+        new_yaw = prior.yaw
+        if yaws and prior.yaw is not None:   # square symmetry: average on 4*theta
+            a = np.arctan2(np.mean(np.sin(4 * np.asarray(yaws))), np.mean(np.cos(4 * np.asarray(yaws)))) / 4
+            out["dyaw"] = float((a - prior.yaw + np.pi / 4) % (np.pi / 2) - np.pi / 4)
+            new_yaw = prior.yaw + out["dyaw"]
+        if out["shift"] > float(p["max_shift_m"]):
+            out["kind"] = "too_far"
+            return out
+        if out["shift"] < float(p["min_shift_m"]):
+            out["kind"] = "keep"
+            return out
+        det2 = copy.copy(prior)
+        det2.top = np.array([xy[0], xy[1], prior.top[2]])
+        det2.yaw = new_yaw
+        d0 = ests[0]["det"]
+        if prior.shape == "triangle" and d0.shape == "triangle" and d0.apex_yaw is not None \
+                and not out["occluded"] and d0.apex_conf >= (prior.apex_conf or 0.0):
+            det2.apex_yaw, det2.apex_conf = d0.apex_yaw, d0.apex_conf
+        new = self._pg_plan(pg, det2)
+        if new.ok:
+            out["kind"], out["plan"] = "corrected", new
+        else:
+            out["kind"], out["why"] = ("keep_infeasible" if out["shift"] <= float(p["keep_if_infeasible_m"])
+                                       else "infeasible"), new.reason
+        return out
+
+    def _pg_plan(self, pg, det2):
+        """The pick re-planned from the pre-grasp pose for the corrected detection: same arm, bin, drop slot and
+        grasp variant as the plan it replaces; planner.dry_run_safety is part of every plan (ok = feasible)."""
+        plan, kw = pg["plan"], pg["plan"].pg_ctx["kw"]
+        with self._decision_motion() as pl:
+            if self.cfg["policy"].get("first_object_speed_scale") is not None and self.n_started == 0:
+                pl = copy.copy(pl)
+                pl.object_speed_scale = float(self.cfg["policy"]["first_object_speed_scale"])
+            pl.vary = getattr(plan, "pg_vary", None)
+            try:
+                new = pl._plan_side_hints(det2, plan.side, plan.target_bin, self.arm_cmd.copy(), self.hand_cmd.copy(),
+                                          drop_slot=plan.drop_slot)
+            finally:
+                pl.vary = None
+        if new.ok:
+            for a in ("skill_key", "skill_arm", "pg_vary"):
+                if hasattr(plan, a):
+                    setattr(new, a, getattr(plan, a))
+            if self._vary_on():
+                new.grasp_key = self._grasp_key(new)
+        return new
+
+    def _pg_tail(self, plan, split):
+        """The rest of the original plan after its to_pregrasp move (same trajectory ticks, indices shifted)."""
+        tail = copy.copy(plan)
+        tail.arm, tail.hand = plan.arm[split:], plan.hand[split:]
+        tail.phases = [(n, s - split, e - split) for n, s, e in plan.phases if s >= split]
+        ch = plan.close_hold
+        tail.close_hold = None if ch is None else (ch[0] - split, ch[1] - split)
+        return tail
+
+    def _pg_finish(self, res, t):
+        pg, p = self._pg, self.cfg["grasp"]["pregrasp"]
+        self._pg = None
+        plan, kind, prior = pg["plan"], res["kind"], pg["det"]
+        mm = lambda v: 1000.0 * v
+        head = f"[pregrasp] t={t:.2f} {plan.color} {plan.side}"
+        if "dx" in res:
+            head += (f" dx={mm(res['dx']):+.1f} mm dy={mm(res['dy']):+.1f} mm dyaw={np.degrees(res['dyaw']):+.1f} deg "
+                     f"shift={mm(res['shift']):.1f} mm{' occluded' if res['occluded'] else ''}")
+        if kind == "corrected":
+            self._note(t, f"{head} -> corrected grasp ({res['plan'].duration:.1f} s)")
+            return self._start(res["plan"], t, pregrasp_done=True)
+        if kind in ("gone", "too_far", "infeasible"):
+            why = {"gone": "target not found at its predicted position", "too_far":
+                   f"correction above max {mm(float(p['max_shift_m'])):.0f} mm",
+                   "infeasible": f"corrected grasp infeasible ({res.get('why')})"}[kind]
+            return self._pg_abort(pg, t, f"{head} -> abort: {why}; retreat + re-look")
+        note = {"keep": "within tolerance: grasp as planned", "hidden": "target under the hand, not observable: grasp as planned",
+                "unsupported": "no re-detection possible: grasp as planned",
+                "keep_infeasible": f"corrected grasp infeasible ({res.get('why')}), shift small: grasp as planned",
+                "timeout": "re-localisation timed out: grasp as planned",
+                "error": f"re-localisation failed ({res.get('why')}): grasp as planned"}[kind]
+        self._note(t, f"{head} -> {note}")
+        return self._start(self._pg_tail(plan, pg["split"]), t, pregrasp_done=True)
+
+    def _pg_abort(self, pg, t, msg):
+        """Retreat the arm and look again. Not a try (nothing was started); after max_aborts_per_object the object is
+        left on the counter (failed list) so the loop is bounded."""
+        plan, prior = pg["plan"], pg["det"]
+        self._note(t, msg)
+        xy = np.asarray(prior.top[:2], float)
+        rad = self._attempt_radius()
+        self._pg_aborts.append((prior.color, xy))
+        n = sum(1 for c, q in self._pg_aborts if c == prior.color and np.linalg.norm(q - xy) < rad)
+        if n >= int(self.cfg["grasp"]["pregrasp"]["max_aborts_per_object"]):
+            self.failed.append(xy.copy())
+            self._note(t, f"[pregrasp] {prior.color} aborted {n}x at its pre-grasp pose: left on the counter")
+        home = self.arm_cmd.copy()
+        home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
+        a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
+        self._enqueue(a, h)
         return self._pop()
 
     # ------------------------------------------------------------------ action plumbing

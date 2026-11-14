@@ -437,6 +437,19 @@ grasp:
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
+  pregrasp_relocalise: false  # FLAG (Timi pregrasp): re-detect the target at the pre-grasp pose, correct the grasp (params: grasp.pregrasp)
+  pregrasp:                   # only read with pregrasp_relocalise
+    gate_m: 0.075             # re-detection gate radius around the predicted position (same colour class); > max_shift_m so a 6 cm error is found
+    min_shift_m: 0.008        # smaller correction -> keep the plan (the tail of the original plan runs)
+    max_shift_m: 0.07         # larger correction -> abort: retreat + re-look, never grasp
+    keep_if_infeasible_m: 0.012   # corrected plan infeasible: keep the original only for a shift this small, else retreat
+    wait_s: 0.15              # settle time at the pre-grasp pose before the first frame (time based, no sleep)
+    frames: 1                 # fresh frames (distinct obs t) per re-detection (1-2); median xy. Each extra frame costs one hold (0.2 s)
+    occluded_frac: 0.75       # visible blob area / first-look area below this (or touching the hand mask): occlusion fit
+    hidden_frac: 0.6          # predicted footprint covered by the arm mask >= this: unobserved -> keep the plan
+    min_visible_frac: 0.15    # visible area below this fraction of the first look: unobserved -> keep the plan
+    arm_dilate_px: 6          # extra dilation of the FK arm mask for this re-detection
+    max_aborts_per_object: 2  # retreat + re-look this often per object, then it is left on the counter
   approach_extra_m: 0.0       # added to the pregrasp height (policy.speed_tiers sets 0.015 for the first object only)
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)

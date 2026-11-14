@@ -92,6 +92,7 @@ flags:
   grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture
   grasp.release_wait_s: null                    # lag R44  null = today (open_hold_s)
   grasp.release_confirm: false                  # lag R49  off
+  grasp.pregrasp_relocalise: false              # Timi r22   pre-grasp re-localisation
   grasp.cylinder_no_yaw_vary: false             # cyl yaw    retry on a cylinder: no yaw variants (off = stock)
   grasp.staggered_release: false                # finals grasp two-stage release; off = simultaneous release
   grasp.staggered_release_delay_s: 0.30         # delay before DDS slots 5/6 begin opening

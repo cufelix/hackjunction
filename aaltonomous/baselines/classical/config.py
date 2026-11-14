@@ -171,6 +171,7 @@ FLAGS = {
     "grasp.generic_fallback": ("generic grasp", False, "unknown/low-confidence shape: geometry-only top-down grasp, colour-only bin resolution"),
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
+    "grasp.pregrasp_relocalise": ("Timi pregrasp", False, "closed-loop pre-grasp re-localisation: at the pre-grasp pose wait for fresh frames, re-detect the target near its predicted position (FK arm mask, visible part + depth top-plane fit), re-plan the grasp from the corrected point/yaw if it moved > min_shift_m; target gone or shift > max_shift_m -> retreat + re-look"),
     "grasp.cylinder_no_yaw_vary": ("cyl yaw", False, "retry on a detected cylinder varies the posture only, never the finger yaw (rotationally symmetric)"),
     "grasp.staggered_release": ("finals grasp", False, "release thumb and first finger before DDS slots 5/6"),
     "grasp.staggered_release_delay_s": ("finals grasp", 0.30, "delay before DDS slots 5/6 begin opening when staggered_release is on"),
