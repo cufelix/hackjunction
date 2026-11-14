@@ -79,6 +79,10 @@ REALPERC_FLAGS = frozenset({"perception.color_gate.fk_silhouette", "perception.p
                             "perception.real_merge_split"})
 
 
+# real-demo (drop_3) real-only values: release height + slow final approach (point_in_palm / closed_tight values were already ON)
+REAL_DEMO_FLAGS = frozenset({"grasp.drop_height_extra_m", "grasp.approach_slow_mps"})
+
+
 def expected_flags(overlay_name):
     """Reviewed ON-set for the baked overlay; any other overlay keeps the r22 allow-list."""
     if overlay_name in ("finals_r24", "finals_r24_classic", "finals_r23_universal"):
@@ -86,7 +90,8 @@ def expected_flags(overlay_name):
         if overlay_name != "finals_r24_classic":
             exp |= BRAIN_SWITCHES
         if overlay_name != "finals_r23_universal":
-            exp |= REALPERC_FLAGS
+            exp |= REALPERC_FLAGS | REAL_DEMO_FLAGS
+            exp -= {"grasp.close_posture_by_shape"}   # real: one pinch_demo-family posture for all shapes
         return exp
     return EXPECTED_FINALS_FLAGS
 

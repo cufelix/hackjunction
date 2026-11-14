@@ -138,5 +138,36 @@ class TestProfileForce(unittest.TestCase):
         self.assertFalse(c["perception"]["novel_objects"])
 
 
+class TestRealDemoValues(unittest.TestCase):
+    """drop_3 real-demo values: ON in the real profile only; sim (via profile_auto.sim_overrides) keeps r23 values."""
+    OLD = {"grasp.point_in_palm": [0.0862, -0.0864, 0.0143], "hand.closed_tight": [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6],
+           "grasp.close_posture_by_shape": True, "grasp.drop_height_extra_m": 0.0, "grasp.approach_slow_mps": 0.0}
+
+    def _g(self, cfg, k):
+        for kk in k.split("."):
+            cfg = cfg[kk]
+        return cfg
+
+    def test_real_gets_demo_values_sim_keeps_old(self):
+        for ov in ("finals_r24", "finals_r24_classic"):
+            real = load_config(profile="none", overlay=ov)
+            so = real["profile_auto"]["sim_overrides"]
+            sim = load_config(profile="sim", overlay=ov, overrides=so)
+            self.assertEqual(self._g(real, "grasp.point_in_palm"), [0.1094, -0.0694, 0.0142])
+            self.assertEqual(self._g(real, "hand.closed_tight"), [0.0, 0.84, 0.21, -0.79, -1.24, -0.62, -1.23])
+            self.assertFalse(self._g(real, "grasp.close_posture_by_shape"))
+            self.assertEqual(self._g(real, "grasp.drop_height_extra_m"), 0.06)
+            self.assertEqual(self._g(real, "grasp.approach_slow_mps"), 0.05)
+            for k, v in self.OLD.items():
+                self.assertEqual(self._g(sim, k), v, k)
+
+    def test_thumb0_is_zero_in_every_mirrored_posture(self):
+        # the right-hand mirror flips th0's sign, which is wrong per FK: th0 must stay 0 (TODO: fix the mirror, then lift)
+        for ov in ("finals_r24", "finals_r24_classic"):
+            cfg = load_config(profile="none", overlay=ov)
+            self.assertEqual(cfg["hand"]["closed_tight"][0], 0.0)
+            self.assertEqual(cfg["hand"]["closed_demo"][0], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
