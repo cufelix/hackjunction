@@ -72,3 +72,5 @@ flags:
   grasp.release_confirm: true                   # lag R49  empty-hand check after the open; re-open once, else home + stop
   perception.color_gate.fk_dilate_px: 3        # New H2     render-tested RGB/FK fringe; nearby spawn-object recall
   perception.color_gate.near_margin_m: 0.10    # New H2/M1  prior/disagree union through full bin.vote.max_shift_m
+  policy.generation_workers: true               # H7: reset invalidates look workers immediately; stale generations never publish
+  grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort

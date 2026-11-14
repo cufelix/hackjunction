@@ -117,25 +117,30 @@ class NanGuardTests(unittest.TestCase):
         self.assertFalse(out["done"])
         self.assertTrue(any(m.startswith("[nan_guard]") for m in self.logs))
 
-    def test_first_act_nan_joint_holds_home_for_that_joint_only(self):
-        measured = self.home + 0.05          # finite joints are held at their MEASURED value, not at home
+    def test_first_act_nan_joint_latches_without_inventing_home_target(self):
+        measured = self.home + 0.05
         measured[0] = np.nan
         out = self.pol.act(self.obs(arm_q=measured))
-        self.assertTrue(np.isfinite(out["arm_q_target"]).all() and np.isfinite(out["hand_q_target"]).all())
-        tgt = out["arm_q_target"][-1]
-        self.assertEqual(tgt[0], self.home[0])
-        np.testing.assert_array_equal(tgt[1:], measured[1:])
-        np.testing.assert_array_equal(out["hand_q_target"][-1], self.hand)
+        self.assertEqual(out["arm_q_target"].shape, (0, 14))
+        self.assertEqual(out["hand_q_target"].shape, (0, 14))
+        self.assertTrue(self.pol._encoder_latched)
+        trusted = self.pol.act(self.obs(t=0.033))
+        self.assertFalse(self.pol._encoder_latched)
+        self.assertGreater(len(trusted["arm_q_target"]), 0)
 
-    def test_nan_hand_joint_on_first_act_holds_open_pose_never_zero(self):
+    def test_nan_hand_joint_on_first_act_is_not_replaced_by_open_posture(self):
         hand = self.hand + 0.02
         hand[2] = np.inf
         out = self.pol.act(self.obs(hand_q=hand))
-        h = out["hand_q_target"][-1]
-        self.assertEqual(h[2], self.hand[2])
-        np.testing.assert_array_equal(h[[0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]],
-                                      hand[[0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]])
-        self.assertFalse(np.all(out["hand_q_target"] == 0.0))
+        self.assertEqual(out["arm_q_target"].shape, (0, 14))
+        self.assertEqual(out["hand_q_target"].shape, (0, 14))
+
+    def test_pretrust_no_action_chunk_queues_no_safety_target(self):
+        from aaltonomous.deploy.runner import split_action
+        arm = self.home.copy()
+        arm[4] = np.nan
+        out = self.pol.act(self.obs(arm_q=arm))
+        self.assertEqual(split_action(out), [])
 
     def test_nan_depth_pixels_become_missing_not_an_exception(self):
         depth = np.full((48, 64), 1.0, np.float32)

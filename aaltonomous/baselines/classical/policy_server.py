@@ -41,11 +41,11 @@ class ClassicalServerPolicy(Policy):
         self.action_horizon = int(self.pol.cfg["motion"]["chunk"])
 
     def reset(self, instruction, task=None, seed=None):
-        # An episode can end mid-look (time limit): let that planning thread finish before the next one starts,
-        # the kinematics/planner state is not thread-safe.
-        job, t0 = self.pol._job, time.monotonic()
-        while job is not None and job["result"] is None and time.monotonic() - t0 < 30.0:
-            time.sleep(0.02)
+        if not self.pol.cfg["policy"].get("generation_workers", False):
+            # Legacy flag-off path: wait before resetting shared planner state.
+            job, t0 = self.pol._job, time.monotonic()
+            while job is not None and job["result"] is None and time.monotonic() - t0 < 30.0:
+                time.sleep(0.02)
         if task not in (None, "sort_fixed"):
             log.warning("task %r: the classical baseline only does rung 1 (colour = bin from scene.yaml)", task)
         info = {"instruction": instruction, "task": task, "seed": seed}

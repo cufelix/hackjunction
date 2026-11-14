@@ -116,6 +116,7 @@ class Detection:
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
     sat_med: float | None = None  # perception.color_gate.sat_floor only: median HSV S (0-255) over the blob mask
+    hue_mixed: bool = False       # H1: a post-split part still contains both red and yellow source-mask pixels
 
     def __repr__(self):
         x, y, z = self.top
@@ -1071,7 +1072,16 @@ class Perception:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
             self._fit_colour_kmeans(hsv, kkeep)
         masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
-        items = self._hue_guard_items(masks, hsv) if self.hue_guard else masks.items()
+        if self.hue_guard:
+            # H1: the red|yellow union is grouped and split before any colour is
+            # assigned.  Each resulting part is then classified and guarded
+            # solely from its own source pixels.
+            for color, blob, area, centroid, mixed in self._hue_guard_parts(masks, hsv, keep, depth):
+                self._detect_blob(color, blob, area, centroid, depth, include_bins, dets, rejected, hsv,
+                                  hue_mixed=mixed)
+            items = ((color, mask) for color, mask in masks.items() if color not in ("red", "yellow"))
+        else:
+            items = masks.items()
         for color, m in items:
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
             k = int(c["open_px"])
@@ -1114,6 +1124,37 @@ class Perception:
             items.append((label, comp.astype(np.uint8) * 255))
         return items + [(c, m) for c, m in masks.items() if c not in ("red", "yellow")]
 
+    def _hue_guard_parts(self, masks, hsv, keep, depth):
+        """H1 red/yellow candidates, split before label assignment.
+
+        A part retaining pixels from both disjoint source masks is tagged mixed;
+        `_hue_guard` abstains it even when its brightest pixels look decisive.
+        """
+        import cv2
+        red = masks["red"] & keep
+        yellow = masks["yellow"] & keep
+        union = (red | yellow).astype(np.uint8)
+        k = int(self.cfg["open_px"])
+        if k > 0:
+            union = cv2.morphologyEx(union, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        n, lab, stats, cent = cv2.connectedComponentsWithStats(union, connectivity=8)
+        out = []
+        for i in range(1, n):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area < self.cfg["min_area_px"]:
+                continue
+            blob = (lab == i).astype(np.uint8)
+            parts = self.split_blob(blob, area, cent[i], depth) if self.split_blobs else [(blob, area, cent[i])]
+            for part, p_area, p_cent in parts:
+                use = part > 0
+                top = top_face_hsv(hsv[use])
+                label = classify_hue(top[0], self.hsv)
+                nr, ny = int(np.count_nonzero(red[use])), int(np.count_nonzero(yellow[use]))
+                if label not in ("red", "yellow"):
+                    label = "red" if nr >= ny else "yellow"
+                out.append((label, part, p_area, p_cent, nr > 0 and ny > 0))
+        return out
+
     def _hue_guard(self, dets, rejected):
         """perception.hue_guard: abstain (or resolve by frame evidence) on orange/yellow hues near the boundary."""
         idx = [i for i, d in enumerate(dets) if d.hsv_med is not None]
@@ -1130,6 +1171,8 @@ class Perception:
                 keep.append(d)
                 continue
             label, reason = by_idx[i]
+            if d.hue_mixed:
+                label, reason = None, "mixed"
             if reason is None:
                 if label != d.color:
                     n_relabel += 1
@@ -1147,7 +1190,8 @@ class Perception:
                  f"moved_rejected={len(moved)} reasons={reasons}")
         return keep, rejected + moved
 
-    def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None):
+    def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None,
+                     hue_mixed=False):
         """One colour blob -> Detection (depth top face, else plane) -> dets or rejected (the stock per-blob body)."""
         import cv2
         c = self.cfg
@@ -1179,6 +1223,7 @@ class Perception:
                 self._log_orange_candidate(blob)
         if det is not None and hsv is not None and self.hue_guard:
             det.hsv_med = top_face_hsv(hsv[blob > 0])   # layer 3: colour from the top face, not the whole blob
+            det.hue_mixed = bool(hue_mixed)
         if det is not None and hsv is not None and self.sat_floor:
             det.sat_med = float(np.median(hsv[blob > 0][:, 1]))   # color_gate.sat_floor: shadow / sheen has low S
         if det is not None and hsv is not None and self.place_gate:

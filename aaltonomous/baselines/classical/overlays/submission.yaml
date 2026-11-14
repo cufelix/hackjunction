@@ -11,6 +11,7 @@ flags:
   scene.counter_z_prior: null                   # prior      no-depth table height (finals_* overlays: 0.15)
   calib.fk_xcheck: false                        # B2         passive RGB/FK head-pose cross-check (log-only)
   policy.safety_shell: false                    # safety     hold-last + 20 % reserve + no blocking calls in act(); OFF until its A/B
+  policy.generation_workers: false              # H7         generation-tagged workers + immediate reset
   skills.memory: false                         # persistent grasp-variant learning (A/B overlay: ab_skills)
   skills.memory_path: null                     # SQLite path; unset = in-memory; AALTO_SKILLS_DB overrides
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
@@ -76,6 +77,7 @@ flags:
   grasp.drop_lateral_margin_m: 0.0              # finals safe release toward bin centre; IK fallback to stock
   policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
   grasp.held_detector: stall                   # real held  legacy diagnostic; ab_held_detector selects finger_sum
+  grasp.held_calibration.enabled: false         # M3         steady empty-close e0 after home/settle
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.arm_vel_cap: null                      # Timi vel   rad/s arm speed cap (real robot margin); null = profile 0.97
   motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2

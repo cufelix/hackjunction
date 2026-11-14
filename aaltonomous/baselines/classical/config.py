@@ -42,11 +42,12 @@ FLAGS = {
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
-    "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner, hold the last emitted action (zero hold before any); non-finite head_depth -> 0 (missing)"),
+    "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner and hold the last trusted target (before trust, return no action until one complete finite encoder frame); non-finite head_depth -> 0 (missing)"),
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.multilingual": ("multilingual", False, "closed-grammar FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK instructions -> cached English canonical form before resolve; unsupported foreign input stays unparsed (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
+    "policy.generation_workers": ("H7", False, "generation-tagged look workers compute on an episode snapshot; reset invalidates immediately and never waits for stale work"),
     "policy.fixed_mapping": ("organisers P0", None, "explicit sort_fixed scene metadata passed by server reset (null = shared FIXED_MAPPING; finals venue: yellow left, blue center, red right); never a language fallback"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
@@ -99,6 +100,7 @@ FLAGS = {
     "grasp.held_detector": ("real held", "stall", "stall (legacy max error) | finger_sum (bias-corrected Dex3 fingers)"),
     "grasp.release_wait_s": ("lag R44", None, "null | s: hold at least this long after the open command before the retreat (Dex3 lags 300-380 ms)"),
     "grasp.release_confirm": ("lag R49", False, "after open + wait the fingers must read an empty hand: re-open once, else home and stop picking"),
+    "grasp.held_calibration.enabled": ("M3", False, "finger_sum: after home/settle, close empty hands and accept the command-measured baseline only after N low-velocity samples"),
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
@@ -275,10 +277,10 @@ def check_flag_values(cfg):
     mc = _get(cfg, "instruction.max_chars")
     if not isinstance(mc, int) or isinstance(mc, bool) or mc < 0:
         raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")
-    if not isinstance(_get(cfg, "safety.nan_guard"), bool):
-        raise ValueError("safety.nan_guard: want true or false")
-    if not isinstance(_get(cfg, "grasp.drop_slot_grid"), bool):
-        raise ValueError("grasp.drop_slot_grid: want true or false")
+    for key in ("safety.nan_guard", "policy.generation_workers", "grasp.held_calibration.enabled",
+                "grasp.drop_slot_grid"):
+        if not isinstance(_get(cfg, key), bool):
+            raise ValueError(f"{key}: want true or false")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
@@ -311,6 +313,15 @@ def check_flag_values(cfg):
     if not 0.0 <= float(hg.get("red_min_s", 110.0)) <= 255.0:
         raise ValueError(f"perception.hue_guard.red_min_s = {hg.get('red_min_s')}: want 0-255")
     g = cfg.get("grasp") or {}
+    hc = g.get("held_calibration") or {}
+    nsteady = hc.get("steady_samples", 4)
+    if not isinstance(nsteady, int) or isinstance(nsteady, bool) or nsteady <= 0:
+        raise ValueError("grasp.held_calibration.steady_samples must be a positive int")
+    vmax, held, timeout = (float(hc.get("max_velocity_rad_s", 0.08)),
+                           float(hc.get("hold_after_settle_s", 0.4)), float(hc.get("timeout_s", 5.0)))
+    if not (np.isfinite(vmax) and vmax > 0.0 and np.isfinite(held) and held >= 0.4
+            and np.isfinite(timeout) and timeout > held):
+        raise ValueError("grasp.held_calibration needs velocity > 0, hold >= 0.4 s, timeout > hold")
     for key in ("generic_shape_min_conf", "generic_min_confidence"):
         if not 0.0 <= float(g.get(key, 0.5)) <= 1.0:
             raise ValueError(f"grasp.{key} must be in [0, 1]")

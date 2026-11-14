@@ -235,6 +235,12 @@ grasp:
   release_confirm: false      # FLAG (lag R49): after open + wait the finger state must read empty (held detector); not empty -> re-open once, then home and stop picking
   release_confirm_s: 1.5      # release_confirm: how long to poll for an empty hand after each open (Dex3 lag 0.3-0.4 s)
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
+  held_calibration:           # M3 FLAG: an empty close at home supplies e0; invalid/unfinished calibration disables abort
+    enabled: false
+    steady_samples: 4         # consecutive policy observations (chunks are <=0.33 s)
+    max_velocity_rad_s: 0.08  # both commanded and measured hand velocity must be below this
+    hold_after_settle_s: 0.4  # finger lag is 300-380 ms; retain at least another 0.4 s before accepting e0
+    timeout_s: 5.0          # accommodates lag + 0.4 s hold + four observations at the 0.33 s chunk cadence
   # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
   # gates, not independently switchable features. The classifier is consulted even when classify_shape is off.
   generic_fallback: false
@@ -416,6 +422,7 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)
   safety_shell_vel_reserve: 0.0  # with safety_shell: >0 slows every plan to <= (1 - this) x the SafetyFilter velocity limit (e.g. 0.2); 0 = plans untouched
+  generation_workers: false   # H7 FLAG: immutable generation-tagged look results; reset invalidates without waiting
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   fixed_mapping: null         # FLAG (organisers P0). explicit sort_fixed scene metadata passed at server reset;
                               # null = shared tasks.FIXED_MAPPING. Never used as a sort_language blank/error fallback

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+from dataclasses import dataclass
 import os
 import re
 import sys
@@ -74,6 +75,16 @@ class _BinVoteResult:
         return ({k: np.asarray(v, float) for k, v in self.shift}, dict(self.extra), dict(self.confidence))
 
 
+@dataclass(frozen=True)
+class _LookResult:
+    generation: int
+    outcome: tuple
+    state: tuple
+    perception_state: tuple
+    counter_z_runtime: object
+    logs: tuple
+
+
 def _lower_thread_priority(nice=10):
     """Linux: raise the nice value of the calling thread only (setpriority on its native thread id)."""
     try:
@@ -83,6 +94,18 @@ def _lower_thread_priority(nice=10):
 
 
 class ClassicalPolicy:
+    _LOOK_COMMIT_FIELDS = (
+        "last_detections", "last_bin_detections", "scheduled_corrections", "plans", "retry_pass_used",
+        "attempts", "attempt_tracks", "retry_allow", "slot_pending", "slot_used", "_bin_misses", "gate_skipped",
+        "budget_abandoned", "failed", "too_long", "verification_pending", "last_verification",
+        "verify_relooks_remaining", "retry_colors", "retry_targets", "used_drop_slots", "reserved_drop_slots",
+        "_skill_pending", "_pend_out", "_stab", "_stab_last", "_dec_warned", "_cap_logged", "_prior_side",
+        "_brain_reg", "_brain_n", "_last_pick", "_brain_looks", "_brain_finds", "tiers", "tier", "C",
+    )
+    _LOOK_PERCEPTION_FIELDS = ("_ah_est", "_ah_tries", "hsv", "_colour_kmeans_done", "_colour_kmeans_tries",
+                               "colour_kmeans_info", "color_gate_degraded", "fk_mask_px")
+    _LOOK_DEEP_FIELDS = {"attempt_tracks", "gate_skipped", "slot_used", "verification_pending", "last_verification",
+                         "used_drop_slots", "reserved_drop_slots", "_skill_pending", "_pend_out", "tiers"}
     @staticmethod
     def _safety_hand_limits(spec, safety):
         """SafetyFilter._shrink for the hand, kept read-only and Pinocchio-free."""
@@ -240,6 +263,12 @@ class ClassicalPolicy:
         return (dict(given) if given else guarded or resolved or legacy), guarded
 
     def reset(self, info=None):
+        generation_workers = bool((self.cfg.get("policy") or {}).get("generation_workers", False))
+        if generation_workers:
+            # Invalidate first.  No lock/join: reset is constant-time with respect
+            # to stale work, which can only publish to its detached job object.
+            self._look_generation = getattr(self, "_look_generation", 0) + 1
+            self._job = None
         if isinstance(info, str):
             info = {"instruction": info}
         info = info or {}
@@ -274,7 +303,11 @@ class ClassicalPolicy:
         self.waiting = False
         self.events = []
         self.plans = []
-        self._job = None
+        if not generation_workers:
+            self._job = None
+        # A stale generation owns its detached snapshot and may finish in the
+        # background.  The new episode gets a fresh worker slot immediately.
+        self._look_thread = None
         look_lock = self.__dict__.setdefault("_look_lock", threading.Lock())
         with look_lock:
             self._look_generation = getattr(self, "_look_generation", 0) + 1
@@ -290,12 +323,17 @@ class ClassicalPolicy:
         self.slot_pending = None    # (bin, slot, grasp xy, colour) of the last standalone-slot placement
         self._gdiag = None          # policy.grasp_diag_log: the pick being watched
         self.held_detector.reset()
+        self._held_cal_phase = None
+        self._held_cal_done = not (self.held_detector.mode == "finger_sum" and
+                                   bool((self.cfg["grasp"].get("held_calibration") or {}).get("enabled", False)))
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
+        self._encoder_hold = None    # M2: last complete finite encoder sample; never synthesize an unobserved joint
+        self._encoder_latched = False
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
         # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
         lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
@@ -551,48 +589,63 @@ class ClassicalPolicy:
             self.log(f"[nan_guard] {msg}")
 
     @staticmethod
-    def _fallback_pose(q, home):
-        """Per joint: the measured value where it is finite, else the home value of that joint (self.home =
-        config home_arm_q, hand: self.post['open'] from config hand.open). A missing or wrong-shape reading gives the
-        whole home pose. Never zeros: a zero target is a large move for the arms."""
-        home = np.asarray(home, float)
+    def _encoder_vector(q):
+        """Return an exact 14-vector or None.  Never fills an unobserved joint."""
         try:
             v = np.asarray(q, float).reshape(-1)
         except (TypeError, ValueError):
-            return home.copy()
-        if v.shape != home.shape:
-            return home.copy()
-        return np.where(np.isfinite(v), v, home)
+            return None
+        return v if v.shape == (14,) else None
+
+    def _complete_encoder(self, obs):
+        a, h = self._encoder_vector(obs.get("arm_q")), self._encoder_vector(obs.get("hand_q"))
+        if a is None or h is None or not (np.all(np.isfinite(a)) and np.all(np.isfinite(h))):
+            return None
+        return a.copy(), h.copy()
 
     def _nan_guard(self, obs):
-        """Non-finite arm_q / hand_q: skip the planner this tick and hold the last emitted action (before any action this
-        episode: measured-or-home pose, see _fallback_pose). Non-finite head_depth pixels -> 0 = missing depth: perception keeps only
+        """Non-finite arm_q / hand_q: latch the planner until a complete finite encoder frame. Hold the last emitted
+        or complete measured pose; before either exists return no action rather than filling an unobserved joint.
+        Non-finite head_depth pixels -> 0 = missing depth: perception keeps only
         depth_range_mm (config.yaml, 150..2000 mm) so 0 is invalid there (perception.py:369, :336). All-finite obs: returned
         as is. Returns (obs, hold_action or None)."""
         if not isinstance(obs, dict):
             return obs, None
-        bad_q = False
+        complete = self._complete_encoder(obs)
+        if complete is not None:
+            self._encoder_hold = complete
+            self._encoder_latched = False
+        bad_q = complete is None
         for k in ("arm_q", "hand_q"):
             v = obs.get(k)
             if v is not None:
                 try:
                     bad_q = bad_q or not bool(np.all(np.isfinite(np.asarray(v, float))))
                 except (TypeError, ValueError):
-                    pass   # malformed: _act's own handling is unchanged
+                    bad_q = True
         dep = obs.get("head_depth")
         if isinstance(dep, np.ndarray) and dep.dtype.kind == "f" and not np.isfinite(dep).all():
             obs = {**obs, "head_depth": np.where(np.isfinite(dep), dep, dep.dtype.type(0))}
             self._nan_log(f"head_depth: {int((~np.isfinite(dep)).sum())} non-finite px -> 0 (missing depth)")
         if not bad_q:
             return obs, None
+        self._encoder_latched = True
         if self._emitted is not None:
             a, h = self._emitted
             what = "last emitted action"
-        else:   # nothing emitted yet: per joint the measured value where finite, else home (never zeros)
-            a = self._fallback_pose(obs.get("arm_q"), self.home)
-            h = self._fallback_pose(obs.get("hand_q"), self.post["open"])
-            what = "measured-or-home pose (none emitted yet)"
-        self._nan_log(f"non-finite arm_q/hand_q: planner skipped, holding {what}")
+        elif self._encoder_hold is not None:
+            a, h = self._encoder_hold
+            what = "last complete encoder sample"
+        else:
+            # The runner treats a zero-row chunk as no new action and holds the
+            # SafetyFilter command established from the measured reset pose.
+            # This neither invents an absolute joint target nor records a
+            # nonfinite safety clip while encoder trust is still unavailable.
+            self._nan_log("non-finite arm_q/hand_q: no-motion latch, returning no action "
+                          "until the first complete encoder sample")
+            empty = np.empty((0, 14), float)
+            return obs, {"arm_q_target": empty.copy(), "hand_q_target": empty.copy(), "done": False}
+        self._nan_log(f"non-finite arm_q/hand_q: no-motion latch, holding {what}")
         k = max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
         return obs, {"arm_q_target": np.repeat(np.asarray(a, float)[None], k, 0),
                      "hand_q_target": np.repeat(np.asarray(h, float)[None], k, 0), "done": False}
@@ -636,10 +689,19 @@ class ClassicalPolicy:
             a, h = self._shell_last
         elif self.arm_cmd is not None:
             a, h = self.arm_cmd, self.hand_cmd
+        elif self._encoder_hold is not None:
+            a, h = self._encoder_hold
         else:
-            # nothing commanded yet: measured where finite, else home (same rule as _nan_guard; never zeros)
-            a = self._fallback_pose(obs.get("arm_q"), self.home)
-            h = self._fallback_pose(obs.get("hand_q"), self.post["open"])
+            # The shell can be enabled without nan_guard, so capture a complete
+            # finite first observation here as an exact (non-invented) hold.
+            complete = self._complete_encoder(obs) if isinstance(obs, dict) else None
+            if complete is not None:
+                a, h = complete
+            else:
+                # With any unobserved joint, return no target and let the runner
+                # retain its measured reset command without a safety clip.
+                empty = np.empty((0, 14), float)
+                return {"arm_q_target": empty.copy(), "hand_q_target": empty.copy(), "done": False}
         k = max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
         return {"arm_q_target": np.repeat(np.asarray(a, float)[None], k, 0),
                 "hand_q_target": np.repeat(np.asarray(h, float)[None], k, 0), "done": False}
@@ -679,6 +741,55 @@ class ClassicalPolicy:
             return np.clip(np.asarray(self.hand_cmd, float), self._held_hand_lo, self._held_hand_hi)
         return self.hand_cmd
 
+    def _held_calibration_tick(self, obs, t):
+        """M3 empty-close calibration, entirely in the normal non-blocking action state machine."""
+        if self._held_cal_done or self.held_detector.mode != "finger_sum":
+            return None
+        p = self.cfg["grasp"].get("held_calibration") or {}
+        if not p.get("enabled", False) or self.state not in ("look", "held_calibration"):
+            return None
+        if self._held_cal_phase is None:
+            # settle sets state=look as soon as it enqueues the hold.  Do not
+            # replace that queue: calibration starts only after every settle
+            # target has actually been returned to the runner.
+            if self.queue_a is not None and len(self.queue_a):
+                return None
+            self.state = "held_calibration"
+            self._held_cal_phase = "sample"
+            self.held_detector.require_empty_close_calibration(
+                t, steady_samples=p.get("steady_samples", 4),
+                max_velocity_rad_s=p.get("max_velocity_rad_s", 0.08),
+                hold_after_settle_s=p.get("hold_after_settle_s", 0.4),
+                timeout_s=p.get("timeout_s", 5.0))
+            posture = self.cfg["grasp"].get("close_posture", "closed")
+            target = self.post[posture]
+            h = ramp(self.hand_cmd, target, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
+            n = max(1, int(np.ceil(float(p.get("hold_after_settle_s", 0.4)) * HZ)))
+            h = np.vstack([h, np.repeat(target[None], n, 0)])
+            self._enqueue(np.repeat(self.arm_cmd[None], len(h), 0), h)
+            self._note(t, "held calibration: empty close at home")
+            return self._pop()
+        if self._held_cal_phase == "sample":
+            status = self.held_detector.sample_empty_close(t, self._held_command(), obs.get("hand_q"))
+            if self.queue_a is not None and len(self.queue_a):
+                return None
+            if status == "pending":
+                return self._hold()
+            target = self.post["open"]
+            h = ramp(self.hand_cmd, target, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
+            n = max(1, int(np.ceil(float(self.cfg["motion"].get("open_hold_s", 0.4)) * HZ)))
+            h = np.vstack([h, np.repeat(target[None], n, 0)])
+            self._enqueue(np.repeat(self.arm_cmd[None], len(h), 0), h)
+            self._held_cal_phase = "reopen"
+            state = "accepted" if status == "ready" else "invalid; early abort disabled"
+            self._note(t, f"held calibration {state}: {self.held_detector.calibration_reason}")
+            return self._pop()
+        if self._held_cal_phase == "reopen" and not (self.queue_a is not None and len(self.queue_a)):
+            self._held_cal_phase = None
+            self._held_cal_done = True
+            self.state = "look"
+        return None
+
     def _act(self, obs):
         first = self.arm_cmd is None
         if first:  # first call: start from the measured pose
@@ -690,7 +801,8 @@ class ClassicalPolicy:
         t = float(obs.get("t", 0.0))
         if first:
             self._ep_t0 = t
-        if self.held_detector.mode == "finger_sum":
+        held_cal_on = bool((self.cfg["grasp"].get("held_calibration") or {}).get("enabled", False))
+        if self.held_detector.mode == "finger_sum" and not held_cal_on:
             if first:
                 # The first command is synthesized from this same measurement,
                 # so it carries no tracking-bias information. Start the window
@@ -732,6 +844,9 @@ class ClassicalPolicy:
             self._grasp_diag(obs)
         if self._stall is not None:
             self._lift_on_stall(obs)
+        held_cal_action = self._held_calibration_tick(obs, t)
+        if held_cal_action is not None:
+            return held_cal_action
         if self._rel is not None:
             r = self._release_confirm(obs, t)
             if r is not None:
@@ -816,11 +931,30 @@ class ClassicalPolicy:
                 return self._hold(done=True)
             if self.threaded:
                 if self._job is None:
-                    self._job = {"obs": obs, "result": None}
-                    threading.Thread(target=self._look_job, args=(self._job,), daemon=True).start()
+                    if self.cfg["policy"].get("generation_workers", False):
+                        # A detached stale worker owns its snapshot.  Do not start
+                        # another planner user until it exits; act() only polls.
+                        if self._look_thread is not None and self._look_thread.is_alive():
+                            return self._hold()
+                        generation = self._look_generation
+                        worker, logs = self._look_snapshot()
+                        job_obs = {k: (np.asarray(v).copy() if isinstance(v, np.ndarray) else copy.deepcopy(v))
+                                   for k, v in obs.items()}
+                        self._job = {"generation": generation, "obs": job_obs, "result": None}
+                        self._look_thread = threading.Thread(target=self._look_job,
+                                                             args=(self._job, worker, logs), daemon=True)
+                        self._look_thread.start()
+                    else:
+                        self._job = {"obs": obs, "result": None}
+                        threading.Thread(target=self._look_job, args=(self._job,), daemon=True).start()
                 if self._job["result"] is None:
                     return self._hold()
                 res, self._job = self._job["result"], None
+                if self.cfg["policy"].get("generation_workers", False):
+                    if not isinstance(res, _LookResult) or res.generation != self._look_generation:
+                        return self._hold()
+                    self._commit_look_result(res)
+                    res = res.outcome
             else:
                 res = self._look(obs)
             return self._after_look(res, t)
@@ -870,15 +1004,80 @@ class ClassicalPolicy:
         return True
 
     # ------------------------------------------------------------------ look + plan
-    def _look_job(self, job):
+    def _look_snapshot(self):
+        """Fast copy-on-launch transaction for one look/plan worker."""
+        worker = copy.copy(self)
+        for name in self._LOOK_COMMIT_FIELDS:
+            if hasattr(self, name):
+                value = getattr(self, name)
+                if name in self._LOOK_DEEP_FIELDS:
+                    value = copy.deepcopy(value)
+                elif isinstance(value, (list, dict, set)):
+                    value = value.copy()
+                setattr(worker, name, value)
+        worker.planner = copy.copy(self.planner)
+        worker.planner.__dict__ = self.planner.__dict__.copy()
+        # Pinocchio Model is read-only after construction, but Data and the
+        # temporary IK hints/offsets are mutated by FK/IK.  Give every worker
+        # its own transaction-local state so stale and current generations may
+        # finish concurrently after a reset.
+        worker.kin = copy.copy(self.kin)
+        worker.kin.data = worker.kin.model.createData()
+        worker.kin.offset = {side: np.asarray(value, float).copy() for side, value in self.kin.offset.items()}
+        worker.kin.hint = np.asarray(self.kin.hint, float).copy()
+        worker.planner.kin = worker.kin
+        for name in ("mapping", "bin_shift", "drop_extra", "bin_conf"):
+            setattr(worker.planner, name, copy.deepcopy(getattr(self.planner, name)))
+        # Scene configuration is read-only; only counter_z_runtime changes per
+        # look, so a shallow object copy isolates that write without copying the
+        # full scene/config synchronously in act().
+        worker.scene = copy.copy(self.scene)
+        worker.planner.scene = worker.scene
+        worker.perception = copy.copy(self.perception)
+        worker.perception.__dict__ = self.perception.__dict__.copy()
+        worker.perception._arm_surface = None  # lazily rebuilt inside this worker; its Pinocchio Data is mutable
+        for name in self._LOOK_PERCEPTION_FIELDS:
+            if hasattr(self.perception, name):
+                setattr(worker.perception, name, copy.deepcopy(getattr(self.perception, name)))
+        worker.perception.scene = worker.scene
+        worker.perception.bin_shift_src = worker.planner
+        logs = []
+        worker.log = logs.append
+        worker.perception.log = logs.append
+        return worker, logs
+
+    def _commit_look_result(self, result):
+        for name, value in result.state:
+            setattr(self, name, value)
+        for name, value in result.perception_state:
+            setattr(self.perception, name, value)
+        self.scene.counter_z_runtime = result.counter_z_runtime
+        for message in result.logs:
+            self.log(message)
+
+    def _look_job(self, job, worker=None, logs=None):
         _lower_thread_priority()  # planning must not starve act() (the control loop's thread)
         if job.get("kind") == "bin_vote":
             self._bin_vote_look_job(job)
             return
         try:
-            job["result"] = self._look(job["obs"])
+            if worker is None:
+                job["result"] = self._look(job["obs"])
+                return
+            outcome = worker._look(job["obs"])
+            state = tuple((name, getattr(worker, name)) for name in self._LOOK_COMMIT_FIELDS if hasattr(worker, name))
+            perception_state = tuple((name, getattr(worker.perception, name))
+                                     for name in self._LOOK_PERCEPTION_FIELDS if hasattr(worker.perception, name))
+            if job["generation"] == self._look_generation:
+                job["result"] = _LookResult(job["generation"], outcome, state, perception_state,
+                                             worker.scene.counter_z_runtime, tuple(logs))
         except Exception as e:  # never kill the control loop
-            job["result"] = ("error", repr(e))
+            if worker is None:
+                job["result"] = ("error", repr(e))
+            else:
+                if job["generation"] == self._look_generation:
+                    job["result"] = _LookResult(job["generation"], ("error", repr(e)), (), (),
+                                                 worker.scene.counter_z_runtime, tuple(logs))
 
     def _copy_bin_vote_frame(self, obs):
         """Copy camera buffers before returning to the runner; the worker never observes reused frame storage."""
