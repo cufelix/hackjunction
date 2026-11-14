@@ -88,7 +88,7 @@ class TestHueGuard(unittest.TestCase):
 
         p.split_blob = split
         parts = p._hue_guard_parts(masks, hsv, np.full((30, 40), 255, np.uint8), None)
-        self.assertEqual([(label, mixed) for label, _, _, _, mixed in parts],
+        self.assertEqual([(label, mixed) for label, _, _, _, mixed, _ in parts],
                          [("red", False), ("yellow", False)])
 
     def test_h1_part_with_both_source_colours_abstains(self):

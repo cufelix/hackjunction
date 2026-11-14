@@ -182,6 +182,16 @@ perception:
     enabled: false
     min_gap_deg: 6.0
     red_min_s: 110             # layer 2b: red-labelled candidate with top-face S below this -> abstain (0-255)
+  topface_mode: top35          # FLAG (recall P0). whole_blob falls back from brightest 35% when that subset is too small
+  topface_min_px: 1024         # whole_blob fallback threshold for the brightest-35% subset (far cylinder ~850 px)
+  sat_floor_adaptive: false    # FLAG (recall P0). Per-frame blue/purple S floor relative to counter background
+  sat_floor_adaptive_params: {abs_min: 45, bg_percentile: 90, margin: 10}
+  area_floor_geometric: false  # FLAG (recall P0). Prism-projected floor and cube-projected ceiling at the blob row
+  area_floor_geometric_params: {min_frac: 0.35, max_factor: 2.0}
+  partial_ok_near_hand: false  # FLAG (recall P0). FK-boundary fragments become tentative, never directly pickable
+  partial_ok_near_hand_params: {min_area_px: 30, boundary_px: 2, max_relooks: 2}
+  relook_before_done: false    # FLAG (recall P0). Retract, wait for fresh frames, then one final detection
+  relook_fresh_frames: 2
   colour_kmeans: false       # FLAG (EV gate). Once per episode, bounded k=3 on robust object-blob HSV pixels;
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:

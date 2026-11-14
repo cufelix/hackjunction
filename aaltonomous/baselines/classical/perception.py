@@ -278,6 +278,8 @@ class Perception:
         self.hue_guard = bool(hg.get("enabled", False))
         self.hue_guard_min_gap_deg = float(hg.get("min_gap_deg", 6.0))
         self.hue_guard_red_min_s = float(hg.get("red_min_s", 110.0))
+        self.topface_mode = self.cfg.get("topface_mode", "top35")
+        self.topface_min_px = int(self.cfg.get("topface_min_px", 1024))
         # Per-episode colour k-means always starts/falls back at the measured
         # robust ranges, regardless of the separately selectable stock set.
         self.colour_kmeans = bool(self.cfg.get("colour_kmeans", False))
@@ -295,7 +297,13 @@ class Perception:
         self.fk_mask = bool(self.color_gate_cfg.get("fk_mask", False))   # perception.color_gate.fk_mask (FLAG)
         self._arm_surface = None   # lazily built FK surface for fk_mask (own instance: never shares B1's lock)
         self.fk_mask_px = 0        # pixels the last fk mask removed (diagnostics)
-        self.sat_floor = self.color_gate and bool(self.color_gate_cfg.get("sat_floor", False))   # color_gate.sat_floor (FLAG)
+        self.sat_floor_adaptive = bool(self.cfg.get("sat_floor_adaptive", False))
+        self.sat_floor_fixed = self.color_gate and bool(self.color_gate_cfg.get("sat_floor", False))
+        self.sat_floor = self.color_gate and (self.sat_floor_fixed or self.sat_floor_adaptive)
+        self._sat_floors = dict(self.color_gate_cfg.get("sat_floor_params") or {})
+        self.area_floor_geometric = self.color_gate and bool(self.cfg.get("area_floor_geometric", False))
+        self.partial_ok_near_hand = bool(self.cfg.get("partial_ok_near_hand", False))
+        self.partial_near_hand_cfg = dict(self.cfg.get("partial_ok_near_hand_params") or {})
         self.live_bins = bool(self.color_gate_cfg.get("live_bins", False))   # perception.color_gate.live_bins (FLAG)
         self.bin_shift_src = None  # live_bins: object with .bin_shift {bin: pelvis dxy} (the policy's planner, bin.vote)
         self.geometry_runtime = False   # bin.geometry_runtime flag, set by policy.py: every bin consumer follows bin_shift_src.bin_shift
@@ -1106,6 +1114,57 @@ class Perception:
             out[color] = m
         return out
 
+    def _counter_image_mask(self, shape):
+        """Projected object-free near-mat band, used only by adaptive saturation sampling."""
+        mat = np.asarray(self.scene.cfg["counter"]["mat_size"], float)
+        object_near = float(self.scene.cfg["layout"]["region_y"][0]) - 0.5 * self.size
+        far = max(0.02, object_near - 0.005)
+        corners = self.scene.mat_to_pelvis(np.array([[0.0, 0.0, 0.0], [mat[0], 0.0, 0.0],
+                                                     [mat[0], far, 0.0], [0.0, far, 0.0]]))
+        uvz = self._project(corners)
+        if not np.all(np.isfinite(uvz)) or np.any(uvz[:, 2] <= 0):
+            return np.ones(shape, bool)
+        poly = np.round(uvz[:, :2]).astype(np.int32)
+        out = np.zeros(shape, np.uint8)
+        cv2.fillConvexPoly(out, poly, 1)
+        return out.astype(bool)
+
+    def _adaptive_saturation_masks(self, hsv, keep):
+        """Blue/purple mask with a counter-relative S threshold and the original H/V bands unchanged."""
+        p = self.cfg.get("sat_floor_adaptive_params") or {}
+        blue = self.hsv.get("blue") or []
+        # The projected strip is deliberately in front of the object region,
+        # so sample all of it. Excluding purple-hued counter pixels would hide
+        # exactly the background competition this adaptive floor must measure.
+        bg = (keep > 0) & self._counter_image_mask(hsv.shape[:2])
+        sat = hsv[..., 1][bg]
+        if len(sat):
+            hist = np.bincount(sat, minlength=256)
+            rank = int(np.ceil(float(p.get("bg_percentile", 90.0)) * hist.sum() / 100.0))
+            bg_p = int(np.searchsorted(np.cumsum(hist), max(rank, 1), side="left"))
+        else:
+            bg_p = 0
+        floor = float(np.clip(max(float(p.get("abs_min", 45.0)),
+                                  bg_p + float(p.get("margin", 10.0))), 0.0, 255.0))
+        self._sat_floors = (dict(self.color_gate_cfg.get("sat_floor_params") or {})
+                            if self.sat_floor_fixed else {})
+        self._sat_floors["blue"] = floor
+        ranges = {name: list(vals) for name, vals in self.hsv.items()}
+        ranges["blue"] = [([int(lo[0]), int(np.ceil(floor)), int(lo[2])], list(hi))
+                           for lo, hi in blue]
+        return self._masks_hsv(hsv, ranges)
+
+    def _topface_hsv(self, px):
+        """Configured hue vote; top35 remains the exact legacy path."""
+        if self.topface_mode != "whole_blob":
+            return top_face_hsv(px)
+        px = np.asarray(px).reshape(-1, 3)
+        top_n = max(1, int(np.ceil(0.35 * len(px))))
+        if top_n < self.topface_min_px:
+            med = np.median(px, axis=0)
+            return float(med[0]), float(med[1]), float(med[2])
+        return top_face_hsv(px)
+
     def _fit_colour_kmeans(self, hsv, keep):
         """One bounded k=3 attempt on robust object-blob pixels per episode."""
         import cv2
@@ -1157,25 +1216,35 @@ class Perception:
         self.color_gate_degraded = False
         self.update_counter_height(depth)    # calib.plane.apply_height (inert when off)
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
+        arm_boundary = None
         if self.fk_mask and robot_q is not None:   # the robot's own arms / hands are never objects
             arm = self._fk_arm_mask(keep.shape, *robot_q)
             if arm is not None:
                 keep[arm] = 0
+                if self.partial_ok_near_hand:
+                    r = max(1, int(self.partial_near_hand_cfg.get("boundary_px", 2)))
+                    outer = cv2.dilate(arm.astype(np.uint8),
+                                       cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+                    arm_boundary = (outer > 0) & ~arm
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
-        need_hsv = self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor
+        need_hsv = self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor or self.sat_floor_adaptive
         hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None
         if self.colour_kmeans and not self._colour_kmeans_done and arm_clear:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
             self._fit_colour_kmeans(hsv, kkeep)
-        masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
+        if self.sat_floor_adaptive:
+            masks = self._adaptive_saturation_masks(hsv, keep)
+        else:
+            masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
         if self.hue_guard:
             # H1: the red|yellow union is grouped and split before any colour is
             # assigned.  Each resulting part is then classified and guarded
             # solely from its own source pixels.
-            for color, blob, area, centroid, mixed in self._hue_guard_parts(masks, hsv, keep, depth):
+            for color, blob, area, centroid, mixed, tent in self._hue_guard_parts(masks, hsv, keep, depth,
+                                                                                  arm_boundary):
                 self._detect_blob(color, blob, area, centroid, depth, include_bins, dets, rejected, hsv,
-                                  hue_mixed=mixed)
+                                  hue_mixed=mixed, tentative=tent)
             items = ((color, mask) for color, mask in masks.items() if color not in ("red", "yellow"))
         else:
             items = masks.items()
@@ -1187,16 +1256,27 @@ class Perception:
             n, lab, stats, cent = cv2.connectedComponentsWithStats(m, connectivity=8)
             for i in range(1, n):
                 area = int(stats[i, cv2.CC_STAT_AREA])
-                if area < c["min_area_px"]:
+                x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+                ww, hh = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+                win = np.s_[y0:y0 + hh, x0:x0 + ww]
+                tentative = bool(arm_boundary is not None and
+                                  np.any(arm_boundary[win] & (lab[win] == i)))
+                floor = (int(self.partial_near_hand_cfg.get("min_area_px", 30))
+                         if tentative else int(c["min_area_px"]))
+                if area < floor:
                     continue
                 blob = (lab == i).astype(np.uint8)
                 if self.split_blobs:
                     for part, p_area, p_cent in self.split_blob(blob, area, cent[i], depth):
+                        part_tentative = bool(arm_boundary is not None and
+                                              np.any(arm_boundary[win] & (part[win] > 0)))
                         self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected,
-                                          hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None)
+                                          hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None,
+                                          tentative=part_tentative)
                     continue
                 self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected,
-                                  hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None)
+                                  hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None,
+                                  tentative=tentative)
         if self.hue_guard:
             dets, rejected = self._hue_guard(dets, rejected)
         if self.color_gate:
@@ -1214,14 +1294,14 @@ class Perception:
         items = []
         for i in range(1, n):
             comp = lab == i
-            top = top_face_hsv(hsv[comp])
+            top = self._topface_hsv(hsv[comp])
             label = classify_hue(top[0], self.hsv)
             if label is None:
                 label = "red" if (masks["red"][comp] > 0).sum() >= (masks["yellow"][comp] > 0).sum() else "yellow"
             items.append((label, comp.astype(np.uint8) * 255))
         return items + [(c, m) for c, m in masks.items() if c not in ("red", "yellow")]
 
-    def _hue_guard_parts(self, masks, hsv, keep, depth):
+    def _hue_guard_parts(self, masks, hsv, keep, depth, arm_boundary=None):
         """H1 red/yellow candidates, split before label assignment.
 
         A part retaining pixels from both disjoint source masks is tagged mixed;
@@ -1238,18 +1318,23 @@ class Perception:
         out = []
         for i in range(1, n):
             area = int(stats[i, cv2.CC_STAT_AREA])
-            if area < self.cfg["min_area_px"]:
-                continue
             blob = (lab == i).astype(np.uint8)
+            # recall partial_ok_near_hand: an FK-boundary fragment gets the lower floor and is marked tentative
+            tentative = bool(arm_boundary is not None and np.any(arm_boundary & (blob > 0)))
+            floor = (int(self.partial_near_hand_cfg.get("min_area_px", 30)) if tentative
+                     else int(self.cfg["min_area_px"]))
+            if area < floor:
+                continue
             parts = self.split_blob(blob, area, cent[i], depth) if self.split_blobs else [(blob, area, cent[i])]
             for part, p_area, p_cent in parts:
                 use = part > 0
-                top = top_face_hsv(hsv[use])
+                part_tentative = bool(arm_boundary is not None and np.any(arm_boundary & use))
+                top = self._topface_hsv(hsv[use])   # top35 = legacy; recall topface_mode whole_blob fallback
                 label = classify_hue(top[0], self.hsv)
                 nr, ny = int(np.count_nonzero(red[use])), int(np.count_nonzero(yellow[use]))
                 if label not in ("red", "yellow"):
                     label = "red" if nr >= ny else "yellow"
-                out.append((label, part, p_area, p_cent, nr > 0 and ny > 0))
+                out.append((label, part, p_area, p_cent, nr > 0 and ny > 0, part_tentative))
         return out
 
     def _hue_guard(self, dets, rejected):
@@ -1273,12 +1358,15 @@ class Perception:
             if reason is None:
                 if label != d.color:
                     n_relabel += 1
+                    old = d
                     d = replace(d, color=label)
+                    self._copy_tentative(old, d)
                 keep.append(d)
                 continue
             n_amb += 1
             reasons[reason] = reasons.get(reason, 0) + 1
             amb = replace(d, color_conf=AMBIGUOUS_CONF)
+            self._copy_tentative(d, amb)
             if self.place_gate:   # the place gate (colour_min > 0.3) keeps it off the bins; it stays on the table
                 keep.append(amb)
             else:
@@ -1288,7 +1376,7 @@ class Perception:
         return keep, rejected + moved
 
     def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None,
-                     hue_mixed=False):
+                     hue_mixed=False, tentative=False):
         """One colour blob -> Detection (depth top face, else plane) -> dets or rejected (the stock per-blob body)."""
         import cv2
         c = self.cfg
@@ -1319,7 +1407,7 @@ class Perception:
             elif color == "orange":
                 self._log_orange_candidate(blob)
         if det is not None and hsv is not None and self.hue_guard:
-            det.hsv_med = top_face_hsv(hsv[blob > 0])   # layer 3: colour from the top face, not the whole blob
+            det.hsv_med = self._topface_hsv(hsv[blob > 0])   # configured top-face / small-blob hue vote
             det.hue_mixed = bool(hue_mixed)
         if det is not None and hsv is not None and self.sat_floor:
             det.sat_med = float(np.median(hsv[blob > 0][:, 1]))   # color_gate.sat_floor: shadow / sheen has low S
@@ -1329,6 +1417,9 @@ class Perception:
             except Exception as exc:  # never raise into act()
                 det.color_conf = 0.0
                 self.log(f"[gate] colour_confidence failed for {color}: {type(exc).__name__}: {exc}")
+        if det is not None and tentative:
+            det.tentative = True
+            det.tentative_reason = "fk_mask_boundary"
         why = self._reject(det, bins_first=include_bins)
         if self.shape_diag and det is not None and det.shape_diag is not None:
             self._log_diag(det, why)
@@ -1784,18 +1875,32 @@ class Perception:
     def _color_gate_why(self, det, g):
         """Rules 1 (area floor scaled by distance), 1b (area ceiling: rim / tape / merged blob), 2b (positive workspace:
         only the counter in front of the bin row) and 2 (bin zone). None = keep."""
-        if g.get("sat_floor") and self._color_gate_sat_low(det, g):
+        if self.sat_floor and self._color_gate_sat_low(det, g):
             return "color_gate:sat_floor"
         Z = self._color_gate_depth(det.top)
         if Z is None:
-            if det.n_px < g["min_px_no_z"]:
+            if not getattr(det, "tentative", False) and det.n_px < g["min_px_no_z"]:
                 return "color_gate:speckle_no_z"
             if g.get("max_px_no_z") is not None and det.n_px > g["max_px_no_z"]:
                 return "color_gate:too_big_no_z"
+        elif self.area_floor_geometric:
+            p = self.cfg.get("area_floor_geometric_params") or {}
+            prism = self._projected_top_area_px(det.top, self.size * self.size / np.sqrt(3.0))
+            cube = self._projected_top_area_px(det.top, self.size * self.size)
+            if prism is None or cube is None:
+                if not getattr(det, "tentative", False) and det.n_px < g["min_px_no_z"]:
+                    return "color_gate:speckle_no_z"
+                if g.get("max_px_no_z") is not None and det.n_px > g["max_px_no_z"]:
+                    return "color_gate:too_big_no_z"
+            else:
+                if not getattr(det, "tentative", False) and det.n_px < float(p.get("min_frac", 0.35)) * prism:
+                    return "color_gate:speckle"
+                if det.n_px > float(p.get("max_factor", 2.0)) * cube:
+                    return "color_gate:too_big"
         else:
             K = self.cal.cams[self.cam].K
             expected = float(K[0, 0]) * float(K[1, 1]) * (self.size / Z) ** 2   # one object's top face, px
-            if det.n_px < g["area_frac"] * expected:
+            if not getattr(det, "tentative", False) and det.n_px < g["area_frac"] * expected:
                 return "color_gate:speckle"
             if g.get("max_area_frac") is not None and det.n_px > g["max_area_frac"] * expected:
                 return "color_gate:too_big"
@@ -1805,8 +1910,34 @@ class Perception:
         """perception.color_gate.sat_floor: a blue (purple) or yellow blob whose median S is below its floor is a
         shadow or sheen. Other colours (red, orange) and blobs without a measured S are never rejected here."""
         name = "blue" if det.color == "purple" else det.color
-        floor = (g.get("sat_floor_params") or {}).get(name)
+        if name == "blue" and self.sat_floor_adaptive:
+            floor = self._sat_floors.get("blue")
+        else:
+            floor = (g.get("sat_floor_params") or {}).get(name) if self.sat_floor_fixed else None
         return floor is not None and det.sat_med is not None and det.sat_med < float(floor)
+
+    @staticmethod
+    def _copy_tentative(source, target):
+        """Preserve opt-in dynamic metadata across dataclass replacements without changing legacy Detection bytes."""
+        if getattr(source, "tentative", False):
+            target.tentative = True
+            target.tentative_reason = getattr(source, "tentative_reason", "fk_mask_boundary")
+        return target
+
+    def _projected_top_area_px(self, top, area_m2):
+        """Local pinhole area of a horizontal top-face patch at ``top`` (row-aware via optical Z)."""
+        try:
+            T = self._T()
+            p = (np.asarray(top, float) - T[:3, 3]) @ T[:3, :3]
+            z = float(p[2])
+            if not np.isfinite(z) or z <= 0:
+                return None
+            n = np.array([0.0, 0.0, 1.0]) @ T[:3, :3]
+            K = self.cal.cams[self.cam].K
+            out = float(K[0, 0]) * float(K[1, 1]) * abs(float(np.dot(n, p))) * float(area_m2) / z ** 3
+            return out if np.isfinite(out) and out > 0 else None
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def _color_gate_workspace(self, det, g):
         """Rule 2b: keep only pelvis x in ws_x, |y| <= ws_abs_y, and in front of the bin row's near edge (nominal or
@@ -1881,8 +2012,9 @@ class Perception:
         """Rule 4: a triangle that is not a depth top face (2D blob) has no trusted shape: unknown."""
         if det.shape == "triangle" and det.method != "depth":
             diag = dict(det.shape_diag, label=None, gate="color_gate:no_depth_triangle") if det.shape_diag else None
-            return replace(det, shape=None, shape_conf=0.0, shape_path="abstain_color_gate", shape_diag=diag,
-                           apex_yaw=None, apex_conf=0.0, apex_gate=None)
+            out = replace(det, shape=None, shape_conf=0.0, shape_path="abstain_color_gate", shape_diag=diag,
+                          apex_yaw=None, apex_conf=0.0, apex_gate=None)
+            return self._copy_tentative(det, out)
         return det
 
 

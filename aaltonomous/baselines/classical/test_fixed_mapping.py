@@ -9,7 +9,7 @@ from .config import load_config
 from .policy import ClassicalPolicy
 
 REAL = {"yellow": "left", "blue": "center", "red": "right"}
-FINALS = ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22", "finals_real")
+FINALS = ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_real")
 SIM = ("submission", "cand_r17", "rc1")
 
 
