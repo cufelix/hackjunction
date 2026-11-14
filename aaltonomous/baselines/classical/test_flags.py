@@ -23,6 +23,16 @@ class TestFlags(unittest.TestCase):
         self.assertFalse(cfg["skills"]["memory"])
         self.assertIsNone(cfg["skills"]["memory_path"])   # unset: in-memory, no /tmp file
 
+    def test_finals_r22_enables_only_the_grasp_reliability_flags_over_r21(self):
+        base = load_config(overlay="finals_r21")
+        got = load_config(overlay="finals_r22_grasp")
+        base["overlay"] = "finals_r22_grasp"
+        base["grasp"]["staggered_release"] = True
+        base["policy"]["retry_jitter_m"] = 0.004
+        base["perception"]["assoc_radius_m"] = 0.10
+        base["held"]["read_through_carry"] = True
+        self.assertEqual(got, base)
+
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
 
@@ -207,7 +217,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_real", "rc1", "rc1_strict",
+                                      "finals_r21", "finals_r22_grasp", "finals_real", "rc1", "rc1_strict",
                                       "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)

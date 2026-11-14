@@ -83,3 +83,11 @@ class HeldDetector:
             scores[finger] = float(sign * native_err[idx].sum())
         scores["finger_sum"] = max(scores["index"], scores["middle"])
         return bool(scores["finger_sum"] >= self.threshold_rad), scores
+
+    def held_max(self, side, samples):
+        """Classify N ``(command, measured)`` samples by their maximum grip signal."""
+        results = [self.held(side, command, measured) for command, measured in samples]
+        if not results:
+            raise ValueError("held_max needs at least one sample")
+        key = "finger_sum" if self.mode == "finger_sum" else "track_err_max"
+        return max(results, key=lambda item: item[1][key])

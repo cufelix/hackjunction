@@ -42,6 +42,7 @@ flags:
   perception.color_gate.live_bins: false        # Felix gate  footprint follows the live bin estimate (else nominal + 10 cm near)
   perception.color_gate.sat_floor: false       # Felix gate  blue S<110 / yellow S<45 blobs rejected (shadow, sheen)
   perception.split_blobs: true                 # real colour  split touching same-colour objects
+  perception.assoc_radius_m: 0.06              # finals grasp same-colour retry association across frames
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
   grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)
@@ -53,9 +54,12 @@ flags:
   policy.episode_summary_log: false             # Oliver #3  one log line per episode end
   policy.retry_vary_grasp: false                # retry-vary another grasp when the object remains in the next frame
   policy.max_attempts_vary: null                # retry-vary e.g. 3 (needs retry_vary_grasp), only with time left
+  policy.retry_jitter_m: 0.0                    # finals grasp deterministic +/-xy retry offset; 0 = off
   policy.first_object_speed_scale: null         # finals safe null | (0,1], arm speed of the first started pick only
   grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture
   grasp.cylinder_no_yaw_vary: false             # cyl yaw    retry on a cylinder: no yaw variants (off = stock)
+  grasp.staggered_release: false                # finals grasp two-stage release; off = simultaneous release
+  grasp.staggered_release_delay_s: 0.30         # delay before DDS slots 5/6 begin opening
   policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
   policy.place_gate: false                      # EV gate    confidence-gated placement (off in shipped submission)
   policy.place_gate_colour_min: 0.6             # EV gate    minimum HSV/blob colour confidence
@@ -69,6 +73,7 @@ flags:
   grasp.drop_lateral_margin_m: 0.0              # finals safe release toward bin centre; IK fallback to stock
   policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
   grasp.held_detector: stall                   # real held  legacy diagnostic; ab_held_detector selects finger_sum
+  held.read_through_carry: false               # finals grasp post-lift + carry grip reads
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.arm_vel_cap: null                      # Timi vel   rad/s arm speed cap (real robot margin); null = profile 0.97
   motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2

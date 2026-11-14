@@ -62,4 +62,5 @@ def reserve_plan(plan, arm0, hand0, *limits):
     return dataclasses.replace(
         plan, arm=stretch(plan.arm, arm0, k), hand=stretch(plan.hand, hand0, k),
         phases=[(nm, ix(s), ix(e)) for nm, s, e in plan.phases],
-        close_hold=None if plan.close_hold is None else tuple(ix(i) for i in plan.close_hold), abort=abort)
+        close_hold=None if plan.close_hold is None else tuple(ix(i) for i in plan.close_hold),
+        release_stages=None if plan.release_stages is None else tuple(ix(i) for i in plan.release_stages), abort=abort)

@@ -66,6 +66,7 @@ FLAGS = {
     "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),
     "perception.principal_point": ("Oliver lane 3", "file", "file | center: Isaac renders cx,cy at the image centre"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
+    "perception.assoc_radius_m": ("finals grasp", 0.06, "same-colour detection-to-retry association radius across frames"),
     "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = the policy's current bin estimate (bin.vote shift / calibrate_bins); none -> nominal + near_margin_m towards the robot"),
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
     "perception.color_gate.sat_floor": ("Felix gate", False, "reject blue (purple) blobs with median HSV S < sat_floor_params.blue and yellow < .yellow (shadow / sheen); red and orange unchanged"),
@@ -84,6 +85,7 @@ FLAGS = {
     "policy.retry_vary_grasp": ("retry-vary", False, "retry after the object remains in the next frame with another "
                                                      "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
+    "policy.retry_jitter_m": ("finals grasp", 0.0, "retry grasp-point jitter magnitude; 0 disables the deterministic +/-xy pattern"),
     "policy.first_object_speed_scale": ("finals safe", None,
                                           "null | (0,1]: arm speed x this for every plan made before the first pick starts"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
@@ -93,6 +95,7 @@ FLAGS = {
     "policy.object_time_budget_s": ("EV gate", None, "cumulative planned motion budget per tracked object; null = off"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
     "grasp.held_detector": ("real held", "stall", "stall (legacy max error) | finger_sum (bias-corrected Dex3 fingers)"),
+    "held.read_through_carry": ("finals grasp", False, "sample finger_sum after lift and through carry; abort an empty post-lift read"),
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
@@ -114,6 +117,8 @@ FLAGS = {
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
     "grasp.cylinder_no_yaw_vary": ("cyl yaw", False, "retry on a detected cylinder varies the posture only, never the finger yaw (rotationally symmetric)"),
+    "grasp.staggered_release": ("finals grasp", False, "release thumb and first finger before DDS slots 5/6"),
+    "grasp.staggered_release_delay_s": ("finals grasp", 0.30, "delay before DDS slots 5/6 begin opening when staggered_release is on"),
     "bin.geometry_runtime": ("bin geo", False, "every bin consumer (perception masks/hulls/near_bin/in_bin/gate, planner drop/slots/collision) follows bin_geometry(): nominal + the voted shift"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
@@ -267,6 +272,17 @@ def check_flag_values(cfg):
         v = float(_get(cfg, k))
         if not np.isfinite(v) or v < 0.0:
             raise ValueError(f"{k} must be a finite non-negative distance")
+    distances = {"policy.retry_jitter_m": 0.02, "perception.assoc_radius_m": 0.25}
+    for k, hi in distances.items():
+        v = float(_get(cfg, k))
+        if not np.isfinite(v) or not 0.0 <= v <= hi:
+            raise ValueError(f"{k} must be finite and in [0, {hi}]")
+    delay = float(_get(cfg, "grasp.staggered_release_delay_s"))
+    if not np.isfinite(delay) or not 0.0 <= delay <= 1.0:
+        raise ValueError("grasp.staggered_release_delay_s must be finite and in [0, 1]")
+    for k in ("grasp.staggered_release", "held.read_through_carry"):
+        if not isinstance(_get(cfg, k), bool):
+            raise ValueError(f"{k}: want true or false")
     pol = cfg["policy"]
     if first_scale is not None and pol.get("safety_shell") and float(pol.get("safety_shell_vel_reserve", 0.0)) > 0.0:
         # the shell wraps planner.plan with closures bound to the stock planner: the first-pick scale would not reach it

@@ -66,6 +66,7 @@ class Plan:
     phases: list = field(default_factory=list)         # (name, start tick, end tick)
     posture: tuple | None = None                       # (posture, shape label, conf, path) with grasp.close_posture_by_shape
     close_hold: tuple | None = None                    # (first, end) tick of the closed-hand hold (lift_on_stall)
+    release_stages: tuple | None = None                # (first start, DDS 5/6 start, ramp end) ticks
     abort: tuple | None = None                         # legacy field; early servo-error abort is intentionally disabled
     safety_clips: int | None = None
     grasp_key: tuple | None = None                     # policy.retry_vary_grasp: (grasp xy, finger heading, posture)
@@ -122,6 +123,36 @@ def ramp(a, b, vmax, dt):
     if n == 0:
         return np.empty((0, len(a)))
     return a + (b - a) * (np.arange(1, n + 1) / n)[:, None]
+
+
+def staggered_release_ramp(a, b, side, vmax, dt, delay_s):
+    """Release thumb + DDS slots 3/4 now and native DDS slots 5/6 after ``delay_s``.
+
+    The returned path is precomputed, so policy ``act()`` only streams targets. ``second_tick`` is the zero-based
+    tick offset at which slots 5/6 first change.
+    """
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    if a.shape != b.shape or a.ndim != 1:
+        raise ValueError("staggered release endpoints must be equal-length vectors")
+    if side not in ("left", "right"):
+        raise ValueError(f"unknown hand side {side!r}")
+    off = 0 if side == "left" else 7
+    delayed = np.zeros(len(a), bool)
+    delayed[off + 5:off + 7] = True
+    duration = np.abs(b - a) / float(vmax)
+    second_tick = int(np.ceil(float(delay_s) / float(dt) - 1e-12))
+    offsets = np.where(delayed, second_tick, 0)
+    move_ticks = np.ceil(duration / float(dt) + 1e-9).astype(int)
+    n = int(np.max(offsets + move_ticks))
+    if n == 0:
+        return np.empty((0, len(a))), 0
+    elapsed = np.maximum(0.0, (np.arange(n, dtype=float)[:, None] + 1.0 - offsets[None]) * float(dt))
+    frac = np.ones((n, len(a)), float)
+    moving = duration > 0.0
+    frac[:, moving] = np.minimum(1.0, elapsed[:, moving] / duration[moving])
+    out = a + (b - a) * frac
+    out[-1] = b
+    return out, second_tick
 
 
 class Planner:
@@ -824,12 +855,19 @@ class Planner:
 
         def hand(name, to, hold_s):
             nonlocal cur_h
-            h = ramp(cur_h, to, hv, self.dt)
+            if name == "open" and g.get("staggered_release", False):
+                h, second_tick = staggered_release_ramp(
+                    cur_h, to, side, hv, self.dt, float(g.get("staggered_release_delay_s", 0.30)))
+            else:
+                h = ramp(cur_h, to, hv, self.dt)
+                second_tick = None
             n_ramp = len(h)
             h = np.vstack([h, np.repeat(np.asarray(to, float)[None], int(round(hold_s / self.dt)), 0)])
+            start = sum(len(x) for x in arm_parts)
             if name == "close":
-                start = sum(len(x) for x in arm_parts)
                 plan.close_hold = (start + n_ramp, start + len(h))
+            elif second_tick is not None:
+                plan.release_stages = (start, start + second_tick, start + n_ramp)
             cur_h = np.asarray(to, float).copy()
             add(name, np.repeat(cur_a[None], len(h), 0), h)
 

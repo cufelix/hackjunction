@@ -38,7 +38,7 @@ from .held import HeldDetector
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
+from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp, staggered_release_ramp
 from .safety_shell import reserve_pair, reserve_plan
 from .brain import BrainLayer, build_world
 from .brain.find import FindClient, extract_queries, match_found
@@ -1036,8 +1036,13 @@ class ClassicalPolicy:
 
     def _attempt_radius(self):
         """Association radius for executed attempts. Retry-vary uses its wider pushed-object track."""
-        pol = self.cfg["policy"]
-        return float(pol.get("retry_assoc_radius", 0.06) if self._vary_on() else pol["same_object_radius"])
+        return self._assoc_radius() if self._vary_on() else float(self.cfg["policy"]["same_object_radius"])
+
+    def _assoc_radius(self):
+        """Same-colour detection-to-target association radius across camera frames."""
+        perception = self.cfg.get("perception") or {}
+        # The policy fallback keeps small isolated unit-test configs compatible; production config owns the value.
+        return float(perception.get("assoc_radius_m", self.cfg.get("policy", {}).get("retry_assoc_radius", 0.06)))
 
     def _attempt_count(self, xy, color=None):
         rad = self._attempt_radius()
@@ -1361,12 +1366,11 @@ class ClassicalPolicy:
         return [it["d"] for it in out]
 
     def _observe_outcome(self, dets):
-        """D3: judge the last pick at the next look: the object (same colour, within retry_assoc_radius of the grasp
-        point) is still on the counter = failure, gone = clean success."""
+        """D3: judge the last pick at the next look; the attempt track uses perception.assoc_radius_m."""
         po, self._pend_out = self._pend_out, None
         if po is None:
             return
-        rad = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
+        rad = self._assoc_radius()
         near = [d for d in dets if d.color == po["color"] and np.linalg.norm(np.asarray(d.top[:2]) - po["xy"]) <= 0.03]
         if near and self.attempt_tracks:   # retry-vary on: the survivor must belong to this attempt's track
             same = [tr for tr in self.attempt_tracks if tr["color"] == po["color"]
@@ -1555,7 +1559,12 @@ class ClassicalPolicy:
         if what == "release":
             rel = self.hand_cmd.copy()
             rel[sl] = self.post[self.cfg["grasp"].get("release_posture", "preshape")][sl]
-            h1 = ramp(self.hand_cmd, rel, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
+            if self.cfg["grasp"].get("staggered_release", False):
+                h1, _ = staggered_release_ramp(
+                    self.hand_cmd, rel, plan.side, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ,
+                    float(self.cfg["grasp"].get("staggered_release_delay_s", 0.30)))
+            else:
+                h1 = ramp(self.hand_cmd, rel, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
             h1 = np.vstack([h1, np.repeat(rel[None], int(round(float(self.cfg["motion"]["open_hold_s"]) * HZ)), 0)])
             a1 = np.repeat(self.arm_cmd[None], len(h1), 0)
             a2, h2 = self.planner.go_to(self.arm_cmd, rel, home, self.post["open"])
@@ -1580,8 +1589,8 @@ class ClassicalPolicy:
 
     def _hist_for(self, d):
         """Earlier picks of this object that did not hold it (held no / unknown): same colour, within
-        retry_assoc_radius of the earlier grasp point (a missed object is often pushed a few cm)."""
-        r = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
+        perception.assoc_radius_m of the earlier grasp point (a missed object is often pushed a few cm)."""
+        r = self._assoc_radius()
         xy = np.asarray(d.top[:2], float)
         return [h for h in self.vary_hist if h["held"] is not True and h["color"] == d.color
                 and np.linalg.norm(xy - h["xy"]) < r]
@@ -1600,6 +1609,20 @@ class ClassicalPolicy:
         fh = getattr(self.planner, "finger_heading", None)
         yaw = fh(plan) if fh is not None else None
         return (np.asarray(plan.waypoints["grasp"][:2], float).copy(), yaw, self._posture_of(plan))
+
+    def _jittered_retry_detection(self, d):
+        """Shallow-copy a retry detection with deterministic +x, -x, +y, -y grasp-point jitter."""
+        magnitude = float(self.cfg["policy"].get("retry_jitter_m", 0.0))
+        if magnitude <= 0.0:
+            return d
+        attempt = self._attempt_count(np.asarray(d.top[:2], float), getattr(d, "color", None))
+        if attempt <= 0:
+            return d
+        pattern = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0))
+        shifted = copy.copy(d)
+        shifted.top = np.asarray(d.top, float).copy()
+        shifted.top[:2] += magnitude * np.asarray(pattern[(attempt - 1) % len(pattern)], float)
+        return shifted
 
     def _variants(self, d, hist):
         """Grasp changes to try, best first: {"posture": name | None, "yaw": rad | None} (None = the stock choice).
@@ -1646,6 +1669,8 @@ class ClassicalPolicy:
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
         differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""
+        plan_detection = self._jittered_retry_detection(d)
+
         def plan(relocate=None):
             args = dict(kw)
             if relocate is not None and plan_fn is None:
@@ -1653,10 +1678,10 @@ class ClassicalPolicy:
             with self._decision_motion() as pl:   # D3/D4 speed scale + first-object clearance (stock planner when off)
                 pl = self._first_object_planner(pl)
                 if plan_fn is None:
-                    return pl.plan(d, self.arm_cmd, self.hand_cmd, **args)
+                    return pl.plan(plan_detection, self.arm_cmd, self.hand_cmd, **args)
                 if pl is not self.planner:
                     args["planner"] = pl
-                return plan_fn(d, self.arm_cmd, self.hand_cmd, **args)
+                return plan_fn(plan_detection, self.arm_cmd, self.hand_cmd, **args)
 
         if not self._vary_on():
             p = plan()
@@ -2182,6 +2207,9 @@ class ClassicalPolicy:
                 # skill_only: watched for skills.memory alone -> no empty-grasp abort, no [grasp_diag] line
                 self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": check,
                                "lift_end": ph["lift"][1], "t": t, "samples": {}, "skill_only": not diag_on}
+                if bool((self.cfg.get("held") or {}).get("read_through_carry", False)) \
+                        and self.held_detector.mode == "finger_sum" and "carry" in ph:
+                    self._gdiag["carry"] = ph["carry"]
         hist = None
         if self._vary_on() and plan.side in ("left", "right"):
             key = plan.grasp_key or (np.asarray(xy, float).copy(), None, self._posture_of(plan))
@@ -2221,7 +2249,7 @@ class ClassicalPolicy:
             return False
         return not det.held(g["plan"].side, hc, hq)[0]
 
-    def _abort_empty_grasp(self, g):
+    def _abort_empty_grasp(self, g, sample="close"):
         """Skip the carry of an empty grasp: open and return home. The pick counts as a miss (attempt counted at
         start, vary_hist held=False), so the next look sees the object still on the table and retry-vary runs.
         Standalone-slot bookkeeping is left to _settle_slot, which frees the slot when the object remains."""
@@ -2231,7 +2259,7 @@ class ClassicalPolicy:
         if self._vary_on() and self.vary_hist:   # the entry _start appended for this plan
             self.vary_hist[-1]["held"] = False
         self.log(f"[held_abort] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
-                 f"close sample empty: carry skipped, object remains")
+                 f"{sample} sample empty: carry skipped, object remains")
         home = self.arm_cmd.copy()
         home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
         a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
@@ -2274,6 +2302,7 @@ class ClassicalPolicy:
         q = obs.get("hand_q")
         left = 0 if self.queue_a is None else len(self.queue_a)
         done = g["n"] - left
+        read_through = "carry" in g and self.held_detector.mode == "finger_sum"
         if q is not None:
             cmd = self._held_command()
             for key, at in (("close", g["close_end"]), ("lift", g["lift_end"])):
@@ -2283,6 +2312,18 @@ class ClassicalPolicy:
                             and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
                         self._abort_empty_grasp(g)   # queue replaced; _act pops it on this same tick
                         return
+                    if key == "lift" and read_through and not g.get("skill_only") \
+                            and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
+                        self._abort_empty_grasp(g, "post-lift")
+                        return
+            if read_through:
+                carry_start, carry_end = g["carry"]
+                if carry_start < done <= carry_end:
+                    carry = g["samples"].setdefault("carry", [])
+                    if not carry or carry[-1][0] != done:
+                        carry.append((done, np.asarray(q, float).copy(), np.asarray(cmd, float).copy()))
+        if read_through and left > 0 and done < g["carry"][1]:
+            return
         need = ("close", "lift") if self.held_detector.mode == "finger_sum" else ("lift",)
         if any(key not in g["samples"] for key in need) and left > 0:
             return
@@ -2313,6 +2354,13 @@ class ClassicalPolicy:
                              f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
         if self.held_detector.mode == "finger_sum" and close_held is not None:
             held = close_held       # headline is the post-wait close sample; lift stays separately labelled above
+        if read_through:
+            post = ([g["samples"]["lift"]] if "lift" in g["samples"] else []) + list(g["samples"].get("carry", []))
+            if post:
+                held, scores = self.held_detector.held_max(plan.side, [(hc, hq) for _, hq, hc in post])
+                parts.append(f"carry_max@n={len(post)}: finger_sum={scores['finger_sum']:.3f} "
+                             f"threshold={self.held_detector.threshold_rad:.3f} "
+                             f"sample_held={'yes' if held else 'no'}")
         pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
         if pend is not None and pend["color"] == plan.color:
             pend["held"] = None if held is None else bool(held)
@@ -2327,7 +2375,7 @@ class ClassicalPolicy:
         if not self._skills_on() or self._skill_pending is None:
             return
         pending = self._skill_pending
-        radius = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
+        radius = self._assoc_radius()
         still = any(d.color == pending["color"] and np.linalg.norm(d.top[:2] - pending["xy"]) < radius for d in dets)
         if still:
             outcome = "dropped" if pending["held"] is True else "miss"
@@ -2385,6 +2433,12 @@ class ClassicalPolicy:
         k = int(self.cfg["motion"]["chunk"])
         if self._stall is not None and self._in_hold():
             k = 1  # lift_on_stall: one tick per request inside the close hold, so every tick's hand_q is seen
+        if self._gdiag is not None and "carry" in self._gdiag:
+            done = self._gdiag["n"] - len(self.queue_a)
+            # Stop exactly at lift end so the post-lift measurement is read before any carry target is emitted.
+            for boundary in (self._gdiag["lift_end"], self._gdiag["carry"][1]):
+                if done < boundary < done + k:
+                    k = boundary - done
         a, h = self.queue_a[:k], self.queue_h[:k]
         self.queue_a, self.queue_h = self.queue_a[k:], self.queue_h[k:]
         if not len(a):
