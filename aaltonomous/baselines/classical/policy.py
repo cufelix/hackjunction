@@ -51,6 +51,7 @@ class ClassicalPolicy:
     def __init__(self, config=None, scene=None, calibration=None, safety: SafetyConfig | None = None,
                  require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None):
         self.cfg = config if isinstance(config, dict) else load_config(config, overrides)
+        self.log = log or (lambda *a: None)
         self.scene = scene if isinstance(scene, Scene) else Scene.load(scene)
         self.cal = calibration if isinstance(calibration, Calibration) else Calibration.load(calibration)
         self.spec = JointSpec()
@@ -58,14 +59,20 @@ class ClassicalPolicy:
         self.home = home_arm(self.cfg, self.spec)
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
-        self.perception = Perception(self.cfg, self.scene, self.cal, log=log or (lambda *a: None))
+        self.perception = Perception(self.cfg, self.scene, self.cal, log=self.log)
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.require_confirm = require_confirm
         self.threaded = threaded
         if threaded:  # pure-Python planning holds the GIL: hand it back to act() sooner (default 5 ms)
             sys.setswitchinterval(min(sys.getswitchinterval(), 0.001))
         self.time_limit = time_limit
-        self.log = log or (lambda *a: None)
+        self.skill_memory = None
+        if (self.cfg.get("skills") or {}).get("memory", False):
+            try:
+                from .skill_memory import SkillMemory
+                self.skill_memory = SkillMemory(path=self.cfg["skills"].get("memory_path"), log=self.log)
+            except Exception as exc:  # learning is optional and must never prevent policy construction
+                self.log(f"[skills] unavailable ({type(exc).__name__}: {exc}); using stock retry order")
         self.reset()
 
     # ------------------------------------------------------------------ API
@@ -116,6 +123,8 @@ class ClassicalPolicy:
         if isinstance(info, str):
             info = {"instruction": info}
         info = info or {}
+        if self.skill_memory is not None:
+            self.skill_memory.reseed(info.get("seed", 0))
         self.mapping = (info.get("mapping") or self._insert_guard_mapping(info) or self._instruction_mapping(info)
                         or dict(FIXED_MAPPING))
         self.planner.mapping = self.mapping
@@ -159,6 +168,7 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+        self._skill_pending = None
 
     def confirm(self):
         self._decision = "go"
@@ -283,12 +293,15 @@ class ClassicalPolicy:
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
             dets = self.perception.detect(obs["head_rgb"], obs["head_depth"])
             self.last_detections = dets
+            self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
             return self._choose_retry(dets, obs, verify=False)
         dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
-        corrections = self._review_bins(bin_dets)
+        if self.verification_pending is None:
+            self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
+        corrections = self._review_bins(bin_dets, float(obs.get("t", 0.0)))
 
         # A known wrong-bin object is the largest score swing, so repair it before
         # touching a new counter object.  The fresh detection is planned directly;
@@ -608,6 +621,41 @@ class ClassicalPolicy:
             out = ([{"posture": v1, "yaw": None}] if p0 == demo else []) + [{"posture": v1, "yaw": a} for a in yaws]
         return out[: int(pol.get("retry_max_variants", 3))]
 
+    def _skills_on(self):
+        return getattr(self, "skill_memory", None) is not None
+
+    @staticmethod
+    def _skill_key(d, side):
+        return (getattr(d, "shape", None) or "unknown", getattr(d, "color", "unknown"), side or "unknown")
+
+    @staticmethod
+    def _skill_arm(v, prev):
+        """Name an existing `_variants` motion without creating a new posture or heading."""
+        alt = v["posture"] is not None and v["posture"] != prev["posture"]
+        yaw = v["yaw"] is not None
+        if not yaw:
+            return "alternate_posture" if alt else "stock"
+        delta = (v["yaw"] - prev["yaw"] + np.pi) % (2 * np.pi) - np.pi
+        suffix = "positive" if delta >= 0 else "negative"
+        return ("alternate_posture_yaw_" if alt else "yaw_") + suffix
+
+    def _ordered_skill_variants(self, d, hist, variants):
+        """Reorder only motions already returned by `_variants`; disabled is byte-for-byte the original order."""
+        if not self._skills_on():
+            return [(None, v) for v in variants]
+        prev = hist[-1]
+        labelled = [(self._skill_arm(v, prev), v) for v in variants]
+        default_order = [arm for arm, _ in labelled]
+        chosen = self.skill_memory.choose(self._skill_key(d, prev["side"]), default_order)
+        rank = {arm: i for i, arm in enumerate(chosen)}
+        return sorted(labelled, key=lambda item: rank.get(item[0], len(rank)))
+
+    def _tag_skill_plan(self, plan, d, arm):
+        if self._skills_on() and plan.ok:
+            plan.skill_arm = arm
+            plan.skill_key = self._skill_key(d, plan.side)
+        return plan
+
     def _plan_pick(self, d, kw, plan_fn=None):
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
@@ -620,14 +668,38 @@ class ClassicalPolicy:
             return fn(d, self.arm_cmd, self.hand_cmd, **args)
 
         if not self._vary_on():
-            return plan()
+            p = plan()
+            return self._tag_skill_plan(p, d, "stock") if self._skills_on() else p
         hist = self._hist_for(d)
         if not hist:
             p = plan()
             if p.ok:
                 p.grasp_key = self._grasp_key(p)
-            return p
-        for v in self._variants(d, hist):
+            if not self._skills_on() or not p.ok:
+                return self._tag_skill_plan(p, d, "stock")
+            key = p.grasp_key
+            prev = {"color": d.color, "xy": np.asarray(key[0], float), "yaw": key[1],
+                    "posture": key[2], "side": p.side, "held": False}
+            variants = [(self._skill_arm(v, prev), v) for v in self._variants(d, [prev])]
+            default_order = ["stock"] + [arm for arm, _ in variants]
+            chosen = self.skill_memory.choose(self._skill_key(d, p.side), default_order)
+            by_arm = {arm: v for arm, v in variants}
+            for arm in chosen:
+                if arm == "stock":
+                    return self._tag_skill_plan(p, d, arm)
+                v = by_arm.get(arm)
+                if v is None:
+                    continue
+                self.planner.vary = v
+                try:
+                    candidate = plan(relocate=False)
+                finally:
+                    self.planner.vary = None
+                if candidate.ok:
+                    candidate.grasp_key = self._grasp_key(candidate)
+                    return self._tag_skill_plan(candidate, d, arm)
+            return self._tag_skill_plan(p, d, "stock")
+        for arm, v in self._ordered_skill_variants(d, hist, self._variants(d, hist)):
             self.planner.vary = v
             try:
                 p = plan(relocate=False)
@@ -641,6 +713,7 @@ class ClassicalPolicy:
                 self.log(f"[retry_vary] {d.color} variant {self._vary_txt(v)} repeats a tried grasp")
                 continue
             p.grasp_key = key
+            self._tag_skill_plan(p, d, arm)
             self.log(f"[retry_vary] {d.color} label={getattr(d, 'shape', None)} try {len(hist) + 1}: "
                      f"{self._vary_txt(v)} -> {self._key_txt(key)} (before: "
                      + ", ".join(self._key_txt((h["xy"], h["yaw"], h["posture"])) for h in hist) + ")")
@@ -650,7 +723,7 @@ class ClassicalPolicy:
             p.grasp_key = self._grasp_key(p)
             if any(self._same_grasp(p.grasp_key, h) for h in hist):
                 return Plan(False, color=d.color, reason="retry_vary: every grasp repeats a tried (point, yaw, posture)")
-        return p
+        return self._tag_skill_plan(p, d, "stock")
 
     @staticmethod
     def _vary_txt(v):
@@ -686,7 +759,7 @@ class ClassicalPolicy:
         blocked = self.used_drop_slots[bin_name] | self.reserved_drop_slots[bin_name]
         return [i for i in range(len(self.planner.drop_slots(bin_name))) if i not in blocked]
 
-    def _review_bins(self, bin_dets):
+    def _review_bins(self, bin_dets, t=None):
         """Update slot occupancy, verify the last release, and return corrective picks.
 
         A coloured component on a bin footprint but with its estimated centre
@@ -726,9 +799,11 @@ class ClassicalPolicy:
                 if matching:
                     self.retry_targets.pop(matching[0])
                 self.last_verification = ("ok", pending)
+                self._finish_skill_attempt("placed", t, held=True)
             elif yellow_unknown and pending["color"] == "yellow":
                 self.reserved_drop_slots[target].add(slot)   # unknown: keep the slot blocked, no retry / relook
                 self.last_verification = ("unknown", pending)
+                self._finish_skill_attempt("held", t, held=True)
             else:
                 # Keep the attempted slot unavailable: if the side-bin view was
                 # occluded, a successful object may still be sitting there.
@@ -738,6 +813,7 @@ class ClassicalPolicy:
                     self.retry_targets.append((pending["color"], np.asarray(pending["source_xy"], float)))
                 self.verify_relooks_remaining = int(self.cfg["policy"].get("verify_relooks", 1))
                 self.last_verification = ("retry", pending)
+                self._finish_skill_attempt("dropped", t, held=False)
             self.verification_pending = None
         return corrections
 
@@ -825,16 +901,24 @@ class ClassicalPolicy:
                            "min": int(round(float(self.cfg["motion"]["close_hold_s"]) * HZ)),
                            "rad": float(ls.get("stall_rad", 0.01)), "need": int(ls.get("settle_ticks", 3)),
                            "last": None, "still": 0, "t": t}
-        if self.cfg["policy"].get("grasp_diag_log", False) and plan.side in ("left", "right"):
+        diag_on = self.cfg["policy"].get("grasp_diag_log", False)
+        if (diag_on or self._skills_on()) and plan.side in ("left", "right"):
             ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
             if "close" in ph and "lift" in ph:
                 self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1],
                                "lift_end": ph["lift"][1], "t": t, "samples": {}}
+        hist = None
         if self._vary_on() and plan.side in ("left", "right"):
             key = plan.grasp_key or (np.asarray(xy, float).copy(), None, self._posture_of(plan))
             h = {"color": plan.color, "xy": np.asarray(key[0], float), "yaw": key[1], "posture": key[2],
                  "side": plan.side, "held": None}
             self.vary_hist.append(h)
+            hist = h
+        if self._skills_on() and plan.side in ("left", "right"):
+            self._skill_pending = {"key": getattr(plan, "skill_key", ("unknown", plan.color, plan.side)),
+                                   "arm": getattr(plan, "skill_arm", "stock"), "color": plan.color,
+                                   "xy": np.asarray(xy, float).copy(), "held": None, "hist": hist,
+                                   "started": float(t), "duration_s": float(plan.duration)}
         self._enqueue(plan.arm, plan.hand)
         if self._slots_on() and plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
             self.slot_used[plan.target_bin].add(plan.drop_slot)
@@ -882,8 +966,39 @@ class ClassicalPolicy:
             held = bool(err.max() >= 0.010)
             parts.append(f"{key}@{tick}: track_err_max={err.max():.3f} stall_vs_closed="
                          f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
-        self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
-                 f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
+        if self._skill_pending is not None and self._skill_pending["color"] == plan.color:
+            self._skill_pending["held"] = held
+            if self._skill_pending["hist"] is not None:
+                self._skill_pending["hist"]["held"] = held
+        if self.cfg["policy"].get("grasp_diag_log", False):
+            self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
+                     f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
+
+    def _settle_skill_attempt(self, dets, t):
+        pending = self._skill_pending
+        if pending is None:
+            return
+        radius = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
+        still = any(d.color == pending["color"] and np.linalg.norm(d.top[:2] - pending["xy"]) < radius for d in dets)
+        if still:
+            outcome = "dropped" if pending["held"] is True else "miss"
+            self._finish_skill_attempt(outcome, t, held=False)
+        else:
+            self._finish_skill_attempt("held" if pending["held"] is not False else "miss", t,
+                                       held=pending["held"] is not False)
+
+    def _finish_skill_attempt(self, outcome, t=None, held=None):
+        pending = self._skill_pending
+        if pending is None or not self._skills_on():
+            return
+        if pending["hist"] is not None and held is not None:
+            pending["hist"]["held"] = bool(held)
+        duration = pending["duration_s"]
+        if t is not None:
+            duration = max(duration, max(0.0, float(t) - pending["started"]))
+        self.skill_memory.record(pending["key"], pending["arm"], outcome, duration)
+        self.log(f"[skills] key={pending['key']} arm={pending['arm']} outcome={outcome}")
+        self._skill_pending = None
 
     def _in_hold(self):
         g = self._stall

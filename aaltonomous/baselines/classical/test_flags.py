@@ -18,6 +18,11 @@ class TestFlags(unittest.TestCase):
                 self.assertEqual(_get(cfg, k), off, k)
         self.assertFalse(any(on for _, _, on, _, _ in effective_flags(cfg)))
 
+    def test_skill_memory_flags_default_off(self):
+        cfg = load_config(overlay="none")
+        self.assertFalse(cfg["skills"]["memory"])
+        self.assertEqual(cfg["skills"]["memory_path"], "/tmp/aalto_skills.sqlite")
+
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
 
@@ -86,6 +91,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary",
                                             "policy.max_total_attempts"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
+        cand_r17 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r17")) if is_on}
+        expect["ab_skills"] = cand_r17 | {"skills.memory"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -117,7 +124,7 @@ class TestFlags(unittest.TestCase):
     def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
-        self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
+        self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "ab_skills", "cand_r16", "cand_r16_nopp", "cand_r17",
                                       "finals_real", "rc1"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)

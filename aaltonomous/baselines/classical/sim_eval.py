@@ -48,7 +48,7 @@ def main(argv=None):
         for seed in a.seeds:
             env.rng = np.random.default_rng(seed)
             obs = env.reset()  # the policy goes home + settles before its first look (fresh frame)
-            pol.reset({"instruction": obs["instruction"]})
+            pol.reset({"instruction": obs["instruction"], "seed": seed})
             clips, info = [], {}
             while True:
                 obs, info = env.step(pol.act(obs))

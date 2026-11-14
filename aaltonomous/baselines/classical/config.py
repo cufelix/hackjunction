@@ -29,6 +29,8 @@ VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affin
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
 FLAGS = {
+    "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
+    "skills.memory_path": ("skill memory", "/tmp/aalto_skills.sqlite", "SQLite path (AALTO_SKILLS_DB overrides)"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
@@ -225,4 +227,3 @@ def home_arm(cfg, spec: JointSpec | None = None):
     if bad:
         raise ValueError(f"home_arm_q too close to the joint limits: {bad}")
     return q
-
