@@ -213,9 +213,11 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
+        expect["finals_r22_bare"] = expect["finals_r22"] | {"perception.glare_reject.enabled",
+                                                             "perception.reflection_reject.enabled", "perception.local_bg.enabled"}   # bare-table A/B
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
                   "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk",
-                  "finals_r22_langzip", "finals_r22_counter"):
+                  "finals_r22_langzip", "finals_r22_counter", "finals_r22_bare"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate",
                   "finals_r22_counter"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
@@ -286,10 +288,11 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_r22", "finals_r22_cal",
-                                      "finals_r22_chunk", "finals_r22_counter", "finals_r22_gate",
-                                      "finals_r22_grasp", "finals_r22_langzip", "finals_r22_recall",
-                                      "finals_real", "rc1", "rc1_strict", "safe_profile"})
+                                      "finals_r21", "finals_r22", "finals_r22_bare",
+                                      "finals_r22_cal", "finals_r22_chunk", "finals_r22_counter",
+                                      "finals_r22_gate", "finals_r22_grasp", "finals_r22_langzip",
+                                      "finals_r22_recall", "finals_real", "rc1", "rc1_strict",
+                                      "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
