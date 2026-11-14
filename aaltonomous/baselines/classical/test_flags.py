@@ -23,6 +23,20 @@ class TestFlags(unittest.TestCase):
         self.assertFalse(cfg["skills"]["memory"])
         self.assertIsNone(cfg["skills"]["memory_path"])   # unset: in-memory, no /tmp file
 
+    def test_calibration_and_empty_recovery_remain_existing_opt_ins(self):
+        """C5/H6, H3, and C4 fixes must not change the flags-off policy."""
+        stock = load_config(overlay="none")
+        finals = load_config(overlay="finals_r21")
+        self.assertIn("calib.plane.apply_height", FLAGS)
+        self.assertIn("perception.online_pitch_cal", FLAGS)
+        self.assertIn("grasp.held_detector", FLAGS)
+        self.assertFalse(stock["calib"]["plane"]["apply_height"])
+        self.assertFalse(stock["perception"]["online_pitch_cal"])
+        self.assertEqual(stock["grasp"]["held_detector"], "stall")
+        self.assertTrue(finals["calib"]["plane"]["apply_height"])
+        self.assertEqual(finals["perception"]["online_pitch_cal"], "table")
+        self.assertEqual(finals["grasp"]["held_detector"], "finger_sum")
+
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
 

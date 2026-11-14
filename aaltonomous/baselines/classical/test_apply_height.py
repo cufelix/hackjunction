@@ -8,7 +8,7 @@ from aaltonomous.scene.scene import Scene
 
 from .config import hand_postures, home_arm, load_config
 from .mock_world import Renderer
-from .perception import Detection, Perception
+from .perception import CounterHeightSample, Detection, Perception
 from .planner import Planner
 
 CAL = Calibration.load()
@@ -54,12 +54,43 @@ class TestApplyHeight(unittest.TestCase):
 
     def test_estimate_plus_10cm(self):
         p, sc, logs = _perc()
-        _looks(p, _depth(NOM + 0.10))
+        d = _depth(NOM + 0.10)
+        p.update_counter_height(d), p.update_counter_height(d)
+        self.assertEqual(sc.counter_z, NOM)  # H6: never commit from fewer than all N samples
+        p.update_counter_height(d)
         self.assertAlmostEqual(sc.counter_z, NOM + 0.10, delta=0.005)
         self.assertEqual(len(logs), 3)
-        self.assertRegex(logs[-1], r"\[apply_height\] est=.* applied=.* n=3 tilt_deg=.* fallback=none")
+        self.assertRegex(logs[-1], r"\[apply_height\] est=.* applied=.* n=3/3 .*tilt_deg=.* fallback=none")
         p.reset_calibration()
         self.assertEqual(sc.counter_z, NOM)
+
+    def test_inconsistent_window_does_not_commit_then_consistent_window_commits_once(self):
+        p, sc, _ = _perc()
+        for z in (NOM + 0.02, NOM + 0.10, NOM + 0.18):
+            p.accept_counter_height_sample(CounterHeightSample(z, 0.0, 1000, None))
+        self.assertEqual(sc.counter_z, NOM)
+        self.assertFalse(p._ah_done)
+        accepted = NOM + 0.081
+        for z in (accepted - 0.002, accepted, accepted + 0.002):
+            p.accept_counter_height_sample(CounterHeightSample(z, 0.0, 1000, None))
+        self.assertAlmostEqual(sc.counter_z, accepted, delta=1e-12)
+        committed = sc.counter_z
+        p.accept_counter_height_sample(CounterHeightSample(NOM - 0.15, 0.0, 1000, None))
+        self.assertEqual(sc.counter_z, committed)  # H6: one immutable commit per episode
+
+    def test_spread_and_mad_are_both_gated(self):
+        p, sc, _ = _perc()
+        # Spread fails even though the median/MAD are small (one transient plane).
+        for z in (NOM + 0.10, NOM + 0.101, NOM + 0.14):
+            p.accept_counter_height_sample(CounterHeightSample(z, 0.0, 1000, None))
+        self.assertEqual(sc.counter_z, NOM)
+        # MAD independently fails while the 14 mm peak-to-peak spread passes its 15 mm limit.
+        p, sc, _ = _perc()
+        for z in (NOM + 0.100, NOM + 0.107, NOM + 0.114):
+            p.accept_counter_height_sample(CounterHeightSample(z, 0.0, 1000, None))
+        self.assertEqual(sc.counter_z, NOM)
+        self.assertIn("max_spread_m", p.ah)
+        self.assertIn("max_mad_m", p.ah)
 
     def test_clamped_to_20cm(self):
         p, sc, logs = _perc()
@@ -72,7 +103,7 @@ class TestApplyHeight(unittest.TestCase):
             p, sc, logs = _perc()
             p.update_counter_height(bad)
             self.assertEqual(sc.counter_z, NOM)
-            self.assertRegex(logs[-1], r"n=0 .*fallback=\S+")
+            self.assertRegex(logs[-1], r"n=0/3 .*fallback=\S+")
             self.assertNotIn("fallback=none", logs[-1])
 
     def test_tilted_plane_is_nominal_and_logs_tilt(self):

@@ -245,8 +245,10 @@ def vote_bins(perception, planner, frames, cfg, log=print):
     try:
         rims, tapes = [], []
         for f in frames:
-            rims.append(rim_votes(perception, f.get("head_depth"), priors, v))
-            tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v))
+            frame = f.get("transform") or perception.frame_transform()
+            with perception.use_frame_transform(frame):
+                rims.append(rim_votes(perception, f.get("head_depth"), priors, v))
+                tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v))
         rim = {n: _med(rims, n) for n in names}
         tape = {n: _med(tapes, n) for n in names}
         shift, extra, info = resolve(priors, rim, tape, v)

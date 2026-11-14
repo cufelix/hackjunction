@@ -111,6 +111,7 @@ class ClassicalPolicy:
         self.perception.geometry_runtime = bool((self.cfg.get("bin") or {}).get("geometry_runtime"))   # perception follows the shift without bin.vote/live_bins gates
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
         self.require_confirm = require_confirm
+        self._jobs = {}   # bounded background work; reset swaps the dict so stale jobs cannot publish into a new episode
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
         if self._shell:   # policy.safety_shell: all heavy work off the 30 Hz loop (look/plan thread), plans within the reserve
             threaded = True
@@ -216,7 +217,9 @@ class ClassicalPolicy:
             self.brain.reset()
         self.time_limit = info.get("time_limit", self.time_limit)
         self._resolve_time_alias()
-        self.state = "init"
+        preflight = bool(self.cfg["perception"].get("online_pitch_cal", False)
+                         or (self.cfg.get("calib") or {}).get("plane", {}).get("apply_height", False))
+        self.state = "calibrate" if preflight else "init"
         self.queue_a = self.queue_h = None
         self.arm_cmd = self.hand_cmd = None
         self.attempts = []          # (position, count) of objects we tried to pick
@@ -231,6 +234,7 @@ class ClassicalPolicy:
         self.events = []
         self.plans = []
         self._job = None
+        self._jobs = {}
         self._decision = None
         self.last_detections = []
         self.mapping_conf = dict(info.get("mapping_conf") or {})   # colour -> confidence (default 1.0), triage tie-break
@@ -248,6 +252,10 @@ class ClassicalPolicy:
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
+        if self._shell:
+            # A calibration hold must start from this episode's encoders, never a target cached by the shell in the
+            # previous episode.  _act() installs the measured pose before the first _hold().
+            self._shell_last = None
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
         # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
         lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
@@ -257,10 +265,13 @@ class ClassicalPolicy:
             self.pitch_calibration = None
             self._pitch_calibration_done = False   # = the worker was started this episode
         self._pitch_thread = None
+        self._calib_phase_t0 = None
+        self._height_phase_t0 = None
         self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = {}, {}, {}   # bin.vote: nominal until voted
         self._bv_frames, self._bv_done = [], False
         self.calibration = None
         self._calibration_done = False
+        self._empty_recovery = None
         self.hand_calibration = None    # HeadCalibResult of this episode (perception.hand_calibration)
         self._hc_done = self.hand_calib is None
         self._hc_tries = 0
@@ -353,12 +364,12 @@ class ClassicalPolicy:
     def _start_pitch_worker(self, rgb, depth):
         """Run the camera-pitch fit ONCE per episode in a daemon thread, started on the first valid frame."""
         self._pitch_calibration_done = True
-        token, rgb, depth = self._pitch_token, np.array(rgb), np.array(depth)
+        token = self._pitch_token
 
         def work():
             started = time.perf_counter()
             try:
-                out = self.perception.compute_pitch(rgb, depth)
+                out = self.perception.compute_pitch(np.array(rgb, copy=True), np.array(depth, copy=True))
             except Exception as exc:  # optional calibration must never hurt the episode
                 out = self.perception.make_pitch_failure(f"{type(exc).__name__}: {exc}",
                                                          (time.perf_counter() - started) * 1000.0)
@@ -386,6 +397,76 @@ class ClassicalPolicy:
                      f"residual={pitch_cal.residual_m * 1000.0:.1f} mm, "
                      f"points={pitch_cal.n_points}, time={pitch_cal.elapsed_ms:.1f} ms "
                      f"({pitch_cal.reason})")
+
+    def _pitch_timeout(self, t):
+        """Freeze nominal extrinsics and invalidate a late worker before any motion is allowed."""
+        with self._pitch_lock:
+            if self.pitch_calibration is not None:
+                return
+            self._pitch_token += 1
+            out = self.perception.make_pitch_failure("pre-motion calibration timeout",
+                                                     max(0.0, t - self._calib_phase_t0) * 1000.0)
+            self.perception.commit_pitch(out)
+            self.pitch_calibration = out
+        self._log_pitch(out)
+
+    def _preflight_calibration(self, obs, t):
+        """Hold measured joints while pitch then N-gated table height calibrate; never performs a fit in act()."""
+        if self._calib_phase_t0 is None:
+            self._calib_phase_t0 = t
+            self._note(t, "pre-motion calibration: holding measured joints")
+
+        pitch_on = bool(self.cfg["perception"].get("online_pitch_cal", False))
+        if pitch_on and self.pitch_calibration is None:
+            if (not self._pitch_calibration_done
+                    and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
+                self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
+            if t - self._calib_phase_t0 >= self.PITCH_WAIT_S:
+                self._pitch_timeout(t)
+            else:
+                return self._hold()
+
+        plane = (self.cfg.get("calib") or {}).get("plane") or {}
+        if plane.get("apply_height", False) and not self.perception._ah_done:
+            if self._height_phase_t0 is None:
+                self._height_phase_t0 = t
+            timeout = float(plane.get("timeout_s", 3.0))
+            if t - self._height_phase_t0 >= timeout:
+                self.perception._ah_done, self.perception._ah_committed = True, None
+                self.planner.commit_counter_height(None)
+                self._jobs.pop("counter_height", None)
+                self._note(t, f"runtime height fallback: pre-motion timeout ({timeout:.1f} s); nominal keepout")
+            else:
+                job = self._jobs.get("counter_height")
+                if job is None:
+                    depth = obs.get("head_depth")
+                    frame = self.perception.frame_transform()
+                    r = self._bg("counter_height", self._measure_counter_height, depth, frame)
+                else:
+                    r = self._bg("counter_height", self._measure_counter_height, None, None)
+                if r is None:
+                    return self._hold()
+                if r[0] == "err":
+                    from .perception import CounterHeightSample
+                    sample = CounterHeightSample(np.nan, np.nan, 0, f"{type(r[1]).__name__}: {r[1]}")
+                else:
+                    sample = r[1]
+                done, height = self.perception.accept_counter_height_sample(sample, commit_scene=False)
+                if done:
+                    self.planner.commit_counter_height(height)
+                    state = "nominal fallback" if height is None else f"{height:.4f} m"
+                    self._note(t, f"runtime height committed once: {state}; planner keepout={self.planner.counter_keepout_z:.4f} m")
+                else:
+                    return self._hold()
+
+        self.state = "init"
+        self._note(t, f"pre-motion calibration complete: transform v{self.perception.frame_transform().version}")
+        return self._hold()
+
+    def _measure_counter_height(self, depth, frame):
+        """Worker-only copy + fit; copying a full depth frame never runs in act()."""
+        depth = None if depth is None else np.array(depth, copy=True)
+        return self.perception.measure_counter_height(depth, frame)
 
     def _hand_calibrate(self, obs, t):
         """perception.hand_calibration, ASYNC: on a still frame (encoders vs depth in sync) the 30-300 ms ICP runs on a
@@ -635,9 +716,8 @@ class ClassicalPolicy:
             elif obs.get("hand_q") is not None:
                 self.held_detector.observe(t, self._held_command(), obs["hand_q"])
         self._joint_offset_diag(obs, t)
-        if (not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False)
-                and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
-            self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
+        if self.state == "calibrate":
+            return self._preflight_calibration(obs, t)
         if not self._calibration_done and (self.cfg["perception"].get("self_calibration") or {}).get("enabled", False):
             started = time.perf_counter()
             try:
@@ -666,6 +746,8 @@ class ClassicalPolicy:
             self._hand_calibrate(obs, t)
         if self._gdiag is not None:
             self._grasp_diag(obs)
+        if self._empty_recovery is not None:
+            return self._empty_recovery_step(t)
         if self._stall is not None:
             self._lift_on_stall(obs)
         if self._exec is not None and self.queue_a is not None and len(self.queue_a):
@@ -679,7 +761,26 @@ class ClassicalPolicy:
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":
-            a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
+            if (self.cfg.get("calib") or {}).get("plane", {}).get("apply_height", False):
+                if "startup_route" not in self._jobs:
+                    r = self._bg("startup_route", self.planner.safe_home_route,
+                                 self.arm_cmd.copy(), self.hand_cmd.copy(), ("left", "right"), None)
+                else:
+                    r = self._bg("startup_route", self.planner.safe_home_route, None, None)
+                if r is None:
+                    return self._hold()
+                if r[0] == "err":
+                    self.state = "staging_hold"
+                    self._note(t, f"height-safe staging unproved: {type(r[1]).__name__}: {r[1]}; holding")
+                    return self._hold()
+                route = r[1]
+                if not route.ok:
+                    self.state = "staging_hold"
+                    self._note(t, f"height-safe staging unproved: {route.reason}; holding")
+                    return self._hold()
+                a, h = route.arm, route.hand
+            else:
+                a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
             self._home_move = (a, h)
             dq = np.abs(self.home - self.arm_cmd).max()
             self.pending_text = f"move both arms to home_arm_q (max joint change {dq:.2f} rad, {len(a) / HZ:.1f} s)"
@@ -708,18 +809,19 @@ class ClassicalPolicy:
             self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
             self.state = "look"
             return self._pop()
+        if self.state == "look" and self._await_pitch_cal(t):
+            return self._hold()
         if self.state == "look" and not self._bv_done and (self.cfg.get("bin") or {}).get("vote", {}).get("enabled"):
             # bin.vote: first n_frames looks at home, before any pick; then freeze the median, never again
             v = self.cfg["bin"]["vote"]
-            self._bv_frames.append({"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth")})
+            self._bv_frames.append({"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth"),
+                                    "transform": self.perception.frame_transform()})
             if len(self._bv_frames) < int(v["n_frames"]):
                 return self._hold()
             self._bv_done = True
             shift, extra, conf = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg, log=lambda m: self._note(t, m))
             self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = shift, extra, conf
             self._bv_frames = []
-        if self.state == "look" and self._await_pitch_cal(t):
-            return self._hold()
         if self.state == "look":
             if self._dflag("confidence_tiers") and self.tier is None:
                 try:
@@ -767,22 +869,23 @@ class ClassicalPolicy:
         if self.state == "executing":  # queue drained -> back home: look again after settling
             self.state = "settle"
             return self._act(obs)
+        if self.state == "staging_hold":
+            return self._hold()
+        if self.state == "empty_hold":
+            return self._hold()
         return self._hold(done=True)
 
-    PITCH_WAIT_S = 1.0   # perception.online_pitch_cal: the first look waits at most this long (sim time) for the commit
+    PITCH_WAIT_S = 1.0   # perception.online_pitch_cal: pre-motion hold waits at most this long (observation time)
 
     def _await_pitch_cal(self, t):
         """online_pitch_cal ON: the first look must not run on the nominal extrinsics before the fit committed (it would
-        see 0 detections and end the episode). True = hold this tick (max PITCH_WAIT_S from the episode start). Threaded:
-        never blocks. Not threaded: bounded join of the fit worker. Flag off: always False."""
+        see 0 detections and end the episode). Timeout is measured from calibration-phase entry, never episode reset.
+        This poll never joins a worker, so act() cannot block. Flag off: always False."""
         if not self.cfg["perception"].get("online_pitch_cal", False) or self.pitch_calibration is not None:
             return False
-        if t - getattr(self, "_ep_t0", t) >= self.PITCH_WAIT_S:
+        entered = self._calib_phase_t0 if self._calib_phase_t0 is not None else t
+        if t - entered >= self.PITCH_WAIT_S:
             return False
-        th = self._pitch_thread
-        if not self.threaded and th is not None:
-            th.join(timeout=2.0)
-            return self.pitch_calibration is None and th.is_alive()
         return True
 
     # ------------------------------------------------------------------ look + plan
@@ -2222,20 +2325,41 @@ class ClassicalPolicy:
         return not det.held(g["plan"].side, hc, hq)[0]
 
     def _abort_empty_grasp(self, g):
-        """Skip the carry of an empty grasp: open and return home. The pick counts as a miss (attempt counted at
-        start, vary_hist held=False), so the next look sees the object still on the table and retry-vary runs.
-        Standalone-slot bookkeeping is left to _settle_slot, which frees the slot when the object remains."""
+        """Cancel carry and request a proved open -> vertical lift -> home recovery in a worker."""
         plan = g["plan"]
         self._gdiag = None
         self._stall = self._exec = None      # per-plan watchers: their indices no longer match the queue
         if self._vary_on() and self.vary_hist:   # the entry _start appended for this plan
             self.vary_hist[-1]["held"] = False
         self.log(f"[held_abort] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
-                 f"close sample empty: carry skipped, object remains")
-        home = self.arm_cmd.copy()
-        home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
-        a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
-        self._enqueue(a, h)
+                 f"close sample empty: carry cancelled, proving vertical escape")
+        self.queue_a = np.empty((0, 14)); self.queue_h = np.empty((0, 14))
+        self._jobs.pop("empty_recovery", None)
+        self._empty_recovery = {"arm": self.arm_cmd.copy(), "hand": self.hand_cmd.copy(), "side": plan.side,
+                                "source_bin": plan.source_bin, "t": g["t"]}
+
+    def _empty_recovery_step(self, t):
+        """Poll only; route generation/IK/dry-run stays off the control loop."""
+        rec = self._empty_recovery
+        if "empty_recovery" not in self._jobs:
+            r = self._bg("empty_recovery", self.planner.safe_home_route, rec["arm"], rec["hand"],
+                         (rec["side"],), rec["source_bin"])
+        else:
+            r = self._bg("empty_recovery", self.planner.safe_home_route, None, None)
+        if r is None:
+            return self._hold()
+        if r[0] == "err" or not r[1].ok:
+            reason = f"{type(r[1]).__name__}: {r[1]}" if r[0] == "err" else r[1].reason
+            self._empty_recovery = None
+            self.state = "empty_hold"
+            self._note(t, f"empty-grasp recovery unproved: {reason}; holding")
+            return self._hold()
+        route = r[1]
+        self._empty_recovery = None
+        self._enqueue(route.arm, route.hand)
+        self.state = "executing"
+        self._note(t, "empty-grasp recovery: open -> vertical lift -> checked home")
+        return self._pop() if len(route.arm) else self._hold()
 
     def _joint_offset_diag(self, obs, t):
         """debug.log_joint_offset (passive): cmd-minus-measured over the first second of steady holds, from the policy's

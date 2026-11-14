@@ -85,6 +85,16 @@ class Plan:
                 f"max_tilt={tilt:.0f}deg  {self.duration:.1f}s  safety_clips={self.safety_clips}")
 
 
+@dataclass
+class SafeRoute:
+    """Proved open -> vertical escape -> home route, or a fail-closed reason with no commands."""
+    ok: bool
+    arm: np.ndarray | None = None
+    hand: np.ndarray | None = None
+    phases: list = field(default_factory=list)
+    reason: str = ""
+
+
 def time_scale(Qs, vmax, amax, dt):
     """Piecewise-linear joint path through Qs (n, d) -> samples (T, d) at dt, EXCLUDING Qs[0], with a trapezoidal
     profile on the inf-norm arc length: no joint ever moves faster than vmax."""
@@ -142,6 +152,15 @@ class Planner:
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
         self.drop_extra = {}   # bin.vote: bin name -> extra release height (m) when the bin position is low-confidence
         self.bin_conf = {}     # bin.vote: bin name -> confidence in bin_shift (1.0 agree, 0.5 prior only, 0.3 disagree)
+
+    @property
+    def counter_keepout_z(self):
+        """Planner-side table keepout source; one scene assignment updates every planner consumer atomically."""
+        return self.scene.counter_z
+
+    def commit_counter_height(self, z):
+        """Commit the accepted episode height before planning any motion (single shared source of truth)."""
+        self.scene.counter_z_runtime = None if z is None else float(z)
 
     # ------------------------------------------------------------------ geometry helpers
     def _bin_xy0(self, name):
@@ -273,6 +292,96 @@ class Planner:
         if not over.any():
             return np.inf
         return float((pts[over, 2] - self.scene.counter_z).min())
+
+    def _route_pose_safe(self, arm_q, hand_q, sides, clearance, allowed_inside=None):
+        """Equivalent planner-side runtime table/bin keepout used where interface/safety.py cannot be changed."""
+        for side in sides:
+            if self.clearance(side, arm_q, hand_q) < float(clearance) - 2e-3:
+                return False
+            inside = allowed_inside if len(sides) == 1 else None
+            if self.hits_bin_wall(side, arm_q, hand_q, allowed_inside=inside):
+                return False
+        return True
+
+    def safe_home_route(self, arm_from, hand_from, sides=("left", "right"), allowed_inside=None):
+        """Prove an open-hand, vertical escape above the runtime table/rims, then a dry-run-safe route home.
+
+        This is deliberately fail closed: no joint-space fallback is returned when IK, runtime keepouts, bin walls,
+        or the final SafetyFilter replay cannot be proved clip-free.
+        """
+        arm_from, hand_from = np.asarray(arm_from, float), np.asarray(hand_from, float)
+        sides = tuple(s for s in sides if s in ("left", "right"))
+        if arm_from.shape != (14,) or hand_from.shape != (14,) or not sides:
+            return SafeRoute(False, reason="invalid recovery pose/sides")
+        if not np.all(np.isfinite(arm_from)) or not np.all(np.isfinite(hand_from)):
+            return SafeRoute(False, reason="non-finite recovery pose")
+        mo, g = self.cfg["motion"], self.cfg["grasp"]
+        cur_a, cur_h = arm_from.copy(), hand_from.copy()
+        arm_parts, hand_parts, phases = [], [], []
+
+        def add(name, a, h):
+            nonlocal cur_a, cur_h
+            if not len(a):
+                return
+            start = sum(len(x) for x in arm_parts)
+            arm_parts.append(np.asarray(a, float)); hand_parts.append(np.asarray(h, float))
+            phases.append((name, start, start + len(a)))
+            cur_a, cur_h = arm_parts[-1][-1].copy(), hand_parts[-1][-1].copy()
+
+        hand_open = cur_h.copy()
+        for side in sides:
+            sl = ArmKinematics.sl(side)
+            hand_open[sl] = self.post["open"][sl]
+        h = ramp(cur_h, hand_open, mo["hand_max_vel"], self.dt)
+        a = np.repeat(cur_a[None], len(h), 0)
+        for k in range(len(h)):
+            if not self._route_pose_safe(a[k], h[k], sides, 0.003, allowed_inside):
+                return SafeRoute(False, reason="opening hand enters runtime table/bin keepout")
+        add("open", a, h)
+
+        wall = float(self.scene.cfg["bins"]["wall_height"])
+        safe_z = self.counter_keepout_z + max(float(g["carry_height"]), wall + self.height + 0.03)
+        escape_floor = self.counter_keepout_z + wall + 0.003
+        for side in sides:
+            p0 = np.asarray(self.kin.grasp_pose(side, cur_a)[0], float)
+            hand_min = float(np.min(self.kin.hand_points(side, cur_a, cur_h)[:, 2]))
+            target_z = max(safe_z, p0[2] + max(0.0, escape_floor - hand_min))
+            if p0[2] >= target_z - 1e-4:
+                continue
+            n = max(1, int(np.ceil((target_z - p0[2]) / float(mo["cart_step"]))))
+            waypoints, seed = [], cur_a.copy()
+            for z in np.linspace(p0[2], target_z, n + 1)[1:]:
+                q, ok, _, _ = self.kin.solve(side, np.r_[p0[:2], z], seed, top_down=False, restarts=False)
+                if not ok or np.abs(q - seed).max() > float(mo.get("max_joint_step", 0.4)):
+                    return SafeRoute(False, reason=f"unproved vertical lift IK ({side})")
+                waypoints.append(q); seed = q
+            a = time_scale([cur_a] + waypoints, mo["arm_max_vel"], mo["arm_max_acc"], self.dt)
+            h = np.repeat(cur_h[None], len(a), 0)
+            for k in range(len(a)):
+                if not self._route_pose_safe(a[k], h[k], sides, 0.003, allowed_inside):
+                    return SafeRoute(False, reason=f"vertical lift enters runtime table/bin keepout ({side})")
+            add("vertical_lift", a, h)
+
+        for side in sides:
+            if float(np.min(self.kin.hand_points(side, cur_a, cur_h)[:, 2])) < escape_floor:
+                return SafeRoute(False, reason=f"vertical lift does not clear runtime bin rim ({side})")
+
+        home = cur_a.copy()
+        for side in sides:
+            home[ArmKinematics.sl(side)] = self.home[ArmKinematics.sl(side)]
+        a = time_scale([cur_a, home], mo["arm_max_vel"], mo["arm_max_acc"], self.dt)
+        h = np.repeat(cur_h[None], len(a), 0)
+        for k in range(len(a)):
+            if not self._route_pose_safe(a[k], h[k], sides, mo["counter_clearance"]):
+                return SafeRoute(False, reason="route home enters runtime table/bin keepout")
+        add("home", a, h)
+        if not arm_parts:
+            return SafeRoute(True, np.empty((0, 14)), np.empty((0, 14)), phases)
+        arm, hand = np.vstack(arm_parts), np.vstack(hand_parts)
+        clips = self.dry_run_safety(arm_from, hand_from, arm, hand)
+        if clips:
+            return SafeRoute(False, reason=f"{clips} safety clips in recovery dry run")
+        return SafeRoute(True, arm, hand, phases)
 
     # ------------------------------------------------------------------ IK helpers
     def _ik(self, side, p, seed, name, plan):
