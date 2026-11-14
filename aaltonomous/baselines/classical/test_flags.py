@@ -138,7 +138,9 @@ class TestFlags(unittest.TestCase):
                                      "policy.max_corrections_per_episode"},
                   "ab_realcolour": {"instruction.resolve", "policy.bin_lookup", "grasp.point_in_palm",
                                     "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
-                                    "perception.hsv_set", "perception.split_blobs"}}
+                                    "perception.hsv_set", "perception.split_blobs"},
+                  "ab_langzip": {"instruction.resolve", "instruction.normalize", "instruction.strict",
+                                 "instruction.structured", "instruction.max_chars", "policy.bin_lookup"}}
         r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r14")) if is_on}
         expect["ab_retry_vary"] = r14 | {"policy.insert_guard", "policy.retry_vary_grasp",
                                          "policy.max_attempts_vary", "policy.max_total_attempts"}

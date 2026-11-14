@@ -22,6 +22,7 @@ flags:
   instruction.normalize: false                  # Felix lang  typo/synonym normaliser (RC1 overlay turns it on)
   instruction.multilingual: false               # FI/CZ       conservative Finnish/Czech instruction canonicalizer
   instruction.strict: false                     # Felix strict never guess (rc1_strict overlay turns it on)
+  instruction.structured: false                 # langzip deterministic parallel lists (ab_langzip overlay turns it on)
   brain.backend: stub
   brain.url: http://127.0.0.1:8080/completion
   brain.find: false
