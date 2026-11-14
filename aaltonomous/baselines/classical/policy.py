@@ -2616,6 +2616,11 @@ class ClassicalPolicy:
                         return ("done", None, None, None)
                     continue
                 if tool == "pick_place" and a["obj_id"] in dmap:
+                    pb = lookup_bin(self.cfg, self._brain_mapping, dmap[a["obj_id"]].color,
+                                    getattr(dmap[a["obj_id"]], "shape", None))
+                    if pb is not None and pb != a["bin"]:       # abstain-only: the parser's bin is never overridden
+                        self.log(f"[brain_guard] override dropped: {a['obj_id']} brain={a['bin']} parser={pb}")
+                        continue
                     return ("pick", dmap[a["obj_id"]], a["bin"], None)
                 if tool == "retry" and a["obj_id"] in dmap and self._lookup(dmap[a["obj_id"]]) is not None:
                     return ("retry", dmap[a["obj_id"]], self._lookup(dmap[a["obj_id"]]), a["variant"])
