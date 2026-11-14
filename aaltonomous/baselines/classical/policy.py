@@ -183,7 +183,9 @@ class ClassicalPolicy:
             if prev is None or np.abs(q - prev).max() > p["still_rad"] or obs.get("head_depth") is None:
                 return
             self._hc_tries += 1
-            res = self.hand_calib.solve(self.perception.cal, self.perception.cam, obs["head_depth"], q,
+            from .hand_calib import corrected_calibration
+            start = corrected_calibration(self.perception.cal, self.perception.cam, self.perception.current_T())
+            res = self.hand_calib.solve(start, self.perception.cam, obs["head_depth"], q,
                                         obs.get("hand_q"))
         except Exception as e:
             self._hc_done = True

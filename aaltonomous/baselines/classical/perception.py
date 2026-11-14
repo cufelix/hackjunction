@@ -116,13 +116,20 @@ class Perception:
         self.calibration = None
         self.cal = self.cal_nominal
 
+    def current_T(self):
+        """T_pelvis_optical perception uses right now. perception.online_pitch_cal (timi/pitch-cal) keeps its corrected
+        pose in self.pitch_T (None = nominal); hand calibration starts from whatever is current, so it chains AFTER it."""
+        T = getattr(self, "pitch_T", None)
+        return np.array(T if T is not None else self.cal._T(self.cam), float)
+
     def set_camera_pose(self, T):
         """perception.hand_calibration: use T as this camera's T_pelvis_optical until the next reset, on a copy of the
-        calibration (the shared object stays nominal). The solve starts from self.cal, i.e. whatever pose perception
-        uses now (nominal, or the one perception.online_pitch_cal set earlier in the episode): hand calibration is
-        chained AFTER the table-plane pitch calibration."""
+        calibration (the shared object stays nominal). With online_pitch_cal merged, pitch_T (which wins in _T /
+        _pixel_to_pelvis / _project) is set too, so every path sees the refined pose."""
         from .hand_calib import corrected_calibration
         self.cal = corrected_calibration(self.cal, self.cam, T)
+        if hasattr(self, "pitch_T"):
+            self.pitch_T = np.array(T, float)
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""

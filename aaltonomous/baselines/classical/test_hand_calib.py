@@ -140,6 +140,19 @@ class TestPolicyFlag(unittest.TestCase):
         pol.reset()
         self.assertIs(pol.perception.cal, pol.cal)                                          # next episode: nominal
 
+    def test_chains_after_an_earlier_pose_correction(self):
+        """perception.pitch_T (online_pitch_cal) is the start pose: the cap and the result are relative to it."""
+        from .policy import ClassicalPolicy
+        pol = ClassicalPolicy(log=None, overrides={"perception.hand_calibration.enabled": True})
+        T_a = hc.perturb(T0, [0.0, 0.0, 0.0], [-6.0, 0.0, 0.0])           # "A" corrected pitch (6 deg > the 3 deg cap)
+        pol.perception.pitch_T = T_a.copy()
+        T_true = hc.perturb(T_a, [0.005, -0.004, 0.003], [0.5, -0.4, 0.3])
+        for _ in range(3):
+            pol.act(self.obs(T_true))
+        self.assertTrue(pol.hand_calibration.success, pol.hand_calibration.summary())
+        self.assertLess(np.linalg.norm(pol.perception.pitch_T[:3, 3] - T_true[:3, 3]), 0.003)
+        self.assertLess(hc._rot_deg(T_true[:3, :3].T @ pol.perception.current_T()[:3, :3]), 0.3)
+
     def test_flag_on_gives_up_on_bad_frames(self):
         from .policy import ClassicalPolicy
         pol = ClassicalPolicy(log=None, overrides={"perception.hand_calibration.enabled": True,
