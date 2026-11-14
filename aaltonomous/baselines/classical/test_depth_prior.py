@@ -13,7 +13,7 @@ from .perception import Perception
 
 CAL = Calibration.load()
 NOM = Scene.load().counter_z
-FINALS = ["finals_r20", "finals_r21"]   # the overlays with apply_height: the prior must never shadow a measurement
+FINALS = ["finals_r20", "finals_r21", "finals_r22"]   # the overlays with apply_height: the prior must never shadow a measurement
 RGB = np.zeros((480, 640, 3), np.uint8)
 
 
