@@ -180,6 +180,8 @@ perception:
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
                               # 94/120 orange pieces merged with a neighbour) at distance-transform peaks
+  rim_z_from_depth: false     # FLAG: per-bin rim z from head depth -> planner rim clearance / drop / carry / wall collision
+  rim_z_params: {looks: 3, max_delta_m: 0.04, percentile: 90, min_points: 40, stride: 2, margin_m: 0.006, counter_tol_m: 0.015}
   # FLAG (Felix gate). perception.color_gate: post-filter at the end of detect(), default OFF. Rejects speckle below
   # area_frac * (fx * 0.045 / Z)^2 px (no Z: min_px_no_z); blobs over a bin or within edge_m of its edge (a rim blob
   # is kept only as a depth top face edge_h above the counter); top_k by n_px when > max_cands survive (degraded);
