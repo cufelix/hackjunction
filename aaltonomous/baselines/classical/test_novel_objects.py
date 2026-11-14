@@ -138,10 +138,24 @@ class TestNovelFpRobotAndMerge(unittest.TestCase):
         cu, cv = self.black_uv + [0.0, radius_px + gap_px + 12]   # disc just below (nearer the robot) the box
         return (uu - cu) ** 2 + (vv - cv) ** 2 <= radius_px ** 2
 
-    def _novel(self, robot_q, mask):
-        with patch.object(self.per, "_fk_arm_mask", return_value=mask):
+    def _surface(self, dz):
+        """Fake posed robot surface: a 6x6 cm patch of points dz above the black box top."""
+        g = np.linspace(-.03, .03, 13)
+        xy = np.stack(np.meshgrid(g, g), -1).reshape(-1, 2)
+        c = SC.mat_to_pelvis([.50, .13, .045 + dz])
+        return [(np.c_[xy + c[:2], np.full(len(xy), c[2])], None)]
+
+    def _novel(self, robot_q, mask, dz=0.0):
+        class Surf:
+            posed_links = staticmethod(lambda *a, **k: self._surface(dz))
+        with patch.object(self.per, "_fk_arm_mask", return_value=mask), patch.object(self.per, "_arm_surface", Surf()):
             dets = self.per.detect(self.rgb, self.depth, robot_q=robot_q)
         return {d.color: d for d in dets if getattr(d, "novel", False)}
+
+    def test_blob_under_hovering_hand_is_kept(self):
+        # in the image the box hugs the hand silhouette, but in 3-D the hand is 10 cm above it (the pan case)
+        q = (np.zeros(14), np.zeros(14))
+        self.assertIn("black", self._novel(q, self._arm_mask_beside_black_box(), dz=0.10))
 
     def test_black_blob_hugging_arm_is_dropped_others_kept(self):
         q = (np.zeros(14), np.zeros(14))

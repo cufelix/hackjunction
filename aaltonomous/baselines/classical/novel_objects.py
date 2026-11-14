@@ -73,6 +73,28 @@ def _fold_yaw(yaw):
     return float((float(yaw) + np.pi / 2.0) % np.pi - np.pi / 2.0)
 
 
+def _bottom_only(blob):
+    """Touches the bottom image edge but not the top/left/right ones: an object close to the robot, cut by the view."""
+    return bool(blob[-1].any()) and not (blob[0].any() or blob[:, 0].any() or blob[:, -1].any())
+
+
+def _near_frac(P, arm_pts, dist_m, max_pts=400):
+    """Fraction of component points (pelvis frame) within dist_m of the posed robot surface."""
+    P = np.asarray(P, float)[:, :3]
+    if len(P) > max_pts:
+        P = P[np.linspace(0, len(P) - 1, max_pts).astype(int)]
+    try:
+        from scipy.spatial import cKDTree
+        d, _ = cKDTree(arm_pts).query(P, k=1, distance_upper_bound=dist_m)
+        return float(np.mean(np.isfinite(d)))
+    except ImportError:
+        hit = np.zeros(len(P), bool)
+        for i in range(0, len(arm_pts), 2000):
+            A = arm_pts[i:i + 2000]
+            hit |= (((P[:, None, :] - A[None, :, :]) ** 2).sum(-1) <= dist_m ** 2).any(1)
+        return float(hit.mean())
+
+
 def _uv_in(blob, uv, stride):
     """True if full-res pixel uv lies on the (strided) component mask."""
     u, v = int(round(float(uv[0]) / stride)), int(round(float(uv[1]) / stride))
@@ -228,7 +250,7 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
     good = np.zeros(raw.shape, bool)
     good[vv[ok], uu[ok]] = True
     mask = good.astype(np.uint8)
-    arm_ring = None
+    arm_ring = arm_pts = None
     if robot_q is not None:
         if fp:
             # FP filter (a): the robot silhouette is ALWAYS filled + dilated here, independent of the colour gate's
@@ -239,6 +261,11 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
             arm = perception._fk_arm_mask(raw_full.shape, *robot_q)
         if arm is not None:
             mask[arm[::stride, ::stride]] = 0
+            if fp and float(cfg.get("near_arm_m", 0.04)) > 0:
+                try:   # (e) robot surface in the pelvis frame (same FK the mask used), for 3-D proximity
+                    arm_pts = np.concatenate([P for P, _ in perception._arm_surface.posed_links(*robot_q)], axis=0)
+                except Exception:
+                    arm_pts = None
             if fp and int(cfg.get("near_arm_px", 40)) > 0:
                 # (e) ring just outside the FK silhouette: where a lagging/approximate FK leaves robot fringes.
                 r = max(1, int(cfg.get("near_arm_px", 40)) // stride)
@@ -281,7 +308,9 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         if fp:
             border = bool(blob[0].any() or blob[-1].any() or blob[:, 0].any() or blob[:, -1].any())
             height98 = float(np.percentile(P[:, 2], 98.0) - perception.scene.counter_z)
-            if border and cfg.get("drop_border", True):
+            if border and cfg.get("drop_border", True) and not (
+                    cfg.get("border_keep_bottom", True) and _bottom_only(blob) and arm_pts is not None
+                    and _near_frac(P, arm_pts, float(cfg.get("near_arm_m", 0.04))) < float(cfg.get("near_arm_frac", 0.3))):
                 continue   # (c) partial view at the image edge: robot body, table edge, objects half out of view
             if height98 < float(cfg.get("min_height_m", 0.015)) or dims[1] < float(cfg.get("min_width_m", 0.015)):
                 continue   # (c) flat (shadow, mat print, table edge) or a thin strip (mask fringe, wall edge)
@@ -289,8 +318,12 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
                 frac = float(cfg.get("near_arm_frac", 0.3) if colour in _ROBOT_COLOURS
                              else cfg.get("near_arm_frac_coloured", 0.3))
                 if float((blob & arm_ring).sum()) >= frac * float(blob.sum()):
-                    continue   # (e) blob hugging the FK silhouette: the robot's own hand/forearm, or a fingertip
-                    #            fringe that picked up the bin/object colour behind it
+                    # (e) blob hugging the FK silhouette in the image: the robot's own hand/forearm, or a fingertip
+                    # fringe that picked up the bin/object colour behind it -- unless it is clearly away from the
+                    # robot in 3-D (an object on the table right below a hovering hand, e.g. the pan's disc).
+                    near_m = float(cfg.get("near_arm_m", 0.04))
+                    if arm_pts is None or near_m <= 0 or _near_frac(P, arm_pts, near_m) >= frac:
+                        continue
             # (d) a blob at a known detection of the SAME known-family colour stays known unless it is clearly longer
             # than any known object (a 10 cm marker or a pan next to a cube). Merges with arms/bin walls, which made
             # a red cube read as 'red with-handle', are removed by (a)/(b) before this point.
