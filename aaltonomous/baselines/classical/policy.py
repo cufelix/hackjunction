@@ -122,6 +122,8 @@ class ClassicalPolicy:
         self.log = log or (lambda *a: None)
         bc = self.cfg.get("brain") or {}
         self.brain = BrainLayer(bc, log=self.log) if bc.get("enabled", False) else None   # FLAG brain.enabled
+        fm = (self.cfg.get("policy") or {}).get("fixed_mapping")   # FLAG policy.fixed_mapping (validated at load)
+        self.fixed_mapping = dict(fm) if fm else dict(FIXED_MAPPING)   # the ONE fallback accessor (real robot vs sim)
         self.reset()
 
     # ------------------------------------------------------------------ API
@@ -149,7 +151,7 @@ class ClassicalPolicy:
             if not (self.cfg.get("instruction") or {}).get("resolve", False):
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
-            if not text:
+            if not str(text).strip():               # empty / whitespace: no instruction -> the fixed fallback
                 return None
             from .instruction import resolve
             if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
@@ -158,7 +160,7 @@ class ClassicalPolicy:
             if (self.cfg.get("instruction") or {}).get("strict", False):   # never guess: abstain (Felix strict)
                 from .normalize import strict_mapping
                 return strict_mapping(text, resolve(text, fallback={}))
-            return resolve(text) or None
+            return resolve(text, fallback=getattr(self, "fixed_mapping", None)) or None
         except Exception as e:                      # a parse bug must not cost the whole episode
             self.log(f"instruction resolve failed ({e}), using FIXED_MAPPING")
             return None
@@ -190,7 +192,7 @@ class ClassicalPolicy:
         given = info.get("mapping")
         guarded = None if given else self._insert_guard_mapping(info)
         resolved = None if given or guarded else self._instruction_mapping(info)
-        self.mapping = given or guarded or resolved or dict(FIXED_MAPPING)
+        self.mapping = given or guarded or resolved or dict(self.fixed_mapping)
         self.planner.mapping = self.mapping
         self._task, self._instruction = info.get("task"), info.get("instruction")
         self._brain_looks = 0

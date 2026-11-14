@@ -43,6 +43,7 @@ FLAGS = {
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
+    "policy.fixed_mapping": ("organisers P0", None, "colour->bin fallback when the instruction is empty/missing (null = sim FIXED_MAPPING; real robot: yellow left, blue center, red right)"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
     "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
@@ -232,6 +233,10 @@ def check_flag_values(cfg):
             continue
         if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
             raise ValueError(f"{k} = {v!r}: want {n} numbers")
+    fm = _get(cfg, "policy.fixed_mapping")
+    if fm is not None and not (isinstance(fm, dict) and set(fm) == {"red", "yellow", "blue"}
+                               and sorted(map(str, fm.values())) == ["center", "left", "right"]):
+        raise ValueError(f"policy.fixed_mapping = {fm!r}: want null or exactly red/yellow/blue -> a permutation of left/center/right")
     mc = _get(cfg, "instruction.max_chars")
     if not isinstance(mc, int) or isinstance(mc, bool) or mc < 0:
         raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")

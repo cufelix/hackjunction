@@ -3,6 +3,7 @@
 name: finals_real
 flags:
   instruction.resolve: true
+  policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)
   policy.insert_guard: true
   policy.bin_lookup: resolve_bin
   perception.self_calibration.enabled: false
