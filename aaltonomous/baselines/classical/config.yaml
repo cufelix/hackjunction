@@ -290,6 +290,10 @@ ik:
 # Off by default so the step-0 reference run is unchanged. The mapping is never sent over the wire
 # (reset info carries only {"instruction": ...}), so with this off a language episode silently
 # sorts by the fixed colour->bin mapping.
+skills:
+  memory: false                 # FLAG. Learn the best already-validated retry-vary grasp per shape/colour/hand
+  memory_path: /tmp/aalto_skills.sqlite  # FLAG. AALTO_SKILLS_DB overrides; persistence failure falls back in-memory
+
 instruction:
   resolve: false
   normalize: false            # FLAG (Felix). resolve(normalize(text)): fixes typos/synonyms; needs resolve

@@ -48,7 +48,7 @@ class ClassicalServerPolicy(Policy):
             time.sleep(0.02)
         if task not in (None, "sort_fixed"):
             log.warning("task %r: the classical baseline only does rung 1 (colour = bin from scene.yaml)", task)
-        self.pol.reset({"instruction": instruction, "task": task})   # task id: policy.insert_guard
+        self.pol.reset({"instruction": instruction, "task": task, "seed": seed})   # task id: policy.insert_guard; seed: skills
         log.info("reset task=%s seed=%s instruction=%r", task, seed, instruction)
 
     def act(self, obs):

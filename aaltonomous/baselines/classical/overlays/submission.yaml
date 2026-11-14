@@ -9,6 +9,8 @@ name: submission
 flags:
   calib.fk_xcheck: false                        # B2         passive RGB/FK head-pose cross-check (log-only)
   policy.safety_shell: false                    # safety     hold-last + 20 % reserve + no blocking calls in act(); OFF until its A/B
+  skills.memory: false                         # persistent grasp-variant learning (A/B overlay: ab_skills)
+  skills.memory_path: /tmp/aalto_skills.sqlite # SQLite path; AALTO_SKILLS_DB overrides
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   instruction.normalize: false                  # Felix lang  typo/synonym normaliser (RC1 overlay turns it on)
