@@ -1,0 +1,69 @@
+diff --color -ru a/aaltonomous/sim/aalto_task/hooks.py b/aaltonomous/sim/aalto_task/hooks.py
+--- a/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 23:27:59.680341096 +0100
++++ b/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 23:27:59.683843889 +0100
+@@ -140,6 +140,13 @@
+             return {"ok": True, "active": self.place(env, lay), "layout": lay}
+         if cmd == "state":
+             return {"ok": True, "objects": self.state(env), "layout": self.layout}
++        if cmd == "bodies":   # pan test: robot hand/wrist body positions (pelvis frame) to see WHERE the pan is held
++            rob = env.scene["robot"]
++            origin = _t(env.scene.env_origins)[0].cpu().numpy()
++            pos = _t(rob.data.body_pos_w)[0].cpu().numpy() - origin - PELVIS_W
++            names = list(rob.body_names)
++            keep = [i for i, b in enumerate(names) if any(k in b for k in ("palm", "hand", "wrist_yaw"))]
++            return {"ok": True, "bodies": {names[i]: [round(float(x), 5) for x in pos[i]] for i in keep}}
+         if cmd == "evaluate":
+             r = evaluate(self.sc, req.get("task", "sort_fixed"), self.state(env), req.get("mapping"))
+             return {"ok": True, **r}
+diff --color -ru a/aaltonomous/sim/aalto_task/layout.py b/aaltonomous/sim/aalto_task/layout.py
+--- a/aaltonomous/sim/aalto_task/layout.py	2026-11-14 23:27:59.680426197 +0100
++++ b/aaltonomous/sim/aalto_task/layout.py	2026-11-14 23:27:59.683967850 +0100
+@@ -28,9 +28,18 @@
+ PARK_X = -0.60                          # park row behind the robot (pelvis frame)
+ 
+ 
++PAN_NAME = "obj_grey_pan_0"   # pan test (tools/pan): one novel object, only when the sim starts with AALTO_PAN=1
++
++
++def pan_enabled():
++    import os
++    return os.environ.get("AALTO_PAN", "0") == "1"
++
++
+ def object_names(sc: Scene):
+     o = sc.cfg["objects"]
+-    return [f"obj_{c}_{s}_{k}" for s in o["shapes"] for c in o["colors"] for k in range(int(o["copies_per_type"]))]
++    names = [f"obj_{c}_{s}_{k}" for s in o["shapes"] for c in o["colors"] for k in range(int(o["copies_per_type"]))]
++    return names + ([PAN_NAME] if pan_enabled() else [])
+ 
+ 
+ def parse_name(name):
+diff --color -ru a/aaltonomous/sim/aalto_task/scene_cfg.py b/aaltonomous/sim/aalto_task/scene_cfg.py
+--- a/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-14 23:27:59.680489427 +0100
++++ b/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-14 23:27:59.684062160 +0100
+@@ -47,7 +47,13 @@
+     return tuple(float(v) for v in np.asarray(p_pelvis, float) + PELVIS_W)
+ 
+ 
++PAN_RGB = (0.42, 0.42, 0.45)   # pan test: dark grey, not an object colour
++PAN_MASS = 0.15               # kg: light enough for the Dex3 sim grip, heavier than a cube
++
++
+ def _rgb(name):
++    if name not in SC.colors:
++        return PAN_RGB
+     return tuple(c / 255.0 for c in SC.colors[name])
+ 
+ 
+@@ -219,8 +225,10 @@
+             init_state=RigidObjectCfg.InitialStateCfg(pos=_w(p), rot=tuple(float(v) for v in q)),
+             spawn=StlMeshCfg(
+                 path=str(ASSETS / f"object_{shape}.stl"),
++                # pan = disc + handle: a convex hull would fill the gap under the handle, so decompose it
++                approximation="convexDecomposition" if shape == "pan" else "convexHull",
+                 rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False, max_depenetration_velocity=1.0),
+-                mass_props=sim_utils.MassPropertiesCfg(mass=OBJ_MASS),
++                mass_props=sim_utils.MassPropertiesCfg(mass=PAN_MASS if shape == "pan" else OBJ_MASS),
+                 collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True, contact_offset=0.004,
+                                                                  rest_offset=0.0),
+                 visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=_rgb(color), roughness=0.7, metallic=0.0),
