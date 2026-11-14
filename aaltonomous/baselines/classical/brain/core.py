@@ -54,6 +54,18 @@ def build_world(dets, bins, instruction, task, resolver_mapping, resolver_bin_fn
 
 
 # ------------------------------------------------------------------ validator
+def nothing_abstained(point, world, state):
+    """True at after_look when every candidate object already has a parser-decided bin (resolver_bin not None):
+    the brain may assign bins only to objects the deterministic mapping abstained on, so there is nothing to ask."""
+    if point != "after_look":
+        return False
+    objs = {o.get("id"): o for o in (world or {}).get("objects", [])}
+    cands = [objs[c] for c in (state or {}).get("candidates", []) if c in objs]
+    if not cands or any("resolver_bin" not in o for o in cands):
+        return False
+    return all(o["resolver_bin"] is not None for o in cands)
+
+
 def _same(a, b):
     return a is not None and b is not None and a["tool"] == b["tool"] and a.get("args", {}) == b.get("args", {})
 
@@ -383,10 +395,11 @@ class BrainLayer:
         self.pre = {}                       # state key -> AsyncRequest (prefetched)
         self.n_done, self.trace, self.lat = 0, [], []
         self.stats = {"brain": 0, "classical": 0, "pending": 0, "invalid": 0, "bin_reject": 0,
-                      "reach_reject": 0, "timeout": 0, "error": 0,
+                      "reach_reject": 0, "no_abstain": 0, "timeout": 0, "error": 0,
                       "prefetch_hit": 0, "prefetch_miss": 0}
         self.choices = self.world = self.classical = self.point = None
         self.abstain = False
+        self.skipped = False
 
     def _prepare(self, point, world, state, classical_call, image=None, abstain=False):
         choices = allowed_calls(point, state)
@@ -399,6 +412,8 @@ class BrainLayer:
     def prefetch(self, point, world, state, classical_call, image=None, abstain=False):
         """Ask NOW for a decision that will be needed later (the predicted state). Async, never blocks. The answer
         is only used if request() later finds the same state key; otherwise it is dropped."""
+        if nothing_abstained(point, world, state):
+            return None
         _, key, rj = self._prepare(point, world, state, classical_call, image, abstain)
         if key in self.pre:
             return key
@@ -412,6 +427,13 @@ class BrainLayer:
     def request(self, point, world, state, classical_call, image=None, abstain=False):
         """The decision point: reuse a prefetched answer for the same state key, else ask now (async). Returns choices."""
         self.point, self.world, self.classical, self.abstain = point, world, classical_call, abstain
+        self.skipped = False
+        if nothing_abstained(point, world, state):
+            # abstain-only rule: the parser decided every candidate, so there is no bin the brain may assign
+            self.skipped = True
+            self.req.reset()
+            self.choices = []
+            return self.choices
         self.choices, key, rj = self._prepare(point, world, state, classical_call, image, abstain)
         hit = self.pre.pop(key, None)
         if hit is not None:
@@ -433,6 +455,10 @@ class BrainLayer:
         """-> call dict the brain wants executed instead of the classical one, or None (= classical decides).
         Never blocks, never raises. reach_fn(obj_id, bin) -> (ok, reason) is applied only to an override."""
         try:
+            if self.skipped:
+                self.stats["no_abstain"] = self.stats.get("no_abstain", 0) + 1
+                self._note("classical", "nothing abstained: brain not asked")
+                return None
             raw = self.req.poll()
             if raw is not None and getattr(self.req, "_tfin", None) is not None:
                 self.lat.append(self.req._tfin - self.req._t0)
@@ -453,6 +479,8 @@ class BrainLayer:
                     known_bin = obj["resolver_bin"]
                     if known_bin is not None and call["args"]["bin"] != known_bin:
                         why = f"known bin for {call['args']['obj_id']} is {known_bin}"
+                        self.log(f"[brain_guard] override dropped: {call['args']['obj_id']} brain={call['args']['bin']} "
+                                 f"parser={known_bin}")
                         self.stats["bin_reject"] += 1
                         self.trace.append((self.point, call, "bin_reject", why))
                         self._note("classical", why)

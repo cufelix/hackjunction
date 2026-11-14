@@ -1476,7 +1476,8 @@ class Perception:
             arm = self._fk_arm_mask(keep.shape, *robot_q)
             if arm is not None:
                 self._last_arm_mask = arm
-                keep[arm] = 0
+                if self.fk_mask:   # depth_blob_recover alone must not FK-mask the colour blobs
+                    keep[arm] = 0
                 if self.partial_ok_near_hand:
                     r = max(1, int(self.partial_near_hand_cfg.get("boundary_px", 2)))
                     outer = cv2.dilate(arm.astype(np.uint8),

@@ -299,14 +299,16 @@ class ClassicalPolicy:
                 text = canonicalize_multilingual(text)
             if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
                 from .normalize import normalize
-                text = normalize(text)
+                if strict and (self.cfg.get("instruction") or {}).get("structured", False):
+                    from .normalize import structured_normalize
+                    text = structured_normalize(text)
+                else:
+                    text = normalize(text)
             if strict:                              # never guess: abstain (Felix strict)
                 from .normalize import strict_mapping
                 if (self.cfg.get("instruction") or {}).get("structured", False):
-                    from .normalize import structured_mapping
-                    parsed = structured_mapping(text)
-                    if parsed is not None:          # recognised structures fail closed on an incomplete parse
-                        return parsed
+                    from .normalize import structured_final
+                    return structured_final(text)   # structured grammars, complement / scope / amber rules, then strict
                 return strict_mapping(text, resolve(text, fallback={}))
             return resolve(text, fallback={}) or {"default": None}
         except Exception as e:                      # a parse bug must not cost the whole episode
@@ -3365,6 +3367,11 @@ class ClassicalPolicy:
                         return ("done", None, None, None)
                     continue
                 if tool == "pick_place" and a["obj_id"] in dmap:
+                    pb = lookup_bin(self.cfg, self._brain_mapping, dmap[a["obj_id"]].color,
+                                    getattr(dmap[a["obj_id"]], "shape", None))
+                    if pb is not None and pb != a["bin"]:       # abstain-only: the parser's bin is never overridden
+                        self.log(f"[brain_guard] override dropped: {a['obj_id']} brain={a['bin']} parser={pb}")
+                        continue
                     return ("pick", dmap[a["obj_id"]], a["bin"], None)
                 if tool == "retry" and a["obj_id"] in dmap and self._lookup(dmap[a["obj_id"]]) is not None:
                     return ("retry", dmap[a["obj_id"]], self._lookup(dmap[a["obj_id"]]), a["variant"])
