@@ -145,9 +145,22 @@ class Perception:
             cv2.fillConvexPoly(keep, hull, 0)
         return keep
 
-    def _shape_of(self, top_xy, blob):
-        """Shape label, or None (flags off / abstain). Delegates to `classify_top_face` and decides nothing itself."""
+    def _near_bin(self, top):
+        """True if any top-face point (pelvis frame) lies within a bin footprint + bin_pixel_margin + object size.
+        Same 3D test (mat frame) as the bin exclusion in the keep mask: there the top face may have been cut by a
+        straight line in xy, which turns a cube into a 'cylinder'; such a face must not be classified."""
+        sc = self.scene
+        pm = sc.pelvis_to_mat(np.asarray(top, float))
+        half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + self.cfg["bin_pixel_margin"] + self.size
+        return any(np.any(np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1))
+                   for ctr in sc.cfg["bins"]["centers"].values())
+
+    def _shape_of(self, top_xy, blob, near_bin=False):
+        """Shape label, or None (flags off / abstain). Delegates to `classify_top_face` and decides nothing itself;
+        `near_bin` (top face possibly cut by the bin exclusion) only forces an abstain."""
         if not (self.classify_shape or self.triangle_pose):
+            return None
+        if near_bin:
             return None
         shape = None if blob is None else blob.shape
         return classify_top_face(top_xy, blob, shape)[0]
@@ -162,7 +175,8 @@ class Perception:
         w = (d[P[:, 2] >= z_top - self.cfg["top_band"]] / 1000.0) ** 2
         xy = (top[:, :2] * w[:, None]).sum(0) / w.sum()
         z = float(np.median(top[:, 2]))
-        shape = self._shape_of(top[:, :2], blob)
+        near_bin = self.classify_shape and self._near_bin(top)   # near-bin guard: abstain on shape only
+        shape = self._shape_of(top[:, :2], blob, near_bin)
         apex_yaw, apex_conf = None, 0.0
         if shape == "triangle" and self.triangle_pose:
             from .prism_pose import robust_center, triangle_pose

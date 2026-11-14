@@ -1,0 +1,104 @@
+"""Near-bin shape guard in Perception._from_depth: a top face next to a bin may have been cut by the 3D bin
+exclusion (a straight line in xy), so the shape must abstain there; position is unchanged. Run:
+    python -m pytest aaltonomous/baselines/classical/test_near_bin_guard.py -q"""
+import copy
+
+import numpy as np
+
+from aaltonomous.scene.scene import Scene
+
+from .config import load_config
+from .perception import Perception
+from .shape_id import SHAPE_MIN_POINTS
+
+SC, CFG = Scene.load(), load_config()
+
+
+class _PointsCal:
+    """Stand-in calibration: pixel index u -> the precomputed pelvis point P[u]."""
+    def __init__(self, P):
+        self.P = np.asarray(P, float)
+
+    def pixel_to_pelvis(self, cam, u, v, d):
+        return self.P[np.asarray(u, int)]
+
+
+def _perception(P, classify_shape):
+    cfg = copy.deepcopy(CFG)
+    cfg["perception"]["classify_shape"] = classify_shape
+    cfg["perception"]["triangle_pose"] = False
+    return Perception(cfg, SC, _PointsCal(P))
+
+
+def _bin_edge_y():
+    """Mat y of the near edge of the bin exclusion footprint (bins share one row)."""
+    b = SC.cfg["bins"]
+    ys = [c[1] for c in b["centers"].values()]
+    half_y = float(b["outer_size"][1]) / 2 + CFG["perception"]["bin_pixel_margin"]
+    return min(ys) - half_y
+
+
+def _cube_top(cy, cut_y=None, cx=0.45, n=600, seed=0):
+    """Uniform axis-aligned cube top face (mat frame, centre (cx, cy)) -> pelvis points; points with mat y > cut_y
+    are dropped, as the bin exclusion does."""
+    s = SC.size
+    rng = np.random.default_rng(seed)
+    xy = rng.uniform(-s / 2, s / 2, (n, 2)) + [cx, cy]
+    if cut_y is not None:
+        xy = xy[xy[:, 1] <= cut_y]
+    z = np.full(len(xy), SC.object_height())
+    return SC.mat_to_pelvis(np.column_stack([xy, z]))
+
+
+def _detect(P, classify_shape):
+    n = len(P)
+    u, v, d = np.arange(n), np.zeros(n, int), np.full(n, 600.0)
+    return _perception(P, classify_shape)._from_depth("red", u, v, d, n)
+
+
+def _cut_cube(frac=0.10):
+    edge = _bin_edge_y()
+    cy = edge - (0.5 - frac) * SC.size          # this fraction of the face lies inside the footprint
+    return _cube_top(cy, cut_y=edge)
+
+
+def test_cut_cube_next_to_bin_abstains_centre_unchanged():
+    P = _cut_cube(0.10)
+    assert len(P) >= SHAPE_MIN_POINTS
+    on, off = _detect(P, True), _detect(P, False)
+    assert on.shape is None and on.apex_yaw is None
+    np.testing.assert_array_equal(on.top, off.top)
+    assert on.color == off.color and on.yaw == off.yaw
+
+
+def test_same_cube_far_from_bins_is_cube():
+    edge = _bin_edge_y()
+    cy = edge - SC.size - 0.06                    # well outside footprint + size
+    P = _cube_top(cy)
+    det = _detect(P, True)
+    assert det.shape == "cube"
+    p = _perception(P, True)
+    assert not p._near_bin(P)
+
+
+def test_flag_off_unchanged_and_guard_not_evaluated():
+    P = _cut_cube(0.10)
+    p = _perception(P, False)
+
+    def boom(_top):
+        raise AssertionError("guard evaluated with classify_shape off")
+    p._near_bin = boom
+    n = len(P)
+    det = p._from_depth("red", np.arange(n), np.zeros(n, int), np.full(n, 600.0), n)
+    assert det.shape is None and det.apex_yaw is None
+    ref = _detect(P, False)
+    np.testing.assert_array_equal(det.top, ref.top)
+
+
+def test_guard_uses_bin_exclusion_frame_and_size_margin():
+    edge = _bin_edge_y()
+    s = SC.size
+    inside = SC.mat_to_pelvis(np.array([[0.45, edge - s + 1e-4, SC.object_height()]]))
+    outside = SC.mat_to_pelvis(np.array([[0.45, edge - s - 1e-3, SC.object_height()]]))
+    p = _perception(inside, True)
+    assert p._near_bin(inside) and not p._near_bin(outside)
