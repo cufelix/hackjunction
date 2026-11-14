@@ -52,7 +52,8 @@ class TestSimOverrides(unittest.TestCase):
         self.assertIsNone(cfg["policy"]["fixed_mapping"])
         self.assertIsNone(cfg["scene"]["counter_z_prior"])
         self.assertFalse(cfg["grasp"]["release_confirm"])
-        self.assertTrue(cfg["perception"]["gate_below_bins"])   # not listed: overlay value kept
+        self.assertFalse(cfg["perception"]["gate_below_bins"])   # listed since 3b58455: sim = rc1
+        self.assertTrue(cfg["instruction"]["structured"])   # not listed: overlay value kept
 
     def test_auto_none_keeps_finals_values(self):
         cfg = self._decide("none")
