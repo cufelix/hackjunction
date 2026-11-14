@@ -86,6 +86,9 @@ class ClassicalPolicy:
         self._job = None
         self._decision = None
         self.last_detections = []
+        self.perception.reset_calibration()
+        self.calibration = None
+        self._calibration_done = False
 
     def confirm(self):
         self._decision = "go"
@@ -104,6 +107,16 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        if not self._calibration_done:
+            cal = self.perception.calibrate_bins(obs.get("head_depth"))
+            if cal.valid_frame:
+                self._calibration_done = True
+                self.calibration = cal
+                off = cal.xy_offset * 1000.0
+                state = "accepted" if cal.success else "fallback"
+                self._note(t, f"head calibration {state}: xy=({off[0]:+.1f},{off[1]:+.1f}) mm, "
+                              f"confidence={cal.confidence:.2f}, residual={cal.residual_m * 1000.0:.1f} mm, "
+                              f"points={cal.n_points}, time={cal.elapsed_ms:.1f} ms ({cal.reason})")
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":

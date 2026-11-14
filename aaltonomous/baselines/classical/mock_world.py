@@ -28,16 +28,27 @@ def _yaw_R(yaw):
 
 
 class Renderer:
-    def __init__(self, scene: Scene, cal: Calibration, cam="head"):
+    def __init__(self, scene: Scene, cal: Calibration, cam="head", T_pelvis_optical=None):
+        """Ray renderer. An optional actual camera pose lets tests render with nominal calibration held unchanged."""
         self.scene, self.cal, self.cam = scene, cal, cam
         c = cal.cams[cam]
-        T = cal._T(cam)
+        T = cal._T(cam) if T_pelvis_optical is None else np.asarray(T_pelvis_optical, float)
+        self.T = T
         self.K, self.R, self.o = c.K, T[:3, :3], T[:3, 3]
         u, v = np.meshgrid(np.arange(W) + 0.0, np.arange(H) + 0.0)
         ray_opt = np.stack([(u - c.K[0, 2]) / c.K[0, 0], (v - c.K[1, 2]) / c.K[1, 1], np.ones_like(u)], -1)
         self.rays = ray_opt @ self.R.T             # pelvis-frame directions; ray param t == optical depth (m)
         self.colors = {k: np.asarray(v, float) for k, v in scene.colors.items()}
         self._bg = self._background()
+
+    def _project(self, p_pelvis):
+        """Project through the renderer's actual camera pose, not necessarily the nominal Calibration pose."""
+        p = (np.asarray(p_pelvis, float) - self.o) @ self.R
+        z = p[..., 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = self.K[0, 0] * p[..., 0] / z + self.K[0, 2]
+            v = self.K[1, 1] * p[..., 1] / z + self.K[1, 2]
+        return np.stack([u, v, z], axis=-1)
 
     # ---------------------------------------------------------------- primitives
     def _plane(self, z):
@@ -78,7 +89,7 @@ class Renderer:
 
     def _pixels(self, center, R, half):
         corners = center + (np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]) * half) @ R.T
-        uvz = self.cal.project(self.cam, corners)
+        uvz = self._project(corners)
         if np.any(uvz[:, 2] <= 0.01):
             return None
         u0, v0 = np.floor(uvz[:, :2].min(0)).astype(int) - 1
