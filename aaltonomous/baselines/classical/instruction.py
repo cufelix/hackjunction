@@ -172,6 +172,20 @@ _SWAP = re.compile(r"\bswap\s+(?:the\s+)?(?:" + _KW + r")\s+(?:ones\s+)?(?:and|w
 # "..., and so do the blue ones": inherits the bin of the clause before it.
 _SO_DO = re.compile(r"\band\s+so\s+(?:do|does|should|would)\s+(?:the\s+)?((?:" + _KW + r")\b(?:\s+ones?)?)")
 # "Left to right: red, yellow, blue." is the bins-first parallel list in disguise.
+# "leave the red ones", "don't move the blue ones", "let the yellow ones stay": the counter's 0 IS the answer.
+_LK = r"\s+(?:the\s+|all\s+)?(?:" + _KW + r")\b(?:\s+(?:ones|objects|items|pieces))?"
+# "Let red go left" / "Leave red in the left bin" are PLACEMENTS: leave/let only mean leave-alone when
+# a stay-phrase (or the end of the clause) follows the key. ignore / don't move|touch need no test.
+_STAY = (r"(?=\s*(?:where\s+(?:it|they)\s+(?:is|are)|alone|be\b|as\s+(?:it\s+|they\s+)?(?:is|are)|in\s+place|put\b|"
+         r"on\s+the\s+(?:counter|table)|untouched|out\s+of\s+it|stays?\b|[.,;!]|$))")
+_LEAVE = re.compile(r"\b(?:(?:ignore|(?:don'?t|do\s+not|never)\s+(?:move|touch))" + _LK + r"|(?:leave|let)" + _LK + _STAY + r")")
+# "Bin A is the left bin, bin B is the right one" / "the left bin is box A": the sentence names its own
+# labels. Extracted first, substituted into the placements, and the definition clause removed.
+_LABEL = r"(?:bin|box|container)\s+([abc123])\b"
+_DEF_BIN = r"(left|right|center|centre|middle)(?:most|hand)?(?:\s+(?:bin|box|container|one))?"
+_DEFS = (re.compile(r"\b" + _LABEL + r"\s+(?:is|=)\s+(?:the\s+)?" + _DEF_BIN + r"\b"),
+         re.compile(r"\b(?:the\s+)?(?:(?:bin|box|container)\s+(?:on|at)\s+the\s+)?" + _DEF_BIN
+                    + r"\s+(?:is|=)\s+" + _LABEL, 0))
 _L2R = re.compile(r"\bleft\s*(?:-|to|->)\s*right\s*[:,-]?\s*")
 _R2L = re.compile(r"\bright\s*(?:-|to|->)\s*left\s*[:,-]?\s*")
 
@@ -351,6 +365,28 @@ def _clauses(low, ord_ok):
     return out or [low]
 
 
+def _aliases(low):
+    """Apply label definitions ("bin A is the left bin") to the placements; no definitions -> unchanged."""
+    found = []
+    for n, rx in enumerate(_DEFS):
+        for m in rx.finditer(low):
+            lab, b = (m.group(1), m.group(2)) if n == 0 else (m.group(2), m.group(1))
+            found.append((m.span(), lab, _BIN_WORDS[b]))
+    labs = [(lab, b) for _, lab, b in found]
+    # Self-contradictory (a label twice with different bins, or two labels on one bin): keep the defaults.
+    if not found or len(set(labs)) != len({l for l, _ in labs}) or len({b for _, b in labs}) != len(set(labs)):
+        return low
+    table = dict(labs)
+    # Partial definition: undefined labels take the still-unused bins in label order, not the global default.
+    order = "abc" if any(l in "abc" for l in table) else "123"
+    free = [b for b in BINS if b not in table.values()]
+    table.update(zip([l for l in order if l not in table], free))
+    for (a, z), _, _ in sorted(found, reverse=True):
+        low = low[:a] + " " + low[z:]
+    low = re.sub(r"(?:[\s,;]|\band\b)+(?=[.!?])", "", low)  # leftovers of a removed definition list
+    return re.sub(r"\b(?:bin|box|container)\s+([abc123])\b", lambda m: f"the {table[m.group(1)]} bin" if m.group(1) in table else m.group(0), low)
+
+
 def resolve(text, fallback=None):
     """Instruction sentence -> mapping for scene.resolve_bin(). Never returns None.
 
@@ -367,9 +403,10 @@ def resolve(text, fallback=None):
     """
     if not text or not str(text).strip():
         return dict(FIXED_MAPPING if fallback is None else fallback)
-    low = str(text).lower()
+    low = _aliases(str(text).lower())
     # Structural pre-pass (see the patterns above). Order matters: appositive first, so the key
     # word survives; all-but second, so the excluded key never reaches clause parsing.
+    low = _LEAVE.sub(" ", low)  # a key told to stay put is never mentioned again, so nothing completes it
     low = _APPOS.sub("the ", low)
     low = _BETWEEN.sub("middle", low)  # "the bin between the left and right ones" -> the centre bin
     low = _NEIGHBOUR.sub(lambda m: _NEIGHBOUR_BIN.get(m.group(1).split()[0] if m.group(1) in ("after", "before", "next to") else "next",
@@ -432,7 +469,7 @@ def resolve(text, fallback=None):
     if allow_ord:
         whole = _mentions(all_toks, allow_ordinals=True)
 
-    mapping, deferred, kinds = {}, [], []
+    mapping, deferred, kinds, mentioned = {}, [], [], []
     for seg in _clauses(low, allow_ord):
         toks = _tokens(seg)
         ms = _mentions(toks, allow_ord)
@@ -440,6 +477,7 @@ def resolve(text, fallback=None):
         keys, kind = _keys_from(ms)
         if kind:
             kinds.append(kind)
+        mentioned.extend(k for k, _ in keys)
 
         if not bins_:
             deferred.extend(k for k, _ in keys)
@@ -521,6 +559,25 @@ def resolve(text, fallback=None):
             free = [b for b in BINS if b not in set(mapping.values())]
             if k not in mapping and free:
                 mapping[k] = free[0]
+
+    # COMPLETION: a key the sentence named that still has no bin is worth 0 (object stays on the
+    # counter), so giving it one is worth 3p - 1 >= -1 and +2 when right. This is NOT the "bijection
+    # repair" deleted earlier, which MOVED keys that already had a bin (+2 -> -1, a 3-point loss, and
+    # it broke scored many-to-one). Completion only touches keys currently scoring 0 and can never
+    # damage a correct one -- do not remove it by analogy. Order: bins still free, in left/center/right
+    # order, against the keys in sentence order (one key + one free bin = elimination); then a colour's
+    # FIXED_MAPPING bin. A "leave it alone" key is cut out of the sentence up front (_LEAVE) so it keeps its 0, and a "default" already covers the rest.
+    if mapping and "default" not in mapping:
+        kind_of = lambda k: 0 if isinstance(k, tuple) else 1 if k in COLORS else 2  # noqa: E731
+        if comp and len({k[1] for k in comp}) == 1 and len(comp) >= 2:
+            mentioned = [k[0] if isinstance(k, tuple) else k for k in mentioned]
+        kept = {kind_of(k) for k in mapping}
+        todo = [k for k in dict.fromkeys(mentioned) if k not in mapping and kind_of(k) in kept]
+        free = [b for b in BINS if b not in set(mapping.values())]
+        for i, k in enumerate(todo):
+            b = free[i] if i < len(free) else FIXED_MAPPING.get(k)
+            if b:
+                mapping[k] = b
 
     if not mapping:
         return dict(FIXED_MAPPING if fallback is None else fallback)
