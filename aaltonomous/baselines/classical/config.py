@@ -81,6 +81,7 @@ FLAGS = {
     "perception.partial_ok_near_hand": ("recall P0", False, "retain sub-floor blobs touching the FK arm/hand-mask boundary as tentative; policy must re-observe before picking"),
     "perception.relook_before_done": ("recall P0", False, "before nothing-left, retract to home, wait for fresh frames, and run one final relaxed detection"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
+    "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
@@ -368,6 +369,7 @@ def check_flag_values(cfg):
     if not isinstance(pc.get("relook_fresh_frames", 2), int) or isinstance(pc.get("relook_fresh_frames", 2), bool) \
             or int(pc.get("relook_fresh_frames", 2)) < 1:
         raise ValueError("perception.relook_fresh_frames: want an int >= 1")
+    _check_depth_blob_recover(cfg)
     g = cfg.get("grasp") or {}
     hc = g.get("held_calibration") or {}
     nsteady = hc.get("steady_samples", 4)
@@ -451,6 +453,37 @@ def check_expected_flags(cfg, path=None):
     got = flags_dump(cfg)
     return [f"{k}: expected={exp.get(k, '<missing>')!r} got={got.get(k, '<missing>')!r}"
             for k in sorted(set(exp) | set(got)) if exp.get(k, "<missing>") != got.get(k, "<missing>")]
+
+
+def _check_depth_blob_recover(cfg):
+    """Depth-recovery tuning is validated at load time, never in the look worker."""
+    p = cfg.get("perception") or {}
+    if not p.get("depth_blob_recover", False):
+        return
+    d = p.get("depth_blob_recover_params") or {}
+
+    def number(key, lo, hi):
+        value = d.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) or not lo <= value <= hi:
+            raise ValueError(f"perception.depth_blob_recover_params.{key} = {value!r}: want a finite number in [{lo}, {hi}]")
+
+    for key, lo, hi in (("min_height_m", 0.012, 0.15), ("max_height_m", 0.012, 0.15),
+                        ("sat_floor", 0, 255), ("min_colour_conf", 0, 1), ("min_colour_margin", 0, 1),
+                        ("match_iou", 0, 1), ("match_centroid_px", 0, 640),
+                        ("plane_z_window", 0.01, 0.5), ("plane_inlier_m", 0.001, 0.05),
+                        ("shape_flatness_m", 0.001, 0.05), ("shape_prism_aspect", 1, 5)):
+        number(key, lo, hi)
+    if float(d["min_height_m"]) > float(d["max_height_m"]):
+        raise ValueError("depth blob recovery needs min_height_m <= max_height_m")
+    for key, lo in (("stride", 2), ("min_blob_cells", 1), ("max_blob_cells", 1),
+                    ("min_plane_points", 3), ("min_colour_px", 1)):
+        value = d.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < lo:
+            raise ValueError(f"perception.depth_blob_recover_params.{key} = {value!r}: want an int >= {lo}")
+    if int(d["min_blob_cells"]) > int(d["max_blob_cells"]):
+        raise ValueError("depth blob recovery needs min_blob_cells <= max_blob_cells")
+    if not isinstance(d.get("shape_hint"), bool):
+        raise ValueError("perception.depth_blob_recover_params.shape_hint: want true or false")
 
 
 def effective_flags(cfg):

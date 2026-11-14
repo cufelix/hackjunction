@@ -1303,8 +1303,10 @@ class ClassicalPolicy:
         return {"arm_clear": bool(np.abs(self.arm_cmd - self.home).max() < 0.05)}
 
     def _fk_kw(self, obs):
-        """Only with perception.color_gate.fk_mask: the measured arm / hand pose for detect()'s arm mask."""
-        if not (self.cfg["perception"].get("color_gate") or {}).get("fk_mask", False) or obs.get("arm_q") is None:
+        """Measured arm/hand pose for an enabled colour-gate or depth-recovery FK mask."""
+        need_fk = ((self.cfg["perception"].get("color_gate") or {}).get("fk_mask", False) or
+                   self.cfg["perception"].get("depth_blob_recover", False))
+        if not need_fk or obs.get("arm_q") is None:
             return {}
         return {"robot_q": (np.asarray(obs["arm_q"], float),
                             None if obs.get("hand_q") is None else np.asarray(obs["hand_q"], float))}

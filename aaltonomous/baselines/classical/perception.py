@@ -296,6 +296,7 @@ class Perception:
         self.color_gate_degraded = False
         self.fk_mask = bool(self.color_gate_cfg.get("fk_mask", False))   # perception.color_gate.fk_mask (FLAG)
         self._arm_surface = None   # lazily built FK surface for fk_mask (own instance: never shares B1's lock)
+        self._arm_surface_error = None
         self.fk_mask_px = 0        # pixels the last fk mask removed (diagnostics)
         self.sat_floor_adaptive = bool(self.cfg.get("sat_floor_adaptive", False))
         self.sat_floor_fixed = self.color_gate and bool(self.color_gate_cfg.get("sat_floor", False))
@@ -308,6 +309,21 @@ class Perception:
         self.bin_shift_src = None  # live_bins: object with .bin_shift {bin: pelvis dxy} (the policy's planner, bin.vote)
         self.geometry_runtime = False   # bin.geometry_runtime flag, set by policy.py: every bin consumer follows bin_shift_src.bin_shift
         self.bin_vote_on = False   # bin.vote flag, set by policy.py: bin footprints follow bin_shift_src.bin_shift
+        # P0 depth recovery: imported/executed only on this opt-in path and only on scheduled detect() updates, never
+        # on ordinary control ticks.  The real runner already executes scheduled look work in its worker thread.
+        self.depth_blob_recover = bool(self.cfg.get("depth_blob_recover", False))
+        self.depth_recover_cfg = dict(self.cfg.get("depth_blob_recover_params") or {})
+        self.depth_recover_ms = 0.0
+        if self.depth_blob_recover:
+            # Loading Pinocchio, the URDF, and the surface asset can take tens
+            # of milliseconds.  Do it during policy construction, never on the
+            # first scheduled perception/control tick.
+            try:
+                from .hand_calib import ArmSurface
+                self._arm_surface = ArmSurface()
+            except Exception as exc:
+                self._arm_surface_error = exc
+                self.log(f"[depth_recover] FK mask unavailable ({type(exc).__name__}: {exc}); recovery will abstain")
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
@@ -1216,8 +1232,9 @@ class Perception:
         self.color_gate_degraded = False
         self.update_counter_height(depth)    # calib.plane.apply_height (inert when off)
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
+        arm = None
         arm_boundary = None
-        if self.fk_mask and robot_q is not None:   # the robot's own arms / hands are never objects
+        if (self.fk_mask or self.depth_blob_recover) and robot_q is not None:   # the robot's own arms / hands are never objects
             arm = self._fk_arm_mask(keep.shape, *robot_q)
             if arm is not None:
                 keep[arm] = 0
@@ -1226,10 +1243,13 @@ class Perception:
                     outer = cv2.dilate(arm.astype(np.uint8),
                                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
                     arm_boundary = (outer > 0) & ~arm
+        depth_fk_failed = self.depth_blob_recover and robot_q is not None and arm is None
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
-        need_hsv = self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor or self.sat_floor_adaptive
+        need_hsv = (self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor or self.sat_floor_adaptive
+                    or self.depth_blob_recover)
         hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None
+        colour_records = [] if self.depth_blob_recover else None
         if self.colour_kmeans and not self._colour_kmeans_done and arm_clear:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
             self._fit_colour_kmeans(hsv, kkeep)
@@ -1243,8 +1263,11 @@ class Perception:
             # solely from its own source pixels.
             for color, blob, area, centroid, mixed, tent in self._hue_guard_parts(masks, hsv, keep, depth,
                                                                                   arm_boundary):
+                before = len(dets)
                 self._detect_blob(color, blob, area, centroid, depth, include_bins, dets, rejected, hsv,
                                   hue_mixed=mixed, tentative=tent)
+                if colour_records is not None and len(dets) > before:
+                    colour_records.append((dets[-1], blob))
             items = ((color, mask) for color, mask in masks.items() if color not in ("red", "yellow"))
         else:
             items = masks.items()
@@ -1270,13 +1293,35 @@ class Perception:
                     for part, p_area, p_cent in self.split_blob(blob, area, cent[i], depth):
                         part_tentative = bool(arm_boundary is not None and
                                               np.any(arm_boundary[win] & (part[win] > 0)))
+                        before = len(dets)
                         self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected,
                                           hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None,
                                           tentative=part_tentative)
+                        if colour_records is not None and len(dets) > before:
+                            colour_records.append((dets[-1], part))
                     continue
+                before = len(dets)
                 self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected,
                                   hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None,
                                   tentative=tentative)
+                if colour_records is not None and len(dets) > before:
+                    colour_records.append((dets[-1], blob))
+        if self.depth_blob_recover and not depth_fk_failed:
+            try:
+                from .depth_recover import recover_depth_blobs
+                recovered, depth_rejected, self.depth_recover_ms, stats = recover_depth_blobs(
+                    self, rgb, depth, hsv, colour_records, arm)
+                dets.extend(recovered)
+                rejected.extend(depth_rejected)
+                self.log(f"[depth_recover] components={stats['components']} matched={stats['matched']} "
+                         f"unknown={stats['unknown']} accepted={stats['accepted']} plane={stats['plane']} "
+                         f"elapsed_ms={self.depth_recover_ms:.2f}")
+            except Exception as exc:   # optional recall path fails closed; the colour detections still pass through
+                self.depth_recover_ms = 0.0
+                self.log(f"[depth_recover] failed ({type(exc).__name__}: {exc}); colour-only")
+        elif depth_fk_failed:
+            self.depth_recover_ms = 0.0
+            self.log("[depth_recover] skipped: FK arm/hand mask unavailable; colour-only")
         if self.hue_guard:
             dets, rejected = self._hue_guard(dets, rejected)
         if self.color_gate:
@@ -1826,6 +1871,8 @@ class Perception:
         """
         import cv2
         try:
+            if self._arm_surface_error is not None:
+                return None
             if self._arm_surface is None:
                 from .hand_calib import ArmSurface
                 self._arm_surface = ArmSurface()

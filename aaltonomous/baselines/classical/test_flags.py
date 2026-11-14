@@ -42,6 +42,12 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(finals["perception"]["online_pitch_cal"], "table")
         self.assertEqual(finals["grasp"]["held_detector"], "finger_sum")
 
+    def test_depth_blob_recover_flag_defaults_off(self):
+        cfg = load_config(overlay="none")
+        self.assertFalse(cfg["perception"]["depth_blob_recover"])
+        self.assertIn("perception.depth_blob_recover", FLAGS)
+        self.assertFalse(load_config(overlay="submission")["perception"]["depth_blob_recover"])
+
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
 
