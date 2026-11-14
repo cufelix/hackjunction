@@ -3,3 +3,4 @@
 name: ab_maxatt4
 flags:
   policy.max_attempts: 4
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes

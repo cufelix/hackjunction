@@ -3,3 +3,4 @@
 name: ab_resolver
 flags:
   instruction.resolve: true
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes

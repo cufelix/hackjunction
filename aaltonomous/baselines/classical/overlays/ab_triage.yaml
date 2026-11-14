@@ -4,3 +4,4 @@ name: ab_triage
 flags:
   policy.time_triage: true
   policy.max_total_attempts: 10
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes
