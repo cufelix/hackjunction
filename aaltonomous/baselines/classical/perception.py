@@ -80,7 +80,6 @@ class Perception:
             self.cal = copy.copy(calibration)
             self.cal.cams = dict(calibration.cams)
             self.cal.cams[self.cam] = dataclasses.replace(cam, K=K)
-        self.K = self.cal.cams[self.cam].K
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
@@ -371,7 +370,7 @@ class Perception:
         fallback = float(s.get("fallback_area_px", 3000))
         if self.cal is None or self.cam not in getattr(self.cal, "cams", {}):
             return fallback
-        K = self.K
+        K = self.cal.cams[self.cam].K
         z = None
         if depth is not None:
             dlo, dhi = self.cfg["depth_range_mm"]
@@ -615,7 +614,7 @@ class Perception:
     def _from_plane(self, color, uv, area, n_depth):
         """Centroid ray of the blob intersected with the horizontal plane at the object's top."""
         T = self.cal._T(self.cam)
-        K = self.K
+        K = self.cal.cams[self.cam].K
         ray_opt = np.array([(uv[0] - K[0, 2]) / K[0, 0], (uv[1] - K[1, 2]) / K[1, 1], 1.0])
         ray = T[:3, :3] @ ray_opt
         o = T[:3, 3]
