@@ -1,0 +1,8 @@
+# adv-real2: nominal + a start pose that is NOT ARM_HOME (the organisers home the robot themselves): every arm joint
+# +-0.2 rad around ARM_HOME, hands exactly open (0). Calibration that assumes ARM_HOME before any motion fails here.
+# If the organisers publish their exact home pose, put it in start_arm_q: {joint_name: rad, ...} and set jitter to 0.05.
+name: start_pose
+adv:
+  pp_px: [325.042, 250.927]                  # real D435i principal point (calibration.yaml); Isaac renders at 319.5/239.5
+  start_arm_jitter_rad: 0.2
+  start_hand_open: true

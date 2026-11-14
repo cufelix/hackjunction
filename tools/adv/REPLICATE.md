@@ -31,3 +31,39 @@ Policy-side scene.yaml / calibration are NOT changed: the policy keeps believing
 
 If the stock tree differs from the one the patch was cut from, `patch` fails loudly; regenerate with
 `diff -u` of `aaltonomous/sim/aalto_task/{dr,hooks,scene_cfg}.py`.
+
+## adv-real2 profiles (branch `oliver/adv-real2`)
+
+New knobs in the same patch (rebuild the tree with `make_adv_tree.sh` after pulling; the old profiles draw exactly the
+same values per seed as before, because the new knobs use their own seed stream):
+`table_dy_cm`, `counter_dz_mm`, `pp_px`, `dark_near_keep` (+ `dark_lum_max`, `dark_near_mm`), `hand_kp` / `hand_kd` /
+`hand_gain_scale`, `start_arm_jitter_rad` / `start_arm_q` / `start_hand_open`. The evaluator now calls `randomize`
+BEFORE homing the arms, so a profile's start pose applies (it changes nothing for profiles without one).
+
+| profile | what it adds (on top of nominal unless noted) | decides |
+|---|---|---|
+| `pp` | head image rendered at the real principal point 325.0/250.9 (Isaac renders 319.5/239.5) | how much this sim artefact moved every past sim number |
+| `real_soft` | + pp, Dex3 PD gains kp 1.5 / kd 0.2 (real firmware); fit lag with `hand_step.py` | timi/cage, timi/release |
+| `displaced` | + pp, bins +5..14 cm, counter +0..20 mm, head pitch -1.5..-9 deg, table y +-4 cm | timi/handcal, timi/gatefix, calibration |
+| `dark_links` | + pp, depth kept on dark near-field pixels: 80 / 40 / 0 % (one per episode) | timi/handcal (hand ICP) |
+| `start_pose` | + pp, arm start +-0.2 rad per joint around ARM_HOME, hands exactly open | anything calibrating before motion |
+| `real2_all` | real_hard + all of the above (worst case, report only) | readiness story |
+
+**Held-out rule:** seeds with `seed % 4 == 3` are never used for tuning. With 10 seeds from 1000, that is 1003 and 1007.
+`adv_report.py compare` prints them on their own line; a change ships only if the held-out delta is not negative.
+
+### 10-seed A/B recipe (per profile, ~25-40 min per arm on one adv sim)
+```bash
+source tools/adv/adv_env.sh
+# 0) once per tree: hand lag fit (sim idle). Target close.t90_median_s 0.30-0.38 s
+cd $ADV_TREE && bash tools/adv/set_profile.sh real_soft && bash aaltonomous/cloud/aalto.sh py <tools>/hand_step.py /tmp/hand_step_soft.json
+# 1) base vs candidate, same profile, same seeds 1000..1009
+bash <tools>/run_adv.sh <base_branch|sha>  <overlay>   <profile> 1000 10
+bash <tools>/run_adv.sh <cand_branch|sha>  <overlay_c> <profile> 1000 10
+# 2) paired score (+ held-out line) and why objects were lost + localisation error (median / p95 / max, held-out split)
+python3 <tools>/adv_report.py compare $ADV_RUNS/<profile>__<overlay>__<base_sha>__s1000n10 $ADV_RUNS/<profile>__<overlay_c>__<cand_sha>__s1000n10
+python3 <tools>/loss_breakdown.py base=$ADV_RUNS/<profile>__<overlay>__<base_sha>__s1000n10 cand=$ADV_RUNS/<profile>__<overlay_c>__<cand_sha>__s1000n10
+```
+Suggested pairs: `real_soft`: rc7-pre finals_r22 vs timi/cage (+ timi/release); `displaced` and `dark_links`:
+finals_r22 vs timi/handcal; `pp`: rc1 under `nominal` vs `pp` (same code, measures the artefact).
+Not simulated: command latency jitter (needs interface changes), finger-pad friction (unmeasured).

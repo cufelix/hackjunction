@@ -1,6 +1,6 @@
---- a/aaltonomous/sim/aalto_task/dr.py	2026-11-14 12:17:15.075075032 +0100
-+++ b/aaltonomous/sim/aalto_task/dr.py	2026-11-14 12:41:46.194651444 +0100
-@@ -104,9 +104,63 @@
+--- a/aaltonomous/sim/aalto_task/dr.py
++++ b/aaltonomous/sim/aalto_task/dr.py
+@@ -104,9 +104,98 @@
          "rot_offset_rad": [float(rc.uniform(-aj, aj)) if aj else 0.0 for _ in range(3)],
          "stream_seed": int(rc.integers(2 ** 31)),
      }
@@ -51,7 +51,7 @@
 +        img["depth_hole_frac"] = float(_draw(r, A["depth_hole_frac"], 0.0))
 +    if A.get("depth_noise_mm") is not None:
 +        img["depth_noise_mm"] = float(_draw(r, A["depth_noise_mm"], 0.0))
-+    return {
++    out = {
 +        "image": img,
 +        "cam": {"pitch_deg": _draw(r, A.get("cam_pitch_deg"), 0.0), "yaw_deg": _draw(r, A.get("cam_yaw_deg"), 0.0),
 +                "xyz_m": [_draw(r, _sym(v)) / 100.0 for v in xyz]},
@@ -59,12 +59,47 @@
 +        "render_colors": A.get("render_colors"), "bin_rgb": A.get("bin_rgb"), "tape_rgb": A.get("tape_rgb"),
 +        "ensure_object": A.get("ensure_object"), "object_region": A.get("object_region"),
 +    }
++    out.update(_sample_adv2(A, np.random.default_rng(np.random.SeedSequence([int(seed) if seed is not None else 0, 0xAD8])), img))
++    return out
++
++
++def _sample_adv2(A, r, img):
++    """adv-real2 knobs (own seed stream 0xAD8, so the adv-sim draws above stay identical for the same seed).
++      table_dy_cm      counter + mat + bins + objects shifted along pelvis y (lateral table offset)
++      counter_dz_mm    counter + mat + bins + objects raised (pelvis z); the policy keeps the nominal counter height
++      pp_px [cx, cy]   render the head image with this principal point (Isaac centres it at (w-1)/2, (h-1)/2,
++                       ignoring calibration.yaml cx/cy); each entry scalar | [lo, hi] | {mean, std}
++      dark_near_keep   fraction of depth kept on dark near-field pixels (black Dex3 links): scalar or a list to
++                       pick one per episode, e.g. [0.8, 0.4, 0.0]; dark_lum_max (0-255), dark_near_mm set the proxy
++      hand_kp, hand_kd absolute Dex3 joint PD gains in the sim (real firmware: kp 1.5, kd 0.2); hand_gain_scale
++                       multiplies the sim's own gains instead
++      start_arm_jitter_rad  per-arm-joint uniform offset of the start pose around ARM_HOME (evaluate.py homing);
++      start_arm_q      {joint: rad} absolute overrides of the start pose; start_hand_open: true = hands at 0 exactly
++    """
++    keep = A.get("dark_near_keep")
++    if isinstance(keep, (list, tuple)):
++        keep = float(keep[int(r.integers(len(keep)))])
++    if keep is not None:
++        img["dark_near_keep"] = float(keep)
++        img["dark_lum_max"] = float(A.get("dark_lum_max", 45))
++        img["dark_near_mm"] = float(A.get("dark_near_mm", 650))
++    pp = A.get("pp_px")
++    if pp is not None:
++        img["pp_px"] = [_draw(r, pp[0]), _draw(r, pp[1])]
++    sj = float(A.get("start_arm_jitter_rad") or 0.0)
++    return {
++        "table_dy_m": _draw(r, _sym(A["table_dy_cm"]) if A.get("table_dy_cm") is not None else None, 0.0) / 100.0,
++        "counter_dz_m": _draw(r, A.get("counter_dz_mm"), 0.0) / 1000.0,
++        "hand": {k: (None if A.get(k) is None else float(A[k])) for k in ("hand_kp", "hand_kd", "hand_gain_scale")},
++        "start": {"jitter": [float(r.uniform(-sj, sj)) if sj else 0.0 for _ in range(14)],
++                  "arm_q": dict(A.get("start_arm_q") or {}), "hand_open": bool(A.get("start_hand_open", False))},
++    }
 +
 +
  def jitter_layout(layout, params):
      """Apply pose jitter (mat coords) to a layout copy. Deterministic for the params' stream seed."""
      P = (params or {}).get("pose") or {}
-@@ -125,23 +179,42 @@
+@@ -125,23 +214,59 @@
      return out
  
  
@@ -81,6 +116,23 @@
      """Camera noise on one head frame: rgb uint8 (H,W,3), depth uint16 mm (0 = invalid)."""
      if not cam:
          return rgb, depth
++    keep = cam.get("dark_near_keep")
++    if keep is not None and keep < 1.0:     # black Dex3 links: weak IR return on dark near-field surfaces (no seg channel:
++        lum = rgb.astype(np.float32) @ np.float32([0.299, 0.587, 0.114])     # proxy = dark AND near, on the clean frame)
++        dark = (lum <= cam.get("dark_lum_max", 45)) & (depth > 0) & (depth < cam.get("dark_near_mm", 650))
++        depth = np.where(dark & (rng.uniform(size=depth.shape) >= keep), 0, depth).astype(np.uint16)
++    rgb, depth = _corrupt_noise(rgb, depth, cam, rng)
++    pp = cam.get("pp_px")
++    if pp is not None:                      # move the optical centre from the render's (w-1)/2,(h-1)/2 to pp
++        import cv2
++        h, w = depth.shape
++        M = np.float32([[1, 0, pp[0] - (w - 1) / 2.0], [0, 1, pp[1] - (h - 1) / 2.0]])
++        rgb = cv2.warpAffine(rgb, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
++        depth = cv2.warpAffine(depth, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
++    return rgb, depth
++
++
++def _corrupt_noise(rgb, depth, cam, rng):
      g, sd = cam.get("rgb_gain", 1.0), cam.get("rgb_noise_std", 0.0)
 -    if g != 1.0 or sd > 0:
 -        f = rgb.astype(np.float32) * g
@@ -111,9 +163,9 @@
 +            valid &= ~_blob_mask(d.shape, blob, cam.get("depth_hole_blob_seed", 0))
          depth = np.where(valid, np.clip(np.round(d), 1, 65535), 0).astype(np.uint16)
      return rgb, depth
---- a/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 12:17:15.505077988 +0100
-+++ b/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 12:41:46.194412133 +0100
-@@ -68,7 +68,18 @@
+--- a/aaltonomous/sim/aalto_task/hooks.py
++++ b/aaltonomous/sim/aalto_task/hooks.py
+@@ -68,7 +68,19 @@
              print(f"[aalto] head RGB-D on tcp :{rp}")
          self.last_frame = None
          self.zmq = zmq
@@ -121,6 +173,7 @@
 +        self.dr_cfg = dr.load() or dr.load("adv_nominal")     # adv sim: a profile is always active (see tools/adv)
 +        self._counter_depth0 = float(self.sc.cfg["counter"]["counter_size"][1])
 +        self._bin_y0 = {b: float(c[1]) for b, c in self.sc.cfg["bins"]["centers"].items()}
++        self._origin0 = [float(v) for v in self.sc.cfg["counter"]["mat_origin_in_pelvis"]]   # adv-real2 table shift
 +        try:                                  # tape bands are visible only for profiles with tape_rgb
 +            from pxr import UsdGeom
 +            for bn in self.sc.bin_names:
@@ -133,7 +186,7 @@
          self.dr_params, self._dr_base, self._cam_rng = None, None, None
          cp = int(os.environ.get("AALTO_CLOCK_PORT", str(sp + 1 if sp else 0)))
          self.clock = None
-@@ -94,6 +105,7 @@
+@@ -94,6 +106,7 @@
      def place(self, env, layout):
          if self.dr_params:
              layout = dr.jitter_layout(layout, self.dr_params)
@@ -141,7 +194,7 @@
          poses, active = assign(self.sc, layout)
          origin = _t(env.scene.env_origins)[0]
          dev = origin.device
-@@ -122,12 +134,49 @@
+@@ -122,12 +135,50 @@
                          "speed": round(float(np.linalg.norm(v)), 5)})
          return out
  
@@ -151,7 +204,8 @@
 +        R = ((self.dr_params or {}).get("adv") or {}).get("object_region")
 +        if not R:
 +            return layout
-+        o0 = np.asarray(self.sc.origin, float)           # pelvis x = o0x + y_mat ; pelvis y = o0y + x_mat
++        o0 = np.asarray(self._origin0, float)            # pelvis x = o0x + y_mat ; pelvis y = o0y + x_mat (NOMINAL
++                                                         # origin: a table_dy/counter_dz shift is applied by assign)
 +        out = []
 +        for o in layout:
 +            o = dict(o)
@@ -192,7 +246,7 @@
          if cmd == "info":
              d = None if not self.dr_cfg else {"name": self.dr_cfg.get("name"), "path": self.dr_cfg["_path"]}
              return {"ok": True, "dr": d, "ports": self.ports, "n_objects": len(self.names), **self.clock_info()}
-@@ -136,7 +185,7 @@
+@@ -136,7 +187,7 @@
          if cmd == "reset_random":
              if self.dr_cfg:
                  self.randomize(env, req.get("seed"))
@@ -201,7 +255,7 @@
              return {"ok": True, "active": self.place(env, lay), "layout": lay}
          if cmd == "state":
              return {"ok": True, "objects": self.state(env), "layout": self.layout}
-@@ -254,9 +303,16 @@
+@@ -254,9 +305,22 @@
                                  "color": tuple(p.GetAttribute("inputs:color").Get() or (1, 1, 1)),
                                  "translate": tuple(t.Get()) if t and t.Get() is not None else None}
      roots = {"Counter": "/World/envs/env_0/Counter"}
@@ -215,10 +269,16 @@
 +            if stage.GetPrimAtPath(tp).IsValid():
 +                roots[f"tape:{bn}:{part}"] = tp
 +                b["xf"][(bn, f"Tape_{bn}_{part}")] = tuple(stage.GetPrimAtPath(tp).GetAttribute("xformOp:translate").Get())
++    for name in ("Counter", "Mat", "Lid"):             # adv-real2: the whole table moves with table_dy / counter_dz
++        pr = stage.GetPrimAtPath(f"/World/envs/env_0/{name}")
++        at = pr.GetAttribute("xformOp:translate") if pr.IsValid() else None
++        if at and at.Get() is not None:
++            b["xf"][(None, name)] = tuple(at.Get())
++    b["hand"] = _hand_gains(env)
      for n in rt.names:
          roots[f"obj:{n}"] = _env0(env.scene[n].cfg.prim_path)
      for k, r in roots.items():
-@@ -303,12 +359,22 @@
+@@ -303,12 +367,22 @@
          T, O = P["textures"], P["objects"]
          for k, lst in base["colors"].items():
              for sh, rgb in lst:
@@ -241,7 +301,7 @@
                      new = dr.jitter_color(rgb, o["dh"], o["s"], o["v"])
                  sh.GetInput("diffuseColor").Set(Gf.Vec3f(*[float(min(max(c, 0.0), 1.0)) for c in new]))
          tex = stage.GetPrimAtPath("/World/envs/env_0/Mat/material/texture")
-@@ -344,11 +410,36 @@
+@@ -344,14 +418,110 @@
              C = P["camera"]
              q = (R.from_rotvec(C["rot_offset_rad"]) * R.from_quat(q0[0].cpu().numpy())).as_quat()   # xyzw
              pos = pos0[0].cpu().numpy() + np.asarray(C["pos_offset"])
@@ -261,9 +321,10 @@
 +        adv = P.get("adv") or {}
 +        dx = adv.get("bin_dx_m") or {}
 +        from pxr import UsdGeom
++        dy, dz = float(adv.get("table_dy_m") or 0.0), float(adv.get("counter_dz_m") or 0.0)
 +        for (bn, prim_name), t0 in base["xf"].items():
 +            prim = stage.GetPrimAtPath(f"/World/envs/env_0/{prim_name}")
-+            prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(t0[0] + float(dx.get(bn, 0.0)), t0[1], t0[2]))
++            prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(t0[0] + float(dx.get(bn, 0.0)), t0[1] + dy, t0[2] + dz))
 +            if prim_name.startswith("Tape_"):
 +                (UsdGeom.Imageable(prim).MakeVisible if adv.get("tape_rgb") else UsdGeom.Imageable(prim).MakeInvisible)()
 +        for bn, y0 in rt._bin_y0.items():          # scoring follows the moved bins (mat y = pelvis x - 0.14)
@@ -272,14 +333,87 @@
 +        cs = list(rt.sc.cfg["counter"]["counter_size"])
 +        cs[1] = rt._counter_depth0 + 2 * max([0.0] + [float(v) for v in dx.values()])
 +        rt.sc.cfg["counter"]["counter_size"] = cs
++        o0 = rt._origin0                           # objects (assign) + scoring follow the shifted table
++        rt.sc.cfg["counter"]["mat_origin_in_pelvis"] = [o0[0], o0[1] + dy, o0[2] + dz]
 +        ok["bins"] = True
 +    except Exception as e:
 +        ok["bins"] = f"{type(e).__name__}: {e}"
++    try:
++        ok["hand_gains"] = _apply_hand_gains(env, base.get("hand"), (P.get("adv") or {}).get("hand") or {})
++    except Exception as e:
++        ok["hand_gains"] = f"{type(e).__name__}: {e}"
      return ok
  
  
---- a/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-14 12:17:15.829080216 +0100
-+++ b/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-14 12:18:29.208269694 +0100
++def _hand_gains(env):
++    """Nominal Dex3 joint PD gains (captured once): {ids, names, kp, kd} or None."""
++    try:
++        rob = env.scene["robot"]
++        names = list(getattr(rob, "joint_names", None) or rob.data.joint_names)
++        ids = [i for i, n in enumerate(names) if "_hand_" in n]
++        kp = _t(rob.data.joint_stiffness)[0, ids].clone()
++        kd = _t(rob.data.joint_damping)[0, ids].clone()
++        print(f"[aalto] adv: nominal hand gains kp {kp.cpu().numpy().round(3).tolist()} kd {kd.cpu().numpy().round(3).tolist()}")
++        return {"ids": ids, "names": [names[i] for i in ids], "kp": kp, "kd": kd}
++    except Exception as e:
++        print(f"[aalto] adv: no hand gain access: {type(e).__name__}: {e}")
++        return None
++
++
++def _write_gain(rob, what, val, ids):
++    """PhysX drive (implicit actuators) via whichever writer this Isaac Lab has, plus the actuator model's own tensor
++    (explicit actuators compute torque from it). Returns the writer used."""
++    dev = val.device
++    jid = torch.tensor(ids, dtype=torch.long, device=dev)
++    eid = torch.tensor([0], dtype=torch.long, device=dev)
++    used = None
++    for fn in (f"write_joint_{what}_to_sim_index", f"write_joint_{what}_to_sim"):
++        f = getattr(rob, fn, None)
++        if f is None:
++            continue
++        try:
++            f(**{what: val[None]}, joint_ids=jid, env_ids=eid)
++            used = fn
++            break
++        except TypeError:
++            f(val[None], joint_ids=jid, env_ids=eid)
++            used = fn
++            break
++    attr = {"stiffness": "stiffness", "damping": "damping"}[what]
++    for act in getattr(rob, "actuators", {}).values():
++        aid = getattr(act, "joint_indices", None)
++        t = getattr(act, attr, None)
++        if aid is None or not torch.is_tensor(t):
++            continue
++        aid = list(range(rob.num_joints)) if isinstance(aid, slice) else [int(i) for i in aid]
++        for k, j in enumerate(ids):
++            if j in aid:
++                t[0, aid.index(j)] = val[k].to(t.device)
++    return used
++
++
++def _apply_hand_gains(env, base, H):
++    """adv `hand_kp` / `hand_kd` (absolute) or `hand_gain_scale`; none set -> restore the nominal gains."""
++    if not base:
++        return "no base gains"
++    kp, kd = base["kp"].clone(), base["kd"].clone()
++    if H.get("hand_gain_scale") is not None:
++        kp, kd = kp * H["hand_gain_scale"], kd * H["hand_gain_scale"]
++    if H.get("hand_kp") is not None:
++        kp[:] = H["hand_kp"]
++    if H.get("hand_kd") is not None:
++        kd[:] = H["hand_kd"]
++    rob = env.scene["robot"]
++    w = _write_gain(rob, "stiffness", kp, base["ids"]), _write_gain(rob, "damping", kd, base["ids"])
++    return {"writers": w, "kp": float(kp.mean()), "kd": float(kd.mean()), "nominal_kp": float(base["kp"].mean()),
++            "nominal_kd": float(base["kd"].mean())}
++
++
+ def runtime(env):
+     global _RT
+     if _RT is None:
+--- a/aaltonomous/sim/aalto_task/scene_cfg.py
++++ b/aaltonomous/sim/aalto_task/scene_cfg.py
 @@ -208,6 +208,37 @@
      return out
  
@@ -327,3 +461,44 @@
      if lid:
          attrs["lid"] = lid_cfg()
      ns = dict(attrs)
+--- a/aaltonomous/sim/evaluate.py
++++ b/aaltonomous/sim/evaluate.py
+@@ -83,7 +83,7 @@
+         self.pool.shutdown(wait=False, cancel_futures=True)
+ 
+ 
+-def home_arms(env, sc, vmax=0.6, hold_s=0.5):
++def home_arms(env, sc, vmax=0.6, hold_s=0.5, start=None):
+     """Spec §3 "arms start in a fixed home pose": park every object, then move arms to the sim home pose
+     (layout.ARM_HOME) and hands to 0 through the safety filter, so the next layout is placed with the arms clear.
+     Uses (and ends) a throw-away AaltoEnv episode; call before seeding env.rng for the trial."""
+@@ -92,6 +92,14 @@
+     spec = env.filter.spec
+     home = np.array([ARM_HOME[n] for n in spec.arm_names])
+     hand = np.clip(np.zeros(len(spec.hand_names)), spec.hand_lower + 0.05, spec.hand_upper - 0.05)
++    if start:      # adv-real2 profile: start pose != ARM_HOME (jitter + absolute overrides), hands exactly open
++        home = home + np.asarray(start.get("jitter") or np.zeros(len(home)))[:len(home)]
++        for k, v in (start.get("arm_q") or {}).items():
++            if k in spec.arm_names:
++                home[spec.arm_names.index(k)] = float(v)
++        home = np.clip(home, spec.arm_lower + 0.06, spec.arm_upper - 0.06)
++        if start.get("hand_open"):
++            hand = np.clip(np.zeros(len(spec.hand_names)), spec.hand_lower, spec.hand_upper)
+     sc.reset([])
+     orig = env.backend.reset_scene
+     env.backend.reset_scene = lambda layout, instruction: None
+@@ -180,11 +188,11 @@
+         rest = float(env.scene.cfg["success"]["at_rest_speed"])
+         for i in range(a.trials):
+             seed = a.seed + i
+-            home_err = home_arms(env, sc)
+-            env.rng = np.random.default_rng(seed)
+             dr = None
+-            if sim_info.get("dr"):
++            if sim_info.get("dr"):      # adv-real2: randomize BEFORE homing, so the profile's start pose applies
+                 dr = sc.call(cmd="randomize", seed=seed).get("params")
++            home_err = home_arms(env, sc, start=((dr or {}).get("adv") or {}).get("start"))
++            env.rng = np.random.default_rng(seed)
+             rec = Recorder(out_dir / f"episode_{i:03d}")
+             t0 = time.monotonic()
+             try:

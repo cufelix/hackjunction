@@ -1,0 +1,10 @@
+# adv-real2: nominal + the real session's geometry errors. The policy keeps the nominal scene.yaml / calibration.
+#   bins 5-14 cm farther (pelvis +x), counter 0-20 mm higher, head pitch error 1.5-9 deg, table lateral offset +-4 cm.
+name: displaced
+adv:
+  pp_px: [325.042, 250.927]                  # real D435i principal point (calibration.yaml); Isaac renders at 319.5/239.5
+  bin_dx_cm: [5.0, 14.0]
+  bin_dx_jitter_cm: 1.0
+  counter_dz_mm: [0.0, 20.0]
+  cam_pitch_deg: [-9.0, -1.5]                # convention tools/pitch_fit.py, same as real_hard
+  table_dy_cm: 4.0                           # +-4 cm: counter, mat, bins and objects together

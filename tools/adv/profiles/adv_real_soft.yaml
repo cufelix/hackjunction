@@ -1,0 +1,8 @@
+# adv-real2: nominal + soft Dex3 hands. Real firmware gains kp 1.5 / kd 0.2 (organiser fact), ~67x softer than the
+# sim's. Target: finger step response with 300-380 ms lag (fit with tools/adv/hand_step.py; if the lag is off, sweep
+# hand_kp / hand_kd here, not in the policy). Decides timi/cage (cage grasp) and timi/release (staggered release).
+name: real_soft
+adv:
+  pp_px: [325.042, 250.927]                  # real D435i principal point (calibration.yaml); Isaac renders at 319.5/239.5
+  hand_kp: 1.5
+  hand_kd: 0.2

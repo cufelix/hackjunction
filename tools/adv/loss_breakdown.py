@@ -20,6 +20,10 @@ incl. the profile's object_region remap; a "detection" = a `skip`/`execute` log 
                          e.g. orange bin rim / tape read as 'red') was executed or skipped in the episode
   a  not detected        no detection of its colour within 10 cm of P, no phantom either
 Episode level: phantom detections per episode are reported separately (they cost time even when no object is lost to them).
+
+Localisation error (every object, sorted or not): distance from P to the nearest detection of its colour within 10 cm
+(xy, pelvis frame), reported as median / p95 / max, split into tuning seeds and HELD-OUT seeds (seed % 4 == 3, never used
+for tuning). P follows the adv-real2 table_dy shift. Objects with no detection within 10 cm count as "unlocalised".
 """
 import argparse
 import glob
@@ -96,6 +100,7 @@ def start_positions(trial):
         if R:
             px = R["x_c"] + R["kx"] * (px - 0.295)
             py = R["y_c"] + R["ky"] * py
+        py += float((((trial.get("dr_params") or {}).get("adv")) or {}).get("table_dy_m") or 0.0)   # adv-real2 table shift
         out[n] = (o["color"], o.get("shape"), np.array([px, py]))
     return out
 
@@ -141,6 +146,30 @@ def classify(trial, lines):
     return res, len(phantom), len(dets)
 
 
+def heldout(seed):
+    return int(seed) % 4 == 3
+
+
+def loc_errors(trial, lines):
+    """-> [(seed, name, err_m or None)] for every placed object."""
+    dets = parse_dets(lines)
+    out = []
+    for n, (col, _, P) in start_positions(trial).items():
+        d = [float(np.linalg.norm(x["pos"] - P)) for x in dets if x["colour"] == col]
+        e = min(d) if d else None
+        out.append((trial["seed"], n, e if e is not None and e <= 0.10 else None))
+    return out
+
+
+def loc_line(errs):
+    e = sorted(x[2] for x in errs if x[2] is not None)
+    miss = sum(x[2] is None for x in errs)
+    if not e:
+        return f"n={len(errs)}  unlocalised {miss}"
+    q = lambda f: e[min(int(round(f * (len(e) - 1))), len(e) - 1)] * 100
+    return f"n={len(errs)}  median {q(0.5):.1f} cm  p95 {q(0.95):.1f} cm  max {e[-1]*100:.1f} cm  unlocalised {miss}"
+
+
 def load_run(d):
     ev = sorted(glob.glob(f"{d}/*/eval.json") + glob.glob(f"{d}/eval.json"))[-1]
     trials = json.load(open(ev))["trials"]
@@ -157,7 +186,7 @@ def main():
     md = []
     for spec in a.runs:
         label, dirs = spec.split("=", 1)
-        rows, n_eps, n_obj, ph, nd = [], 0, 0, 0, 0
+        rows, n_eps, n_obj, ph, nd, locs = [], 0, 0, 0, 0, []
         for d in sum([sorted(glob.glob(x)) for x in dirs.split(",")], []):
             trials, logs = load_run(d)
             for t in trials:
@@ -165,12 +194,15 @@ def main():
                 n_obj += t["n_objects"]
                 r, p, nde = classify(t, logs.get(t["seed"], []))
                 rows += r
+                locs += loc_errors(t, logs.get(t["seed"], []))
                 ph += p
                 nd += nde
         c = Counter(r["cat"] for r in rows)
         lost = len(rows)
         md.append(f"### {label}: {n_eps} episodes, {n_obj} objects, {lost} lost ({100*lost/max(n_obj,1):.0f} %); "
                   f"phantom detections {ph} of {nd} ({100*ph/max(nd,1):.0f} %)\n")
+        md.append(f"Localisation error, tuning seeds: {loc_line([x for x in locs if not heldout(x[0])])}  ")
+        md.append(f"Localisation error, HELD-OUT seeds (seed % 4 == 3): {loc_line([x for x in locs if heldout(x[0])])}\n")
         md.append("| cat | reason | count | % of lost |\n|---|---|---|---|")
         for k, nm in CATS:
             md.append(f"| {k} | {nm} | {c[k]} | {100*c[k]/max(lost,1):.0f} % |")

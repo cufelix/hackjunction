@@ -1,0 +1,6 @@
+# adv-real2: nominal + ONLY the principal-point fix. Isaac's PinholeCameraCfg centres the principal point, so every stock
+# sim eval so far rendered the head image 5.5 px / 11.6 px off the calibration the policy (and the real camera) uses.
+# This profile measures how much that sim artefact alone moved our numbers. All other real2 profiles include it.
+name: pp
+adv:
+  pp_px: [325.042, 250.927]                  # real D435i principal point (calibration.yaml); Isaac renders at 319.5/239.5

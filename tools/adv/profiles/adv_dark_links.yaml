@@ -1,0 +1,9 @@
+# adv-real2: nominal + the depth camera barely seeing the black Dex3 links. One level per episode: 80 / 40 / 0 % of
+# depth kept on dark near-field pixels (proxy: luminance <= 45 and range < 650 mm, no segmentation channel).
+# Decides timi/handcal (hand/forearm ICP extrinsic fit), which must survive 0 % depth on the hand.
+name: dark_links
+adv:
+  pp_px: [325.042, 250.927]                  # real D435i principal point (calibration.yaml); Isaac renders at 319.5/239.5
+  dark_near_keep: [0.8, 0.4, 0.0]
+  dark_lum_max: 45
+  dark_near_mm: 650

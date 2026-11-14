@@ -7,7 +7,8 @@
 
 Time (team rule: a new layer may add at most 2 % to the median episode time vs the base): episode time = SIM seconds
 (sim_s, independent of box load / RTF). Reported per run: median, p95, mean time per PLACED object (sum episode time / sum
-correct placements) and the placement count. `compare` prints "TIME FAIL" when run B (candidate) median time > 1.02 x run A (base).
+correct placements) and the placement count.
+Held-out rule (adv-real2): seeds with seed % 4 == 3 are never used for tuning; `compare` reports them on their own line. `compare` prints "TIME FAIL" when run B (candidate) median time > 1.02 x run A (base).
 
 Score used here: the evaluator's episode score, but an episode that ended in a safety stop (end_reason safe_stop / aborted /
 crash, or safety mode safe_stop) counts as -6 (spec: worst case). Robust metric = mean - std over episodes.
@@ -119,6 +120,11 @@ def cmd_compare(a, b):
     dt = 100.0 * (mb_ - ma_) / ma_ if ma_ else float("nan")
     print(f"time delta B-A: median {mb_ - ma_:+.2f} s ({dt:+.1f} %)  p95 {sb['t_p95'] - sa['t_p95']:+.2f} s  per placed "
           f"{(sb['t_per_placed'] or 0) - (sa['t_per_placed'] or 0):+.2f} s" + ("   *** TIME FAIL (median > +2 %) ***" if dt > 2.0 else "   time ok (<= +2 %)"))
+    for nm, ss in (("tuning seeds", [s for s in seeds if s % 4 != 3]), ("HELD-OUT seeds (seed % 4 == 3)", [s for s in seeds if s % 4 == 3])):
+        if ss:
+            dd = [B[s]["score"] - A[s]["score"] for s in ss]
+            print(f"  {nm}: n={len(ss)} A mean {st.mean(A[s]['score'] for s in ss):+.2f}  B mean {st.mean(B[s]['score'] for s in ss):+.2f}  "
+                  f"delta {st.mean(dd):+.2f}  wins {sum(x > 0 for x in dd)} losses {sum(x < 0 for x in dd)}")
     se = st.pstdev(d) / (len(d) ** 0.5) if len(d) > 1 else float("nan")
     print(f"paired delta B-A: mean {st.mean(d):+.2f} (se {se:.2f})  wins {sum(x > 0 for x in d)} losses {sum(x < 0 for x in d)} "
           f"ties {sum(x == 0 for x in d)}  d(mean-std) {sb['mean_minus_std'] - sa['mean_minus_std']:+.2f}   (* = safety stop, counted -6)")
