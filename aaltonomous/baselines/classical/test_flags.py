@@ -85,7 +85,7 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(sub, stock)
         # The frozen submission is unchanged; only the newly registered, default-off overrides may be absent.
         sub_keys = set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"])
-        self.assertEqual(set(FLAGS) - sub_keys, {"policy.chunk_ticks", "policy.hold_ticks"})
+        self.assertEqual(set(FLAGS) - sub_keys, {"policy.chunk_ticks", "policy.hold_ticks", "perception.prism_speckle_floor"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):
@@ -221,6 +221,7 @@ class TestFlags(unittest.TestCase):
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
+        expect["ab_prism_speckle"] = expect["finals_r22_gate"] | {"perception.prism_speckle_floor"}   # prism floor A/B
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -279,7 +280,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_log_joint_offset", "ab_object_time_budget_s",
                                       "ab_place_gate", "ab_plane_b1_inj_p7", "ab_plane_cgate",
                                       "ab_plane_cgate_live", "ab_plane_cgate_live_fk",
-                                      "ab_plane_cgate_live_vote", "ab_plane_inj_p7",
+                                      "ab_plane_cgate_live_vote", "ab_plane_inj_p7", "ab_prism_speckle",
                                       "ab_retry_vary", "ab_retry_vary_slots", "ab_robust_input",
                                       "ab_safety", "ab_sat_floor", "ab_shape2d", "ab_skills",
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",

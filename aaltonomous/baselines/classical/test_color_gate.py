@@ -303,3 +303,54 @@ class TestColorGateLiveBins(unittest.TestCase):
             np.testing.assert_allclose(hi, nominal[name]["outer_hi"])
         np.testing.assert_allclose(boxes["left"][0], nominal["left"]["outer_lo"])
         np.testing.assert_allclose(boxes["left"][1], nominal["left"]["outer_hi"])
+
+
+class TestPrismSpeckleFloor(unittest.TestCase):
+    """perception.prism_speckle_floor (default OFF): triangular orange/red blobs use a lower speckle floor."""
+
+    @staticmethod
+    def _blob(kind):
+        import cv2
+        m = np.zeros((200, 200), np.uint8)
+        if kind == "triangle":
+            cv2.fillConvexPoly(m, np.array([[100, 40], [40, 140], [160, 140]], np.int32), 1)
+        elif kind == "square":
+            m[60:140, 60:140] = 1
+        else:   # thin tape
+            m[90:100, 10:190] = 1
+        return m
+
+    def _perc(self, on):
+        from aaltonomous.baselines.classical.config import load_config
+        cfg = load_config(overlay="finals_r22_gate", overrides={"perception.prism_speckle_floor": on})
+        return Perception(cfg, Scene.load(), Calibration.load())
+
+    def test_flag_default_off_and_registered(self):
+        from aaltonomous.baselines.classical.config import FLAGS
+        self.assertIn("perception.prism_speckle_floor", FLAGS)
+        self.assertFalse(load_config()["perception"]["prism_speckle_floor"])
+        self.assertFalse(self._perc(False).prism_speckle_floor)
+
+    def test_shape_test_accepts_triangle_only(self):
+        p = self._perc(True)
+        self.assertTrue(p._prism_like(self._blob("triangle")))
+        self.assertFalse(p._prism_like(self._blob("square")))
+        self.assertFalse(p._prism_like(self._blob("tape")))
+
+    def test_lower_floor_applies_only_to_prism_like(self):
+        p = self._perc(True)
+        top = np.array([0.30, 0.0, 0.15])
+        Z = p._color_gate_depth(top)
+        self.assertIsNotNone(Z)
+        K = p.cal.cams[p.cam].K
+        expected = float(K[0, 0]) * float(K[1, 1]) * (p.size / Z) ** 2
+        n_px = int(0.2 * expected)   # between the prism floor (0.08) and the generic floor (0.4)
+        g = p.color_gate_cfg
+        plain = Detection("red", top, n_px, 0, "plane")
+        prism = Detection("red", top, n_px, 0, "plane", prism_like=True)
+        self.assertEqual(p._color_gate_why(plain, g), "color_gate:speckle")
+        self.assertNotEqual(p._color_gate_why(prism, g), "color_gate:speckle")
+        tiny = Detection("red", top, int(0.02 * expected), 0, "plane", prism_like=True)
+        self.assertEqual(p._color_gate_why(tiny, g), "color_gate:speckle")
+        off = self._perc(False)
+        self.assertEqual(off._color_gate_why(prism, off.color_gate_cfg), "color_gate:speckle")

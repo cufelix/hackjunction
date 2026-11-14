@@ -250,6 +250,8 @@ perception:
   gate_below_bins: false      # FLAG: untrusted live bins use the observed bin/tape mass instead of nominal projected geometry
   gate_below_bins_params: {h_max: 17, s_min: 77, v_min: 50, object_s_min: 140, object_v_min: 150,
                            open_px: 5, min_component_px: 2000, min_mass_px: 18000, margin_px: 3, trusted_bin_conf: 0.5}
+  prism_speckle_floor: false  # FLAG: orange/red blob with a triangular outline gets a lower color_gate speckle floor
+  prism_speckle_floor_params: {area_frac: 0.08, min_fill: 0.75, min_solidity: 0.85, max_aspect: 2.0, min_short_px: 22, min_px: 60}
   reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
   still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
   still_vote_params: {n_frames: 3, min_hits: 2, match_m: 0.02}

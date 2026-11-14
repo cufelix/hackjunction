@@ -120,6 +120,7 @@ class Detection:
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
     sat_med: float | None = None  # perception.color_gate.sat_floor only: median HSV S (0-255) over the blob mask
+    prism_like: bool = False      # perception.prism_speckle_floor only: orange/red blob with a triangular outline
     hue_mixed: bool = False       # H1: a post-split part still contains both red and yellow source-mask pixels
 
     def __repr__(self):
@@ -331,6 +332,8 @@ class Perception:
         self.sat_floor = self.color_gate and (self.sat_floor_fixed or self.sat_floor_adaptive)
         self._sat_floors = dict(self.color_gate_cfg.get("sat_floor_params") or {})
         self.area_floor_geometric = self.color_gate and bool(self.cfg.get("area_floor_geometric", False))
+        self.prism_speckle_floor = self.color_gate and bool(self.cfg.get("prism_speckle_floor", False))
+        self.prism_speckle_cfg = dict(self.cfg.get("prism_speckle_floor_params") or {})
         self.partial_ok_near_hand = bool(self.cfg.get("partial_ok_near_hand", False))
         self.partial_near_hand_cfg = dict(self.cfg.get("partial_ok_near_hand_params") or {})
         self.live_bins = bool(self.color_gate_cfg.get("live_bins", False))   # perception.color_gate.live_bins (FLAG)
@@ -1536,6 +1539,31 @@ class Perception:
         return (solidity >= float(self.split_solidity_cfg.get("solidity", 0.82)) and
                 aspect <= float(self.split_solidity_cfg.get("max_aspect", 2.0)))
 
+    def _prism_like(self, blob):
+        """perception.prism_speckle_floor: the blob outline fills >= min_fill of its minimum enclosing triangle, is
+        compact (solidity >= min_solidity) and not a sliver (aspect <= max_aspect, short side >= min_short_px)."""
+        try:
+            p = self.prism_speckle_cfg
+            m = (np.asarray(blob) > 0).astype(np.uint8)
+            cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not cnts:
+                return False
+            cnt = max(cnts, key=cv2.contourArea)
+            area = float(cv2.contourArea(cnt))
+            if area < float(p.get("min_px", 60)):
+                return False
+            hull = cv2.convexHull(cnt)
+            if area / max(float(cv2.contourArea(hull)), 1.0) < float(p.get("min_solidity", 0.85)):
+                return False
+            _, (w, h), _ = cv2.minAreaRect(hull)
+            short, long = min(float(w), float(h)), max(float(w), float(h))
+            if short < float(p.get("min_short_px", 22)) or long / max(short, 1e-6) > float(p.get("max_aspect", 2.0)):
+                return False   # thin tape flaps and arm slivers
+            tri_area, _ = cv2.minEnclosingTriangle(hull.astype(np.float32))
+            return bool(tri_area > 0 and area / tri_area >= float(p.get("min_fill", 0.75)))
+        except Exception:
+            return False
+
     def _tape_like(self, color, blob, hsv):
         """Thin warm candidate without the configured bright saturated core. Hue never decides rejection."""
         if color not in ("red", "orange") or hsv is None:
@@ -1779,6 +1807,8 @@ class Perception:
         if det is not None and hsv is not None and self.hue_guard:
             det.hsv_med = self._topface_hsv(hsv[blob > 0])   # configured top-face / small-blob hue vote
             det.hue_mixed = bool(hue_mixed)
+        if det is not None and self.prism_speckle_floor and color in ("red", "orange"):
+            det.prism_like = self._prism_like(blob)
         if det is not None and hsv is not None and self.sat_floor:
             det.sat_med = float(np.median(hsv[blob > 0][:, 1]))   # color_gate.sat_floor: shadow / sheen has low S
         if det is not None and hsv is not None and self.place_gate:
@@ -2300,7 +2330,10 @@ class Perception:
             K = self.cal.cams[self.cam].K
             expected = float(K[0, 0]) * float(K[1, 1]) * (self.size / Z) ** 2   # one object's top face, px
             speckle_expected = self._visible_expected_area(det, expected)
-            if not getattr(det, "tentative", False) and det.n_px < g["area_frac"] * speckle_expected:
+            frac = g["area_frac"]
+            if self.prism_speckle_floor and det.prism_like:
+                frac = min(frac, float(self.prism_speckle_cfg.get("area_frac", 0.08)))   # lying/standing prism: small top
+            if not getattr(det, "tentative", False) and det.n_px < frac * speckle_expected:
                 return "color_gate:speckle"
             if g.get("max_area_frac") is not None and det.n_px > g["max_area_frac"] * expected:
                 return "color_gate:too_big"
