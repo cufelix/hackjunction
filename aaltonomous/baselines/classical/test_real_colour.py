@@ -197,3 +197,29 @@ class TestSplitBlobs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRejectOrange(unittest.TestCase):
+    ON = load_config(overlay="none", overrides={"perception.hsv_set": "robust", "perception.reject_orange": True})
+
+    def test_off_is_unchanged(self):
+        p = Perception(ROBUST, SC, CAL)
+        self.assertIs(p.hsv, ROBUST["perception"]["hsv_robust"])
+
+    def test_orange_basin_rejected_objects_kept(self):
+        p = Perception(self.ON, SC, CAL)
+        for hsv in [(12, 200, 220), (10, 120, 250), (16, 150, 200), (20, 60, 240), (21, 200, 200), (24, 70, 240)]:
+            self.assertEqual(_classes(p, _patch(hsv)), [], hsv)
+        for hsv, cls in [((3, 134, 207), "red"), ((178, 134, 207), "red"), ((28, 171, 210), "yellow"),
+                         ((25, 88, 170), "yellow"), ((40, 85, 250), "yellow"), ((107, 133, 193), "blue")]:
+            self.assertEqual(_classes(p, _patch(hsv)), [cls], hsv)
+
+    def test_pose_error_phantoms_removed(self):
+        T = CAL._T("head").copy()
+        T[0, 3] += 0.01                      # 1 cm camera pose error: bin hulls no longer cover the rims
+        for rgb_bin in ([230, 110, 30], [235, 170, 60]):
+            sc = copy.deepcopy(SC)
+            sc.cfg["bins"]["rgb"] = rgb_bin
+            rgb, depth = Renderer(sc, CAL, T_pelvis_optical=T).render([])
+            self.assertGreater(len(Perception(ROBUST, sc, CAL).detect(rgb, depth)), 0)
+            self.assertEqual(Perception(self.ON, sc, CAL).detect(rgb, depth), [])

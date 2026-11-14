@@ -40,6 +40,7 @@ FLAGS = {
     "perception.no_blob_shape": ("Oliver #5/#7", False, "no metric top face -> shape None, never the 2D blob ratio"),
     "perception.shape_diag": ("Oliver #5/#7", False, "passive [shape_diag] log line per detection (no action change)"),
     "perception.hsv_set": ("real colour", "stock", "stock | robust: one HSV set for sim + the real head cam (hsv_robust)"),
+    "perception.reject_orange": ("yellow-phantom", False, "clip red/yellow HSV out of the orange bin hue basin (red H<=8, yellow H>=22, S>=80 below H 26)"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),

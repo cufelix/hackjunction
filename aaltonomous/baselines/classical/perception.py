@@ -91,7 +91,27 @@ class Perception:
         # real colour (hf_perception 2026-11-14): one HSV set for sim + the real head cam; split touching objects
         self.hsv = self.cfg["hsv_robust"] if self.cfg.get("hsv_set", "stock") == "robust" else self.cfg["hsv"]
         self.split_blobs = bool(self.cfg.get("split_blobs", False))
+        # reject_orange (yellow-phantom 2026-11-14, default OFF): clip red / yellow ranges out of the orange bin hue basin
+        if self.cfg.get("reject_orange", False):
+            self.hsv = self._without_orange(self.hsv, self.cfg["orange"])
         self.log = log if log is not None else print
+
+    @staticmethod
+    def _without_orange(hsv, o):
+        """Copy of ``hsv`` with the orange bin basin removed: red H <= red_h_max; yellow needs H >= yellow_h_min and,
+        below yellow_s_h (H), S >= yellow_s_min (washed-out orange rims have low S; real yellow tops H > yellow_s_h)."""
+        out = dict(hsv)
+        out["red"] = [[list(lo), [min(hi[0], o["red_h_max"]), hi[1], hi[2]]] if lo[0] <= o["red_h_max"] else [list(lo), list(hi)]
+                      for lo, hi in hsv["red"] if lo[0] <= o["red_h_max"] or lo[0] >= 100]
+        y = []
+        for lo, hi in hsv["yellow"]:
+            h0 = max(lo[0], o["yellow_h_min"])
+            if h0 <= o["yellow_s_h"]:
+                y.append([[h0, max(lo[1], o["yellow_s_min"]), lo[2]], [min(hi[0], o["yellow_s_h"]), hi[1], hi[2]]])
+            if hi[0] > o["yellow_s_h"]:
+                y.append([[max(h0, o["yellow_s_h"] + 1), lo[1], lo[2]], list(hi)])
+        out["yellow"] = y
+        return out
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
