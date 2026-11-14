@@ -1024,7 +1024,7 @@ run in parallel and the GPU box is never the bottleneck for logic work.
 | **4** | **Endgame: settle, and release rather than carry** | 💻+🖥 | The sim's 3 s grace does not exist on stage |
 | **5** | **Yaw-aligned prism grasp** | 🖥 GPU | The organisers' own named blocker, and the real robot grips *worse* |
 | **6** | **Post-placement verification** | 🖥 GPU | Largest per-object swing available: −1 → +2 |
-| **7** | ✅ **Shape classifier + border guard** — **DONE on CPU** `c81360f` | 💻 CPU | Insurance against shape-keyed finals instructions. The win was finding the feature was on the wrong data: **61 % → 100 %** |
+| **7** | ✅ **Shape classifier** — **DONE on CPU** `c81360f`; **my module superseded by Oliver's `shape_id.py`**, the border guard is his (`77715e8` measured why) | 💻 CPU | Insurance against shape-keyed finals instructions. The win was finding the feature was on the wrong data: **61 % → 100 %**, and that a bin-mask cut inverts it: **100 % → 21.7 %** |
 | 8 | Stretch: relay hand-over · DR fitted to Drop 1 | both | Generality story, 25 % |
 
 ### 0. Measure the baseline on the sim clock 🖥 **before anything else**
@@ -1133,7 +1133,14 @@ scoring decision, not a scheduling detail.**
 
 **Done when:** an episode that previously stopped early now keeps sorting, measured on the same seeds.
 
-### 4. Endgame 💻+🖥 ⚠️ **SCOPE CUT 14 Nov 01:35 — most of this item is worth zero points**
+### 4. Endgame 💻+🖥 🔴 **CLOSED 14 Nov 01:49 — worth zero points, nothing built**
+
+Correction 18 cut this to one surviving case and left an FK question. Correction 19 answered it:
+the palm sits at `pelvis_x` **0.2185 m** at home, the footprint starts at **0.09**, so a wedged
+object carried to home is still *over the counter* — `counter` = 0, never `off` = −1. There is no
+remaining case. Kept below only so nobody re-derives it.
+
+#### The original item, for the record
 
 I wrote this item believing that being cut off mid-carry was expensive. It is not. The scoring
 rule, read in full (`scene.py classify_cube`, which `layout.py:110` calls):
@@ -1488,6 +1495,8 @@ listed here, not inline, so the body reads as fact and this reads as history.
 | 17 | *"Chunk seams must be blended, and we need our own rate limiter in front of anything that produces targets."* | ✅ **Wrong, and it would have been wasted work.** `_pop` slices one pre-planned trajectory, `time_scale` guarantees ≤ vmax and excludes `Qs[0]`, every `go_to` starts from the last emitted target, and a hold is a zero delta. The stream is **velocity-continuous by construction**. The real exposure is the **3.1 % margin between the `sim` profile's `arm_max_vel 0.97` and the filter's 1.0** | §2.1 |
 | 16 | *"The real robot grants no settle time."* | ⚠️ **UNVERIFIED and was stated as fact.** Not in any code we have read — `evaluate.py` is the sim path only. An inference from rules line 25, not a measurement. Plan for no grace; do not quote it as fact | §3.4.4 |
 | 11 | *"The organisers ship a model of real camera noise harsher than the DR — depth σ 3 mm, 20 % holes on the object."* | ✅ Those are **test-fixture values**. `capture.py:133` `MockSource` is *"Synthetic static scene for offline tests"* and `test_drop1.py:22` injects them so `stats.py` can be checked against them. Caught by Oliver's session. What survives: `train.yaml` has **no object-hole parameter** and `stats.py` **measures one**, so the structural gap is real and the magnitude is unknown | §3.6.5 |
+| 19 | *"#4's one surviving case is worth building"* (correction 18's open question) | ✅ **Closed: it is not.** FK on the planner's own `ArmKinematics` gives the palm at **pelvis_x = 0.2185 m** at `home_arm_q`, and the counter footprint starts at **0.09**. The palm at home is *inside* the footprint, so even a wedged object scores `counter` = 0, never `off` = −1. **Item #4 is dead in full; nothing was built** | §5 item 4 |
+| 20 | *"A hull-area floor will catch a blob the bin mask cut"* (my own first fix for #7's border defect) | ✅ **Measured and wrong, retracted before building.** A cube cut by 10 % has median hull area **1844 mm²**, an honest triangle **1158–1296 mm²**, so a floor under the thinnest triangle (1042 mm²) catches **0 of 423** wrong cube labels. Also found: the cut is **not in image space** on the depth path at all — `perception.py:109` throws the 2D hull mask away and bins are excluded in **3D** at `:115-118`, so an image-border guard cannot see it by construction. And the damage is an *inversion*, not a degradation: a 10 % cut takes cubes from **100 % → 21.7 %**, labelling them cylinders. The guard belongs in `_from_depth` next to `top` and must **abstain** | §5 item 7 |
 
 ### A.3 What ran locally on a GPU-less laptop, 14 Nov
 
