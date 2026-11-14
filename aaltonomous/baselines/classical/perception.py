@@ -19,6 +19,8 @@ import numpy as np
 
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
+from . import bin_detect
+from .bin_detect import fit_counter_plane
 
 
 @dataclass
@@ -92,11 +94,66 @@ class Perception:
         self.hsv = self.cfg["hsv_robust"] if self.cfg.get("hsv_set", "stock") == "robust" else self.cfg["hsv"]
         self.split_blobs = bool(self.cfg.get("split_blobs", False))
         self.log = log if log is not None else print
+        # perception.detect_bins (FLAG, default OFF): once per episode find the real bin row (bin_detect.py). ON and
+        # accepted: the perceived footprints replace the nominal ones in the bin masking / in_bin / near_bin tests.
+        # bin_layout is ALWAYS filled (nominal when off / not accepted) for the integrator (planner drop targets).
+        self.detect_bins = bool(self.cfg.get("detect_bins", False))
+        self._bin_half = bin_detect.half_pelvis(scene)
+        self._reset_bins()
+
+    def _reset_bins(self):
+        self.bin_layout = bin_detect.nominal_layout(self.scene)   # name -> {"xy": (2,) pelvis, "yaw": rad, "source"}
+        self.bin_detection = None
+        self._bins_done = False
+        self._bins_perceived = False
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
+        self._reset_bins()
+
+    def detect_bin_layout(self, rgb, depth):
+        """perception.detect_bins: find the three bins (colour + depth geometry) and latch self.bin_layout.
+        Any failure -> nominal layout + reason (never raises). Latched once a frame with valid depth was seen."""
+        started = time.perf_counter()
+        try:
+            res = self._detect_bin_layout(rgb, depth, started)
+        except Exception as exc:   # optional feature: never break detection
+            res = bin_detect.BinDetection(False, True, f"{type(exc).__name__}: {exc}",
+                                          bin_detect.nominal_layout(self.scene),
+                                          elapsed_ms=(time.perf_counter() - started) * 1000.0)
+        self.bin_detection = res
+        if res.valid_frame:
+            self._bins_done = True
+            self.bin_layout = res.layout
+            self._bins_perceived = bool(res.success)
+            self.log(f"[bin_detect] {res.summary()}")
+        return res
+
+    def _detect_bin_layout(self, rgb, depth, started):
+        def invalid(reason):
+            return bin_detect.BinDetection(False, False, reason, bin_detect.nominal_layout(self.scene),
+                                           elapsed_ms=(time.perf_counter() - started) * 1000.0)
+        if depth is None or np.ndim(depth) != 2:
+            return invalid("no depth frame")
+        dlo, dhi = self.cfg["depth_range_mm"]
+        valid = (depth >= dlo) & (depth <= dhi)
+        if valid.mean() < self.cfg["min_valid_frac"]:
+            return invalid("insufficient valid depth")
+        p = bin_detect.params(self.cfg)
+        stride = max(1, int(p["pixel_stride"]))
+        vv, uu = np.nonzero(valid[::stride, ::stride])
+        vv, uu = vv * stride, uu * stride
+        P = self.cal.pixel_to_pelvis(self.cam, uu, vv, depth[vv, uu].astype(float))
+        orange = None
+        if rgb is not None and p["use_colour"]:
+            orange = bin_detect.orange_mask(rgb[::stride, ::stride], p["orange_hsv"])[vv // stride, uu // stride]
+        return bin_detect.detect_bin_row(P, orange, self.scene, self.cfg, started)
+
+    def _perceived_bin_hits(self, xy, margin):
+        """{name: (N,) bool} pelvis xy inside each PERCEIVED bin footprint + margin (only when _bins_perceived)."""
+        return bin_detect.in_footprints(self.bin_layout, self._bin_half, xy, margin)
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""
@@ -137,27 +194,10 @@ class Perception:
         sc = self.scene
 
         # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.
-        pm = sc.pelvis_to_mat(P)
-        mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
-        counter = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) &
-                   (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03) &
-                   (np.abs(P[:, 2] - sc.counter_z) < float(c.get("plane_z_window", 0.06))))
-        plane_points = P[counter]
-        if len(plane_points) < int(c.get("min_plane_points", 500)):
-            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, "counter plane not visible")
-        A = np.c_[plane_points[:, :2], np.ones(len(plane_points))]
-        keep = np.ones(len(A), bool)
-        coef = np.array([0.0, 0.0, sc.counter_z])
-        plane_tol = float(c.get("plane_inlier_m", 0.006))
-        for _ in range(3):
-            if keep.sum() < int(c.get("min_plane_points", 500)):
-                break
-            coef = np.linalg.lstsq(A[keep], plane_points[keep, 2], rcond=None)[0]
-            residual = plane_points[:, 2] - A @ coef
-            center = np.median(residual)
-            keep = np.abs(residual - center) <= plane_tol
-        if keep.sum() < int(c.get("min_plane_points", 500)):
-            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, "counter plane fit rejected")
+        coef, why = fit_counter_plane(P, sc, float(c.get("plane_z_window", 0.06)), float(c.get("plane_inlier_m", 0.006)),
+                                      int(c.get("min_plane_points", 500)))
+        if coef is None:
+            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, why)
 
         height = P[:, 2] - (np.c_[P[:, :2], np.ones(len(P))] @ coef)
         b = sc.cfg["bins"]
@@ -295,6 +335,8 @@ class Perception:
         import cv2
         c = self.cfg
         dets, rejected = [], []
+        if self.detect_bins and not self._bins_done:
+            self.detect_bin_layout(rgb, depth)
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
         for color, m in self.masks(rgb).items():
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
@@ -466,7 +508,10 @@ class Perception:
         # footprints, while bin blobs remain labelled ``in_bin:*``.
         upper = c["height_range"][1] if exclude_bins else max(c["height_range"][1], 4.0)
         ok = (h >= 0.25) & (h <= upper)
-        if exclude_bins:
+        if exclude_bins and self._bins_perceived:
+            for hit in self._perceived_bin_hits(P[:, :2], c["bin_pixel_margin"]).values():
+                ok &= ~hit
+        elif exclude_bins:
             half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + c["bin_pixel_margin"]
             for ctr in sc.cfg["bins"]["centers"].values():
                 ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1)
@@ -479,6 +524,16 @@ class Perception:
         sc = self.scene
         keep = np.full(shape, 255, np.uint8)
         b = sc.cfg["bins"]
+        if self._bins_perceived:
+            half = self._bin_half + self.cfg["bin_pixel_margin"]
+            for v in self.bin_layout.values():
+                xy = bin_detect.footprint_corners(v, half)
+                corners = np.array([[x, y, sc.counter_z + z] for x, y in xy for z in (0.0, float(b["wall_height"]))])
+                uvz = self.cal.project(self.cam, corners)
+                if np.any(uvz[:, 2] <= 0):
+                    continue
+                cv2.fillConvexPoly(keep, cv2.convexHull(np.round(uvz[:, :2]).astype(np.int32)), 0)
+            return keep
         half = np.asarray(b["outer_size"], float) / 2 + self.cfg["bin_pixel_margin"]
         for cx, cy in b["centers"].values():
             corners = np.array([[cx + sx * half[0], cy + sy * half[1], z] for sx in (-1, 1) for sy in (-1, 1)
@@ -495,6 +550,9 @@ class Perception:
         Same 3D test (mat frame) as the bin exclusion in the keep mask: there the top face may have been cut by a
         straight line in xy, which turns a cube into a 'cylinder'; such a face must not be classified."""
         sc = self.scene
+        if self._bins_perceived:
+            hits = self._perceived_bin_hits(np.asarray(top, float)[..., :2], self.cfg["bin_pixel_margin"] + self.size)
+            return any(bool(h.any()) for h in hits.values())
         pm = sc.pelvis_to_mat(np.asarray(top, float))
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + self.cfg["bin_pixel_margin"] + self.size
         return any(np.any(np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1))
@@ -630,6 +688,13 @@ class Perception:
         if not (-m <= pm[0] <= W + m and -m <= pm[1] <= D + m):
             return "off_mat"
         bm = c["bin_exclusion_margin"]
+        if self._bins_perceived:
+            for name, hit in self._perceived_bin_hits(det.top[:2], bm).items():
+                if hit[0]:
+                    return f"in_bin:{name}"
+            if bins_first and not lo <= h <= hi:
+                return f"height {h:.2f} sizes"
+            return None
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + bm
         for name, ctr in sc.cfg["bins"]["centers"].items():
             if np.all(np.abs(pm[:2] - np.asarray(ctr, float)) <= half):

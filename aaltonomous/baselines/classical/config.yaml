@@ -55,6 +55,27 @@ perception:
     min_axis_points: 35
     min_confidence: 0.30
   object_height: null         # null = scene.yaml size * height_ratio
+  detect_bins: false          # FLAG (bin detect, Oliver). Once per episode find the 3 bins (orange + depth walls, bin_detect.py),
+                              # gate vs nominal; accepted -> perceived footprints for the bin masking / in_bin. Perception.bin_layout
+  bin_detect:                 # params of detect_bins (missing keys -> bin_detect.DEFAULTS)
+    pixel_stride: 3
+    max_plane_points: 6000    # subsamples (runtime budget < 30 ms)
+    max_points: 2500
+    min_height_m: 0.015       # above the fitted counter plane
+    rim_slack_m: 0.03         # wall points up to wall_height + this
+    use_colour: true
+    orange_hsv: [[[0, 60, 40], [26, 255, 255]], [[165, 60, 40], [180, 255, 255]]]   # sim H ~12-24, real cardboard H 2-7
+    search_m: 0.15            # coarse row search window
+    max_offset_m: 0.15        # gate: every bin centre within this of nominal
+    max_yaw_deg: 15.0         # gate: every bin yaw within this
+    coarse_cell_m: 0.01
+    coarse_yaw_step_deg: 2.5
+    inlier_m: [0.025, 0.015, 0.008]
+    iters_per_window: 3
+    min_points_per_bin: 120
+    min_edge_points: 20
+    max_spacing_err_m: 0.03   # gate: neighbour centre distance vs nominal
+    max_yaw_spread_deg: 6.0   # gate: per-bin yaw vs row yaw
   classify_shape: false       # set Detection.shape from the metric top-face cloud (shape_id); no top face -> 2D blob, or None with no_blob_shape
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
   near_bin_guard: false       # FLAG (#7, Oliver). With classify_shape: abstain on shape (None) when the top face is

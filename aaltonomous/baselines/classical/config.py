@@ -34,6 +34,8 @@ FLAGS = {
     "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
     "perception.self_calibration.enabled": ("Timi calib", False,
                                             "per-episode head-camera xy offset from the bin walls (depth)"),
+    "perception.detect_bins": ("Oliver bins", False,
+                               "per-episode bin row detection (orange + depth walls); perceived footprints for masking"),
     "perception.classify_shape": ("Oliver #5/#7", False, "Detection.shape from the top face (shape_id)"),
     "perception.triangle_pose": ("Oliver #5", False, "triangles: apex yaw + robust xy centre"),
     "perception.near_bin_guard": ("Oliver #7", False, "classify_shape abstains next to a bin (cut top face)"),
