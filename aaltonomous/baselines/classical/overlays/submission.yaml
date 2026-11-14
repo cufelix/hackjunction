@@ -70,6 +70,8 @@ flags:
   perception.gate_below_bins: false            # image-space bin-mass gate when live geometry is untrusted
   perception.reject_log: false                 # per-colour rejection-stage diagnostics
   perception.still_vote: false                 # non-blocking vote across still frames
+  perception.prism_orientation: false           # prism orient standing vs lying prism (default off)
+  grasp.lying_prism: false                      # prism orient close across the ridge of a lying prism
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
   grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)
