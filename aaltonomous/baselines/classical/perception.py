@@ -206,6 +206,13 @@ class Perception:
         self.cal_nominal = self.cal
         self.ah = (cfg.get("calib") or {}).get("plane") or {}   # calib.plane.apply_height (FLAG, default OFF)
         self._ah_est, self._ah_tries = [], 0
+        # calib.wide_counter_window (FLAG, default OFF): estimation window nominal -wide_lo .. +wide_hi, runtime height
+        # estimated even without apply_height, mat z follows the runtime counter (see COUNTERZ.md)
+        self.wide = bool(((cfg.get("calib") or {}).get("wide_counter_window", False)))
+        self.wide_lo = float(self.ah.get("wide_lo_m", 0.08))
+        self.wide_hi = float(self.ah.get("wide_hi_m", 0.22))
+        if self.wide:
+            self.scene.mat_z_follows_counter = True
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
@@ -763,7 +770,7 @@ class Perception:
                                           float(elapsed_ms), str(reason))
         return self.calibration
 
-    def _counter_plane(self, depth, c, z0=None):
+    def _counter_plane(self, depth, c, z0=None, wide_seed=False):
         """Pelvis points of `depth` (stride-subsampled) and the counter plane z = ax + by + c fitted to them.
         (P, coef, None) or (None, None, reason). Shared by calibrate_bins and the bin.vote rim vote."""
         dlo, dhi = self.cfg["depth_range_mm"]
@@ -780,6 +787,12 @@ class Perception:
         # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.
         pm = sc.pelvis_to_mat(P)
         mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
+        if self.wide and z0 is None and (wide_seed or sc.counter_z_runtime is None):
+            # calib.wide_counter_window: no runtime height yet -> seed the +-window from the dominant z layer inside
+            # nominal -wide_lo .. +wide_hi over the mat (bins / objects are minor layers)
+            z0 = self._wide_seed(P, pm, mat, int(c.get("min_plane_points", 500)))
+            if z0 is None:
+                return (None, None, "counter plane not visible")
         counter = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) &
                    (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03) &
                    (np.abs(P[:, 2] - (sc.counter_z if z0 is None else z0)) < float(c.get("plane_z_window", 0.06))))
@@ -801,6 +814,41 @@ class Perception:
             return (None, None, "counter plane fit rejected")
         return P, coef, None
 
+    def counter_z_prior(self):
+        """calib.wide_counter_window: configured counter z prior (scene.counter_z_prior, else calib.plane.counter_z_prior_m,
+        pelvis frame), clamped to the window; None if neither is set."""
+        v = getattr(self.scene, "counter_z_prior", None)
+        if v is None:
+            v = self.ah.get("counter_z_prior_m")
+        if v is None or not np.isfinite(float(v)):
+            return None
+        nom = self.scene.nominal_counter_z
+        return float(np.clip(float(v), nom - self.wide_lo, nom + self.wide_hi))
+
+    def _wide_seed(self, P, pm, mat, min_points):
+        """calib.wide_counter_window: z of the counter layer = the lowest well-populated peak of the 1 cm z histogram of
+        mat points inside nominal -wide_lo .. +wide_hi (bin rims / objects are smaller layers ABOVE the counter). None if
+        no layer has min_points."""
+        nom = self.scene.nominal_counter_z
+        lo, hi = nom - self.wide_lo, nom + self.wide_hi
+        on = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) & (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03)
+              & (P[:, 2] >= lo) & (P[:, 2] <= hi))
+        if int(on.sum()) < min_points:
+            return None
+        z = P[on, 2]
+        edges = np.arange(lo, hi + 0.01, 0.01)
+        h = np.histogram(z, bins=edges)[0].astype(float)
+        smooth = h + np.r_[0.0, h[:-1]] + np.r_[h[1:], 0.0]    # +-1 cm
+        top = smooth.max()
+        if top < min_points:
+            return None
+        for i in np.nonzero(smooth >= 0.6 * top)[0]:           # lowest peak of comparable mass
+            if i == 0 or smooth[i] >= smooth[i - 1]:
+                if i == len(smooth) - 1 or smooth[i] >= smooth[i + 1]:
+                    sel = z[(z >= edges[max(i - 1, 0)]) & (z <= edges[min(i + 2, len(edges) - 1)])]
+                    return float(np.median(sel))
+        return None
+
     def _plane_height(self, depth, a):
         """(z at the mat centre, tilt deg, n inliers, None) from the existing counter-plane fit, or (nan, tilt, n, why)."""
         nan = float("nan")
@@ -811,6 +859,14 @@ class Perception:
         c = {"plane_z_window": float(a.get("window_m", 0.40)), "min_plane_points": int(a.get("min_inliers", 500))}
         xy = sc.mat_to_pelvis([*(np.asarray(sc.cfg["counter"]["mat_size"], float) / 2), 0.0])[:2]
         z = nom
+        if self.wide:   # calib.wide_counter_window: pass 1 seeds z0 from the nominal -wide_lo .. +wide_hi histogram
+            c["plane_z_window"] = 0.03
+            P, coef, why = self._counter_plane(depth, c, wide_seed=True)
+            if why:
+                return nan, nan, 0, why
+            z = float(coef @ np.r_[xy, 1.0])
+            if not nom - self.wide_lo <= z <= nom + self.wide_hi:
+                return z, nan, 0, f"z {z - nom:+.3f} outside the window"
         for _ in range(2):          # pass 1 coarse (wide window), pass 2 tight around pass 1's plane
             P, coef, why = self._counter_plane(depth, c, z0=z)
             if why:
@@ -830,7 +886,7 @@ class Perception:
         Inert (no state touched) when the flag is off."""
         a = self.ah
         n_looks = int(a.get("looks", 3))
-        if not a.get("apply_height") or len(self._ah_est) >= n_looks or self._ah_tries >= 3 * n_looks:
+        if not (a.get("apply_height") or self.wide) or len(self._ah_est) >= n_looks or self._ah_tries >= 3 * n_looks:
             return
         self._ah_tries += 1
         nom = self.scene.nominal_counter_z
@@ -842,8 +898,13 @@ class Perception:
             self._ah_est.append(z)
         est = float(np.median(self._ah_est)) if self._ah_est else float("nan")
         lim = float(a.get("max_dz_m", 0.20))
-        applied = float(np.clip(est, nom - lim, nom + lim)) if self._ah_est else nom
+        lo, hi = (nom - self.wide_lo, nom + self.wide_hi) if self.wide else (nom - lim, nom + lim)
+        applied = float(np.clip(est, lo, hi)) if self._ah_est else nom
         self.scene.counter_z_runtime = applied if self._ah_est else None
+        if self.wide and not self._ah_est:   # unmeasured: the configured prior, never the nominal scene value
+            prior = self.counter_z_prior()
+            if prior is not None:
+                self.scene.counter_z_runtime = prior
         self.log(f"[apply_height] est={est:.4f} applied={applied:.4f} n={len(self._ah_est)} tilt_deg={tilt:.2f} "
                  f"fallback={why or ('clamped' if applied != est else 'none')}")
 
@@ -1652,6 +1713,8 @@ class Perception:
         ws_x = g.get("ws_x")
         if ws_x is None:
             return None
+        if self.wide and self.scene.counter_z_runtime is None:
+            return None   # calib.wide_counter_window: counter height unmeasured and no prior -> the xy are unreliable: fail OPEN
         x, y = float(det.top[0]), float(det.top[1])
         near_mat_y = min(float(lo[1]) for lo, _ in self._color_gate_boxes(g, hedge=False))
         near_x = float(self.scene.mat_to_pelvis(np.array([0.0, near_mat_y]))[0])

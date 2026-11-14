@@ -36,6 +36,8 @@ FLAGS = {
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
     "calib.plane.apply_height": ("P0 table", False, "runtime counter_z from the head-depth counter-plane fit (median of the first calib.plane.looks looks, clamped to +-max_dz_m, nominal on bad depth / tilt > max_tilt_deg); every consumer reads scene.counter_z"),
+    "calib.wide_counter_window": ("counter-z", False, "counter-z estimation window nominal -8 .. +22 cm (dominant-layer seed, then the usual +-3 cm plane fit with tilt/inlier gates; estimate outside = nominal), runtime height estimated even without calib.plane.apply_height, mat z follows the runtime counter; see COUNTERZ.md"),
+    "planner.bin_wall_extra_m": ("counter-z", 0.0, "extra bin wall height (m) on the release/carry height and the rim keepout (planner)"),
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
@@ -245,6 +247,8 @@ def check_flag_values(cfg):
     mc = _get(cfg, "instruction.max_chars")
     if not isinstance(mc, int) or isinstance(mc, bool) or mc < 0:
         raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")
+    if not isinstance(_get(cfg, "calib.wide_counter_window"), bool):
+        raise ValueError("calib.wide_counter_window: want true or false")
     if not isinstance(_get(cfg, "safety.nan_guard"), bool):
         raise ValueError("safety.nan_guard: want true or false")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
@@ -263,7 +267,7 @@ def check_flag_values(cfg):
     first_scale = _get(cfg, "policy.first_object_speed_scale")
     if first_scale is not None and not 0.0 < float(first_scale) <= 1.0:
         raise ValueError("policy.first_object_speed_scale must be null or in (0, 1]")
-    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m"):
+    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m", "planner.bin_wall_extra_m"):
         v = float(_get(cfg, k))
         if not np.isfinite(v) or v < 0.0:
             raise ValueError(f"{k} must be a finite non-negative distance")
