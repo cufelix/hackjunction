@@ -95,8 +95,11 @@ Sources: blind results posted in the room after each hash, e.g. the 05242eae run
 - Our absolute number is uncertain, our improvement is not. First resolver 8fcfb5f3 vs integrated 05242eae, sentence
   by sentence on the same sealed sets (paired, exact McNemar on discordant pairs; verified by re-running both hashes):
   v2: 13 sentences gained, 0 lost (35 right in both, 12 wrong in both), two-sided p = 0.00024;
-  v1: 10 gained, 0 lost, p = 0.002; many-to-one: 3 gained, 0 lost, p = 0.25 (too few to say).
-  No sentence went from right to wrong in any set.
+  v1: 10 gained, 0 lost, p = 0.002; many-to-one: 3 gained, 0 lost, p = 0.25 (NOT significant, do not claim it
+  as a gain). No sentence went from right to wrong in any set.
+- Many-to-one is the REGRESSION GUARD, not a win: it held at 28/30 through every integrated hash and it is what
+  stopped resolver 4b34ed8f (28 -> 27) from reaching the submission. A fixed adversarial set that blocked a
+  regression is a process claim worth more than a fourth accuracy number.
 - Process claim a judge can re-run: before the leave-tail fix we predicted it would change NOTHING on the sealed
   sets; comparing the raw resolver output for all 241 sentences (not the scores), 0 changed. Identical scores alone
   would prove much less, since offsetting errors look the same.
