@@ -112,6 +112,7 @@ class Detection:
     generic_confidence: float = 0.0
     shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
+    ridge_yaw: float | None = None  # perception.prism_side only: pelvis-frame heading (rad, [0, pi)) of a LYING prism's ridge
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
 
@@ -226,6 +227,7 @@ class Perception:
         # grasp.posture_apex_gate (default off): prism-top check features for "triangle" detections (apex_gate.py)
         self.want_apex = self.want_path and bool(cfg.get("grasp", {}).get("posture_apex_gate", False))
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
+        self.prism_side = bool(self.cfg.get("prism_side", False))   # lying prism (ridge up) from depth, see prism_side.py
         # #7 near-bin guard: abstain on shape when the top face may be cut by the bin exclusion (needs classify_shape)
         self.near_bin_guard = bool(self.cfg.get("near_bin_guard", False))
         # perception.y_affine [a, b] (23-grasp-failure §11b/§13): perceived - true y = a*y + b (pelvis) -> subtract it.
@@ -1397,9 +1399,18 @@ class Perception:
         xy = (top[:, :2] * w[:, None]).sum(0) / w.sum()
         z = float(np.median(top[:, 2]))
         near_bin = self.near_bin_guard and self.classify_shape and self._near_bin(top)   # near-bin guard: abstain on shape only
-        shape, conf, path = self._shape_conf(top[:, :2], blob, near_bin)
+        lying = None
+        if self.prism_side:
+            from .prism_side import lying_prism
+            lying = lying_prism(P, self.scene.counter_z, self.size)
+        if lying is not None:   # ridge, no flat top face: shape + centre + height from the ridge, yaw = ridge
+            shape, conf, path = "triangle", 0.9, "prism_side"
+            self._last_path = path
+            xy, z = lying[0], lying[1]
+        else:
+            shape, conf, path = self._shape_conf(top[:, :2], blob, near_bin)
         apex_yaw, apex_conf = None, 0.0
-        if shape == "triangle" and self.triangle_pose:
+        if lying is None and shape == "triangle" and self.triangle_pose:
             from .prism_pose import robust_center, triangle_pose
             tp = triangle_pose(top[:, :2], altitude=self.size)
             if tp is not None:
@@ -1413,11 +1424,13 @@ class Perception:
         det = Detection(color, np.array([xy[0], xy[1], z]), area, len(u), "depth", _yaw(top[:, :2]),
                         (float(np.median(u)), float(np.median(v))))
         det.shape = shape
+        if lying is not None:
+            det.ridge_yaw = float(lying[2])
         if self.want_path:
             det.shape_conf, det.shape_path = conf, self._last_path
         if apex_yaw is not None:
             det.apex_yaw, det.apex_conf = apex_yaw, apex_conf
-        if self.want_apex and shape == "triangle":
+        if self.want_apex and shape == "triangle" and lying is None:
             from .apex_gate import apex_gate_features
             det.apex_gate = apex_gate_features(top[:, :2], altitude=self.size)
         if self.generic_fallback:   # flag off: no call, no work

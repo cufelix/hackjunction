@@ -54,6 +54,7 @@ FLAGS = {
                                             "per-episode head-camera 6-DOF pose from the arms in depth (ICP vs FK)"),
     "perception.classify_shape": ("Oliver #5/#7", False, "Detection.shape from the top face (shape_id)"),
     "perception.triangle_pose": ("Oliver #5", False, "triangles: apex yaw + robust xy centre"),
+    "perception.prism_side": ("finals prism", False, "lying triangular prism (ridge up) from depth: shape triangle + ridge_yaw; grasp across the ridge at the ridge height"),
     "perception.near_bin_guard": ("Oliver #7", False, "classify_shape abstains next to a bin (cut top face)"),
     "perception.no_blob_shape": ("Oliver #5/#7", False, "no metric top face -> shape None, never the 2D blob ratio"),
     "perception.shape_diag": ("Oliver #5/#7", False, "passive [shape_diag] log line per detection (no action change)"),

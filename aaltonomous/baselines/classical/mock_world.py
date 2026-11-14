@@ -135,6 +135,36 @@ class Renderer:
         nz = np.where(t == tcap, 1.0, 0.0)
         self._write(rgb, zb, win, np.isfinite(t), t, nz, col)
 
+    def _prism(self, rgb, zb, center, yaw, s, h, orient, col):
+        """Triangular prism (equilateral cross-section, altitude s). orient "side": lies on a rectangular face, ridge up,
+        ridge along `yaw` (pelvis frame), centre = bbox centre, height h = altitude. "up": triangle face on the counter,
+        apex towards +y at yaw 0, extruded h upward. Ray vs convex half-spaces (test infrastructure only)."""
+        a = s / 3.0                                      # triangle apothem (altitude s)
+        if orient == "side":
+            w = 2 * s / np.sqrt(3)
+            k = np.array([[0, 0, -1.0], [1, 0, 0], [-1, 0, 0], [0, h, w / 2], [0, -h, w / 2]])
+            k[3:] /= np.linalg.norm(k[3:], axis=1, keepdims=True)
+            d = np.r_[h / 2, s / 2, s / 2, [k[3] @ np.array([0, 0, h / 2])] * 2]
+        else:
+            ang = np.pi / 2 + 2 * np.pi * np.arange(3) / 3
+            k = np.r_[[[0, 0, 1.0], [0, 0, -1.0]], np.stack([np.cos(ang), np.sin(ang), 0 * ang], -1)]
+            d = np.r_[h / 2, h / 2, a, a, a]
+        win = self._pixels(center, np.eye(3), np.full(3, 0.055))
+        if win is None:
+            return
+        R = _yaw_R(yaw)
+        dr = self.rays[win] @ R
+        o = (self.o - center) @ R
+        with np.errstate(divide="ignore", invalid="ignore"):
+            nd = dr @ k.T                                # (.., K)
+            t = (d - o @ k.T) / nd
+        tin = np.where(nd < 0, t, -np.inf)
+        tout = np.where(nd > 0, t, np.inf)
+        tmin, tmax = tin.max(-1), tout.min(-1)
+        hit = (tmax >= np.maximum(tmin, 0)) & (tmin > 0)
+        nz = np.abs((k[tin.argmax(-1)] @ R.T)[..., 2])
+        self._write(rgb, zb, win, hit, tmin, nz, col)
+
     @staticmethod
     def _write(rgb, zb, win, hit, t, nz, col):
         z = zb[win]
@@ -155,6 +185,8 @@ class Renderer:
             s, h = ob["size"], ob.get("height", ob["size"])
             if ob.get("shape", "cube") in ("cylinder", "circle"):
                 self._cylinder(rgb, zb, ob["pos"], s / 2, h / 2, col)
+            elif ob.get("orient") in ("up", "side"):   # opt-in true prism (mock only); default stays a box
+                self._prism(rgb, zb, ob["pos"], ob.get("yaw", 0.0), s, h, ob["orient"], col)
             else:  # cube; triangle prisms are drawn as their bounding box (a blob is a blob for this baseline)
                 self._box(rgb, zb, ob["pos"], _yaw_R(ob.get("yaw", 0.0)), np.array([s / 2, s / 2, h / 2]), col)
         depth = np.where(np.isfinite(zb), zb * 1000.0, 0.0)
@@ -182,7 +214,7 @@ class RenderMockBackend(MockBackend):
     def reset_scene(self, layout, instruction):
         super().reset_scene(layout, instruction)
         sc = self.scene
-        self.objects = [{"color": c["color"], "shape": c.get("shape", "cube"), "yaw": c.get("yaw", 0.0), "size": sc.size,
+        self.objects = [{"color": c["color"], "shape": c.get("shape", "cube"), "yaw": c.get("yaw", 0.0), "orient": c.get("orient"), "size": sc.size,
                          "height": sc.object_height(c.get("shape")),
                          "pos": sc.mat_to_pelvis(sc.cube_spawn_mat(c))} for c in layout]
         self.held = {"left": None, "right": None}

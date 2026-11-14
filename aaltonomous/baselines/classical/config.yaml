@@ -140,6 +140,8 @@ perception:
   object_height: null         # null = scene.yaml size * height_ratio
   classify_shape: false       # set Detection.shape from the metric top-face cloud (shape_id); no top face -> 2D blob, or None with no_blob_shape
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
+  prism_side: false           # FLAG (finals). Lying prism (ridge up, no flat top): Detection.shape triangle + ridge_yaw from depth
+                              # (prism_side.py); planner closes across the ridge at the measured ridge height
   near_bin_guard: false       # FLAG (#7, Oliver). With classify_shape: abstain on shape (None) when the top face is
                               # within a bin footprint + margin + object size (face possibly cut by the bin exclusion)
   shape_diag: false           # FLAG (Oliver). Passive: Detection.shape_diag + one [shape_diag] log line per detection

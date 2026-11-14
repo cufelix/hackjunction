@@ -479,6 +479,10 @@ class Planner:
         # the legacy free-yaw planning because their destination search is already the fallback path.
         if vy is not None and (kw.get("place_xy") is None or kw.get("source_bin") is not None):
             return self._plan_side_heading(det, side, bin_name, arm_q, hand_q, float(vy), **kw)
+        if self._prism_side_on(det) and kw.get("place_xy") is None:
+            p = self._plan_side_ridge(det, side, bin_name, arm_q, hand_q, **kw)
+            if p is not None:
+                return p
         if self._yaw_align_on(det) and kw.get("place_xy") is None:
             p = self._plan_side_yaw(det, side, bin_name, arm_q, hand_q, **kw)
             if p is not None:
@@ -548,9 +552,33 @@ class Planner:
                 and getattr(det, "generic_required", False)
                 and getattr(det, "generic_width", None) is not None)
 
+    def _prism_side_on(self, det):
+        """perception.prism_side found a lying prism (ridge_yaw set): grasp across the ridge, at its measured height."""
+        ry = getattr(det, "ridge_yaw", None)
+        return (bool(self.cfg["perception"].get("prism_side", False)) and getattr(det, "shape", None) == "triangle"
+                and ry is not None and np.isfinite(ry))
+
+    def _plan_side_ridge(self, det, side, bin_name, arm_q, hand_q, **kw):
+        """Lying prism: fingers parallel to the ridge, so the thumb-finger closure spans the ridge (perpendicular to it).
+        Both ridge directions are tried, nearest the arm's natural heading first; the first aligned plan wins, else None
+        (-> the legacy hints)."""
+        g = self.cfg["grasp"]
+        s = 1.0 if side == "left" else -1.0
+        ref = -s * np.radians(float(g.get("yaw_ref_deg", 25.0)))
+        cands = sorted((abs((a - ref + np.pi) % (2 * np.pi) - np.pi), a)
+                       for a in (float(det.ridge_yaw), float(det.ridge_yaw) + np.pi))
+        for da, a in cands:
+            if da > np.radians(float(g.get("yaw_max_dev_deg", 75.0))):
+                continue
+            p = self._plan_side_heading(det, side, bin_name, arm_q, hand_q, a, **kw)
+            if p.ok:
+                p.reason = f"ridge-aligned ({np.degrees(a):.0f} deg)"
+                return p
+        return None
+
     def _object_height(self, det):
-        """Measured height for accepted generic geometry; configured height otherwise."""
-        return float(det.top[2] - self.scene.counter_z) if self._generic_on(det) else self.height
+        """Measured height for accepted generic geometry / a lying prism's ridge; configured height otherwise."""
+        return float(det.top[2] - self.scene.counter_z) if (self._generic_on(det) or self._prism_side_on(det)) else self.height
 
     def _plan_side_generic(self, det, side, bin_name, arm_q, hand_q, **kw):
         """Align palm-x (the fingers) with the proposal's major axis."""
@@ -708,7 +736,7 @@ class Planner:
                     corrective=source_bin is not None)
         sl = ArmKinematics.sl(side)
         H, post = self._object_height(det), self.post
-        if self._generic_on(det):
+        if self._generic_on(det) or self._prism_side_on(det):
             hlo, hhi = cfg["perception"].get("height_range", (0.4, 2.0))
             if not np.isfinite(H) or not float(hlo) * self.height <= H <= float(hhi) * self.height:
                 plan.reason = f"generic object height {1000 * H:.0f} mm outside safe range"
