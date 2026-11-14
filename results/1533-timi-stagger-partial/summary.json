@@ -1,0 +1,1 @@
+{"status":"partial","seeds_planned":30,"arms":{"cand_r16_nopp_d04fbea":{"seeds":30,"correct":113,"wrong":0,"counter":11,"objects":124,"cube":[36,36],"cylinder":[46,46],"triangle":[31,42],"hz_min":29.96,"rtf":0.323},"ab_stagger_d04fbea":{"seeds":24,"correct":84,"wrong":0,"counter":15,"objects":99,"cube":[23,27],"cylinder":[37,41],"triangle":[24,31],"hz_min":29.96,"rtf":0.341}}}
