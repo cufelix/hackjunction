@@ -1,0 +1,368 @@
+diff --git a/aaltonomous/baselines/classical/config.yaml b/aaltonomous/baselines/classical/config.yaml
+index 19cce3b..2addb47 100644
+--- a/aaltonomous/baselines/classical/config.yaml
++++ b/aaltonomous/baselines/classical/config.yaml
+@@ -64,6 +64,27 @@ grasp:
+   yaw_max_hints: 2
+   yaw_min_conf: 0.5
+   yaw_tri_shift: true         # move the grasp point to the midpoint of the object's extent along the finger direction
++  # WIP escape hatch, default off. Triangle prisms WITHOUT yaw alignment: keep the hand heading, shift the grasp point
++  # along the clamp axis u = horizontal unit vector index tip -> thumb tip of the `closed` posture in use (per arm, FK).
++  # Only for metric-path triangles (depth top-face cloud; shape_diag path == metric if present) with an apex_yaw,
++  # and not inside the yaw_align pass. rel = (apex_yaw - finger heading) mod 120 deg, finger heading = palm x of the
++  # grasp IK; d(rel) linear in the 10-deg tables below (wraps at 120).
++  # SIGN: target = centroid - (d + arm_err) * u. d > 0 means the object's width midpoint lies toward the THUMB, so the
++  # grasp target moves toward the INDEX.
++  # Tables computed for the pinch_demo posture (closed [0.00, 0.92, 0.25, -0.50, -1.41, -0.49, -1.21], point_in_palm
++  # [0.1094, -0.0694, 0.0142]) ONLY. With pinch_v1 (the stock `closed`) an along-axis offset does not help: this
++  # flag is meaningful only together with pinch_demo.
++  prism_offset: "off"         # off | table (quoted: bare `off` is YAML false; both mean off)
++  prism_offset_table_l: [-1.2, 0.2, 1.8, 3.2, 4.5, 2.8, 1.2, -0.2, -1.8, -3.5, -4.5, -2.8]   # mm at rel 0,10,..,110
++  # right = left(-rel mod 120), verified by FK through the config mirror (max diff 0.00 mm on a 2-deg grid)
++  prism_offset_table_r: [-1.2, -2.8, -4.5, -3.5, -1.8, -0.2, 1.2, 2.8, 4.5, 3.2, 1.8, 0.2]
++  # The table works on the (perception.y_affine-corrected) centroid: NO perception bias term here.
++  # arm_lateral_err_mm_*: the arm's own measured lateral execution error along u (index->thumb), measured on box A:
++  # L -2.5 mm, R +2.3 mm (toward the midline); NOT the perception bias (that is perception.y_affine). Default off.
++  # Used only with prism_offset: table AND arm_lateral_comp: true; then target = centroid - (d + err) * u.
++  arm_lateral_comp: false
++  arm_lateral_err_mm_l: 0.0
++  arm_lateral_err_mm_r: 0.0
+   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
+   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
+   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
+diff --git a/aaltonomous/baselines/classical/planner.py b/aaltonomous/baselines/classical/planner.py
+index 432d014..441fcdb 100644
+--- a/aaltonomous/baselines/classical/planner.py
++++ b/aaltonomous/baselines/classical/planner.py
+@@ -40,6 +40,7 @@ class Plan:
+     hand: np.ndarray | None = None                     # (T, 14)
+     phases: list = field(default_factory=list)         # (name, start tick, end tick)
+     safety_clips: int | None = None
++    prism_offset: dict | None = None                   # grasp.prism_offset applied: side, rel_deg, d_mm, arm_err_mm, u, shift
+ 
+     @property
+     def duration(self):
+@@ -105,6 +106,9 @@ class Planner:
+         self.dt = dt
+         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
+         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
++        self.log = print            # passive diagnostics only ([prism_offset] lines); the policy passes its own
++        self._yaw_pass = False      # inside _plan_side_yaw: the grasp point is already moved by yaw_tri_shift
++        self._clamp_cache = {}      # (side, closed posture bytes) -> index->thumb tip vector, palm frame
+ 
+     # ------------------------------------------------------------------ geometry helpers
+     def bin_xy(self, name):
+@@ -364,6 +368,7 @@ class Planner:
+         Returns the first Plan whose achieved finger direction is within yaw_tol_deg, else None (-> legacy hints)."""
+         g = self.cfg["grasp"]
+         saved = (self.kin.hint, self.kin.w_hint)
++        self._yaw_pass = True
+         try:
+             for a in self.yaw_hint_angles(float(det.apex_yaw), side):
+                 f = np.array([np.cos(a), np.sin(a), 0.0])
+@@ -379,8 +384,70 @@ class Planner:
+                         return p
+         finally:
+             self.kin.hint, self.kin.w_hint = saved
++            self._yaw_pass = False
+         return None
+ 
++    # ------------------------------------------------------------------ prism grasp offset (grasp.prism_offset)
++    def _prism_mode(self):
++        m = self.cfg["grasp"].get("prism_offset", "off")
++        m = "off" if m is None or m is False else str(m)   # YAML 1.1 reads a bare `off` as False
++        if m not in ("off", "table"):
++            raise ValueError(f"grasp.prism_offset must be off|table, got {m!r}")
++        return m
++
++    def _prism_offset_on(self, det):
++        """Triangle from the METRIC top-face path (depth source; shape_diag, if present, says path == metric) with an
++        apex yaw, outside the yaw-align pass (that one moves the grasp point itself), and grasp.prism_offset: table."""
++        if self._prism_mode() == "off" or self._yaw_pass:
++            return False
++        ya = getattr(det, "apex_yaw", None)
++        diag = getattr(det, "shape_diag", None)
++        return (getattr(det, "shape", None) == "triangle" and ya is not None and bool(np.isfinite(ya))
++                and getattr(det, "method", None) == "depth"
++                and (diag is None or diag.get("path") == "metric"))
++
++    def _clamp_axis_palm(self, side):
++        """Index tip -> thumb tip of the `closed` posture in use, palm frame (FK once per arm and posture)."""
++        closed = np.asarray(self.post["closed"], float)
++        key = (side, closed.tobytes())
++        if key not in self._clamp_cache:
++            t = self.kin.tips_in_palm(side, closed)
++            self._clamp_cache[key] = t[2] - t[0]
++        return self._clamp_cache[key]
++
++    @staticmethod
++    def prism_table_d(table, rel_deg):
++        """d (mm) at rel (deg) from a 12-entry table on 0, 10, .., 110 deg, linear, wrapping at 120."""
++        tab = np.asarray(table, float)
++        if tab.shape != (12,):
++            raise ValueError("prism offset table needs 12 values (0..110 deg, step 10)")
++        xs = np.r_[np.arange(0.0, 120.0, 10.0), 120.0]
++        return float(np.interp(float(rel_deg) % 120.0, xs, np.r_[tab, tab[0]]))
++
++    def _prism_shift(self, det, side, p, arm_q):
++        """Grasp xy shift -(d(rel) + arm_lateral_err if arm_lateral_comp) * u (m), or None if the heading probe IK fails. Finger heading = palm x
++        of an IK solve at the unshifted grasp point (same seeds as the grasp IK; a few-mm shift keeps the heading).
++        d > 0: the object's width midpoint along u lies toward the THUMB, so the target moves toward the index."""
++        g = self.cfg["grasp"]
++        s = "l" if side == "left" else "r"
++        v_palm = self._clamp_axis_palm(side)
++        q, ok, _, _ = self.kin.solve(side, p, arm_q, top_down=True, extra_seeds=[self.home[ArmKinematics.sl(side)]])
++        if not ok:
++            return None
++        self.kin._fk(q)
++        R = self.kin.data.oMf[self.kin.palm[side]].rotation
++        heading = float(np.arctan2(R[1, 0], R[0, 0]))
++        u = (R @ v_palm)[:2]
++        u = u / np.linalg.norm(u)
++        rel = float(np.degrees(float(det.apex_yaw) - heading) % 120.0)
++        d = self.prism_table_d(g[f"prism_offset_table_{s}"], rel)
++        # the arm's own lateral execution error along u (NOT the perception bias: that is perception.y_affine)
++        err = float(g.get(f"arm_lateral_err_mm_{s}", 0.0) or 0.0) if g.get("arm_lateral_comp", False) else 0.0
++        shift = -(d + err) / 1000.0 * u
++        if bool(self.cfg.get("perception", {}).get("shape_diag", False)):
++            self.log(f"[prism_offset] {side} {rel:.1f} {d:+.2f} arm_err={err:+.2f}")
++        return {"side": side, "rel_deg": rel, "d_mm": d, "arm_err_mm": err, "heading": heading, "u": u, "shift": shift}
++
+     def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None):
+         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
+         sc, zc = self.scene, self.scene.counter_z
+@@ -395,6 +462,11 @@ class Planner:
+         # grasp height: object mid-height, raised until the preshaped fingers clear the counter
+         xy = det.top[:2] + np.asarray((g.get("arm_xy_offset") or {}).get(side, [0.0, 0.0]), float)  # per-arm, TUNE
+         z = zc + g["height_frac"] * H
++        if self._prism_offset_on(det):   # grasp.prism_offset: table (metric-path triangles only)
++            pr = self._prism_shift(det, side, np.r_[xy, z], arm_q)
++            if pr is not None:
++                xy = xy + pr["shift"]
++                plan.prism_offset = pr
+         for _ in range(4):
+             qg, ok = self._ik(side, np.r_[xy, z], arm_q, "grasp", plan)
+             if not ok:
+diff --git a/aaltonomous/baselines/classical/policy.py b/aaltonomous/baselines/classical/policy.py
+index c327e74..b8489ea 100644
+--- a/aaltonomous/baselines/classical/policy.py
++++ b/aaltonomous/baselines/classical/policy.py
+@@ -63,6 +63,7 @@ class ClassicalPolicy:
+             sys.setswitchinterval(min(sys.getswitchinterval(), 0.001))
+         self.time_limit = time_limit
+         self.log = log or (lambda *a: None)
++        self.planner.log = self.log   # passive [prism_offset] diagnostics only
+         self.reset()
+ 
+     # ------------------------------------------------------------------ API
+diff --git a/aaltonomous/baselines/classical/test_prism_offset.py b/aaltonomous/baselines/classical/test_prism_offset.py
+new file mode 100644
+index 0000000..2321b63
+--- /dev/null
++++ b/aaltonomous/baselines/classical/test_prism_offset.py
+@@ -0,0 +1,205 @@
++"""grasp.prism_offset (WIP, default off): grasp xy shift along the clamp axis for metric-path triangles.
++Run: python -m pytest aaltonomous/baselines/classical/test_prism_offset.py -q"""
++import copy
++import unittest
++
++import numpy as np
++
++from aaltonomous.scene.scene import Scene
++
++from .config import hand_postures, home_arm, load_config
++from .perception import Detection
++from .planner import Planner
++
++SC = Scene.load()
++H = SC.object_height()
++XY = {"left": np.array([0.30, 0.10]), "right": np.array([0.30, -0.10])}
++TAB_L = [-1.2, 0.2, 1.8, 3.2, 4.5, 2.8, 1.2, -0.2, -1.8, -3.5, -4.5, -2.8]
++TAB_R = [-1.2, -2.8, -4.5, -3.5, -1.8, -0.2, 1.2, 2.8, 4.5, 3.2, 1.8, 0.2]
++
++
++def _planner(mode="off", shape_diag=False, **grasp):
++    cfg = load_config()
++    cfg["grasp"]["prism_offset"] = mode
++    cfg["grasp"].update(grasp)
++    cfg["perception"]["shape_diag"] = shape_diag
++    pl = Planner(cfg, SC, hand_postures(cfg), home_arm(cfg))
++    pl.log_lines = []
++    pl.log = pl.log_lines.append
++    return pl
++
++
++def _det(side="left", **kw):
++    d = dict(shape="triangle", apex_yaw=0.3, apex_conf=0.9, shape_diag={"path": "metric"})
++    d.update(kw)
++    method = d.pop("method", "depth")
++    return Detection("red", np.r_[XY[side], SC.counter_z + H], 0, 0, method, **d)
++
++
++def _probe(pl, det, side):
++    p = np.r_[XY[side], SC.counter_z + pl.cfg["grasp"]["height_frac"] * pl.height]
++    return pl._prism_shift(det, side, p, pl.home.copy())
++
++
++class TestConfig(unittest.TestCase):
++    def test_defaults(self):
++        g = load_config()["grasp"]
++        self.assertIn(g["prism_offset"], ("off", False))
++        self.assertEqual(g["prism_offset_table_l"], TAB_L)
++        self.assertEqual(g["prism_offset_table_r"], TAB_R)
++        self.assertIs(g["arm_lateral_comp"], False)
++        self.assertEqual((g["arm_lateral_err_mm_l"], g["arm_lateral_err_mm_r"]), (0.0, 0.0))
++        self.assertNotIn("prism_offset_bias_mm_l", g)
++
++    def test_right_table_is_left_mirrored(self):
++        for k in range(12):
++            self.assertEqual(TAB_R[k], TAB_L[(-k) % 12])
++
++    def test_bad_mode_raises(self):
++        with self.assertRaises(ValueError):
++            _planner("on")._prism_offset_on(_det())
++
++    def test_table_interp_wraps(self):
++        f = Planner.prism_table_d
++        self.assertAlmostEqual(f(TAB_L, 30), 3.2)
++        self.assertAlmostEqual(f(TAB_L, 45), 3.65)
++        self.assertAlmostEqual(f(TAB_L, 115), -2.0)        # between 110 (-2.8) and 120 == 0 (-1.2)
++        self.assertAlmostEqual(f(TAB_L, 117.5), -1.6)
++        self.assertAlmostEqual(f(TAB_L, -5), -2.0)          # -5 == 115
++        self.assertAlmostEqual(f(TAB_L, 240 + 30), 3.2)
++
++
++class TestGate(unittest.TestCase):
++    def test_only_metric_triangles_with_apex(self):
++        pl = _planner("table")
++        self.assertTrue(pl._prism_offset_on(_det()))
++        self.assertTrue(pl._prism_offset_on(_det(shape_diag=None)))     # no diag: depth source = metric cloud
++        for kw in (dict(shape="cube"), dict(shape="cylinder"), dict(shape=None),       # abstain
++                   dict(method="plane"), dict(apex_yaw=None), dict(apex_yaw=float("nan")),
++                   dict(shape_diag={"path": "abstain_near_bin"}), dict(shape_diag={"path": "abstain_plane"})):
++            self.assertFalse(pl._prism_offset_on(_det(**kw)), kw)
++
++    def test_off_never_on(self):
++        for mode in ("off", False, None):
++            self.assertFalse(_planner(mode)._prism_offset_on(_det()))
++
++    def test_not_inside_yaw_pass(self):
++        pl = _planner("table")
++        pl._yaw_pass = True
++        self.assertFalse(pl._prism_offset_on(_det()))
++
++
++class TestShift(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.pl = _planner("table", shape_diag=True)
++        cls.heading = {s: _probe(cls.pl, _det(s), s)["heading"] for s in ("left", "right")}
++
++    def _at(self, side, rel_deg, pl=None):
++        pl = pl or self.pl
++        return _probe(pl, _det(side, apex_yaw=self.heading[side] + np.radians(rel_deg)), side)
++
++    def test_left_table_at_rels(self):
++        for rel, d in ((30, 3.2), (45, 3.65), (115, -2.0)):
++            r = self._at("left", rel)
++            self.assertAlmostEqual(r["rel_deg"], rel, places=4)
++            self.assertAlmostEqual(r["d_mm"], d, places=6)
++            u = r["u"]
++            self.assertAlmostEqual(np.linalg.norm(u), 1.0, places=9)
++            np.testing.assert_allclose(r["shift"], -d / 1000 * u, atol=1e-12)
++
++    def test_clamp_axis_points_index_to_thumb(self):
++        # pinch geometry: left clamp axis roughly 90-140 deg CCW of the finger heading, right mirrored (CW)
++        for side, sgn in (("left", 1), ("right", -1)):
++            r = self._at(side, 0)
++            a = np.degrees(np.arctan2(r["u"][1], r["u"][0]) - r["heading"])
++            a = (a + 180) % 360 - 180
++            self.assertTrue(80 < sgn * a < 150, (side, a))
++
++    def test_right_arm_uses_right_table(self):
++        r = self._at("right", 20)
++        self.assertAlmostEqual(r["d_mm"], TAB_R[2])          # -4.5 (left table at 20 deg: +1.8)
++        pl = _planner("table", prism_offset_table_r=[7.0] * 12)
++        self.assertAlmostEqual(self._at("right", 20, pl)["d_mm"], 7.0)
++        self.assertAlmostEqual(self._at("left", 20, pl)["d_mm"], TAB_L[2])
++
++    def test_arm_lateral_err_sign_per_arm(self):
++        zero = dict(prism_offset_table_l=[0.0] * 12, prism_offset_table_r=[0.0] * 12,
++                    arm_lateral_err_mm_l=-2.5, arm_lateral_err_mm_r=2.3)
++        pl = _planner("table", arm_lateral_comp=True, **zero)
++        for side, b in (("left", -2.5), ("right", 2.3)):
++            r = self._at(side, 40, pl)
++            self.assertEqual(r["arm_err_mm"], b)
++            # target = centroid - (d + err) * u: shift along u is -(0 + err) mm
++            self.assertAlmostEqual(float(r["shift"] @ r["u"]) * 1000, -b, places=9)
++        # comp flag off: the error values are ignored
++        off = _planner("table", arm_lateral_comp=False, **zero)
++        for side in ("left", "right"):
++            r = self._at(side, 40, off)
++            self.assertEqual(r["arm_err_mm"], 0.0)
++            np.testing.assert_array_equal(r["shift"], np.zeros(2))
++        # added on top of d
++        pl2 = _planner("table", arm_lateral_comp=True, arm_lateral_err_mm_l=1.0)
++        r1, r0 = self._at("left", 40, pl2), self._at("left", 40)
++        self.assertAlmostEqual(float((r1["shift"] - r0["shift"]) @ r0["u"]) * 1000, -1.0, places=6)
++
++    def test_log_line_only_with_shape_diag(self):
++        self.pl.log_lines.clear()
++        self._at("left", 30)
++        self.assertEqual(len(self.pl.log_lines), 1)
++        self.assertTrue(self.pl.log_lines[0].startswith("[prism_offset] left 30.0 +3.20"))
++        quiet = _planner("table", shape_diag=False)
++        self._at("left", 30, quiet)
++        self.assertEqual(quiet.log_lines, [])
++
++
++class TestPlanSide(unittest.TestCase):
++    """Full _plan_side (left arm): flag off is identical to a no-triangle plan; table moves the grasp xy by -d*u."""
++
++    @classmethod
++    def setUpClass(cls):
++        cls.off, cls.tab = _planner("off"), _planner("table")
++        post = cls.off.post
++        cls.args = ("left", cls.off.home.copy(), post["open"].copy())
++        h = _probe(cls.tab, _det(), "left")["heading"]
++        cls.det = _det(apex_yaw=h + np.radians(30.0))
++        cls.p_off = cls.off._plan_side(cls.det, "left", *cls.args)
++        cls.p_tab = cls.tab._plan_side(cls.det, "left", *cls.args)
++
++    def test_off_is_identical(self):
++        cube = copy.copy(self.det); cube.shape, cube.apex_yaw, cube.shape_diag = "cube", None, None
++        ref = _planner("off")
++        del ref.cfg["grasp"]["prism_offset"]
++        p_ref = ref._plan_side(cube, "left", *self.args)
++        self.assertTrue(self.p_off.ok, self.p_off.reason)
++        self.assertIsNone(self.p_off.prism_offset)
++        self.assertEqual(self.p_off.waypoints.keys(), p_ref.waypoints.keys())
++        for k in p_ref.waypoints:
++            self.assertEqual(self.p_off.waypoints[k].tobytes(), p_ref.waypoints[k].tobytes(), k)
++        self.assertEqual(self.p_off.arm.tobytes(), p_ref.arm.tobytes())
++        self.assertEqual(self.p_off.hand.tobytes(), p_ref.hand.tobytes())
++
++    def test_table_moves_grasp_xy(self):
++        self.assertTrue(self.p_tab.ok, self.p_tab.reason)
++        pr = self.p_tab.prism_offset
++        self.assertIsNotNone(pr)
++        self.assertAlmostEqual(pr["rel_deg"], 30.0, places=4)
++        self.assertAlmostEqual(pr["d_mm"], 3.2)
++        dxy = self.p_tab.waypoints["grasp"][:2] - self.p_off.waypoints["grasp"][:2]
++        np.testing.assert_allclose(dxy, -3.2e-3 * pr["u"], atol=1e-12)
++        # achieved heading of the planned grasp stays within 2 deg of the probe heading
++        e = next(e for n, s, e in self.p_tab.phases if n == "descend")
++        self.tab.kin._fk(self.p_tab.arm[e - 1])
++        x = self.tab.kin.data.oMf[self.tab.kin.palm["left"]].rotation[:, 0]
++        dh = (np.arctan2(x[1], x[0]) - pr["heading"] + np.pi) % (2 * np.pi) - np.pi
++        self.assertLess(abs(np.degrees(dh)), 2.0)
++
++    def test_cube_unchanged_with_table(self):
++        cube = copy.copy(self.det); cube.shape = "cube"
++        p = self.tab._plan_side(cube, "left", *self.args)
++        self.assertIsNone(p.prism_offset)
++        self.assertEqual(p.waypoints["grasp"].tobytes(), self.p_off.waypoints["grasp"].tobytes())
++
++
++if __name__ == "__main__":
++    unittest.main()
