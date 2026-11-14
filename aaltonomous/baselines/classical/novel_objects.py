@@ -301,7 +301,7 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
             HP = points[huse]
             if len(HP) >= 10:
                 _, hmajor, hminor, hdims = _axes_and_footprint(HP[:, :2])
-                # body centre (handle pixels excluded): the handle axis points outward from it; grasp >= rim + 4 cm
+                # body centre (handle pixels excluded): the handle axis points outward from it; grasp >= rim + handle_rim_margin_m (6 cm)
                 BP = points[blob & valid & ~handle_mask]
                 body_c = np.median(BP[:, :2], axis=0) if len(BP) >= 10 else object_centre_xy
                 u = hmajor if float((np.median(HP[:, :2], axis=0) - body_c) @ hmajor) >= 0 else -hmajor
