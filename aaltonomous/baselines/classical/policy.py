@@ -199,6 +199,7 @@ class ClassicalPolicy:
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
         self.require_confirm = require_confirm
         self._jobs = {}   # bounded background work; reset swaps the dict so stale jobs cannot publish into a new episode
+        self._universal_inert = False   # known-task guard: set per episode in reset(); read by _cl_on/_ftd_on/_match_novel before then
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
         bv = (self.cfg.get("bin") or {}).get("vote") or {}
         self._async_bin_vote = bool(bv.get("enabled", False) and bv.get("async_extract", False))
@@ -414,6 +415,10 @@ class ClassicalPolicy:
         self.mapping, guarded = self._episode_mapping(info)
         self.planner.mapping = self.mapping
         self._task, self._instruction = info.get("task"), info.get("instruction")
+        self._universal_inert, inert_reason = self._known_task_inert(info)
+        self.perception.novel_objects = bool(self.cfg["perception"].get("novel_objects", False)) and not self._universal_inert
+        if inert_reason and self.brain is not None:
+            self.log(f"[universal] inert: known task ({inert_reason})")
         self._brain_looks = 0
         self._brain_finds = 0
         self._brain_find_fn = getattr(self, "_brain_find_fn", None)
@@ -438,7 +443,7 @@ class ClassicalPolicy:
             self.brain.reset()
         if self.plan_brain is not None:
             self.plan_brain.reset()
-        self._planner_needed = (self.plan_brain is not None and
+        self._planner_needed = (self.plan_brain is not None and not self._universal_inert and
                                 (instruction_needs_plan(self._instruction, self._brain_abstain)
                                  or self._strict_leaves_colour()))
         self._planner_place_cache = {}
@@ -1761,7 +1766,7 @@ class ClassicalPolicy:
         novels = [d for d in dets if getattr(d, "novel", False)]
         for d in novels:
             d.novel_target_bin, d.novel_matched = None, False
-        if not novels or not (self.cfg.get("instruction") or {}).get("novel_objects", False):
+        if not novels or self._universal_inert or not (self.cfg.get("instruction") or {}).get("novel_objects", False):
             return
         from .novel_objects import match_instruction
         match = match_instruction(self._instruction, novels)
@@ -2398,6 +2403,9 @@ class ClassicalPolicy:
                     valid = (kind == "pick" and any(d0 is d for d in offered)
                              and getattr(d0, "novel", False) and b0 == self._novel_brain_bin
                              and getattr(d0, "graspable", False))
+                    if valid and not self._novel_grounded(d0):
+                        valid = False
+                        self.log(f"[novel] brain pick not grounded: {getattr(d0, 'label', '') or getattr(d0, 'color', '?')}")
                     if valid:
                         d0.novel_target_bin, d0.novel_matched = b0, True
                     else:
@@ -2445,7 +2453,7 @@ class ClassicalPolicy:
                     continue
             others = [o.top[:2] for o in dets if o is not d]
             common = {"obstacles": others}
-            if pol.get("novel_obstacles", False):
+            if pol.get("novel_obstacles", False) and not self._universal_inert:
                 clearance = []
                 for o in dets:
                     if o is d or not getattr(o, "novel", False):
@@ -3270,11 +3278,24 @@ class ClassicalPolicy:
 
     # ---------------------------------------------------------- brain agent (find_to_detection / closed_loop)
     def _cl_on(self):
-        return isinstance(self.plan_brain, AgentLoop)
+        return isinstance(self.plan_brain, AgentLoop) and not self._universal_inert
+
+    def _known_task_inert(self, info):
+        """Known-task guard: a sort_fixed or resolver-mapped instruction that names no novel noun keeps the whole
+        universal layer inert (r23 behaviour). -> (inert, reason)."""
+        from .novel_objects import novel_noun_named
+        if novel_noun_named(self._instruction):
+            return False, None
+        if info.get("task") == "sort_fixed":
+            return True, "sort_fixed"
+        if not self._resolver_abstains(self.mapping):
+            return True, "resolver"
+        return False, None
 
     def _ftd_on(self):
         bc = self.cfg.get("brain") or {}
-        return self.brain is not None and bool(bc.get("find_to_detection", False)) and bool(bc.get("find", False))
+        return (self.brain is not None and not self._universal_inert and bool(bc.get("find_to_detection", False))
+                and bool(bc.get("find", False)))
 
     def _variant_chooser(self, untried):
         """Order of the untried grasp variants: the skill-memory bandit when it exists, else the registry order."""
@@ -3293,6 +3314,13 @@ class ClassicalPolicy:
         if self._found:
             world["found"] = dict(self._found)
         return world
+
+    def _novel_grounded(self, d):
+        """brain.grounded_picks: a novel object may receive a bin from the brain only when the flag is on AND the last
+        find() point lies on it (match_found, same 40 px radius as the find mapping)."""
+        if not (self.cfg.get("brain") or {}).get("grounded_picks", False):
+            return False
+        return bool(match_found([it["point"] for it in self.__dict__.get("_last_find_items", [])], [d]))
 
     def _ground_flag(self, world):
         """brain.grounded_picks (universal): for an open-vocabulary instruction (parser abstains / unknown nouns) a blind plan
