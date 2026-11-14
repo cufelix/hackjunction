@@ -69,6 +69,7 @@ class Plan:
     abort: tuple | None = None                         # legacy field; early servo-error abort is intentionally disabled
     safety_clips: int | None = None
     grasp_key: tuple | None = None                     # policy.retry_vary_grasp: (grasp xy, finger heading, posture)
+    shape: str | None = None                           # narration metadata; does not affect planning
 
     @property
     def duration(self):
@@ -703,7 +704,8 @@ class Planner:
     def _plan_side_inner(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
         sc, zc = self.scene, self.scene.counter_z
-        plan = Plan(False, side=side, color=det.color, target_bin=bin_name if place_xy is None else "counter",
+        plan = Plan(False, side=side, color=det.color, shape=getattr(det, "shape", None),
+                    target_bin=bin_name if place_xy is None else "counter",
                     source_bin=source_bin, drop_slot=drop_slot if place_xy is None else None,
                     corrective=source_bin is not None)
         sl = ArmKinematics.sl(side)

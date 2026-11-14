@@ -334,6 +334,16 @@ instruction:
 safety:
   nan_guard: false
 
+# Optional cached narration. Only `enabled` is a feature flag; the remaining
+# values configure its localhost, non-blocking UDP datagrams. The policy never
+# plays audio or talks to ElevenLabs/Unitree directly.
+voice:
+  enabled: false
+  host: 127.0.0.1
+  port: 45821
+  send_buffer_bytes: 8192
+  max_datagram_bytes: 1024
+
 # AI brain (brain/): closed-set tool choice over the classical planner. Off = byte-identical to before.
 brain:
   enabled: false              # FLAG. true: at each look the backend picks one of the allowed tool calls (index + conf)

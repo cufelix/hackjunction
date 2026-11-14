@@ -131,6 +131,16 @@ class ClassicalPolicy:
                 self.skill_memory = SkillMemory(path=self.cfg["skills"].get("memory_path"), log=self.log)
             except Exception as exc:  # learning is optional and must never prevent policy construction
                 self.log(f"[skills] unavailable ({type(exc).__name__}: {exc}); using stock retry order")
+        self._voice = None
+        if (self.cfg.get("voice") or {}).get("enabled", False):
+            try:
+                from .voice_events import VoiceEventEmitter
+                vc = self.cfg["voice"]
+                self._voice = VoiceEventEmitter(vc.get("host", "127.0.0.1"), vc.get("port", 45821),
+                                                vc.get("send_buffer_bytes", 8192),
+                                                vc.get("max_datagram_bytes", 1024))
+            except Exception as exc:
+                self.log(f"[voice] disabled ({type(exc).__name__}: {exc})")
         self.reset()
 
     # ------------------------------------------------------------------ API
@@ -204,6 +214,11 @@ class ClassicalPolicy:
         self.mapping = given or guarded or resolved or dict(self.fixed_mapping)
         self.planner.mapping = self.mapping
         self._task, self._instruction = info.get("task"), info.get("instruction")
+        self._voice_start_pending = self._voice is not None
+        self._voice_plan = None
+        self._voice_placed = 0
+        self._voice_done = False
+        self._voice_abstained = set()
         self._brain_looks = 0
         self._brain_finds = 0
         self._brain_find_fn = getattr(self, "_brain_find_fn", None)
@@ -463,6 +478,10 @@ class ClassicalPolicy:
         self._decision = "stop"
 
     def act(self, obs):
+        if getattr(self, "_voice_start_pending", False):
+            self._voice_start_pending = False
+            self._voice_emit("episode_start")
+            self._voice_emit("instruction_understood", summary=self._voice_instruction_summary())
         ng = bool((self.cfg.get("safety") or {}).get("nan_guard", False))
         if ng:
             obs, hold = self._nan_guard(obs)
@@ -624,6 +643,8 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        if getattr(self, "_voice", None) is not None:
+            self._voice_progress()
         if first:
             self._ep_t0 = t
         if self.held_detector.mode == "finger_sum":
@@ -934,6 +955,12 @@ class ClassicalPolicy:
             if not any(c == d.color and np.linalg.norm(xy - p) < rad for c, p in self._bin_misses):
                 self._bin_misses.append((d.color, xy))
                 self.log(f"[bin_lookup] miss color={d.color} shape={shape}")
+                key = (str(d.color), str(shape or "unknown"))
+                abstained = getattr(self, "_voice_abstained", set())
+                if getattr(self, "_voice", None) is not None and key not in abstained:
+                    abstained.add(key)
+                    self._voice_emit("abstained", colour=d.color, shape=shape or "unknown",
+                                     reason="no_bin_mapping")
         return b
 
     def _slots_on(self):
@@ -2083,6 +2110,8 @@ class ClassicalPolicy:
                 self._note(t, f"verified {pending['color']} in {pending['target_bin']} slot {pending['drop_slot']}")
             elif status == "unknown":
                 self._note(t, f"release of {pending['color']} in {pending['target_bin']} unknown (not retried)")
+                self._voice_emit("unknown", colour=pending["color"], bin=pending["target_bin"],
+                                 reason="placement_unverified")
             else:
                 self._note(t, f"release of {pending['color']} not verified in {pending['target_bin']}; retry")
             self.last_verification = None
@@ -2175,7 +2204,8 @@ class ClassicalPolicy:
                            "last": None, "still": 0, "t": t}
         skill_side = self._skills_on() and plan.side in ("left", "right")
         diag_on = self.cfg["policy"].get("grasp_diag_log", False) or self.held_detector.mode == "finger_sum"
-        if (diag_on or skill_side) and plan.side in ("left", "right"):
+        watch_pick = diag_on or getattr(self, "_voice", None) is not None
+        if (watch_pick or skill_side) and plan.side in ("left", "right"):
             ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
             if "close" in ph and "lift" in ph:
                 check = self.held_detector.evaluation_tick(*ph["close"], HZ)
@@ -2195,6 +2225,13 @@ class ClassicalPolicy:
                                    "xy": np.asarray(xy, float).copy(), "held": None, "hist": hist,
                                    "started": float(t), "duration_s": float(plan.duration)}
         self._enqueue(plan.arm, plan.hand)
+        if getattr(self, "_voice", None) is not None:
+            phases = {name: end for name, _start, end in (plan.phases or [])}
+            self._voice_plan = {"n": len(plan.arm), "picked_at": phases.get("lift"),
+                                "placed_at": phases.get("open"), "picked": False, "pick_valid": False,
+                                "placed": False,
+                                "colour": plan.color, "shape": plan.shape or "unknown",
+                                "bin": plan.target_bin}
         if self._slots_on() and plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
             self.slot_used[plan.target_bin].add(plan.drop_slot)
             self.slot_pending = (plan.target_bin, plan.drop_slot, plan.waypoints["grasp"][:2].copy(), plan.color)
@@ -2232,6 +2269,8 @@ class ClassicalPolicy:
             self.vary_hist[-1]["held"] = False
         self.log(f"[held_abort] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
                  f"close sample empty: carry skipped, object remains")
+        if getattr(self, "_voice", None) is not None:
+            self._voice_pick_result(False, reason="empty_grasp")
         home = self.arm_cmd.copy()
         home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
         a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
@@ -2313,6 +2352,8 @@ class ClassicalPolicy:
                              f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
         if self.held_detector.mode == "finger_sum" and close_held is not None:
             held = close_held       # headline is the post-wait close sample; lift stays separately labelled above
+        if getattr(self, "_voice", None) is not None:
+            self._voice_pick_result(held)
         pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
         if pend is not None and pend["color"] == plan.color:
             pend["held"] = None if held is None else bool(held)
@@ -2404,9 +2445,57 @@ class ClassicalPolicy:
             self.log(f"[classical] episode end: attempts={len(self.attempts)} failed={len(self.failed)} "
                      f"too_long={len(getattr(self, 'too_long', []))} started={self.n_started} "
                      f"retry_pass_used={int(self.retry_pass_used)}")
+        if done and getattr(self, "_voice", None) is not None and not getattr(self, "_voice_done", False):
+            self._voice_done = True
+            self._voice_emit("episode_done", count=getattr(self, "_voice_placed", 0))
         return self._remember_policy_action(np.repeat(self.arm_cmd[None], k, 0),
                                             np.repeat(self.hand_cmd[None], k, 0), done, steady=True)
 
     def _note(self, t, msg):
         self.events.append((round(t, 2), msg))
         self.log(f"[classical t={t:6.2f}] {msg}")
+
+    # ------------------------------------------------------------------ optional voice events
+    def _voice_emit(self, event, **fields):
+        """Best effort only: narration can never affect policy execution."""
+        sink = getattr(self, "_voice", None)
+        if sink is None:
+            return False
+        try:
+            return bool(sink.emit(event, **fields))
+        except Exception:
+            return False
+
+    def _voice_instruction_summary(self):
+        mapping = getattr(self, "mapping", {}) or {}
+        parts = []
+        for key, target in sorted(mapping.items(), key=lambda item: str(item[0])):
+            if target not in (None, "abstain"):
+                label = "+".join(key) if isinstance(key, tuple) else str(key)
+                parts.append(f"{label} to {target}")
+        return "; ".join(parts[:9]) or "No safe placements understood"
+
+    def _voice_progress(self):
+        """Publish phase-boundary facts after the preceding command chunk ran."""
+        event = getattr(self, "_voice_plan", None)
+        if event is None or self.queue_a is None:
+            return
+        done = event["n"] - len(self.queue_a)
+        if (not event["placed"] and event["placed_at"] is not None and done >= event["placed_at"]
+                and event["pick_valid"] and event["bin"] in self.scene.bin_names):
+            event["placed"] = True
+            self._voice_placed += 1
+            self._voice_emit("placed", colour=event["colour"], shape=event["shape"], bin=event["bin"])
+        if done >= event["n"]:
+            self._voice_plan = None
+
+    def _voice_pick_result(self, held, reason="unverified_grasp"):
+        event = getattr(self, "_voice_plan", None)
+        if event is None or event["picked"]:
+            return
+        event["picked"] = True
+        event["pick_valid"] = held is True
+        if held is True:
+            self._voice_emit("picked", colour=event["colour"], shape=event["shape"])
+        else:
+            self._voice_emit("unknown", colour=event["colour"], shape=event["shape"], reason=reason)

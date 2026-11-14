@@ -23,6 +23,11 @@ class TestFlags(unittest.TestCase):
         self.assertFalse(cfg["skills"]["memory"])
         self.assertIsNone(cfg["skills"]["memory_path"])   # unset: in-memory, no /tmp file
 
+    def test_voice_flag_defaults_off_and_is_registered(self):
+        cfg = load_config(overlay="none")
+        self.assertIn("voice.enabled", FLAGS)
+        self.assertFalse(cfg["voice"]["enabled"])
+
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
 

@@ -31,6 +31,7 @@ VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affin
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
 FLAGS = {
+    "voice.enabled": ("ElevenLabs", False, "emit best-effort localhost UDP narration events to the optional audio sidecar"),
     "brain.backend": ("brain", "stub", "stub (= classical choice) | llamacpp (bounded async HTTP + GBNF)"),
     "brain.url": ("brain", "http://127.0.0.1:8080/completion", "llama.cpp server for brain.backend=llamacpp"),
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),

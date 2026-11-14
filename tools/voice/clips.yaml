@@ -1,0 +1,42 @@
+# 30 short, finals-safe lines. `generate: false` reserves the rap asset name;
+# replace it with an original 15-second ElevenLabs Music clip if desired.
+clips:
+  episode_start:
+    text: "Sorting run started."
+  instruction_understood:
+    text: "Instructions understood. I will narrate committed moves."
+
+  picked.red.cube: {text: "Red cube secured."}
+  picked.red.cylinder: {text: "Red cylinder secured."}
+  picked.red.triangle: {text: "Red triangle secured."}
+  picked.yellow.cube: {text: "Yellow cube secured."}
+  picked.yellow.cylinder: {text: "Yellow cylinder secured."}
+  picked.yellow.triangle: {text: "Yellow triangle secured."}
+  picked.blue.cube: {text: "Blue cube secured."}
+  picked.blue.cylinder: {text: "Blue cylinder secured."}
+  picked.blue.triangle: {text: "Blue triangle secured."}
+
+  placed.red.cube.left: {text: "Red cube. Left bin."}
+  placed.red.cylinder.center: {text: "Red cylinder. Center bin."}
+  placed.red.triangle.right: {text: "Red triangle. Right bin."}
+  placed.yellow.cube.left: {text: "Yellow cube. Left bin."}
+  placed.yellow.cylinder.center: {text: "Yellow cylinder. Center bin."}
+  placed.yellow.triangle.right: {text: "Yellow triangle. Right bin."}
+  placed.blue.cube.left: {text: "Blue cube. Left bin."}
+  placed.blue.cylinder.center: {text: "Blue cylinder. Center bin."}
+  placed.blue.triangle.right: {text: "Blue triangle. Right bin."}
+
+  placed.left: {text: "Placed in the left bin."}
+  placed.center: {text: "Placed in the center bin."}
+  placed.right: {text: "Placed in the right bin."}
+  abstained: {text: "Confidence is low. I am leaving this object alone."}
+  unknown: {text: "Placement could not be verified, so I will not guess."}
+  episode_done.default: {text: "Sorting complete."}
+
+  playful.1: {text: "Tiny hands, serious sorting."}
+  playful.2: {text: "That was a grip decision."}
+  playful.3: {text: "Bins sorted. Robot satisfied."}
+  rap_intro:
+    text: "Placeholder for an original fifteen second sorting rap intro."
+    generate: false
+
