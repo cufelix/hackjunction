@@ -318,6 +318,17 @@ class TestPolicyHeldWiring(unittest.TestCase):
         self.assertEqual(pol._held_cal_phase, "sample")
         self.assertGreater(len(action["hand_q_target"]), 0)
 
+    def test_held_calibration_closes_to_cage_cylinder_when_cage_mode_is_on(self):
+        pol = ClassicalPolicy(log=None, overrides={"grasp.held_detector": "finger_sum",
+                                                   "grasp.held_calibration.enabled": True,
+                                                   "grasp.cage_mode": True})
+        pol.state = "look"
+        pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
+        pol.queue_a = pol.queue_h = np.empty((0, 14))
+        pol._held_calibration_tick({"hand_q": pol.hand_cmd.copy()}, 1.0)
+        self.assertEqual(pol._held_cal_phase, "sample")
+        np.testing.assert_allclose(pol.queue_h[-1], pol.post["cage_cylinder"], atol=1e-12)
+
     @staticmethod
     def policy_with_detector(side):
         pol = ClassicalPolicy.__new__(ClassicalPolicy)

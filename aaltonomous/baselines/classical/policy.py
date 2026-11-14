@@ -1095,7 +1095,8 @@ class ClassicalPolicy:
                 max_velocity_rad_s=p.get("max_velocity_rad_s", 0.08),
                 hold_after_settle_s=p.get("hold_after_settle_s", 0.4),
                 timeout_s=p.get("timeout_s", 5.0))
-            posture = self.cfg["grasp"].get("close_posture", "closed")
+            g = self.cfg["grasp"]
+            posture = "cage_cylinder" if g.get("cage_mode", False) else g.get("close_posture", "closed")
             target = self.post[posture]
             h = ramp(self.hand_cmd, target, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
             n = max(1, int(np.ceil(float(p.get("hold_after_settle_s", 0.4)) * HZ)))
