@@ -25,6 +25,58 @@ def trace(side, index_sum, middle_sum, thumb0_native=0.0):
 
 
 class TestFingerSumHeldDetector(unittest.TestCase):
+    def test_m3_empty_close_reference_requires_steady_samples_after_point_four_seconds(self):
+        det = HeldDetector("finger_sum", 0.045)
+        det.require_empty_close_calibration(0.0, steady_samples=3, max_velocity_rad_s=0.08,
+                                            hold_after_settle_s=0.4, timeout_s=3.0)
+        cmd, q = trace("left", -0.04, -0.04)
+        self.assertEqual(det.sample_empty_close(0.1, cmd, q), "pending")
+        self.assertEqual(det.sample_empty_close(0.2, cmd, q), "pending")
+        self.assertEqual(det.sample_empty_close(0.59, cmd, q), "pending")
+        self.assertEqual(det.sample_empty_close(0.61, cmd, q), "pending")
+        self.assertEqual(det.sample_empty_close(0.71, cmd, q), "pending")
+        self.assertEqual(det.sample_empty_close(0.81, cmd, q), "ready")
+        self.assertTrue(det.ready)
+
+    def test_m3_motion_resets_reference_and_invalid_calibration_disables_abort(self):
+        det = HeldDetector("finger_sum", 0.045)
+        det.require_empty_close_calibration(0.0, steady_samples=2, max_velocity_rad_s=0.08,
+                                            hold_after_settle_s=0.4, timeout_s=1.0)
+        cmd, q = trace("left", -0.04, -0.04)
+        det.sample_empty_close(0.1, cmd, q)
+        moving = q.copy()
+        moving[3] += 0.2
+        det.sample_empty_close(0.2, cmd, moving)
+        self.assertFalse(det.ready)
+        self.assertEqual(det.sample_empty_close(1.1, cmd, q), "invalid")
+        self.assertFalse(det.ready)
+        self.assertIn("timed out", det.calibration_reason)
+
+    def test_m3_four_samples_fit_real_chunk_cadence_after_lag(self):
+        det = HeldDetector("finger_sum", 0.045)
+        det.require_empty_close_calibration(0.0, steady_samples=4, max_velocity_rad_s=0.08,
+                                            hold_after_settle_s=0.4, timeout_s=5.0)
+        cmd, q = trace("left", -0.04, -0.04)
+        # Hand is still moving through 1.65 s (close trajectory + 300--380 ms lag).
+        for i, t in enumerate((0.10, 0.43, 0.76, 1.09, 1.42, 1.65)):
+            moving = q.copy()
+            moving[3:7] += 0.1 * i
+            self.assertEqual(det.sample_empty_close(t, cmd, moving), "pending")
+        settled = moving
+        statuses = [det.sample_empty_close(t, cmd, settled) for t in (1.98, 2.31, 2.64, 2.97, 3.30, 3.63)]
+        self.assertEqual(statuses[-1], "ready")
+        self.assertTrue(det.ready)
+
+    def test_m3_rejects_nonidentical_index_middle_commands(self):
+        det = HeldDetector("finger_sum", 0.045)
+        det.require_empty_close_calibration(0.0, steady_samples=2, max_velocity_rad_s=0.08,
+                                            hold_after_settle_s=0.4, timeout_s=2.0)
+        cmd, q = trace("left", -0.04, -0.04)
+        cmd[3] += 0.1
+        self.assertEqual(det.sample_empty_close(0.1, cmd, q), "invalid")
+        self.assertFalse(det.ready)
+        self.assertIn("differ", det.calibration_reason)
+
     def detector_with_reference(self, side, threshold=0.045):
         det = HeldDetector("finger_sum", threshold)
         det.start(0.0)
@@ -157,6 +209,16 @@ class TestEmptyGraspAbort(unittest.TestCase):
             self.assertIsNotNone(pol._gdiag)
             self.assertIsNone(pol.vary_hist[-1]["held"])
 
+    def test_invalid_empty_close_calibration_disables_early_abort(self):
+        detector = HeldDetector("finger_sum", 0.045)
+        detector.require_empty_close_calibration(0.0, steady_samples=2, max_velocity_rad_s=0.08,
+                                                 hold_after_settle_s=0.4, timeout_s=1.0)
+        cmd, q = trace("left", -0.04, -0.04)
+        detector.sample_empty_close(0.1, cmd, q)
+        self.assertEqual(detector.sample_empty_close(1.1, cmd, q), "invalid")
+        _, pol, empty_q = self.started(sums=(-0.01, -0.01), detector=detector)
+        self.assertFalse(pol._held_abort_due(pol._gdiag, empty_q, pol.hand_cmd))
+
     def test_stall_mode_never_aborts(self):
         _, pol, q = self.started()
         pol.held_detector = HeldDetector("stall", 0.045)
@@ -164,6 +226,23 @@ class TestEmptyGraspAbort(unittest.TestCase):
 
 
 class TestPolicyHeldWiring(unittest.TestCase):
+    def test_m3_calibration_does_not_replace_the_home_settle_queue(self):
+        pol = ClassicalPolicy(log=None, overrides={"grasp.held_detector": "finger_sum",
+                                                   "grasp.held_calibration.enabled": True})
+        pol.state = "look"  # settle switches to look while its hold queue is still draining
+        pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
+        pol.queue_a = np.repeat(pol.arm_cmd[None], 2, axis=0)
+        pol.queue_h = np.repeat(pol.hand_cmd[None], 2, axis=0)
+        self.assertIsNone(pol._held_calibration_tick({"hand_q": pol.hand_cmd.copy()}, 1.0))
+        self.assertIsNone(pol._held_cal_phase)
+        self.assertEqual(len(pol.queue_a), 2)
+
+        pol.queue_a = pol.queue_h = np.empty((0, 14))
+        action = pol._held_calibration_tick({"hand_q": pol.hand_cmd.copy()}, 1.1)
+        self.assertEqual(pol.state, "held_calibration")
+        self.assertEqual(pol._held_cal_phase, "sample")
+        self.assertGreater(len(action["hand_q_target"]), 0)
+
     @staticmethod
     def policy_with_detector(side):
         pol = ClassicalPolicy.__new__(ClassicalPolicy)
