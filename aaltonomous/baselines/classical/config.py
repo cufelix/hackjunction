@@ -24,6 +24,7 @@ LIMITS = {"motion.carry_scale": (0.0, 1.0)}
 CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight"),
            "grasp.held_detector": ("stall", "finger_sum"),
            "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust", "robust_v2"),
+           "perception.topface_mode": ("top35", "whole_blob"),
            "perception.principal_point": ("file", "center"),
            "perception.online_pitch_cal": (False, True, "table"), "brain.backend": ("stub", "llamacpp")}
 VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
@@ -69,6 +70,11 @@ FLAGS = {
     "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = the policy's current bin estimate (bin.vote shift / calibrate_bins); none -> nominal + near_margin_m towards the robot"),
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
     "perception.color_gate.sat_floor": ("Felix gate", False, "reject blue (purple) blobs with median HSV S < sat_floor_params.blue and yellow < .yellow (shadow / sheen); red and orange unchanged"),
+    "perception.sat_floor_adaptive": ("recall P0", False, "blue/purple S floor = max(abs_min, counter-background p90 + margin), retaining the configured hue band"),
+    "perception.area_floor_geometric": ("recall P0", False, "area floor from projected prism top x min_frac and ceiling from projected cube top x max_factor"),
+    "perception.topface_mode": ("recall P0", "top35", "top35 | whole_blob: whole-blob hue vote when the brightest-35% subset is too small"),
+    "perception.partial_ok_near_hand": ("recall P0", False, "retain sub-floor blobs touching the FK arm/hand-mask boundary as tentative; policy must re-observe before picking"),
+    "perception.relook_before_done": ("recall P0", False, "before nothing-left, retract to home, wait for fresh frames, and run one final relaxed detection"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
@@ -275,6 +281,29 @@ def check_flag_values(cfg):
     hg = cfg.get("perception", {}).get("hue_guard") or {}
     if not 0.0 <= float(hg.get("red_min_s", 110.0)) <= 255.0:
         raise ValueError(f"perception.hue_guard.red_min_s = {hg.get('red_min_s')}: want 0-255")
+    pc = cfg.get("perception") or {}
+    if not isinstance(pc.get("topface_min_px", 1024), int) or isinstance(pc.get("topface_min_px", 1024), bool) \
+            or int(pc.get("topface_min_px", 1024)) < 1:
+        raise ValueError("perception.topface_min_px: want an int >= 1")
+    sa = pc.get("sat_floor_adaptive_params") or {}
+    for key in ("abs_min", "bg_percentile", "margin"):
+        v = sa.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v):
+            raise ValueError(f"perception.sat_floor_adaptive_params.{key}: want a finite number")
+    if not 0.0 <= float(sa.get("abs_min", 45)) <= 255.0 or not 0.0 <= float(sa.get("bg_percentile", 90)) <= 100.0 \
+            or float(sa.get("margin", 10)) < 0.0:
+        raise ValueError("adaptive saturation needs abs_min 0..255, bg_percentile 0..100, margin >= 0")
+    ag = pc.get("area_floor_geometric_params") or {}
+    if not 0.0 < float(ag.get("min_frac", 0.35)) <= 1.0 or float(ag.get("max_factor", 2.0)) < 1.0:
+        raise ValueError("geometric area needs min_frac in (0,1] and max_factor >= 1")
+    ph = pc.get("partial_ok_near_hand_params") or {}
+    for key in ("min_area_px", "boundary_px", "max_relooks"):
+        v = ph.get(key)
+        if not isinstance(v, int) or isinstance(v, bool) or v < 1:
+            raise ValueError(f"perception.partial_ok_near_hand_params.{key}: want an int >= 1")
+    if not isinstance(pc.get("relook_fresh_frames", 2), int) or isinstance(pc.get("relook_fresh_frames", 2), bool) \
+            or int(pc.get("relook_fresh_frames", 2)) < 1:
+        raise ValueError("perception.relook_fresh_frames: want an int >= 1")
     g = cfg.get("grasp") or {}
     for key in ("generic_shape_min_conf", "generic_min_confidence"):
         if not 0.0 <= float(g.get(key, 0.5)) <= 1.0:

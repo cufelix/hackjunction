@@ -248,6 +248,11 @@ class ClassicalPolicy:
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
+        self._partial_relooks = 0   # partial_ok_near_hand: bounded retract/re-observe attempts
+        self._final_relook_used = False
+        self._relook_fresh = 0
+        self._relook_last_t = None
+        self._relook_reason = None
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
         # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
         lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
@@ -678,6 +683,21 @@ class ClassicalPolicy:
                 return r
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
+        if self.state == "relook_settle":
+            n = int(round(self.cfg["motion"]["settle_s"] * HZ))
+            self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
+            self.state = "relook_fresh"
+            return self._pop()
+        if self.state == "relook_fresh":
+            # A request may repeat an observation while a command chunk is consumed. Count only increasing episode time.
+            if self._relook_last_t is None or t > self._relook_last_t:
+                self._relook_fresh += 1
+                self._relook_last_t = t
+            need = int(self.cfg["perception"].get("relook_fresh_frames", 2))
+            if self._relook_fresh < need:
+                return self._hold()
+            self._note(t, f"{self._relook_reason}: {self._relook_fresh} fresh frames; re-detect")
+            self.state = "look"
         if self.state == "init":
             a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
             self._home_move = (a, h)
@@ -860,6 +880,8 @@ class ClassicalPolicy:
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
         for d, source_bin, target_bin in corrections:
+            if getattr(d, "tentative", False):
+                continue  # partial_ok_near_hand: never grasp an FK-boundary fragment directly
             budget_blocked = False
             if self._vary_on():   # no place gate: the object is already in a bin
                 n = self._attempt_count(d.top[:2], d.color)
@@ -902,7 +924,12 @@ class ClassicalPolicy:
         """_choose + #3 retry pass (Oliver 40fb22a, policy.retry_pass, default off)."""
         if not verify and self._slots_on():
             self._settle_slot(dets)
-        res = self._choose(dets, obs, verify)
+        choose_dets = dets
+        tentative = []
+        if self.cfg["perception"].get("partial_ok_near_hand", False):
+            tentative = [d for d in dets if getattr(d, "tentative", False)]
+            choose_dets = [d for d in dets if not getattr(d, "tentative", False)]
+        res = self._choose(choose_dets, obs, verify)
         pol = self.cfg["policy"]
         if res[0] == "none" and dets and pol.get("retry_pass", False) and not self.retry_pass_used:
             # Retry pass (once per episode): objects excluded only by max_attempts get retry_extra_attempts more
@@ -921,7 +948,10 @@ class ClassicalPolicy:
                                                   for color, xy in excluded)]
                 self.retry_allow += [(xy, extra) for xy in excl]
                 self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
-                res = self._choose(dets, obs, verify)
+                res = self._choose(choose_dets, obs, verify)
+        max_relooks = int((self.cfg["perception"].get("partial_ok_near_hand_params") or {}).get("max_relooks", 2))
+        if res[0] == "none" and tentative and self._partial_relooks < max_relooks:
+            return ("partial", None, len(dets))
         return res
 
     def _bin_of(self, d):
@@ -2029,6 +2059,8 @@ class ClassicalPolicy:
         corrections = []
         yellow_unknown = bool(self.cfg["policy"].get("verify_yellow_unknown", False))
         for d, footprint_bin in bin_dets:
+            if getattr(d, "tentative", False):
+                continue  # re-observe with retracted arms; never score or correct this fragment
             target_bin = lookup_detection_bin(self.cfg, self.mapping, d)
             score_bin = self._score_bin(d)
             scored.append((d, footprint_bin, score_bin))
@@ -2095,11 +2127,18 @@ class ClassicalPolicy:
             self._note(t, "placement unresolved; take one more settled verification frame")
             self.state = "settle"
             return self._hold()
+        if kind == "partial":
+            self._partial_relooks += 1
+            return self._begin_retracted_relook(t, "tentative FK-boundary candidate",
+                                                f"partial relook {self._partial_relooks}")
         if kind == "uncorrectable":
             self._note(t, "known wrong-bin object has no safe corrective or cleanup plan; stopping")
             self.state = "done"
             return self._hold(done=True)
         if kind == "none":
+            if self.cfg["perception"].get("relook_before_done", False) and not self._final_relook_used:
+                self._final_relook_used = True
+                return self._begin_retracted_relook(t, "nothing-left guard", "final relaxed relook")
             self._note(t, f"nothing left to sort ({res[2]} detections)")
             self.state = "done"
             return self._hold(done=True)
@@ -2119,6 +2158,17 @@ class ClassicalPolicy:
             self._note(t, f"waiting for confirm: {plan.summary()}")
             return self._hold()
         return self._start(plan, t)
+
+    def _begin_retracted_relook(self, t, reason, note):
+        """Queue a normal home/open trajectory, then let `_act` settle and count fresh frames without sleeping."""
+        a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
+        self._enqueue(a, h)
+        self.state = "relook_settle"
+        self._relook_fresh = 0
+        self._relook_last_t = None
+        self._relook_reason = reason
+        self._note(t, f"{note}: retract arms to home before re-detection")
+        return self._pop()
 
     def _verify_on(self):
         return bool(self.cfg["policy"].get("verify_placement", False))
