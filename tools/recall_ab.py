@@ -14,6 +14,10 @@ Two steps:
           detections: centroid inside a GT bin_tape / bin_wall / hand / other bbox, else "phantom".
       PYTHONPATH=. python tools/recall_ab.py score <dir> [<dir> ...] --md <report.md>
 
+  --colour-aware  second mode: detection must agree in colour (orange<->red, purple<->blue, yellow) to match; a
+          wrong-colour detection near a GT is an FP and tallied as wrong_colour. Prints the sanity check that the
+          colour-agnostic reimplementation reproduces the E1 headline and FP census exactly.
+
 Matching = the E1 contract (greedy, 25 px nearest centroid, colour-agnostic, file order, one used-set per frame).
 Tentative detections (perception.partial_ok_near_hand) are counted as accepted and also reported separately.
 """
@@ -170,16 +174,119 @@ def fp_census(d, labels):
     return {"fp": c, "fp_total": sum(c.values()), "fp_by_colour": by_col, "tentative": tent, "tentative_matched": tent_matched}
 
 
+# ---- colour-aware scoring ------------------------------------------------------------------------------------------
+# GT colours are real names (orange/purple/yellow); the policy emits sim names (red/blue/yellow). Alias both ways.
+COLOUR_CANON = {"orange": "red", "red": "red", "purple": "blue", "blue": "blue", "yellow": "yellow"}
+
+
+def canon_colour(c):
+    c = str(c).lower()
+    return COLOUR_CANON.get(c, c)
+
+
+def colours_agree(gt_cls, det_colour):
+    return canon_colour(str(gt_cls).split("-")[0]) == canon_colour(det_colour)
+
+
+def score_colour(d, fr, colour_aware):
+    """Visible-only recall per class (+ FP census) with optional colour constraint.
+
+    Visibility = e1_fair_recall's headline `locus == visible_on_mat` per GT row (read from its fair_recall.json
+    per_gt, so the filter is exactly the E1 one). Greedy order = all GT object rows of the frame in file order
+    (non-visible GT still consume detections, as in the E1 match). With colour_aware=False this reproduces the
+    colour-agnostic headline exactly. With colour_aware=True a detection is only a candidate for a GT of the
+    same (aliased) colour; same-position wrong-colour detections stay unmatched and count as FP + wrong_colour.
+    """
+    dets = {(r["ep"], r["frame_idx"]): r for r in map(json.loads, open(os.path.join(d, "detections_e1.jsonl")))}
+    labels = [json.loads(ln) for ln in open(os.path.join(DATA, LABELS)) if ln.strip()]
+    boxes = {}
+    for r in labels:
+        ep = int(r.get("ep", -1))
+        if ep < 0 or ep >= HELD_OUT_FROM or r.get("frame_idx") is None:
+            continue
+        boxes.setdefault((ep, int(r["frame_idx"])), []).append(r)
+    by_frame = {}
+    for g in fr["per_gt"]:
+        if g["ep"] >= HELD_OUT_FROM:
+            continue
+        by_frame.setdefault((g["ep"], g["frame_idx"]), []).append(g)
+    per_class, matched_total, n_total = {}, 0, 0
+    fp = {"tape": 0, "bin_wall": 0, "hand": 0, "other": 0, "phantom": 0}
+    wrong, confusion, fp_by_col = 0, {}, {}
+    for key, gts in by_frame.items():
+        fd = dets.get(key)
+        acc = fd["accepted_false"] if fd else []
+        used = set()
+        for g in gts:
+            hit = False
+            c = g["centroid"]
+            if c is not None:
+                best, bd = None, MATCH_PX
+                for i, x in enumerate(acc):
+                    if i in used or (colour_aware and not colours_agree(g["cls"], x["color"])):
+                        continue
+                    dist = math.hypot(x["uv"][0] - c[0], x["uv"][1] - c[1])
+                    if dist <= bd:
+                        best, bd = i, dist
+                if best is not None:
+                    used.add(best)
+                    hit = True
+            if g["locus"] == "visible_on_mat":
+                st = per_class.setdefault(g["cls"], {"n": 0, "matched": 0})
+                st["n"] += 1
+                st["matched"] += int(hit)
+                n_total += 1
+                matched_total += int(hit)
+        if not fd:
+            continue
+        rows = boxes.get(key, [])
+        for i, x in enumerate(acc):
+            if i in used:
+                continue
+            k = "phantom"
+            for kind, lab in (("bin_tape", "tape"), ("bin_wall", "bin_wall"), ("hand", "hand"), ("other", "other")):
+                if any(_inb(x["uv"], b) for b in (_bbox(r) for r in rows if r.get("kind") == kind) if b):
+                    k = lab
+                    break
+            fp[k] += 1
+            fp_by_col[x["color"]] = fp_by_col.get(x["color"], 0) + 1
+            if colour_aware:   # unmatched, within 25 px of a GT object of another colour -> wrong colour
+                near = [g for g in gts if g["centroid"] is not None and not colours_agree(g["cls"], x["color"])
+                        and math.hypot(x["uv"][0] - g["centroid"][0], x["uv"][1] - g["centroid"][1]) <= MATCH_PX]
+                if near:
+                    g = min(near, key=lambda g: math.hypot(x["uv"][0] - g["centroid"][0], x["uv"][1] - g["centroid"][1]))
+                    wrong += 1
+                    kk = f"{g['cls']}->{x['color']}"
+                    confusion[kk] = confusion.get(kk, 0) + 1
+    pc = {k: dict(n=v["n"], matched=v["matched"], recall=round(v["matched"] / v["n"], 3) if v["n"] else None)
+          for k, v in sorted(per_class.items())}
+    return {"n": n_total, "matched": matched_total, "recall": round(matched_total / n_total, 3) if n_total else 0.0,
+            "per_class": pc, "fp": fp, "fp_total": sum(fp.values()), "wrong_colour": wrong,
+            "wrong_colour_pairs": dict(sorted(confusion.items(), key=lambda kv: -kv[1])), "fp_by_colour": fp_by_col}
+
+
+def detection_colours(dirs):
+    s = {}
+    for d in dirs:
+        for r in map(json.loads, open(os.path.join(d, "detections_e1.jsonl"))):
+            for x in r["accepted_false"]:
+                s[x["color"]] = s.get(x["color"], 0) + 1
+    return s
+
+
 def cmd_score(a):
     labels = [json.loads(ln) for ln in open(os.path.join(DATA, LABELS)) if ln.strip()]
     rows = []
     for d in a.dirs:
-        subprocess.run([sys.executable, os.path.join(HERE, "e1_fair_recall.py"), "--outdir", d,
-                        "--labels", os.path.join(DATA, LABELS), "--counter-z", "0.15"],
-                       check=True, cwd=ROOT, stdout=subprocess.DEVNULL, env={**os.environ, "PYTHONPATH": ROOT})
+        if not (a.reuse_fair and os.path.exists(os.path.join(d, "fair_recall.json"))):
+            subprocess.run([sys.executable, os.path.join(HERE, "e1_fair_recall.py"), "--outdir", d,
+                            "--labels", os.path.join(DATA, LABELS), "--counter-z", "0.15"],
+                           check=True, cwd=ROOT, stdout=subprocess.DEVNULL, env={**os.environ, "PYTHONPATH": ROOT})
         fr = json.load(open(os.path.join(d, "fair_recall.json")))
         arm = json.load(open(os.path.join(d, "arm.json")))
         rows.append((d, arm, fr, fp_census(d, labels)))
+    if a.colour_aware:
+        return _score_colour_report(a, rows)
     L = ["| arm | overlay / overrides | recall (visible) | orange-cube | orange-prism | purple-cube | yellow-cube | "
          "yellow-cyl | FP total | tape | wall | hand | other | phantom | tentative (matched) |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
@@ -194,6 +301,37 @@ def cmd_score(a):
                  + " | ".join(cell(k) for k in ("orange-cube", "orange-prism", "purple-cube", "yellow-cube", "yellow-cylinder"))
                  + f" | {fp['fp_total']} | {f['tape']} | {f['bin_wall']} | {f['hand']} | {f['other']} | {f['phantom']} | {fp['tentative']} ({fp['tentative_matched']}) |")
         out.append(dict(dir=d, arm=arm, headline=h, fp=fp))
+    txt = "\n".join(L)
+    print(txt)
+    if a.md:
+        open(a.md, "w").write(txt + "\n")
+        json.dump(out, open(os.path.splitext(a.md)[0] + ".json", "w"), indent=1)
+
+
+def _score_colour_report(a, rows):
+    print("detection colour strings found:", detection_colours([r[0] for r in rows]), flush=True)
+    out, L = [], ["| arm | agnostic | colour-aware | drop | orange-cube | orange-prism | purple-cube | yellow-cube | yellow-cyl "
+                  "| wrong_colour | FP agn -> col |", "|---|---|---|---|---|---|---|---|---|---|---|"]
+    ok = True
+    for d, arm, fr, fp in rows:
+        h = _headline(fr)
+        ag = score_colour(d, fr, False)
+        ca = score_colour(d, fr, True)
+        same = (ag["matched"], ag["n"]) == (h["matched"], h["n"]) and all(
+            ag["per_class"].get(k, {}).get("matched") == v["matched"] for k, v in h["per_class"].items())
+        fp_same = ag["fp"] == fp["fp"]
+        ok &= same and fp_same
+        name = "/".join(d.rstrip("/").split("/")[-2:])
+        print(f"[sanity] {name}: agnostic reimpl {ag['matched']}/{ag['n']} vs e1_fair_recall {h['matched']}/{h['n']} "
+              f"per-class {'OK' if same else 'MISMATCH'}; FP census {'OK' if fp_same else 'MISMATCH'}", flush=True)
+        cls = ca["per_class"]
+        cell = lambda k: f"{cls[k]['matched']}/{cls[k]['n']} = {cls[k]['recall']:.3f}" if k in cls else "-"
+        L.append(f"| {name} | {ag['matched']}/{ag['n']} = {ag['recall']:.3f} | **{ca['matched']}/{ca['n']} = {ca['recall']:.3f}** | "
+                 f"{ca['recall'] - ag['recall']:+.3f} | " + " | ".join(cell(k) for k in ("orange-cube", "orange-prism", "purple-cube", "yellow-cube", "yellow-cylinder"))
+                 + f" | {ca['wrong_colour']} | {ag['fp_total']} -> {ca['fp_total']} |")
+        out.append(dict(dir=d, arm=arm, agnostic=ag, colour_aware=ca, drop=round(ca["recall"] - ag["recall"], 3),
+                        sanity_agnostic_reproduced=same and fp_same))
+    print("SANITY (colour constraint off reproduces e1_fair_recall headline + FP census):", "PASS" if ok else "FAIL")
     txt = "\n".join(L)
     print(txt)
     if a.md:
@@ -219,6 +357,9 @@ def main():
     s = sp.add_parser("score")
     s.add_argument("dirs", nargs="+")
     s.add_argument("--md")
+    s.add_argument("--colour-aware", action="store_true",
+                   help="a detection may only match a GT of the same (aliased) colour; also reports wrong_colour")
+    s.add_argument("--reuse-fair", action="store_true", help="reuse an existing fair_recall.json instead of re-running it")
     a = ap.parse_args()
     (cmd_detect if a.cmd == "detect" else cmd_score)(a)
 
