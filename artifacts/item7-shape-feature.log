@@ -1,0 +1,27 @@
+# item #7 shape-feature measurement
+# repo: c81360f  dirty: 3 file(s)
+# script: scripts/measure_shape_feature.py  (sha256 4278944e7e50c631)
+# command: /home/felix/.venvs/gd/bin/python3 -I scripts/measure_shape_feature.py
+# python: 3.12.3 numpy 2.5.3 cv2 5.0.0
+# n = 3 x-positions * 5 y-positions * 7 yaws = 105 poses per shape, seed 7
+# date: 2026-11-14T00:17:52Z
+
+
+A) 2D PIXEL BLOB  (what classify_blob is given today)
+  shape                 ratio range   median     px   accuracy @ 0.88/0.66
+  cube       0.806 - 0.982     0.890   5012    62.9%  -> cylinder 37%
+  cylinder   0.822 - 0.859     0.843   3342   100.0%
+  triangle   0.624 - 0.730     0.677   3516    21.0%  -> cylinder 79%
+
+B) METRIC TOP-FACE POINTS  (top[:, :2], same data _yaw gets)
+  shape                 ratio range   median     px   accuracy @ 0.88/0.66
+  cube       0.942 - 0.987     0.967   2768   100.0%
+  cylinder   0.792 - 0.858     0.817    599   100.0%
+  triangle   0.542 - 0.608     0.573   1610   100.0%
+
+# self-check: policy/shape_from_top.py
+  cube       ok, ratio 0.958 (ideal 1.000, measured 0.942-0.987)
+  cylinder   ok, ratio 0.791 (ideal 0.785, measured 0.792-0.858)
+  triangle   ok, ratio 0.556 (ideal 0.500, measured 0.542-0.608)
+  border guard ok
+all ok
