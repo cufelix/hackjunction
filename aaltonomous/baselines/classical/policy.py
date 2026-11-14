@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
 from dataclasses import dataclass
 import os
 import re
@@ -34,8 +35,9 @@ from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene
 
 from . import decision as dec
+from . import landing
 from .bin_vote import vote_bins
-from .config import equalize_index_middle, hand_postures, home_arm, load_config
+from .config import equalize_index_middle, hand_postures, home_arm, load_config, soft_detector_active, soft_hand_active, soft_overclose
 from .held import HeldDetector
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
@@ -124,6 +126,12 @@ class ClassicalPolicy:
         self.post = hand_postures(self.cfg, self.spec)
         self._mirror_im = bool(self.cfg["hand"].get("mirror_index_middle", False))
         self.home = home_arm(self.cfg, self.spec)
+        self._soft_det = soft_detector_active(self.cfg)    # held.soft_detector on a soft hand (default OFF)
+        if self._soft_det:
+            h, g = self.cfg["held"], self.cfg["grasp"]
+            self.held_detector.configure_soft(
+                self.post["preshape"], h["soft_margin_rad"], h["soft_lift_margin_rad"], h["soft_prior_ratio"],
+                float(g["soft_lag_s"]) + float(g["soft_settle_s"]) + float(h["soft_read_after_s"]))
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
         # Mirror SafetyFilter's hand position clamp without constructing or
@@ -309,6 +317,8 @@ class ClassicalPolicy:
         self._brain_mapping, self._brain_mapping_source = self._resolver_mapping(info, guarded)
         self._brain_abstain = self._resolver_abstains(self._brain_mapping)
         self._brain_reg, self._brain_n, self._last_pick = [], 0, None
+        self._novel_brain_candidates = []
+        self._novel_brain_bin = None
         if self.brain is not None:
             self.brain.reset()
         self.time_limit = info.get("time_limit", self.time_limit)
@@ -355,6 +365,8 @@ class ClassicalPolicy:
         self._held_cal_phase = None
         self._held_cal_done = not (self.held_detector.mode == "finger_sum" and
                                    bool((self.cfg["grasp"].get("held_calibration") or {}).get("enabled", False)))
+        self._softcal = None        # held.soft_detector: the episode-start empty close being watched
+        self._softcal_done = False
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
@@ -411,6 +423,13 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+        self._landing = None        # policy.verify_landing: the release whose outcome the next look classifies
+        self._occ_prev = None       # verify_landing: {bin: occupancy} of the previous look
+        self.landing_events = []    # verify_landing: (kind, colour, bin) per classified release
+        self.landing_regrants = 0
+        self.landing_refunds = 0
+        self.bounce_count = {}
+        self._landing_excl_logged = set()
         self._skill_pending = None  # skills.memory: the started pick whose outcome is not settled yet
         self._joint_offset_t0 = None                      # debug.log_joint_offset: start of the first-second window
         self._last_policy_arm_cmd = self._last_policy_hand_cmd = None
@@ -1062,6 +1081,8 @@ class ClassicalPolicy:
             self._hand_calibrate(obs, t)
         if self._gdiag is not None:
             self._grasp_diag(obs)
+        if self._softcal is not None:
+            self._soft_baseline_step(obs)
         if self._empty_recovery is not None:
             return self._empty_recovery_step(t)
         if self._stall is not None:
@@ -1146,6 +1167,8 @@ class ClassicalPolicy:
             n = int(round(self.cfg["motion"]["settle_s"] * HZ))
             self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
             self.state = "look"
+            if self._soft_det and not self._softcal_done:
+                self._soft_baseline_start(t)   # one empty close per hand at home, queued: act() never blocks
             return self._pop()
         if self.state == "look" and self._await_pitch_cal(t):
             # H3/H4: no bin-vote frame (or any look) is captured while the first pitch commit is pending.
@@ -1408,9 +1431,10 @@ class ClassicalPolicy:
         return out
 
     def _fk_kw(self, obs):
-        """Measured arm/hand pose for an enabled colour-gate or depth-recovery FK mask."""
+        """Measured pose for an enabled colour-gate, depth-recovery or novel-object FK mask."""
         need_fk = ((self.cfg["perception"].get("color_gate") or {}).get("fk_mask", False) or
-                   self.cfg["perception"].get("depth_blob_recover", False))
+                   self.cfg["perception"].get("depth_blob_recover", False) or
+                   self.cfg["perception"].get("novel_objects", False))
         if not need_fk or obs.get("arm_q") is None:
             return {}
         return {"robot_q": (np.asarray(obs["arm_q"], float),
@@ -1428,13 +1452,21 @@ class ClassicalPolicy:
                                           **self._counter_kw(obs))
             if dets is None:
                 return ("still_vote_pending",)
+            if (self.cfg.get("instruction") or {}).get("novel_objects", False):
+                self._match_novel(dets)
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
+            if self._landing_on():   # policy.verify_landing: classify the last release, never target an in-bin object
+                relook, dets = self._landing_review(obs, dets)
+                if relook is not None:
+                    return relook
             return self._choose_retry(dets, obs, verify=False)
         dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
                                                    **self._detect_kw(), **self._fk_kw(obs), **self._counter_kw(obs))
         if dets is None:
             return ("still_vote_pending",)
+        if (self.cfg.get("instruction") or {}).get("novel_objects", False):
+            self._match_novel(dets)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -1476,6 +1508,31 @@ class ClassicalPolicy:
             if alt is not None:
                 return alt
         return res
+
+    def _match_novel(self, dets):
+        """Attach a bin only to one deterministic visible novel match.
+
+        Unknown nouns expose a closed visible-novel list to the already
+        bounded asynchronous brain.  With no brain, or on timeout, every such
+        object keeps ``novel_target_bin=None`` and is therefore unpickable.
+        """
+        self._novel_brain_candidates, self._novel_brain_bin = [], None
+        novels = [d for d in dets if getattr(d, "novel", False)]
+        for d in novels:
+            d.novel_target_bin, d.novel_matched = None, False
+        if not novels or not (self.cfg.get("instruction") or {}).get("novel_objects", False):
+            return
+        from .novel_objects import match_instruction
+        match = match_instruction(self._instruction, novels)
+        if match.matched is not None:
+            match.matched.novel_target_bin = match.target_bin
+            match.matched.novel_matched = True
+            self.log(f"[novel] matched {match.matched.color} {match.matched.shape} -> {match.target_bin}")
+        elif match.brain_candidates and self.brain is not None:
+            self._novel_brain_candidates = list(match.brain_candidates)
+            self._novel_brain_bin = match.target_bin
+            self.log(f"[novel] unresolved noun {match.unresolved_noun!r}; offered "
+                     f"{len(match.brain_candidates)} visible novel candidates to brain")
 
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
@@ -1552,7 +1609,119 @@ class ClassicalPolicy:
         max_relooks = int((self.cfg["perception"].get("partial_ok_near_hand_params") or {}).get("max_relooks", 2))
         if res[0] == "none" and tentative and self._partial_relooks < max_relooks:
             return ("partial", None, len(dets))
+        if res[0] == "none" and choose_dets and self._landing_on():
+            res = self._landing_regrant(res, choose_dets, obs)
         return res
+
+    # ------------------------------------------------------------------ policy.verify_landing
+    def _landing_on(self):
+        """verify_landing is the observe-only verifier; the old verify_placement (#6) keeps its own machinery."""
+        return bool(self.cfg["policy"].get("verify_landing", False)) and not self._verify_on()
+
+    def _landing_review(self, obs, dets):
+        """-> (relook result | None, dets). Never raises: any error keeps the stock detections."""
+        try:
+            return self._landing_review_inner(obs, dets)
+        except Exception as exc:
+            self.log(f"[landing] disabled for this look: {type(exc).__name__}: {exc}")
+            return None, dets
+
+    def _landing_review_inner(self, obs, dets):
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        occ = landing.bin_occupancy(self.perception, obs.get("head_depth"))
+        pend = self._landing
+        if pend is not None:
+            min_delta = float(pol.get("landing_min_delta", 0.5))
+            kind, info = landing.classify_landing(pend, self._occ_prev, occ, dets, min_delta)
+            if kind in ("lost", "unknown"):
+                cb = self._landing_colour_bin(obs, pend["color"])
+                if cb is not None:
+                    kind, info = landing.classify_landing(pend, self._occ_prev, occ, dets, min_delta, colour_bin=cb)
+            if kind in ("lost", "unknown") and pend.get("relooks", int(pol.get("landing_relooks", 1))) > 0:
+                pend["relooks"] = pend.get("relooks", int(pol.get("landing_relooks", 1))) - 1
+                return ("relook", None, len(dets)), dets   # a bounce may still roll: one more settled frame
+            self._landing = None
+            self.landing_events.append((kind, pend["color"], pend["bin"]))
+            dtxt = {k: round(v, 2) for k, v in info["delta"].items()}
+            self.log(f"[landing] t={t:.1f} {pend['color']}->{pend['bin']}: {kind} delta={dtxt}")
+            if kind == "wrong_bin":
+                self.log(f"[landing] {pend['color']} landed in {info['bin']} (wrong bin, -1): logged, not corrected")
+            elif kind == "bounce":
+                dets = self._landing_requeue(pend, info["det"], dets)
+        self._occ_prev = occ
+        margin = float(pol.get("landing_in_bin_margin_m", 0.01))
+        keep = []
+        for d in dets:
+            b = landing.inside_bin(self.perception, d.top[:2], margin)
+            if b is None:
+                keep.append(d)
+            elif (d.color, b) not in self._landing_excl_logged:
+                self._landing_excl_logged.add((d.color, b))
+                self.log(f"[landing] {d.color} inside the {b} bin footprint: never a pick target")
+        self.last_detections = keep
+        return None, keep
+
+    def _landing_colour_bin(self, obs, color):
+        """Bin name of a same-colour blob inside a bin footprint (colour fallback when depth is inconclusive)."""
+        try:
+            _, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
+                                                 **self._detect_kw(), **self._fk_kw(obs))
+        except Exception:
+            return None
+        for d, why in rejected:
+            if d is not None and d.color == color and why.startswith("in_bin:"):
+                return why.split(":", 1)[1]
+        return None
+
+    def _landing_requeue(self, pend, det, dets):
+        """A bounced object is a normal counter target again: refund the attempt, forget the old give-ups, jitter the grasp."""
+        pol = self.cfg["policy"]
+        src = np.asarray(pend["src_xy"], float)
+        if self.landing_refunds < int(pol.get("landing_max_refunds", 4)):
+            self.landing_refunds += 1
+            rad = self._attempt_radius()
+            for i in range(len(self.attempts) - 1, -1, -1):
+                if np.linalg.norm(np.asarray(self.attempts[i][0], float) - src) < rad:
+                    self.attempts.pop(i)
+                    break
+            near = [tr for tr in self.attempt_tracks
+                    if tr["color"] == pend["color"] and np.linalg.norm(src - tr["xy"]) < rad]
+            if near:
+                tr = min(near, key=lambda item: np.linalg.norm(src - item["xy"]))
+                tr["count"] = max(0, tr["count"] - 1)
+        rad = float(pol["same_object_radius"])
+        self.failed = [f for f in self.failed if np.linalg.norm(det.top[:2] - f) >= rad
+                       and np.linalg.norm(src - f) >= rad]
+        n = self.bounce_count.get(pend["color"], 0)
+        self.bounce_count[pend["color"]] = n + 1
+        jit = landing.jitter(n, float(pol.get("landing_jitter_m", 0.01)), det.top[:2])
+        moved = dataclasses.replace(det, top=det.top + np.r_[jit, 0.0])
+        self.log(f"[landing] {pend['color']} bounced back to the counter at ({det.top[0]:+.3f},{det.top[1]:+.3f}): "
+                 f"re-queued, jitter ({jit[0] * 100:+.1f},{jit[1] * 100:+.1f}) cm")
+        return [moved if d is det else d for d in dets]
+
+    def _landing_regrant(self, res, dets, obs):
+        """Nothing pickable but objects were skipped for max_attempts only: with a full pick+place cycle of time left
+        they get one fresh attempt (vary_hist keeps the retry from repeating a grasp). At most landing_regrants_max."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        if (self.landing_regrants >= int(pol.get("landing_regrants_max", 2))
+                or self.time_limit - t < float(pol.get("landing_regrant_min_s", 14.0))):
+            return res
+        rad = self._attempt_radius()
+        excluded = [(d.color, d.top[:2]) for d in dets if self._attempt_excluded(d.top[:2], d.color)]
+        if not excluded:
+            return res
+        self.landing_regrants += 1
+        self.attempts = [(p, c) for p, c in self.attempts
+                         if not any(np.linalg.norm(xy - p) < rad for _, xy in excluded)]
+        self.attempt_tracks = [tr for tr in self.attempt_tracks
+                               if not any(tr["color"] == color and np.linalg.norm(xy - tr["xy"]) < rad
+                                          for color, xy in excluded)]
+        self.retry_allow += [(xy, 1) for _, xy in excluded]
+        self._note(t, f"landing regrant {self.landing_regrants}: {len(excluded)} object(s) get one more attempt")
+        return self._choose(dets, obs, False)
 
     def _bin_of(self, d):
         """lookup_bin for a counter candidate; a miss (None / abstain) is logged once per object per episode."""
@@ -1790,14 +1959,30 @@ class ClassicalPolicy:
         triage = bool(pol.get("time_triage", False))
         forced = None   # (det, bin, variant) from the brain (brain.enabled)
         if self.brain is not None:
-            sel = self._brain_select(cands, dets, obs)
+            brain_only_novel = bool(self._novel_brain_candidates)
+            offered = [d for d in self._novel_brain_candidates if any(d is x for x in dets)]
+            sel = self._brain_select(offered, offered, obs) if brain_only_novel else self._brain_select(cands, dets, obs)
             if sel is not None:
                 kind, d0, b0, var = sel
-                if kind == "look":
+                if brain_only_novel:
+                    valid = (kind == "pick" and any(d0 is d for d in offered)
+                             and getattr(d0, "novel", False) and b0 == self._novel_brain_bin
+                             and getattr(d0, "graspable", False))
+                    if valid:
+                        d0.novel_target_bin, d0.novel_matched = b0, True
+                    else:
+                        # The novel hook may neither stop the known task nor
+                        # select a known/ungraspable object or another bin.
+                        sel = None
+                if sel is None:
+                    kind = None
+                if kind is None:
+                    pass
+                elif kind == "look":
                     return ("relook", None, len(dets))
-                if kind == "done":
+                elif kind == "done":
                     return ("none", None, len(dets))
-                if kind == "skip":
+                elif kind == "skip":
                     self.failed.append(d0.top[:2])          # the brain gave this object up: no more tries
                     cands = [d for d in cands if d is not d0]
                 elif kind in ("pick", "retry"):
@@ -1815,6 +2000,18 @@ class ClassicalPolicy:
                     n_long += 1
                     continue
             others = [o.top[:2] for o in dets if o is not d]
+            common = {"obstacles": others}
+            if pol.get("novel_obstacles", False):
+                clearance = []
+                for o in dets:
+                    if o is d or not getattr(o, "novel", False):
+                        continue
+                    dims = np.asarray(getattr(o, "footprint_dims", [0.05, 0.05]), float)
+                    radius = 0.5 * float(np.max(dims))
+                    top_z = self.scene.counter_z + float(getattr(o, "height", o.top[2] - self.scene.counter_z))
+                    centre = np.asarray(getattr(o, "obstacle_center", o.top[:2]), float)
+                    clearance.append([centre[0], centre[1], radius, top_z])
+                common["clearance_obstacles"] = clearance
             mine = forced is not None and d is forced[0]
             target_bin = forced[1] if mine else self._bin_of(d)
             pfn = self._variant_plan_fn(forced[2]) if mine else None
@@ -1829,7 +2026,7 @@ class ClassicalPolicy:
                 if slot is None:
                     self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
                     continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
+                p = self._plan_pick(d, dict(bin_name=target_bin, drop_slot=slot, **common), pfn)
             elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
                 free = [i for i in range(len(self.planner.drop_slots(target_bin)))
                         if i not in self.slot_used[target_bin]]
@@ -1837,11 +2034,11 @@ class ClassicalPolicy:
                 if slot is None:
                     self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
                     continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
+                p = self._plan_pick(d, dict(bin_name=target_bin, drop_slot=slot, **common), pfn)
             elif mine:   # brain override: the classical planner still checks reach
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others), pfn)
+                p = self._plan_pick(d, dict(bin_name=target_bin, **common), pfn)
             else:
-                p = self._plan_pick(d, dict(obstacles=others))
+                p = self._plan_pick(d, common)
             self.plans.append(p)
             if p.ok and not self._object_time_allows(d, p.duration):
                 continue
@@ -2836,6 +3033,10 @@ class ClassicalPolicy:
             self._exec = {"plan": plan, "n": len(plan.arm), "cut": 0, "t8": False}
         if plan.corrective:
             self.n_corrections += 1
+        if self._landing_on() and not plan.corrective and plan.target_bin in self.scene.bin_names:
+            self._landing = {"color": plan.color, "bin": plan.target_bin, "src_xy": np.asarray(xy, float).copy(),
+                             "pre_xy": [d.top[:2].copy() for d in self.last_detections if d.color == plan.color],
+                             "t": float(t)}
         if plan.posture is not None and self.cfg["policy"].get("grasp_diag_log", False):
             nm, label, conf, path = plan.posture[:4]
             gate = ""
@@ -2861,11 +3062,15 @@ class ClassicalPolicy:
         diag_on = self.cfg["policy"].get("grasp_diag_log", False) or self.held_detector.mode == "finger_sum"
         if (diag_on or skill_side) and plan.side in ("left", "right"):
             ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
-            if "close" in ph and "lift" in ph:
-                check = self.held_detector.evaluation_tick(*ph["close"], HZ)
+            lift_key = "lift_check" if "lift_check" in ph else "lift"   # grasp.soft_squeeze: re-read after the first 2 cm
+            if "close" in ph and lift_key in ph:
+                check = self.held_detector.evaluation_tick(
+                    *ph["close"], HZ, hold_start=plan.close_hold[0] if plan.close_hold else None)
                 # skill_only: watched for skills.memory alone -> no empty-grasp abort, no [grasp_diag] line
                 self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": check,
-                               "lift_end": ph["lift"][1], "t": t, "samples": {}, "skill_only": not diag_on}
+                               "lift_end": ph[lift_key][1], "t": t, "samples": {}, "skill_only": not diag_on}
+                if lift_key == "lift_check" and self.held_detector.soft is not None:
+                    self._gdiag["lift_check"] = True
                 if bool((self.cfg.get("held") or {}).get("read_through_carry", False)) \
                         and self.held_detector.mode == "finger_sum" and "carry" in ph:
                     self._gdiag["carry"] = ph["carry"]
@@ -2898,7 +3103,61 @@ class ClassicalPolicy:
     def _enqueue(self, a, h):
         self.queue_a, self.queue_h = np.asarray(a, float), np.asarray(h, float)
 
-    def _held_abort_due(self, g, hq, hc):
+    def _thr(self, key):
+        m = self._soft_margin(key)
+        return self.held_detector.threshold_rad if m is None else m
+
+    def _soft_margin(self, key):
+        """Soft detector margin for a read: the close read uses soft.margin, the lift_check / carry reads the (smaller)
+        lift margin. None when the soft detector is off (held() then ignores it)."""
+        soft = self.held_detector.soft
+        if soft is None:
+            return None
+        return soft["margin"] if key == "close" else soft["lift_margin"]
+
+    def _soft_baseline_start(self, t):
+        """held.soft_detector: once per episode, at home with both hands open, close both hands on nothing with the
+        grasp command (over-closed, same ramp and hold as a pick), read how far the soft fingers lag, reopen. The
+        ratio error/travel is the empty-hand expectation the pick reads are compared against."""
+        self._softcal_done = True
+        g = self.cfg["grasp"]
+        base = self.post[g.get("close_posture", "closed")]
+        cls = soft_overclose(self.cfg, self.spec, base, self.post["preshape"]) if soft_hand_active(self.cfg) else base
+        hv, dt = float(self.cfg["motion"]["hand_max_vel"]), 1.0 / HZ
+        hold = max(float(self.cfg["motion"]["close_hold_s"]),
+                   float(g["soft_lag_s"]) + float(g["soft_settle_s"]) + float(self.cfg["held"]["soft_read_after_s"]))
+        up = ramp(self.hand_cmd, cls, hv, dt)
+        hold_n = int(round(hold / dt))
+        down = ramp(cls, self.post["open"], hv, dt)
+        h = np.vstack([up, np.repeat(np.asarray(cls, float)[None], hold_n, 0), down])
+        a = np.repeat(self.arm_cmd[None], len(h), 0)
+        if self.queue_a is not None and len(self.queue_a):
+            self.queue_a, self.queue_h = np.vstack([self.queue_a, a]), np.vstack([self.queue_h, h])
+        else:
+            self._enqueue(a, h)
+        base_n = len(self.queue_a) - len(a)
+        self._softcal = {"n": len(self.queue_a), "read": base_n + len(up) + hold_n, "t": t, "samples": []}
+        self._note(t, f"soft baseline: empty close of both hands ({len(h) / HZ:.1f} s)")
+
+    def _soft_baseline_step(self, obs):
+        c = self._softcal
+        q = obs.get("hand_q")
+        left = 0 if self.queue_a is None else len(self.queue_a)
+        done = c["n"] - left
+        if q is not None and c["read"] - 12 <= done <= c["read"]:   # the last ~0.4 s of the empty hold
+            c["samples"].append((self._held_command().copy(), np.asarray(q, float).copy()))
+        if done > c["read"] or left == 0:
+            self._softcal = None
+            ok = {}
+            for side in ("left", "right"):
+                good = [(cm, m) for cm, m in c["samples"] if np.all(np.isfinite(m)) and m.shape == (14,)]
+                ok[side] = self.held_detector.soft_calibrate(side, good)
+            ratios = {s_: self.held_detector.soft_ratio(s_) for s_ in ("left", "right")}
+            self.log(f"[soft_baseline] n={len(c['samples'])} ok={ok} empty-close error/travel "
+                     f"left={ {k: round(v, 3) for k, v in ratios['left'].items()} } "
+                     f"right={ {k: round(v, 3) for k, v in ratios['right'].items()} }")
+
+    def _held_abort_due(self, g, hq, hc, margin=None):
         """grasp.held_detector=finger_sum only: the close sample is clearly empty. Unsure (no bias reference, missing
         or non-finite joint data) is never empty, so the placement runs as before."""
         det = self.held_detector
@@ -2906,6 +3165,8 @@ class ClassicalPolicy:
             return False
         if not (np.all(np.isfinite(hq)) and np.all(np.isfinite(hc))):
             return False
+        if det.soft is not None:
+            return not det.held(g["plan"].side, hc, hq, margin)[0]
         return not det.held(g["plan"].side, hc, hq)[0]
 
     def _abort_empty_grasp(self, g, sample="close"):
@@ -3041,8 +3302,9 @@ class ClassicalPolicy:
                             and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
                         self._abort_empty_grasp(g)   # queue replaced; _act pops it on this same tick
                         return
-                    if key == "lift" and read_through and not g.get("skill_only") \
-                            and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
+                    if key == "lift" and (read_through or g.get("lift_check")) and not g.get("skill_only") \
+                            and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float),
+                                                     self._soft_margin("lift")):
                         self._abort_empty_grasp(g, "post-lift")
                         return
             if read_through:
@@ -3068,7 +3330,10 @@ class ClassicalPolicy:
                 parts.append(f"{key}=n/a")
                 continue
             tick, hq, hc = g["samples"][key]
-            held, scores = self.held_detector.held(plan.side, hc, hq)
+            if self.held_detector.soft is not None:
+                held, scores = self.held_detector.held(plan.side, hc, hq, self._soft_margin(key))
+            else:
+                held, scores = self.held_detector.held(plan.side, hc, hq)
             if key == "close":
                 close_held = held
             if self.held_detector.mode == "stall":
@@ -3078,7 +3343,7 @@ class ClassicalPolicy:
             else:
                 parts.append(f"{key}@{tick}: finger_sum={scores['finger_sum']:.3f} "
                              f"index_sum={scores['index']:.3f} middle_sum={scores['middle']:.3f} "
-                             f"threshold={self.held_detector.threshold_rad:.3f} sample_held={'yes' if held else 'no'} "
+                             f"threshold={self._thr(key):.3f} sample_held={'yes' if held else 'no'} "
                              f"stall_vs_closed="
                              f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
         if self.held_detector.mode == "finger_sum" and close_held is not None:
@@ -3086,9 +3351,10 @@ class ClassicalPolicy:
         if read_through:
             post = ([g["samples"]["lift"]] if "lift" in g["samples"] else []) + list(g["samples"].get("carry", []))
             if post:
-                held, scores = self.held_detector.held_max(plan.side, [(hc, hq) for _, hq, hc in post])
+                held, scores = self.held_detector.held_max(plan.side, [(hc, hq) for _, hq, hc in post],
+                                                           self._soft_margin("lift"))
                 parts.append(f"carry_max@n={len(post)}: finger_sum={scores['finger_sum']:.3f} "
-                             f"threshold={self.held_detector.threshold_rad:.3f} "
+                             f"threshold={self._thr('lift'):.3f} "
                              f"sample_held={'yes' if held else 'no'}")
         pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
         if pend is not None and pend["color"] == plan.color:

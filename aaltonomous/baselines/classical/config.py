@@ -27,7 +27,7 @@ CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_postur
            "perception.topface_mode": ("top35", "whole_blob"),
            "perception.principal_point": ("file", "center"),
            "perception.online_pitch_cal": (False, True, "table"), "brain.backend": ("stub", "llamacpp")}
-VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
+VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2, "grasp.soft_overshoot": 7}
 
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
@@ -100,6 +100,7 @@ FLAGS = {
     "perception.color_gate.sat_floor_params.blue": ("gate fix", 110, "blue/purple saturation floor variant"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
+    "perception.novel_objects": ("novel R22", False, "depth connected components above the counter -> conservative open-vocabulary object candidates"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
@@ -118,6 +119,7 @@ FLAGS = {
     "policy.first_object_speed_scale": ("finals safe", None,
                                           "null | (0,1]: arm speed x this for every plan made before the first pick starts"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
+    "policy.verify_landing": ("r22", False, "observe each release (bin depth occupancy / colour): bounce -> re-queue with jitter + refund, wrong bin / lost -> log; in-bin exclusion; attempt regrant while time is left"),
     "policy.place_gate": ("EV gate", False, "require colour and target-bin confidence before planning a placement"),
     "policy.place_gate_colour_min": ("EV gate", 0.6, "minimum HSV/blob colour confidence (used only by place_gate)"),
     "policy.place_gate_bin_min": ("EV gate", 0.5, "minimum residual-derived bin confidence (used only by place_gate)"),
@@ -128,6 +130,10 @@ FLAGS = {
     "grasp.release_confirm": ("lag R49", False, "after open + wait the fingers must read an empty hand: re-open once, else home and stop picking"),
     "grasp.held_calibration.enabled": ("M3", False, "finger_sum: after home/settle, close empty hands and accept the command-measured baseline only after N low-velocity samples"),
     "held.read_through_carry": ("finals grasp", False, "sample finger_sum after lift and through carry; abort an empty post-lift read"),
+    "grasp.soft_hand": ("softgrip", False, "the hand's finger servos are soft (real Dex3 kp 1.5 / sim real_soft); also implied by config profile none/real"),
+    "grasp.soft_overshoot": ("softgrip", [0.0, 0.10, 0.10, 0.50, 1.00, 0.50, 1.00], "grasp.soft_squeeze: per-joint over-closure beyond the posture, LEFT DDS order, magnitudes along the closing direction, clipped to the URDF limits"),
+    "grasp.soft_squeeze": ("softgrip", False, "soft hand: close to posture + overshoot, hold >= lag+settle, slow first 2 cm of lift (lift_check phase)"),
+    "held.soft_detector": ("softgrip", False, "soft hand: held = finger stall further open than the empty-close baseline (one empty close per hand at episode start) by > margin; re-read after 2 cm lift (needs grasp.held_detector=finger_sum)"),
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
@@ -149,6 +155,7 @@ FLAGS = {
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
     "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
     "grasp.generic_fallback": ("generic grasp", False, "unknown/low-confidence shape: geometry-only top-down grasp, colour-only bin resolution"),
+    "grasp.generic": ("novel R22", False, "URDF-opening-gated top-down/handle grasps for targeted novel detections"),
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
     "grasp.cylinder_no_yaw_vary": ("cyl yaw", False, "retry on a detected cylinder varies the posture only, never the finger yaw (rotationally symmetric)"),
@@ -165,9 +172,11 @@ FLAGS = {
                                  "log cmd-minus-measured during steady holds in the first second (no control change)"),
     "policy.confidence_order": ("D1/D2", False, "order by 2*p/est_time (p_colour*p_bin*p_grasp), never the hardest first"),
     "policy.object_time_cap": ("D2", False, "per-object cap (remaining-15)/left 15..35 s, T-20 s no new object, T-8 s release/retract"),
+    "policy.novel_obstacles": ("novel R22", False, "untargeted novel detections are clearance obstacles for every planned hand trajectory"),
     "policy.speed_tiers": ("D3", False, "1st object 0.7 + 1.5 cm clearance, clean 0.85/0.9, failure 0.6 + centre bin only"),
     "policy.confidence_tiers": ("D4", False, "hold 3-5 s, calibration C -> CONFIDENT / DEGRADED / PRIOR-ONLY"),
     "decision.isolated_first": ("isolated-first", False, "candidates within decision.isolated_min_m of another detection go after the isolated ones"),
+    "instruction.novel_objects": ("novel R22", False, "closed-vocabulary colour/shape-noun matching onto visible novel candidates; unresolved nouns abstain or use the bounded brain"),
 }
 
 
@@ -410,9 +419,11 @@ def check_flag_values(cfg):
     delay = float(_get(cfg, "grasp.staggered_release_delay_s"))
     if not np.isfinite(delay) or not 0.0 <= delay <= 1.0:
         raise ValueError("grasp.staggered_release_delay_s must be finite and in [0, 1]")
-    for k in ("grasp.staggered_release", "held.read_through_carry"):
+    for k in ("grasp.staggered_release", "held.read_through_carry", "grasp.soft_hand", "grasp.soft_squeeze",
+              "held.soft_detector"):
         if not isinstance(_get(cfg, k), bool):
             raise ValueError(f"{k}: want true or false")
+    _check_soft(cfg)
     pol = cfg["policy"]
     if first_scale is not None and pol.get("safety_shell") and float(pol.get("safety_shell_vel_reserve", 0.0)) > 0.0:
         # the shell wraps planner.plan with closures bound to the stock planner: the first-pick scale would not reach it
@@ -577,6 +588,56 @@ def effective_flags(cfg):
             off = _get(stock, k)
         out.append((k, v, v != off, owner, what))
     return out
+
+
+SOFT_PARAMS = {  # key -> (lo, hi) inclusive; all finite
+    "grasp.soft_overshoot": (0.0, 2.0),
+    "grasp.soft_limit_margin_rad": (0.02, 0.2),
+    "grasp.soft_lag_s": (0.0, 2.0),
+    "grasp.soft_settle_s": (0.0, 2.0),
+    "grasp.soft_lift_check_m": (0.005, 0.06),
+    "grasp.soft_lift_check_scale": (0.05, 1.0),
+    "held.soft_margin_rad": (0.0, 1.5),
+    "held.soft_lift_margin_rad": (0.0, 1.5),
+    "held.soft_read_after_s": (0.0, 2.0),
+    "held.soft_prior_ratio": (0.0, 1.0),
+}
+
+
+def _check_soft(cfg):
+    for k, (lo, hi) in SOFT_PARAMS.items():
+        vals = np.atleast_1d(np.asarray(_get(cfg, k), float))
+        if not (np.all(np.isfinite(vals)) and np.all(vals >= lo) and np.all(vals <= hi)):
+            raise ValueError(f"{k} = {_get(cfg, k)!r}: want finite values in [{lo}, {hi}]")
+    if _get(cfg, "held.soft_detector") and _get(cfg, "grasp.held_detector") != "finger_sum":
+        raise ValueError("held.soft_detector needs grasp.held_detector = finger_sum")
+
+
+def soft_hand_active(cfg):
+    """grasp.soft_squeeze ON and the hand is soft: hand.soft, or the config profile is none / real."""
+    return bool(cfg["grasp"].get("soft_squeeze", False)
+                and (cfg["grasp"].get("soft_hand", False) or str(cfg.get("profile", "")) in ("none", "real")))
+
+
+def soft_detector_active(cfg):
+    """held.soft_detector ON and the hand is soft (same rule as soft_hand_active, without needing soft_squeeze)."""
+    return bool(cfg["held"].get("soft_detector", False)
+                and (cfg["grasp"].get("soft_hand", False) or str(cfg.get("profile", "")) in ("none", "real")))
+
+
+def soft_overclose(cfg, spec, base14, rest14):
+    """The 14-vector `base14` (a closed posture) over-closed per joint by grasp.soft_overshoot, along the closing
+    direction sign(base - rest) (rest = the preshape the hand closes from), never beyond the URDF limits shrunk by
+    grasp.soft_limit_margin_rad (>= the safety filter's 0.02 hand margin, so the filter never clips it). Joints that do
+    not move between rest and base (thumb0) get no overshoot. Right overshoot = the left vector in right DDS order."""
+    ov_l = np.asarray(cfg["grasp"]["soft_overshoot"], float)
+    ov = np.r_[ov_l, np.abs(mirror_left_to_right(ov_l))]
+    base, rest = np.asarray(base14, float), np.asarray(rest14, float)
+    m = float(cfg["grasp"]["soft_limit_margin_rad"])
+    lo, hi = spec.hand_lower + m, spec.hand_upper - m
+    d = np.sign(base - rest)
+    room = np.where(d > 0, hi - base, np.where(d < 0, base - lo, 0.0))
+    return base + d * np.minimum(ov, np.maximum(room, 0.0))
 
 
 def hand_postures(cfg, spec: JointSpec | None = None):

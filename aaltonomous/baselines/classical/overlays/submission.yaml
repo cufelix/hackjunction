@@ -86,6 +86,7 @@ flags:
   grasp.staggered_release: false                # finals grasp two-stage release; off = simultaneous release
   grasp.staggered_release_delay_s: 0.30         # delay before DDS slots 5/6 begin opening
   policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
+  policy.verify_landing: false                  # r22        post-release landing classification (independent of verify_placement)
   policy.place_gate: false                      # EV gate    confidence-gated placement (off in shipped submission)
   policy.place_gate_colour_min: 0.6             # EV gate    minimum HSV/blob colour confidence
   policy.place_gate_bin_min: 0.5                # EV gate    minimum self-calibration/bin confidence
@@ -101,6 +102,10 @@ flags:
   grasp.held_detector: stall                   # real held  legacy diagnostic; ab_held_detector selects finger_sum
   grasp.held_calibration.enabled: false         # M3         steady empty-close e0 after home/settle
   held.read_through_carry: false               # finals grasp post-lift + carry grip reads
+  grasp.soft_hand: false                       # softgrip   soft finger servos (off = sim stiffness)
+  grasp.soft_overshoot: [0.0, 0.10, 0.10, 0.50, 1.00, 0.50, 1.00]   # softgrip over-closure, LEFT DDS order
+  grasp.soft_squeeze: false                    # softgrip   over-closed squeeze + lift_check
+  held.soft_detector: false                    # softgrip   soft-finger held detector
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.arm_vel_cap: null                      # Timi vel   rad/s arm speed cap (real robot margin); null = profile 0.97
   motion.output_caps: null                      # M4         stateful arm+hand accel caps (finals opt-in)
@@ -113,6 +118,10 @@ flags:
   grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
+  perception.novel_objects: false               # R22 novel depth candidates (off in shipped submission)
+  grasp.generic: false                          # R22 novel geometry grasp (off in shipped submission)
+  instruction.novel_objects: false              # R22 novel instruction grounding (off in shipped submission)
+  policy.novel_obstacles: false                 # R22 novel collision keep-outs (off in shipped submission)
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
   hand.mirror_index_middle: false                # R42a       index == middle in every emitted hand target (real DDS slot order differs)
   debug.log_joint_offset: false                 # passive    first-second steady cmd-vs-measured diagnostic

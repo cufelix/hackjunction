@@ -58,6 +58,23 @@ class TestFlags(unittest.TestCase):
         base["held"]["read_through_carry"] = True
         self.assertEqual(got, base)
 
+    def test_finals_r22_softgrip_adds_only_the_three_soft_flags_over_r22(self):
+        base = load_config(overlay="finals_r22")
+        got = load_config(overlay="finals_r22_softgrip")
+        base["overlay"] = "finals_r22_softgrip"
+        base["grasp"]["soft_hand"] = base["grasp"]["soft_squeeze"] = True
+        base["held"]["soft_detector"] = True
+        self.assertEqual(got, base)
+
+    def test_soft_flags_default_off_and_need_finger_sum(self):
+        cfg = load_config(overlay="none")
+        self.assertEqual((cfg["grasp"]["soft_squeeze"], cfg["grasp"]["soft_hand"], cfg["held"]["soft_detector"]),
+                         (False, False, False))
+        with self.assertRaises(ValueError):
+            load_config(overlay="none", overrides={"held.soft_detector": True})
+        with self.assertRaises(ValueError):
+            load_config(overlay="none", overrides={"grasp.soft_overshoot": [0, 0, 0, 3.0, 0, 0, 0]})
+
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
 
@@ -204,6 +221,9 @@ class TestFlags(unittest.TestCase):
             "perception.color_gate.fk_silhouette", "perception.sim_center_principal_point", "perception.aim_z_frac",
             "perception.still_vote"}   # gatefix A/B
         expect["finals_r22_chunk"] = expect["finals_r22"] | {"policy.chunk_ticks", "policy.hold_ticks"}   # handin rate A/B
+        expect["finals_r22_novel"] = expect["finals_r22"] | {
+            "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles"}   # novel R22 on r22
+        expect["finals_r22_verify"] = expect["finals_r22"] | {"policy.verify_landing"}   # r22: + the landing verifier
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -212,12 +232,15 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
-                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):
+                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk",
+                  "finals_r22_novel", "finals_r22_verify"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
-        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_novel", "finals_r22_verify"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
+        expect["finals_r22_softgrip"] = expect["finals_r22"] | {"grasp.soft_hand", "grasp.soft_squeeze",
+                                                                 "held.soft_detector"}   # softgrip A/B: r22 + its 3 flags
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -284,8 +307,9 @@ class TestFlags(unittest.TestCase):
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
                                       "finals_r21", "finals_r22", "finals_r22_cal",
                                       "finals_r22_chunk", "finals_r22_gate", "finals_r22_grasp",
-                                      "finals_r22_recall", "finals_real", "rc1", "rc1_strict",
-                                      "safe_profile"})
+                                      "finals_r22_novel", "finals_r22_recall",
+                                      "finals_r22_softgrip", "finals_r22_verify", "finals_real",
+                                      "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
