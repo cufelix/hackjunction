@@ -114,6 +114,7 @@ class Detection:
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
+    sat_med: float | None = None  # perception.color_gate.sat_floor only: median HSV S (0-255) over the blob mask
 
     def __repr__(self):
         x, y, z = self.top
@@ -262,6 +263,7 @@ class Perception:
         self.fk_mask = bool(self.color_gate_cfg.get("fk_mask", False))   # perception.color_gate.fk_mask (FLAG)
         self._arm_surface = None   # lazily built FK surface for fk_mask (own instance: never shares B1's lock)
         self.fk_mask_px = 0        # pixels the last fk mask removed (diagnostics)
+        self.sat_floor = self.color_gate and bool(self.color_gate_cfg.get("sat_floor", False))   # color_gate.sat_floor (FLAG)
         self.live_bins = bool(self.color_gate_cfg.get("live_bins", False))   # perception.color_gate.live_bins (FLAG)
         self.bin_shift_src = None  # live_bins: object with .bin_shift {bin: pelvis dxy} (the policy's planner, bin.vote)
         self.geometry_runtime = False   # bin.geometry_runtime flag, set by policy.py: every bin consumer follows bin_shift_src.bin_shift
@@ -990,7 +992,7 @@ class Perception:
                 keep[arm] = 0
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
-        need_hsv = self.place_gate or self.colour_kmeans or self.hue_guard
+        need_hsv = self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor
         hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None
         if self.colour_kmeans and not self._colour_kmeans_done and arm_clear:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
@@ -1011,10 +1013,10 @@ class Perception:
                 if self.split_blobs:
                     for part, p_area, p_cent in self.split_blob(blob, area, cent[i], depth):
                         self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected,
-                                          hsv if (self.place_gate or self.hue_guard) else None)
+                                          hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None)
                     continue
                 self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected,
-                                  hsv if (self.place_gate or self.hue_guard) else None)
+                                  hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None)
         if self.hue_guard:
             dets, rejected = self._hue_guard(dets, rejected)
         if self.color_gate:
@@ -1099,6 +1101,8 @@ class Perception:
                     det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
         if det is not None and hsv is not None and self.hue_guard:
             det.hsv_med = top_face_hsv(hsv[blob > 0])   # layer 3: colour from the top face, not the whole blob
+        if det is not None and hsv is not None and self.sat_floor:
+            det.sat_med = float(np.median(hsv[blob > 0][:, 1]))   # color_gate.sat_floor: shadow / sheen has low S
         if det is not None and hsv is not None and self.place_gate:
             try:
                 det.color_conf = colour_confidence(hsv, blob, self.hsv, color, c["min_area_px"])
@@ -1507,6 +1511,8 @@ class Perception:
     def _color_gate_why(self, det, g):
         """Rules 1 (area floor scaled by distance), 1b (area ceiling: rim / tape / merged blob), 2b (positive workspace:
         only the counter in front of the bin row) and 2 (bin zone). None = keep."""
+        if g.get("sat_floor") and self._color_gate_sat_low(det, g):
+            return "color_gate:sat_floor"
         Z = self._color_gate_depth(det.top)
         if Z is None:
             if det.n_px < g["min_px_no_z"]:
@@ -1521,6 +1527,13 @@ class Perception:
             if g.get("max_area_frac") is not None and det.n_px > g["max_area_frac"] * expected:
                 return "color_gate:too_big"
         return self._color_gate_workspace(det, g) or self._color_gate_bin(det, g)
+
+    def _color_gate_sat_low(self, det, g):
+        """perception.color_gate.sat_floor: a blue (purple) or yellow blob whose median S is below its floor is a
+        shadow or sheen. Other colours (red, orange) and blobs without a measured S are never rejected here."""
+        name = "blue" if det.color == "purple" else det.color
+        floor = (g.get("sat_floor_params") or {}).get(name)
+        return floor is not None and det.sat_med is not None and det.sat_med < float(floor)
 
     def _color_gate_workspace(self, det, g):
         """Rule 2b: keep only pelvis x in ws_x, |y| <= ws_abs_y, and in front of the bin row's near edge (nominal or

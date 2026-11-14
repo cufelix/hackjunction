@@ -175,7 +175,8 @@ perception:
   # Near-edge blobs without depth are kept; with depth kept only at object height edge_h (rim = 0.06 m is not).
   color_gate: {enabled: false, fk_mask: false, fk_dilate_px: 15, live_bins: false, near_margin_m: 0.10, area_frac: 0.4, min_px_no_z: 1000,
                max_area_frac: 3.0, max_px_no_z: 6000, ws_x: [0.12, 0.45], ws_abs_y: 0.40, ws_edge_m: 0.01,
-               edge_m: 0.02, edge_h: [0.03, 0.055], max_cands: 6}
+               edge_m: 0.02, edge_h: [0.03, 0.055], max_cands: 6,
+               sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}}   # sat_floor: median S (0-255) over the blob
   split:
     object_size: null         # m, expected object edge for the size gate; null = scene objects.size (perception.object_size)
     area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;
