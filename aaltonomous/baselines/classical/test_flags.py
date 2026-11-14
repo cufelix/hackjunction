@@ -60,6 +60,7 @@ class TestFlags(unittest.TestCase):
                   "ab_hold06": {"motion.close_hold_s"}, "ab_hold12": {"motion.close_hold_s"},
                   "ab_slots": {"grasp.drop_slots"}, "ab_hold12_slots": {"motion.close_hold_s", "grasp.drop_slots"},
                   "ab_carry05": {"motion.carry_scale"}, "ab_calib": {"perception.self_calibration.enabled"},
+                  "ab_counter_plane": {"perception.counter_plane.enabled"},
                   "ab_yaff": {"perception.y_affine"},
                   "ab_pinch_hybrid": {"grasp.close_posture", "hand.closed_tight", "grasp.point_in_palm",
                                       "motion.close_hold_s", "perception.classify_shape",
