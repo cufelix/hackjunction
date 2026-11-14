@@ -207,13 +207,28 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
     bin_half = np.asarray(perception.scene.cfg["bins"]["outer_size"], float) / 2.0 + float(perception.cfg["bin_pixel_margin"])
     for ctr in perception._bin_centres_mat().values():
         ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= bin_half, axis=-1)
+    fp = bool(cfg.get("fp_filter", True))
+    if fp:
+        # FP filter (b): bin walls/rims project a few mm outside the nominal footprint (depth edges, perspective,
+        # runtime shift error), so the novel path excludes a wider band than the known detector's bin_pixel_margin.
+        wide = np.asarray(perception.scene.cfg["bins"]["outer_size"], float) / 2.0 + float(cfg.get("bin_margin_m", 0.03))
+        for ctr in perception._bin_centres_mat().values():
+            ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= wide, axis=-1)
     good = np.zeros(raw.shape, bool)
     good[vv[ok], uu[ok]] = True
     mask = good.astype(np.uint8)
     if robot_q is not None:
-        arm = perception._fk_arm_mask(raw_full.shape, *robot_q)
+        if fp:
+            # FP filter (a): the robot silhouette is ALWAYS filled + dilated here, independent of the colour gate's
+            # fk settings (sim_overrides switch those off, which left the arms/hands as novel blobs).
+            arm = perception._fk_arm_mask(raw_full.shape, *robot_q, dilate_px=int(cfg.get("fk_dilate_px", 10)),
+                                          fill=True)
+        else:
+            arm = perception._fk_arm_mask(raw_full.shape, *robot_q)
         if arm is not None:
             mask[arm[::stride, ::stride]] = 0
+        elif fp:
+            return list(known)   # FK mask failed = arms would read as objects: no novel proposals this frame
     k = max(0, int(cfg.get("morph_px", 3)))
     if k:
         kernel = np.ones((k, k), np.uint8)
@@ -245,6 +260,20 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         nearby = [d for d in known if np.hypot(float(d.uv[0]) - cu, float(d.uv[1]) - cv) <= match_px]
         known_geometry = known_lo <= dims[0] <= known_hi and known_lo <= dims[1] <= known_hi
         colour = dominant_colour(rgb_small, blob)
+        if fp:
+            border = bool(blob[0].any() or blob[-1].any() or blob[:, 0].any() or blob[:, -1].any())
+            height98 = float(np.percentile(P[:, 2], 98.0) - perception.scene.counter_z)
+            if border and cfg.get("drop_border", True):
+                continue   # (c) partial view at the image edge: robot body, table edge, objects half out of view
+            if height98 < float(cfg.get("min_height_m", 0.015)) or dims[1] < float(cfg.get("min_width_m", 0.015)):
+                continue   # (c) flat (shadow, mat print, table edge) or a thin strip (mask fringe, wall edge)
+            # (d) a blob at a known detection of the SAME known-family colour stays known unless it is clearly longer
+            # than any known object (a 10 cm marker or a pan next to a cube). Merges with arms/bin walls, which made
+            # a red cube read as 'red with-handle', are removed by (a)/(b) before this point.
+            same = [d for d in nearby if d.color in _KNOWN_FAMILY and d.color == colour]
+            elongated = dims[0] / max(dims[1], 1e-6) >= float(cfg.get("elongated_aspect", 2.2))
+            if same and not elongated and dims[0] < float(cfg.get("supersede_same_colour_ratio", 1.4)) * known_hi:
+                continue   # elongated (marker) keeps the stock supersede_min_ratio rule below
         known_family = colour in _KNOWN_FAMILY
         # Never use the novel path to bypass a rejected/ambiguous known-task
         # colour.  Known-size family-colour geometry belongs exclusively to
