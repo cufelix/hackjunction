@@ -36,6 +36,7 @@ from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
 from .perception import Perception
 from .planner import Plan, Planner, lookup_bin, ramp
+from .safety_shell import reserve_pair, reserve_plan
 
 HZ = 30.0
 _HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence names a hole AND the lid
@@ -64,6 +65,10 @@ class ClassicalPolicy:
         self.perception = Perception(self.cfg, self.scene, self.cal, log=log or (lambda *a: None))
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.require_confirm = require_confirm
+        self._shell = bool(self.cfg["policy"].get("safety_shell", False))
+        if self._shell:   # policy.safety_shell: all heavy work off the 30 Hz loop (look/plan thread), plans within the reserve
+            threaded = True
+            self._shell_init()
         self.threaded = threaded
         if threaded:  # pure-Python planning holds the GIL: hand it back to act() sooner (default 5 ms)
             sys.setswitchinterval(min(sys.getswitchinterval(), 0.001))
@@ -154,11 +159,17 @@ class ClassicalPolicy:
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
-        self.perception.reset_calibration()
+        # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
+        # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
+        lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
+        with lock:
+            self._pitch_token = getattr(self, "_pitch_token", 0) + 1
+            self.perception.reset_calibration()
+            self.pitch_calibration = None
+            self._pitch_calibration_done = False   # = the worker was started this episode
+        self._pitch_thread = None
         self.calibration = None
         self._calibration_done = False
-        self.pitch_calibration = None
-        self._pitch_calibration_done = False
         self.last_bin_detections = []
         self.used_drop_slots = {name: set() for name in self.scene.bin_names}
         self.reserved_drop_slots = {name: set() for name in self.scene.bin_names}
@@ -181,6 +192,43 @@ class ClassicalPolicy:
         self._dec_warned = set()    # F7: decision helpers that already fell back to stock this episode
         self._prior_side = set()    # F1: side bins already attempted in PRIOR-ONLY
 
+    def _start_pitch_worker(self, rgb, depth):
+        """Run the camera-pitch fit ONCE per episode in a daemon thread, started on the first valid frame."""
+        self._pitch_calibration_done = True
+        token, rgb, depth = self._pitch_token, np.array(rgb), np.array(depth)
+
+        def work():
+            started = time.perf_counter()
+            try:
+                out = self.perception.compute_pitch(rgb, depth)
+            except Exception as exc:  # optional calibration must never hurt the episode
+                out = self.perception.make_pitch_failure(f"{type(exc).__name__}: {exc}",
+                                                         (time.perf_counter() - started) * 1000.0)
+            with self._pitch_lock:
+                if token != self._pitch_token:
+                    return
+                self.perception.commit_pitch(out)   # atomic swap; every tick before this used nominal extrinsics
+                self.pitch_calibration = out
+            self._log_pitch(out)
+
+        self._pitch_thread = threading.Thread(target=work, name="pitch_cal", daemon=True)
+        self._pitch_thread.start()
+
+    def _log_pitch(self, pitch_cal):
+        if pitch_cal.mode == "table":
+            state = "accepted" if pitch_cal.success else "rejected"
+            self.log(f"[pitch_cal] mode=table {state}: dpitch={pitch_cal.pitch_deg:+.2f} deg, "
+                     f"droll={pitch_cal.roll_deg:+.2f} deg, height={pitch_cal.camera_height_m:.3f} m, "
+                     f"inliers={pitch_cal.n_inliers}/{pitch_cal.n_points}, "
+                     f"rms={pitch_cal.residual_m * 1000.0:.1f} mm, "
+                     f"time={pitch_cal.elapsed_ms:.1f} ms ({pitch_cal.reason})")
+        else:
+            state = "accepted" if pitch_cal.success else "fallback"
+            self.log(f"[pitch_cal] {state}: dtheta={pitch_cal.pitch_deg:+.2f} deg, "
+                     f"residual={pitch_cal.residual_m * 1000.0:.1f} mm, "
+                     f"points={pitch_cal.n_points}, time={pitch_cal.elapsed_ms:.1f} ms "
+                     f"({pitch_cal.reason})")
+
     def confirm(self):
         self._decision = "go"
 
@@ -191,6 +239,88 @@ class ClassicalPolicy:
         self._decision = "stop"
 
     def act(self, obs):
+        if not self._shell:
+            return self._act(obs)
+        return self._act_shell(obs)
+
+    # ------------------------------------------------------------------ policy.safety_shell
+    def _shell_init(self):
+        sf, res = self.safety, float(self.cfg["policy"].get("safety_shell_vel_reserve", 0.0))
+        lim = (sf.dt, sf.arm_max_vel, sf.hand_max_vel, res)
+        self._shell_budget = float(sf.hold_after_s)   # beyond this the filter calls the policy stale (stop_after_s: latched stop)
+        self._shell_stats = {"miss": 0, "exception": 0, "overrun": 0}
+        self._shell_last = None                         # (arm (14,), hand (14,)) last row actually handed to the runner
+        self._jobs = {}
+        if res <= 0.0:   # default: no time-stretching, no planner wrappers
+            return
+        pl = self.planner
+        for name in ("plan", "plan_to_counter"):        # every plan, whoever asks (_look runs in the thread), is within the reserve
+            fn = getattr(pl, name)
+            setattr(pl, name, lambda d, a, h, *args, _fn=fn, **kw: reserve_plan(_fn(d, a, h, *args, **kw), a, h, *lim))
+        go = pl.go_to
+        pl.go_to = lambda af, hf, at, ht: reserve_pair(*go(af, hf, at, ht), af, hf, *lim)
+
+    def _bg(self, key, fn, *args):
+        """Run fn(*args) once in a low-priority thread; None while running, then ("ok", value) / ("err", exc)."""
+        job = self._jobs.get(key)
+        if job is None:
+            job = self._jobs[key] = {"result": None}
+
+            def run():
+                _lower_thread_priority()
+                try:
+                    job["result"] = ("ok", fn(*args))
+                except Exception as e:
+                    job["result"] = ("err", e)
+            threading.Thread(target=run, daemon=True).start()
+        if job["result"] is None:
+            return None
+        return self._jobs.pop(key)["result"]
+
+    def _shell_hold(self, obs):
+        if self._shell_last is not None:
+            a, h = self._shell_last
+        elif self.arm_cmd is not None:
+            a, h = self.arm_cmd, self.hand_cmd
+        else:
+            try:
+                a, h = obs["arm_q"], obs["hand_q"]
+            except Exception:
+                a = h = np.zeros(14)
+        k = max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
+        return {"arm_q_target": np.repeat(np.asarray(a, float)[None], k, 0),
+                "hand_q_target": np.repeat(np.asarray(h, float)[None], k, 0), "done": False}
+
+    def _act_shell(self, obs):
+        """act() that never raises and never returns an untested target late: exception or compute over budget ->
+        hold the last commanded target (a chunk already popped for the discarded answer is put back in front of the queue)."""
+        st = self._shell_stats
+        self._popped = None
+        t0 = time.perf_counter()
+        why = None
+        try:
+            res = self._act(obs)
+            if time.perf_counter() - t0 > self._shell_budget:
+                why, st["overrun"] = "overrun", st["overrun"] + 1
+        except Exception as exc:
+            res, why = None, f"exception {type(exc).__name__}: {exc}"
+            st["exception"] += 1
+        if why is None:
+            self._shell_last = (np.array(res["arm_q_target"][-1], float), np.array(res["hand_q_target"][-1], float))
+            return res
+        if self._popped is not None:       # undo the pop: the runner never executes it
+            a, h = self._popped
+            self.queue_a = a if self.queue_a is None else np.vstack([a, self.queue_a])
+            self.queue_h = h if self.queue_h is None else np.vstack([h, self.queue_h])
+            if self._shell_last is not None:
+                self.arm_cmd, self.hand_cmd = self._shell_last[0].copy(), self._shell_last[1].copy()
+        st["miss"] += 1
+        if st["miss"] % 10 == 1:           # once per 10 misses
+            self.log(f"[safety_shell] hold-last ({why}); misses={st['miss']} overruns={st['overrun']} "
+                     f"exceptions={st['exception']} budget={self._shell_budget:.2f}s")
+        return self._shell_hold(obs)
+
+    def _act(self, obs):
         if self.arm_cmd is None:  # first call: start from the measured pose
             # Clamp into the URDF limits: real Dex3 fingers at rest read slightly past 0 (2026-11-11), and holding
             # that measured pose would be clipped every tick -> safety abort before the first move.
@@ -198,35 +328,21 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
-        if not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False):
-            started = time.perf_counter()
-            try:
-                pitch_cal = self.perception.calibrate_pitch(obs.get("head_rgb"), obs.get("head_depth"))
-            except Exception as exc:  # optional calibration must never terminate the control loop
-                elapsed_ms = (time.perf_counter() - started) * 1000.0
-                pitch_cal = self.perception.pitch_calibration_failure(
-                    f"{type(exc).__name__}: {exc}", elapsed_ms=elapsed_ms)
-            if pitch_cal.valid_frame:
-                self._pitch_calibration_done = True
-                self.pitch_calibration = pitch_cal
-                if pitch_cal.mode == "table":
-                    state = "accepted" if pitch_cal.success else "rejected"
-                    self.log(f"[pitch_cal] mode=table {state}: dpitch={pitch_cal.pitch_deg:+.2f} deg, "
-                             f"droll={pitch_cal.roll_deg:+.2f} deg, height={pitch_cal.camera_height_m:.3f} m, "
-                             f"inliers={pitch_cal.n_inliers}/{pitch_cal.n_points}, "
-                             f"rms={pitch_cal.residual_m * 1000.0:.1f} mm, "
-                             f"time={pitch_cal.elapsed_ms:.1f} ms ({pitch_cal.reason})")
-                else:
-                    # Preserve the established bin-rim mode and its log format.
-                    state = "accepted" if pitch_cal.success else "fallback"
-                    self.log(f"[pitch_cal] {state}: dtheta={pitch_cal.pitch_deg:+.2f} deg, "
-                             f"residual={pitch_cal.residual_m * 1000.0:.1f} mm, "
-                             f"points={pitch_cal.n_points}, time={pitch_cal.elapsed_ms:.1f} ms "
-                             f"({pitch_cal.reason})")
+        if (not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False)
+                and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
+            self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
         if not self._calibration_done and (self.cfg["perception"].get("self_calibration") or {}).get("enabled", False):
             started = time.perf_counter()
             try:
-                cal = self.perception.calibrate_bins(obs.get("head_depth"))
+                if self._shell:   # heavy (depth fit): thread, hold meanwhile
+                    r = self._bg("cal", self.perception.calibrate_bins, obs.get("head_depth"))
+                    if r is None:
+                        return self._hold()
+                    if r[0] == "err":
+                        raise r[1]
+                    cal = r[1]
+                else:
+                    cal = self.perception.calibrate_bins(obs.get("head_depth"))
             except Exception as exc:  # calibration is optional; never let it terminate the control loop
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 cal = self.perception.calibration_failure(
@@ -329,7 +445,7 @@ class ClassicalPolicy:
             return self._hold(done=self.state == "done")
         if self.state == "executing":  # queue drained -> back home: look again after settling
             self.state = "settle"
-            return self.act(obs)
+            return self._act(obs)
         return self._hold(done=True)
 
     # ------------------------------------------------------------------ look + plan
@@ -1461,6 +1577,7 @@ class ClassicalPolicy:
         if not len(a):
             return self._hold()
         self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()
+        self._popped = (a, h) if self._shell else None
         return {"arm_q_target": a.copy(), "hand_q_target": h.copy(), "done": False}
 
     def _hold(self, done=False):

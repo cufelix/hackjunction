@@ -1,6 +1,7 @@
 """tools/release_gate.py: submission overlay must equal the chosen rcN flags."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from .config import load_config
@@ -27,6 +28,14 @@ class TestReleaseGate(unittest.TestCase):
         self.assertEqual(release_gate.diff_flags(a, b), [])
         b["policy"]["max_attempts"] = 9
         self.assertEqual(release_gate.diff_flags(a, b), [("policy.max_attempts", a["policy"]["max_attempts"], 9)])
+
+    def test_pitch_cal_conflict_fails_even_when_flags_match(self):
+        cfg = load_config(overrides={"perception.online_pitch_cal": True, "perception.y_affine": [0.02, 0.0]})
+        lines = []
+        with mock.patch.object(release_gate, "load_config", lambda overlay: cfg):
+            self.assertFalse(release_gate.gate("rc1", out=lines.append))
+        self.assertTrue(lines[0].startswith("CONFLICT: perception.online_pitch_cal is ON"))
+        self.assertEqual(lines[-1], "RELEASE GATE FAIL")
 
 
 if __name__ == "__main__":

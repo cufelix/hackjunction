@@ -32,6 +32,7 @@ VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affin
 FLAGS = {
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
+    "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
     "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
@@ -247,3 +248,19 @@ def home_arm(cfg, spec: JointSpec | None = None):
         raise ValueError(f"home_arm_q too close to the joint limits: {bad}")
     return q
 
+
+
+def pitch_cal_conflicts(cfg):
+    """Release-gate rule: online_pitch_cal ON + a non-zero perception.y_affine / perception.xy_offset is a FAIL.
+    Those offsets were fitted against the NOMINAL extrinsics; correcting the camera on top double-corrects."""
+    p = cfg.get("perception") or {}
+    if not p.get("online_pitch_cal", False):
+        return []
+    out = []
+    ya = p.get("y_affine")
+    if ya is not None and any(abs(float(x)) > 0.0 for x in ya):
+        out.append(f"perception.online_pitch_cal is ON together with y_affine={list(ya)} (fitted against nominal extrinsics)")
+    xo = p.get("xy_offset")
+    if xo is not None and any(abs(float(x)) > 0.0 for x in xo):
+        out.append(f"perception.online_pitch_cal is ON together with xy_offset={list(xo)} (fitted against nominal extrinsics)")
+    return out

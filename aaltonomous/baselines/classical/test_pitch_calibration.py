@@ -1,13 +1,17 @@
 """Synthetic tests for the opt-in per-episode head-camera pitch calibration."""
+import threading
+import time
 import unittest
+from unittest import mock
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from aaltonomous.interface.calibration import Calibration
 from aaltonomous.scene.scene import Scene
 
-from .config import load_config
-from .mock_world import make_mock_env
+from .config import load_config, pitch_cal_conflicts
+from .mock_world import Renderer, make_mock_env
 from .perception import Perception
 from .policy import ClassicalPolicy
 
@@ -91,7 +95,6 @@ class TestOnlinePitchCalibration(unittest.TestCase):
                 result = perception.calibrate_pitch(rgb, depth)
                 self.assertTrue(result.success, result)
                 self.assertAlmostEqual(result.pitch_deg, expected, delta=0.5)
-                self.assertLess(result.elapsed_ms, 50.0, result)
                 np.testing.assert_allclose(perception._T(), _pose(result.pitch_deg), atol=1e-12)
 
     def test_empty_image_keeps_nominal_extrinsic(self):
@@ -171,6 +174,7 @@ class TestOnlinePitchCalibration(unittest.TestCase):
         self.assertFalse([line for line in lines if line.startswith("[pitch_cal]")])
         policy.act(obs)
         self.assertTrue(policy._pitch_calibration_done)
+        policy._pitch_thread.join(30)
         cached = policy.pitch_calibration
         self.assertIsNotNone(cached)
         policy.act(obs)
@@ -202,7 +206,6 @@ class TestTablePitchCalibration(unittest.TestCase):
                 self.assertGreaterEqual(result.n_inliers,
                                         cfg["perception"]["table_pitch_calibration"]["min_inliers"])
                 self.assertLess(result.residual_m, 0.005)
-                self.assertLess(result.elapsed_ms, 33.0, result)
 
     def test_recovers_roll_and_corrects_plane_normal(self):
         cfg = load_config(overrides=TABLE_ON)
@@ -215,7 +218,7 @@ class TestTablePitchCalibration(unittest.TestCase):
         np.testing.assert_allclose(perception._T()[:3, :3], _pose(result.pitch_deg, result.roll_deg)[:3, :3],
                                    atol=2e-3)
 
-    def test_recovers_camera_height_and_applies_full_extrinsic(self):
+    def test_reports_camera_height_but_never_writes_z(self):
         cfg = load_config(overrides=TABLE_ON)
         rgb, depth = _synthetic_table(3.0, roll=-2.0, height_delta=0.027)
         perception = Perception(cfg, SC, CAL)
@@ -223,7 +226,10 @@ class TestTablePitchCalibration(unittest.TestCase):
         expected = _pose(3.0, -2.0, 0.027)
         self.assertTrue(result.success, result)
         self.assertAlmostEqual(result.camera_height_m, expected[2, 3] - SC.counter_z, delta=0.005)
-        np.testing.assert_allclose(perception._T(), expected, atol=0.005)
+        self.assertIn("not applied", result.reason)
+        self.assertEqual(perception._T()[2, 3], CAL._T("head")[2, 3])
+        np.testing.assert_array_equal(perception._T()[:3, 3], CAL._T("head")[:3, 3])
+        np.testing.assert_allclose(perception._T()[:3, :3], expected[:3, :3], atol=2e-3)
 
     def test_quality_and_angle_gates_keep_nominal_extrinsic(self):
         cases = [
@@ -268,12 +274,114 @@ class TestTablePitchCalibration(unittest.TestCase):
         obs = dict(obs, head_rgb=rgb, head_depth=depth)
         policy.reset({"instruction": obs["instruction"]})
         policy.act(obs)
+        policy._pitch_thread.join(30)
         pitch_lines = [line for line in lines if line.startswith("[pitch_cal]")]
         self.assertEqual(len(pitch_lines), 1)
-        for field in ("mode=table", "dpitch=", "droll=", "height=", "inliers=", "rms=", "accepted"):
+        for field in ("mode=table", "dpitch=", "droll=", "height=", "inliers=", "rms=", "accepted", "not applied"):
             self.assertIn(field, pitch_lines[0])
         policy.act(obs)
         self.assertEqual(len([line for line in lines if line.startswith("[pitch_cal]")]), 1)
+
+    def test_policy_act_never_blocks_and_uses_nominal_until_swap(self):
+        cfg = load_config(overrides=TABLE_ON)
+        env = make_mock_env(seed=2, cfg=cfg)
+        policy = ClassicalPolicy(config=cfg, log=lambda *a: None, safety=env.filter.cfg)
+        obs = env.reset()
+        policy.reset({"instruction": obs["instruction"]})
+        gate, calls = threading.Event(), []
+        real = policy.perception.compute_pitch
+
+        def slow(rgb, depth):
+            calls.append(1)
+            gate.wait(30)
+            return real(rgb, depth)
+
+        with mock.patch.object(policy.perception, "compute_pitch", slow):
+            policy.act(obs)
+            policy.act(obs)           # worker is stuck; act() must return anyway
+            self.assertIsNone(policy.perception.pitch_T)
+            np.testing.assert_array_equal(policy.perception._T(), CAL._T("head"))
+            gate.set()
+            policy._pitch_thread.join(30)
+        self.assertEqual(len(calls), 1)    # once per episode
+        self.assertIsNotNone(policy.pitch_calibration)
+
+    def test_stale_worker_cannot_write_into_next_episode(self):
+        cfg = load_config(overrides=TABLE_ON)
+        env = make_mock_env(seed=2, cfg=cfg)
+        policy = ClassicalPolicy(config=cfg, log=lambda *a: None, safety=env.filter.cfg)
+        obs = env.reset()
+        rgb, depth = _synthetic_table(3.0)
+        obs = dict(obs, head_rgb=rgb, head_depth=depth)
+        policy.reset({"instruction": obs["instruction"]})
+        gate = threading.Event()
+        real = policy.perception.compute_pitch
+        with mock.patch.object(policy.perception, "compute_pitch", lambda r, d: (gate.wait(30), real(r, d))[1]):
+            policy.act(obs)
+            old = policy._pitch_thread
+            policy.reset({"instruction": obs["instruction"]})   # new episode while the old fit is still running
+            gate.set()
+            old.join(30)
+        self.assertIsNone(policy.pitch_calibration)
+        self.assertIsNone(policy.perception.pitch_T)
+        self.assertFalse(policy._pitch_calibration_done)
+
+    def test_worker_exception_keeps_nominal(self):
+        cfg = load_config(overrides=TABLE_ON)
+        env = make_mock_env(seed=2, cfg=cfg)
+        policy = ClassicalPolicy(config=cfg, log=lambda *a: None, safety=env.filter.cfg)
+        obs = env.reset()
+        policy.reset({"instruction": obs["instruction"]})
+        with mock.patch.object(policy.perception, "compute_pitch", side_effect=RuntimeError("boom")):
+            policy.act(obs)
+            policy._pitch_thread.join(30)
+        self.assertFalse(policy.pitch_calibration.success)
+        self.assertIn("boom", policy.pitch_calibration.reason)
+        np.testing.assert_array_equal(policy.perception._T(), CAL._T("head"))
+
+
+def _render_counter(deg, objects=(), seed=5, hole_frac=0.0):
+    """Counter + bins rendered by the mock world's ray caster with an independently built camera pose
+    (scipy rotation about the optical x axis, not Perception._optical_rx)."""
+    nominal = CAL._T("head").copy()
+    nominal[:3, :3] = nominal[:3, :3] @ Rotation.from_euler("x", deg, degrees=True).as_matrix()
+    return Renderer(SC, CAL, T_pelvis_optical=nominal).render(
+        list(objects), rng=np.random.default_rng(seed), depth_noise_mm=1.2, hole_frac=hole_frac)
+
+
+class TestTableAgainstMockRender(unittest.TestCase):
+    def test_bins_hand_and_holes_are_accepted(self):
+        cfg = load_config(overrides=TABLE_ON)
+        for deg in (0.0, 3.0):
+            with self.subTest(deg=deg):
+                rgb, depth = _render_counter(deg, hole_frac=0.40)
+                depth[355:440, 410:495] = np.maximum(depth[355:440, 410:495].astype(int) - 110, 151)  # the hand
+                rgb[355:440, 410:495] = [90, 90, 90]
+                result = Perception(cfg, SC, CAL).calibrate_pitch(rgb, depth)
+                self.assertTrue(result.success, result)
+                self.assertAlmostEqual(result.pitch_deg, deg, delta=0.5)
+
+    def test_sign_and_magnitude_against_independent_render(self):
+        cfg = load_config(overrides=TABLE_ON)
+        for deg in (-2.0, 2.0):
+            with self.subTest(deg=deg):
+                rgb, depth = _render_counter(deg)
+                result = Perception(cfg, SC, CAL).calibrate_pitch(rgb, depth)
+                self.assertTrue(result.success, result)
+                self.assertEqual(np.sign(result.pitch_deg), np.sign(deg), result)
+                self.assertAlmostEqual(result.pitch_deg, deg, delta=0.5)
+
+
+class TestPitchCalReleaseGate(unittest.TestCase):
+    def test_conflicts(self):
+        self.assertEqual(pitch_cal_conflicts(load_config(overlay="none")), [])
+        on = {"perception.online_pitch_cal": True}
+        self.assertEqual(pitch_cal_conflicts(load_config(overrides=on)), [])
+        self.assertEqual(pitch_cal_conflicts(load_config(overrides={**on, "perception.y_affine": [0.0, 0.0]})), [])
+        self.assertEqual(len(pitch_cal_conflicts(load_config(overrides={**on, "perception.y_affine": [0.02, 0.0]}))), 1)
+        self.assertEqual(len(pitch_cal_conflicts(load_config(overrides={**on, "perception.xy_offset": [0.0, 0.01]}))), 1)
+        off = {"perception.y_affine": [0.02, 0.0]}
+        self.assertEqual(pitch_cal_conflicts(load_config(overrides=off)), [])
 
 
 if __name__ == "__main__":

@@ -45,6 +45,13 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(sub, stock)
         self.assertEqual(set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"]), set(FLAGS))
 
+    def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
+        def on(name):
+            return {k for k, _, is_on, _, _ in effective_flags(load_config(overlay=name)) if is_on}
+        self.assertEqual(on("ab_safety"), on("cand_r17") | {"policy.safety_shell"})
+        self.assertNotIn("policy.safety_shell", on("submission"))
+        self.assertEqual(load_config(overlay="ab_safety")["policy"]["safety_shell_vel_reserve"], 0.0)
+
     def test_overlay_flips_only_its_flags(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "x.yaml"
@@ -134,7 +141,7 @@ class TestFlags(unittest.TestCase):
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
                                       "finals_real", "rc1", "ab_decision", "ab_place_gate",
-                                      "ab_object_time_budget_s", "ab_colour_kmeans"})
+                                      "ab_object_time_budget_s", "ab_colour_kmeans", "ab_safety"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
