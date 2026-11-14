@@ -278,13 +278,20 @@ class ClassicalPolicy:
         except Exception as e:  # never kill the control loop
             job["result"] = ("error", repr(e))
 
+    def _detect_kw(self):
+        """Only with perception.colour_kmeans: tell detect() whether the arm is out of view (parked at home)."""
+        if not self.cfg["perception"].get("colour_kmeans", False):
+            return {}
+        return {"arm_clear": bool(np.abs(self.arm_cmd - self.home).max() < 0.05)}
+
     def _look(self, obs):
         verify = self._verify_on()
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
-            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"])
+            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw())
             self.last_detections = dets
             return self._choose_retry(dets, obs, verify=False)
-        dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True)
+        dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
+                                                   **self._detect_kw())
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -327,9 +334,7 @@ class ClassicalPolicy:
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
         for d, source_bin, target_bin in corrections:
-            if not self._place_gate_allows(d, target_bin):
-                continue
-            n = self._attempt_count(d.top[:2], d.color)
+            n = self._attempt_count(d.top[:2], d.color)  # no place gate: the object is already in a bin
             limit = self._attempt_limit(d.top[:2])
             varied = self._max_attempts_vary()
             if n >= (max(limit, varied) if varied is not None else limit):
@@ -432,10 +437,14 @@ class ClassicalPolicy:
         near = [item for item in tracks if item[0] == color and np.linalg.norm(xy - item[1]) < self._attempt_radius()]
         return None if not near else min(near, key=lambda item: np.linalg.norm(xy - item[1]))
 
+    GATE_MAX_SKIPS = 3
+
     def _bin_confidence(self, d):
         """Confidence in the destination: instruction mapping and bin geometry."""
         mapping = float(self.mapping_conf.get(d.color, 1.0))
-        calibration = 1.0 if self.calibration is None else float(self.calibration.confidence)
+        # Only a successful calibration is evidence; failed/fallback/rejected/none means nominal bins (safe, 1.0).
+        cal = self.calibration
+        calibration = float(cal.confidence) if cal is not None and getattr(cal, "success", False) is True else 1.0
         return float(np.clip(min(mapping, calibration), 0.0, 1.0))
 
     def _place_gate_allows(self, d, target_bin, remember=True):
@@ -450,12 +459,17 @@ class ClassicalPolicy:
         ok = np.isfinite(color_conf) and color_conf >= color_min and np.isfinite(bin_conf) and bin_conf >= bin_min
         if not ok and remember:
             xy = np.asarray(d.top[:2], float).copy()
-            if self._tracked_here(self.gate_skipped, d.color, xy) is None:
-                self.gate_skipped.append((d.color, xy))
-                reason = "colour" if not np.isfinite(color_conf) or color_conf < color_min else "bin"
-                self.log(f"[gate] skip {d.color} target={target_bin} reason={reason} "
-                         f"colour_conf={color_conf:.3f} min={color_min:.3f} "
-                         f"bin_conf={bin_conf:.3f} min={bin_min:.3f}")
+            tr = self._tracked_here(self.gate_skipped, d.color, xy)
+            if tr is None:
+                tr = [d.color, xy, 0]
+                self.gate_skipped.append(tr)
+            else:
+                tr[1] = xy
+            tr[2] += 1  # a skip is re-evaluated on later looks; _choose stops offering it after 3 skips
+            reason = "colour" if not np.isfinite(color_conf) or color_conf < color_min else "bin"
+            self.log(f"[gate] skip {d.color} target={target_bin} reason={reason} "
+                     f"colour_conf={color_conf:.3f} min={color_min:.3f} "
+                     f"bin_conf={bin_conf:.3f} min={bin_min:.3f}")
         return bool(ok)
 
     def _object_time_spent(self, color, xy):
@@ -463,7 +477,10 @@ class ClassicalPolicy:
         return 0.0 if tr is None else float(tr[2]["spent_s"])
 
     def _object_time_allows(self, d, duration, remember=True):
-        """Whether another plan fits the object's cumulative hard motion budget."""
+        """Whether another plan fits the object's cumulative hard motion budget.
+
+        alias target: decision.object_time_cap (not present in this tree; one mechanism, key object_time_budget_s).
+        """
         budget = self.cfg["policy"].get("object_time_budget_s")
         if budget is None:
             return True
@@ -532,8 +549,10 @@ class ClassicalPolicy:
             xy = d.top[:2]
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
                 continue
-            if pol.get("place_gate", False) and self._tracked_here(self.gate_skipped, d.color, xy) is not None:
-                continue
+            if pol.get("place_gate", False):
+                gs = self._tracked_here(self.gate_skipped, d.color, xy)
+                if gs is not None and gs[2] >= self.GATE_MAX_SKIPS:
+                    continue
             if pol.get("object_time_budget_s") is not None and self._tracked_here(
                     self.budget_abandoned, d.color, xy) is not None:
                 continue

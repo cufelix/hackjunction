@@ -26,7 +26,7 @@ def colour_confidence(hsv, blob, ranges_by_class, color, min_area_px=120):
 
     The score combines class-mask purity, HSV threshold margin, V brightness,
     and a brightness-aware penalty near the real orange bin tape (H 2..7,
-    V about 119).  Hue distance is circular, so stock red at H=0 is correctly
+    V about 119).  Absolute brightness is not scored: shadow is not a colour error.  Hue distance is circular, so stock red at H=0 is correctly
     treated as being inside the wrapped red range.
     """
     hsv = np.asarray(hsv, dtype=np.uint8)
@@ -80,13 +80,12 @@ def colour_confidence(hsv, blob, ranges_by_class, color, min_area_px=120):
     neighbour_distance = distance_to(neighbour)[h]
     neighbour_factor = float(np.clip(np.median(neighbour_distance[inside]) / 3.0, 0.0, 1.0)) if inside.any() else 0.0
 
-    brightness = float(np.clip(np.median(px[:, 2].astype(float)) / 255.0, 0.0, 1.0))
     tape = np.zeros(180, bool)
     tape[2:8] = True
     tape_proximity = np.clip(1.0 - distance_to(tape)[h] / 4.0, 0.0, 1.0)
     tape_dimness = np.clip((200.0 - px[:, 2].astype(float)) / 100.0, 0.0, 1.0)
     tape_factor = 1.0 - float(np.mean(tape_proximity * tape_dimness))
-    return float(np.clip(support * purity * hue_factor * sv_factor * neighbour_factor * brightness * tape_factor,
+    return float(np.clip(support * purity * hue_factor * sv_factor * neighbour_factor * tape_factor,
                          0.0, 1.0))
 
 
@@ -181,10 +180,11 @@ class Perception:
         # Per-episode colour k-means always starts/falls back at the measured
         # robust ranges, regardless of the separately selectable stock set.
         self.colour_kmeans = bool(self.cfg.get("colour_kmeans", False))
-        self._colour_kmeans_base = self.cfg["hsv_robust"]
+        self._colour_kmeans_base = self.cfg.get("hsv_robust")
         if self.colour_kmeans:
             self.hsv = self._colour_kmeans_base
         self._colour_kmeans_done = False
+        self._colour_kmeans_tries = 0
         self.colour_kmeans_info = None
         self.log = log if log is not None else print
 
@@ -195,6 +195,7 @@ class Perception:
         if self.colour_kmeans:
             self.hsv = self._colour_kmeans_base
             self._colour_kmeans_done = False
+            self._colour_kmeans_tries = 0
             self.colour_kmeans_info = None
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
@@ -392,7 +393,7 @@ class Perception:
         import cv2
         from .colour_kmeans import fit_hue_ranges
 
-        self._colour_kmeans_done = True
+        self._colour_kmeans_tries += 1
         pixels = []
         try:
             for m in self._masks_hsv(hsv, self._colour_kmeans_base).values():
@@ -404,6 +405,8 @@ class Perception:
             px = np.concatenate(pixels, axis=0) if pixels else np.empty((0, 3), np.uint8)
             self.hsv, self.colour_kmeans_info = fit_hue_ranges(px, self._colour_kmeans_base)
             info = self.colour_kmeans_info
+            if info["status"] == "adapted":
+                self._colour_kmeans_done = True
             self.log(f"[colour_kmeans] {info['status']} reason={info['reason']} "
                      f"centres={info['centres']} sizes={info['sizes']} ranges={info['ranges']}")
         except Exception as exc:
@@ -411,14 +414,17 @@ class Perception:
             self.colour_kmeans_info = {"status": "fallback", "reason": f"{type(exc).__name__}: {exc}",
                                        "centres": [], "sizes": [], "purities": [], "ranges": {}}
             self.log(f"[colour_kmeans] fallback: {type(exc).__name__}: {exc}")
+        if self._colour_kmeans_tries >= 3:
+            self._colour_kmeans_done = True  # give up after the 3rd attempt; robust ranges stay
 
-    def detect(self, rgb, depth, debug=False, include_bins=False):
+    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True):
         """Detect coloured objects.
 
         ``include_bins`` keeps pixels over the known bin footprints long enough for
         :meth:`_reject` to label them ``in_bin:<name>``.  They are still returned
         only through the rejected half of the ``debug=True`` result, so existing
-        callers cannot accidentally pick an already sorted object.
+        callers cannot accidentally pick an already sorted object.  ``arm_clear``: the
+        policy says no arm is in view (looks happen at home); colour k-means only fits then.
         """
         import cv2
         c = self.cfg
@@ -428,8 +434,9 @@ class Perception:
         # either is on, share one RGB->HSV conversion.
         need_hsv = self.place_gate or self.colour_kmeans
         hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None
-        if self.colour_kmeans and not self._colour_kmeans_done:
-            self._fit_colour_kmeans(hsv, keep)
+        if self.colour_kmeans and not self._colour_kmeans_done and arm_clear:
+            kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
+            self._fit_colour_kmeans(hsv, kkeep)
         masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
         for color, m in masks.items():
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
@@ -475,7 +482,11 @@ class Perception:
                 if self.shape_diag:
                     det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
         if det is not None and hsv is not None:
-            det.color_conf = colour_confidence(hsv, blob, self.hsv, color, c["min_area_px"])
+            try:
+                det.color_conf = colour_confidence(hsv, blob, self.hsv, color, c["min_area_px"])
+            except Exception as exc:  # never raise into act()
+                det.color_conf = 0.0
+                self.log(f"[gate] colour_confidence failed for {color}: {type(exc).__name__}: {exc}")
         why = self._reject(det, bins_first=include_bins)
         if self.shape_diag and det is not None and det.shape_diag is not None:
             self._log_diag(det, why)

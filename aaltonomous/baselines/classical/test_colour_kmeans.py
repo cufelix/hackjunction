@@ -70,6 +70,29 @@ class TestColourKmeans(unittest.TestCase):
         self.assertFalse(p._colour_kmeans_done)
         self.assertIs(p.hsv, cfg["perception"]["hsv_robust"])
 
+    def _perc(self, objects):
+        cfg = load_config(overlay="none", overrides={"perception.colour_kmeans": True,
+                                                       "perception.hsv_set": "robust"})
+        rgb, depth = Renderer(SC, CAL).render(objects)
+        return Perception(cfg, SC, CAL, log=lambda *_: None), rgb, depth
+
+    def test_retries_when_arm_in_view_and_caps_at_three_attempts(self):
+        p, rgb, depth = self._perc([])  # no objects -> fit falls back every time
+        p.detect(rgb, depth, arm_clear=False)
+        self.assertEqual(p._colour_kmeans_tries, 0)
+        for n in (1, 2):
+            p.detect(rgb, depth)
+            self.assertEqual((p._colour_kmeans_tries, p._colour_kmeans_done), (n, False))
+        p.detect(rgb, depth)
+        self.assertEqual((p._colour_kmeans_tries, p._colour_kmeans_done), (3, True))
+        p.detect(rgb, depth)
+        self.assertEqual(p._colour_kmeans_tries, 3)
+
+    def test_no_hsv_robust_key_does_not_raise_when_flags_off(self):
+        cfg = load_config(overlay="none")
+        del cfg["perception"]["hsv_robust"]
+        Perception(cfg, SC, CAL, log=lambda *_: None)
+
     def test_flag_defaults_off(self):
         cfg = load_config(overlay="none")
         self.assertFalse(cfg["perception"]["colour_kmeans"])
