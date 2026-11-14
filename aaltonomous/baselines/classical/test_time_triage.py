@@ -13,6 +13,7 @@ from .policy import ClassicalPolicy
 class FakePerception:
     def __init__(self, dets):
         self.dets = dets
+        self.scene = None   # counter_plane: policy.reset() copies perception.scene to the planner
 
     def detect(self, rgb, depth):
         return list(self.dets)
