@@ -855,5 +855,53 @@ class TestPostureByShape(unittest.TestCase):
             self.assertIn("posture=", m)
 
 
+class TestLiftOnStall(unittest.TestCase):
+    def _episode(self, ov, seed=1):
+        logs = []
+        cfg = load_config(overrides=ov)
+        env = make_mock_env(seed=seed, cfg=cfg)
+        pol = ClassicalPolicy(config=cfg, log=logs.append, safety=env.filter.cfg)
+        obs = env.reset()
+        pol.reset({"instruction": obs["instruction"]})
+        while True:
+            obs, info = env.step(pol.act(obs))
+            if info["episode_over"]:
+                break
+        return pol, info, env, logs
+
+    def test_lifts_early_on_stall_within_min_and_timeout(self):
+        on = {"motion.lift_on_stall.enabled": True}
+        pol, info, env, logs = self._episode(on)
+        self.assertEqual(info["safety_summary"]["clipped_steps"], 0)
+        lines = [m for m in logs if m.startswith("[lift_on_stall]")]
+        self.assertEqual(len(lines), pol.n_started)                 # mock fingers stop at the target: every pick
+        for m in lines:
+            held = float(m.split("lift after ")[1].split(" s")[0])
+            self.assertGreaterEqual(held + 1e-9, CFG["motion"]["close_hold_s"])
+            self.assertLess(held, 1.2)
+        self.assertNotIn("wrong", env.backend.outcomes(pol.mapping))
+        p = pol.plans[0]                                           # planned hold = timeout (time checks conservative)
+        hs, he = p.close_hold
+        self.assertEqual(he - hs, round(1.2 * 30))
+
+    def test_no_stall_no_cut_and_off_is_stock(self):
+        logs = []
+        pol = ClassicalPolicy(config=load_config(overrides={"motion.lift_on_stall.enabled": True}), log=logs.append)
+        from .planner import Plan
+        n = 60
+        plan = Plan(True, side="left", color="red", target_bin="left", waypoints={"grasp": np.zeros(3)},
+                    arm=np.zeros((n, 14)), hand=np.zeros((n, 14)), phases=[("close", 0, 50)], close_hold=(10, 50),
+                    ik={"grasp": (True, 0.0, 0.0)})
+        pol.arm_cmd, pol.hand_cmd = np.zeros(14), np.zeros(14)
+        q, ticks = np.zeros(14), len(pol._start(plan, 0.0)["arm_q_target"])
+        while len(pol.queue_a):                                     # fingers keep moving: hold runs to the timeout
+            q = q.copy(); q[:7] += 0.05
+            ticks += len(pol.act({"t": ticks / 30, "arm_q": np.zeros(14), "hand_q": q})["arm_q_target"])
+        self.assertEqual(ticks, n)
+        self.assertFalse([m for m in logs if m.startswith("[lift_on_stall]")])
+        self.assertIsNone(ClassicalPolicy(log=None)._stall)
+        self.assertFalse((CFG["motion"].get("lift_on_stall") or {}).get("enabled"))
+
+
 if __name__ == "__main__":
     unittest.main()

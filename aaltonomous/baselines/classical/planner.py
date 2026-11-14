@@ -54,6 +54,7 @@ class Plan:
     hand: np.ndarray | None = None                     # (T, 14)
     phases: list = field(default_factory=list)         # (name, start tick, end tick)
     posture: tuple | None = None                       # (posture, shape label, conf, path) with grasp.close_posture_by_shape
+    close_hold: tuple | None = None                    # (first, end) tick of the closed-hand hold (lift_on_stall)
     safety_clips: int | None = None
 
     @property
@@ -591,7 +592,11 @@ class Planner:
         def hand(name, to, hold_s):
             nonlocal cur_h
             h = ramp(cur_h, to, hv, self.dt)
+            n_ramp = len(h)
             h = np.vstack([h, np.repeat(np.asarray(to, float)[None], int(round(hold_s / self.dt)), 0)])
+            if name == "close":
+                start = sum(len(x) for x in arm_parts)
+                plan.close_hold = (start + n_ramp, start + len(h))
             cur_h = np.asarray(to, float).copy()
             add(name, np.repeat(cur_a[None], len(h), 0), h)
 
@@ -605,7 +610,11 @@ class Planner:
 
         move("to_pregrasp", [q_pre], hand_to=hand_pre)
         move("descend", down)
-        hand("close", hand_cls, mo["close_hold_s"])
+        ls = mo.get("lift_on_stall") or {}
+        close_hold_s = mo["close_hold_s"]
+        if ls.get("enabled", False):  # hold up to timeout_s; the policy starts the lift early on a finger stall
+            close_hold_s = max(close_hold_s, float(ls.get("timeout_s", 1.2)))
+        hand("close", hand_cls, close_hold_s)
         cs = min(1.0, float(mo.get("carry_scale", 1.0)))  # motion.carry_scale <= 1: slower lift + carry only
         move("lift", up, scale=cs)
         move("carry", carry + lower, scale=cs)

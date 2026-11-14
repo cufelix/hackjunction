@@ -115,6 +115,7 @@ class ClassicalPolicy:
         self.slot_pending = None    # (bin, slot, grasp xy, colour) of the last standalone-slot placement
         self._gdiag = None          # policy.grasp_diag_log: the pick being watched
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
+        self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
         self._summary_logged = False
         self.perception.reset_calibration()
@@ -165,6 +166,8 @@ class ClassicalPolicy:
                               f"points={cal.n_points}, time={cal.elapsed_ms:.1f} ms ({cal.reason})")
         if self._gdiag is not None:
             self._grasp_diag(obs)
+        if self._stall is not None:
+            self._lift_on_stall(obs)
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":
@@ -616,6 +619,13 @@ class ClassicalPolicy:
             nm, label, conf, path = plan.posture
             self.log(f"[grasp_posture] t={t:.1f} {plan.color} {plan.side} label={label} conf={conf:.2f} path={path} "
                      f"posture={'pinch_demo' if nm == 'closed_demo' else 'pinch_v1'} ({nm})")
+        ls = self.cfg["motion"].get("lift_on_stall") or {}
+        self._stall = None
+        if ls.get("enabled", False) and plan.close_hold is not None and plan.side in ("left", "right"):
+            self._stall = {"n": len(plan.arm), "hold": plan.close_hold, "sl": ArmKinematics.sl(plan.side),
+                           "min": int(round(float(self.cfg["motion"]["close_hold_s"]) * HZ)),
+                           "rad": float(ls.get("stall_rad", 0.01)), "need": int(ls.get("settle_ticks", 3)),
+                           "last": None, "still": 0, "t": t}
         if self.cfg["policy"].get("grasp_diag_log", False) and plan.side in ("left", "right"):
             ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
             if "close" in ph and "lift" in ph:
@@ -671,8 +681,40 @@ class ClassicalPolicy:
         self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
                  f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
 
+    def _in_hold(self):
+        g = self._stall
+        done = g["n"] - (0 if self.queue_a is None else len(self.queue_a))
+        return g["hold"][0] <= done < g["hold"][1]
+
+    def _lift_on_stall(self, obs):
+        """motion.lift_on_stall: inside the close hold, skip the rest of the hold (-> lift) once the active hand's
+        hand_q moved < stall_rad for settle_ticks consecutive ticks and at least close_hold_s has passed; else the hold
+        runs to timeout_s (planned length). Only drops hold ticks (same arm + hand target), never adds motion."""
+        g = self._stall
+        left = 0 if self.queue_a is None else len(self.queue_a)
+        done = g["n"] - left
+        hs, he = g["hold"]
+        if done >= he or left == 0:
+            self._stall = None
+            return
+        q = obs.get("hand_q")
+        if done < hs or q is None:
+            return
+        q = np.asarray(q, float)[g["sl"]]
+        if g["last"] is not None:
+            g["still"] = g["still"] + 1 if np.abs(q - g["last"]).max() < g["rad"] else 0
+        g["last"] = q
+        if done - hs >= g["min"] and g["still"] >= g["need"]:
+            cut = he - done
+            self.queue_a, self.queue_h = self.queue_a[cut:], self.queue_h[cut:]
+            self.log(f"[lift_on_stall] t={g['t']:.1f} lift after {(done - hs) / HZ:.2f} s of hold (stall), "
+                     f"skipped {cut / HZ:.2f} s")
+            self._stall = None
+
     def _pop(self):
         k = int(self.cfg["motion"]["chunk"])
+        if self._stall is not None and self._in_hold():
+            k = 1  # lift_on_stall: one tick per request inside the close hold, so every tick's hand_q is seen
         a, h = self.queue_a[:k], self.queue_h[:k]
         self.queue_a, self.queue_h = self.queue_a[k:], self.queue_h[k:]
         if not len(a):

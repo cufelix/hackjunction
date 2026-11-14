@@ -146,6 +146,11 @@ motion:
   cart_step: 0.02             # Cartesian segments are split into IK waypoints this far apart
   max_joint_step: 0.4         # rad between neighbouring Cartesian IK waypoints (more = branch flip, bisect / fail)
   close_hold_s: 0.4           # wait after the hand reaches the closed posture
+  lift_on_stall:              # FLAG (27-dataset-mining: human close->lift median 0.90 s, lift ~0.27 s after the stall)
+    enabled: false            # on: hold up to timeout_s, lift as soon as the fingers stall (>= close_hold_s)
+    timeout_s: 1.2
+    stall_rad: 0.01           # max |dq| per tick (active hand) that counts as "not moving"
+    settle_ticks: 3
   open_hold_s: 0.4
   settle_s: 0.5               # hold at home before looking (arm lag, motion blur)
   chunk: 10                   # ticks returned per act() (0.33 s)

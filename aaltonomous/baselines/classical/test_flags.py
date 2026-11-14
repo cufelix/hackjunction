@@ -54,6 +54,8 @@ class TestFlags(unittest.TestCase):
                                            "motion.close_hold_s", "perception.classify_shape",
                                            "grasp.close_posture_by_shape",
                                            "perception.y_affine"},
+                  "ab_pinch_demo_stall": {"grasp.close_posture", "hand.closed_tight", "grasp.point_in_palm",
+                                          "motion.lift_on_stall.enabled"},
                   "ab_lang_full": {"instruction.resolve", "perception.classify_shape", "perception.no_blob_shape",
                                    "policy.bin_lookup"},
                   "ab_verify_lang": {"policy.verify_placement", "policy.verify_yellow_unknown",
@@ -97,7 +99,8 @@ class TestFlags(unittest.TestCase):
     def test_hard_limits(self):
         """Overlays can never make anything faster than the stock sim profile."""
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
-                          ("motion.carry_scale", "motion.close_hold_s")])
+                          ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
+                           "motion.lift_on_stall.timeout_s")])
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile"):
