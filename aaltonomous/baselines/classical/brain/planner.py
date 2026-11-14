@@ -94,6 +94,12 @@ def plan_prompt(req):
     shots = "\n".join(f"Instruction: {i}\nPlan: {p}" for i, p in examples)
     failure = req.get("failure")
     retry = f"\nPrevious step failed: {json.dumps(failure, separators=(',', ':'))}. Re-plan once." if failure else ""
+    if req.get("agent"):
+        hist = "\n".join(f"- {h['tool']}({json.dumps(h['args'], separators=(',', ':'))}) -> {h['outcome']}"
+                         + (f" ({h['reason']})" if h.get("reason") else "") for h in req.get("history", [])) or "- none"
+        retry += ("\nAgent loop: plan ONLY the remaining steps (at most 4). Objects with novel=true were found by find(); "
+                  "their bin is yours to choose from the instruction; graspable=false means leave them. If the target "
+                  "is not in Scene, call find(description) then wait.\nExecuted so far:\n" + hist)
     return (
         "You are a safe robot task planner. Return ONLY a JSON array. Use ONLY these primitives: "
         "pick_place(obj_id,bin), place_at(obj_id,table_xy), find(description), skip(obj_id), wait, done. "
@@ -252,8 +258,10 @@ def explicit_plan_satisfied(instruction, successful_steps, world_or_count):
 
 
 def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True,
-                  classical_has_work=True, max_steps=MAX_PLAN_STEPS):
-    """Return ``(annotated_steps, errors)``. Invalid steps stay in-order and are skipped at execution."""
+                  classical_has_work=True, max_steps=MAX_PLAN_STEPS, prior_steps=()):
+    """Return ``(annotated_steps, errors)``. Invalid steps stay in-order and are skipped at execution.
+    prior_steps: already executed successful {tool, args} (brain.closed_loop re-plans) - they count for the
+    'only N' limit and for the no-early-done proof, exactly as if they were the start of this plan."""
     try:
         plan = parse_plan(raw)
     except Exception as e:
@@ -263,7 +271,7 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
     objects = {o.get("id"): o for o in (world or {}).get("objects", []) if isinstance(o, dict)}
     instruction = str((world or {}).get("instruction") or "")
     protected, limit = _protected_ids(instruction, objects), _only_limit(instruction)
-    out, errors, valid_prefix = [], [], []
+    out, errors, valid_prefix = [], [], [dict(p) for p in prior_steps]
     virtual_xy = {oid: list(o.get("xy", [])) for oid, o in objects.items()}
     for i, step in enumerate(plan):
         err = []
@@ -298,6 +306,8 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
                 ok, why, _ = _result(reach_fn(oid, bin_name))
                 if not ok:
                     err.append(f"unreachable pick_place: {why}")
+        if tool in ("pick_place", "place_at") and oid in objects and objects[oid].get("graspable") is False:
+            err.append(f"{oid} is ungraspable (too wide / flat): left on the counter")
         if tool in ("pick_place", "place_at") and oid in protected:
             err.append(f"{oid} is protected by the instruction (leave / do not move)")
         if tool in ("pick_place", "place_at") and limit is not None and \

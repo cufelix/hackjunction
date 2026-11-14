@@ -126,6 +126,11 @@ class Detection:
     ridge_yaw: float | None = None  # lying prism: pelvis-frame heading (rad, mod pi) of the ridge = long axis
     prism_xy: tuple | None = None   # lying prism: ridge-strip centre (pelvis xy, = footprint centroid by symmetry)
     prism_conf: float = 0.0         # smallest normalised cue margin of the orientation decision (0..1)
+    novel: bool = False  # brain.find_to_detection only: built from a depth blob at a find() point, never by detect()
+    label: str | None = None  # novel only: the query phrase
+    footprint: tuple | None = None  # novel only: (major, minor) extents of the blob in m
+    height_m: float | None = None  # novel only: top height above the counter plane in m
+    ungraspable: bool = False  # novel only: too wide / flat / unsupported -> the policy skips it
 
     def __repr__(self):
         x, y, z = self.top

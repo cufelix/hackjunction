@@ -45,6 +45,9 @@ def build_world(dets, bins, instruction, task, resolver_mapping, resolver_bin_fn
                      "xy": [round(float(d.top[0]), 4), round(float(d.top[1]), 4)],
                      "reachable": safe(reach_fn, d, rb) if rb is not None else None,
                      "near_bin": safe(near_bin_fn, d), "resolver_bin": rb})
+        if getattr(d, "novel", False):       # brain.find_to_detection: a depth-blob object the colour detector never saw
+            objs[-1].update(novel=True, label=getattr(d, "label", None), footprint=list(getattr(d, "footprint", None) or ()),
+                            height=getattr(d, "height_m", None), graspable=not getattr(d, "ungraspable", False))
     return {"task": task, "instruction": instruction or "", "objects": objs, "frame": "pelvis",
             "last_pick": last_pick,
             "bins": [{"name": n, "xy": [round(float(xy[0]), 4), round(float(xy[1]), 4)], "source": s}
@@ -246,16 +249,17 @@ class LlamaCppHTTPBackend(PlannerBackend):
     def plan(self, request_json):
         """Strict JSON whole-plan completion; semantic validation remains in brain.planner."""
         from .planner import plan_gbnf, plan_prompt
-        deadline = time.monotonic() + self.timeout_s
         req = json.loads(request_json)
+        timeout = min(self.timeout_s, float(req["timeout_s"])) if req.get("timeout_s") else self.timeout_s   # closed loop: per-call
+        deadline = time.monotonic() + timeout
         prompt = plan_prompt(req)
         if self.chatml:
             prompt = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
         body = {"prompt": prompt, "grammar": plan_gbnf(), "temperature": 0,
-                "n_predict": self.plan_n_predict, "cache_prompt": True}
+                "n_predict": int(req.get("n_predict") or self.plan_n_predict), "cache_prompt": True}
         r = urllib.request.Request(self.base + "/completion", data=json.dumps(body).encode(),
                                    headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(r, timeout=self.timeout_s) as resp:
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
             return str(json.loads(self._read_bounded(resp, self.max_response_bytes, deadline))["content"]).strip()
 
 

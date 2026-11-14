@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import importlib.util
 import re
+from pathlib import Path
+
+BUNDLED_FIND_TOOL = Path(__file__).with_name("find_tool.py")   # the copy that ships in the brain sidecar
 
 _VERB = re.compile(r"^(?:please\s+)?(?:put away|put|place|move|sort|take|drop|throw|stack|carry|bring|transfer|send|"
                    r"deposit|fetch|grab|pick up|pick)\s+", re.I)
@@ -56,7 +59,8 @@ class FindClient:
 
     def _load(self):
         if self._mod is None:
-            spec = importlib.util.spec_from_file_location("brain_find_tool", self.path)
+            path = self.path if self.path and Path(self.path).is_file() else str(BUNDLED_FIND_TOOL)
+            spec = importlib.util.spec_from_file_location("brain_find_tool", path)
             self._mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self._mod)
         return self._mod
@@ -72,5 +76,22 @@ class FindClient:
             if self.url:
                 kw["url"] = self.url
             return [tuple(r["point"]) for r in self._load().find(buf.tobytes(), query, **kw)]
+        except Exception:
+            return []
+
+    def detect(self, rgb, query):
+        """Like __call__ but keeps the boxes: [{"point": (x, y), "bbox": [x1, y1, x2, y2], "label": str}], [] on failure.
+        brain.find_to_detection needs the box to clip the depth region grow."""
+        try:
+            import cv2
+            import numpy as np
+            ok, buf = cv2.imencode(".png", cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR))
+            if not ok:
+                return []
+            kw = {"timeout": self.timeout}
+            if self.url:
+                kw["url"] = self.url
+            return [{"point": tuple(r["point"]), "bbox": list(r.get("bbox") or []), "label": str(r.get("label", ""))}
+                    for r in self._load().find(buf.tobytes(), query, **kw)]
         except Exception:
             return []

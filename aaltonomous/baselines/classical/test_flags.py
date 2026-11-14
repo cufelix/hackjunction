@@ -205,6 +205,9 @@ class TestFlags(unittest.TestCase):
             "perception.still_vote"}   # gatefix A/B
         expect["finals_r22_chunk"] = expect["finals_r22"] | {"policy.chunk_ticks", "policy.hold_ticks"}   # handin rate A/B
         expect["finals_r22_lyingprism"] = expect["finals_r22"] | {"perception.prism_orientation", "grasp.lying_prism"}   # prism A/B
+        expect["finals_r22_brain"] = expect["finals_r22"] | {"brain.enabled", "brain.backend", "brain.timeout_s", "brain.request_timeout_s"}
+        expect["finals_r22_agent"] = expect["finals_r22"] | {"brain.enabled", "brain.backend", "brain.planner", "brain.find",
+                                                           "brain.find_to_detection", "brain.closed_loop", "brain.timeout_s", "brain.request_timeout_s"}
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -284,8 +287,9 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_r22", "finals_r22_cal",
-                                      "finals_r22_chunk", "finals_r22_gate", "finals_r22_grasp",
+                                      "finals_r21", "finals_r22", "finals_r22_agent",
+                                      "finals_r22_brain", "finals_r22_cal", "finals_r22_chunk",
+                                      "finals_r22_gate", "finals_r22_grasp",
                                       "finals_r22_lyingprism", "finals_r22_recall", "finals_real",
                                       "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
@@ -388,6 +392,20 @@ class TestFlags(unittest.TestCase):
         base["brain"]["planner"] = True
         base["overlay"] = "ab_planner"
         self.assertEqual(planner, base)
+
+    def test_agent_flags_registered_and_finals_r22_agent_is_r22_plus_the_brain(self):
+        for k in ("brain.find_to_detection", "brain.closed_loop", "brain.timeout_s", "brain.request_timeout_s"):
+            self.assertIn(k, FLAGS)
+        base = load_config(overlay="finals_r22")
+        agent = load_config(overlay="finals_r22_agent")
+        self.assertEqual(agent["brain"]["url"], "http://127.0.0.1:8080/completion")   # one container: loopback
+        for k in ("enabled", "planner", "find", "find_to_detection", "closed_loop"):
+            self.assertTrue(agent["brain"][k], k)
+            base["brain"][k] = True
+        base["brain"]["backend"] = "llamacpp"
+        base["brain"]["timeout_s"] = base["brain"]["request_timeout_s"] = 1.0
+        base["overlay"] = "finals_r22_agent"
+        self.assertEqual(agent, base)
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm

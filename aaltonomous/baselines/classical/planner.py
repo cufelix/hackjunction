@@ -41,6 +41,8 @@ def lookup_bin(cfg, mapping, color, shape=None):
 
 def lookup_detection_bin(cfg, mapping, det):
     """Target for a detection, resolving generic grasps without a shape guess."""
+    if getattr(det, "novel", False):
+        return None             # brain.find_to_detection: a novel object has a bin only when the brain/validator names one
     if getattr(det, "generic_required", False):
         if getattr(det, "generic_width", None) is None:
             return None
@@ -843,7 +845,7 @@ class Planner:
         return None
 
     def _generic_on(self, det):
-        return (bool(self.cfg["grasp"].get("generic_fallback", False))
+        return ((bool(self.cfg["grasp"].get("generic_fallback", False)) or getattr(det, "novel", False))
                 and getattr(det, "generic_required", False)
                 and getattr(det, "generic_width", None) is not None)
 

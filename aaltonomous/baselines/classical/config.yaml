@@ -469,6 +469,16 @@ brain:
   find_path: /data/brain/find/find_tool.py
   find_url: null              # null = find_tool's default (127.0.0.1:8080 chat completions)
   find_timeout_s: 1.5
+  find_to_detection: false    # FLAG. find() point without a matching detection -> novel Detection from the depth blob (brain/novel.py)
+  novel_min_height_m: 0.012   # blob must stand this far above the counter plane (flatter = ungraspable -> skip)
+  novel_min_grasp_height_m: 0.02  # a blob lower than this is found but ungraspable -> skip
+  novel_max_width_m: 0.06     # wider than the hand opening = ungraspable -> skip
+  novel_max_objects: 3        # novel detections kept per episode
+  closed_loop: false          # FLAG. agent loop (brain/agent.py): async re-plan after every outcome; needs planner
+  closed_loop_max_replans: 6  # re-plans per episode (the initial plan is not counted)
+  call_timeout_s: 1.0         # closed loop: deadline per planner call; later = dropped, last plan / classical resolver goes on
+  agent_n_predict: 160        # closed loop: output cap per call (a short plan of <= 4 primitives)
+  max_grasp_fails: 2          # closed loop: failed grasps of one object before another grasp variant (else skip)
   prefetch: true              # ask for the next decision while the current pick runs; state hash must match
   threshold: 0.8              # a decision needs conf >= this ...
   override_conf: 0.95         # ... and, when it differs from the classical choice, conf >= this
