@@ -206,8 +206,10 @@ class TestFlags(unittest.TestCase):
             "perception.color_gate.fk_silhouette", "perception.sim_center_principal_point", "perception.aim_z_frac",
             "perception.still_vote"}   # gatefix A/B
         expect["finals_r22_chunk"] = expect["finals_r22"] | {"policy.chunk_ticks", "policy.hold_ticks"}   # handin rate A/B
-        expect["finals_r22_novel"] = expect["finals_r21"] | {
-            "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles"}
+        expect["finals_r23_universal"] = expect["finals_r22"] | {
+            "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles",
+            "brain.enabled", "brain.backend", "brain.planner", "brain.find", "brain.find_to_detection",
+            "brain.closed_loop", "brain.image_max_side_px", "brain.find_n_predict", "brain.ev_gate"}   # UNIVERSAL.md
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -215,10 +217,10 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
-        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22", "finals_r22_novel",
+        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22", "finals_r23_universal",
                   "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
-        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r23_universal", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
@@ -286,10 +288,10 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_r22", "finals_r22_agent", "finals_r22_novel", "finals_r22_cal",
+                                      "finals_r21", "finals_r22", "finals_r22_agent", "finals_r22_cal",
                                       "finals_r22_chunk", "finals_r22_gate", "finals_r22_grasp",
-                                      "finals_r22_recall", "finals_real", "rc1", "rc1_strict",
-                                      "safe_profile"})
+                                      "finals_r22_recall", "finals_r23_universal", "finals_real", "rc1",
+                                      "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
@@ -391,10 +393,10 @@ class TestFlags(unittest.TestCase):
         base["overlay"] = "ab_planner"
         self.assertEqual(planner, base)
 
-    def test_agent_flags_registered_and_finals_r22_agent_is_r21_plus_the_brain(self):
+    def test_agent_flags_registered_and_finals_r22_agent_is_r22_plus_the_brain(self):
         for k in ("brain.find_to_detection", "brain.closed_loop"):
             self.assertIn(k, FLAGS)
-        base = load_config(overlay="finals_r21")
+        base = load_config(overlay="finals_r22")
         agent = load_config(overlay="finals_r22_agent")
         self.assertEqual(agent["brain"]["url"], "http://127.0.0.1:8080/completion")   # one container: loopback
         for k in ("enabled", "planner", "find", "find_to_detection", "closed_loop"):

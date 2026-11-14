@@ -1954,6 +1954,10 @@ class ClassicalPolicy:
             pfn = self._variant_plan_fn(forced[2]) if mine else None
             if target_bin is None and table_xy is None:
                 continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
+            if table_xy is None and self._ev_leave(d, target_bin, mine):
+                if fp:
+                    return planner_fail("EV gate")
+                continue
             if table_xy is None and not self._place_gate_allows(d, target_bin):
                 if fp:
                     return planner_fail("placement gate")
@@ -2740,11 +2744,33 @@ class ClassicalPolicy:
             world["found"] = dict(self._found)
         return world
 
+    def _ev_leave(self, d, target_bin, brain_chosen):
+        """brain.ev_gate (universal): per-object expected-value gate for a NOVEL object.  Score is +2 correct, -1 wrong
+        bin, 0 left, a failed grasp scores 0 -> EV = p_grasp * (3 p_bin - 1).  p_grasp = the depth-geometry grasp confidence,
+        p_bin = 1 for a deterministic parser/synonym match, else the confidence of the brain's bin (token probability when the
+        backend reports it, otherwise brain.ev_default_conf).  EV below brain.ev_min -> leave the object (0 beats -1)."""
+        bc = self.cfg.get("brain") or {}
+        if not bc.get("ev_gate", False) or not getattr(d, "novel", False) or target_bin is None:
+            return False
+        p_grasp = float(getattr(d, "generic_confidence", 1.0) or 0.0)
+        if getattr(d, "novel_matched", False) and not brain_chosen:
+            p_bin = 1.0
+        else:
+            conf = getattr(getattr(getattr(self, "plan_brain", None), "backend", None), "last_plan_conf", None)
+            p_bin = float(conf) if conf is not None else float(bc.get("ev_default_conf", 0.7))
+        ev = p_grasp * (3.0 * p_bin - 1.0)
+        if ev >= float(bc.get("ev_min", 0.5)):
+            return False
+        self.log(f"[ev] leave {getattr(d, 'label', d.color)!r}: EV {ev:.2f} < {float(bc.get('ev_min', 0.5)):.2f} "
+                 f"(p_grasp {p_grasp:.2f}, p_bin {p_bin:.2f}) -> counter, 0 points")
+        self.failed.append(np.asarray(d.top[:2], float).copy())
+        return True
+
     def _with_novel(self, dets, obs):
         """Known detections + the novel ones, each re-grown from the CURRENT depth at its remembered pixel (gone = placed
         or moved away -> dropped; the colour detector sees it now -> dropped). An ungraspable one is skipped once."""
         from .brain.novel import novel_detection
-        known = [d for d in dets if not getattr(d, "novel", False)]
+        known = list(dets)    # classical + depth-blob novel (perception.novel_objects): a VLM find never duplicates either
         keep, out, bc = [], [], self.cfg["brain"]
         for ent in self._novel_store:
             try:
@@ -2753,8 +2779,8 @@ class ClassicalPolicy:
             except Exception as e:
                 self.log(f"[novel] re-grow failed ({e!r})")
                 d = None
-            if d is None or any(np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04 for k in known):
-                continue
+            if d is None or any(np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04 for k in known + out):
+                continue          # universal: deduplicated by 3D position against every detection and the other finds
             ent["uv"] = d.uv
             keep.append(ent)
             out.append(d)

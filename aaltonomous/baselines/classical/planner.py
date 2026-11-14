@@ -243,7 +243,7 @@ class Planner:
         self.drop_extra = {}   # bin.vote: bin name -> extra release height (m) when the bin position is low-confidence
         self.bin_conf = {}     # bin.vote: bin name -> confidence in bin_shift (1.0 agree, 0.5 prior only, 0.3 disagree)
         self.generic_hand_opening = None
-        if cfg["grasp"].get("generic", False):
+        if cfg["grasp"].get("generic", False) or (cfg.get("brain") or {}).get("find_to_detection", False):
             tips = self.kin.tips_in_palm("left", self.post["open"])
             measured = float(np.linalg.norm(tips[:2].mean(0) - tips[2]))
             self.generic_hand_opening = max(
@@ -826,7 +826,7 @@ class Planner:
         g = self.cfg["grasp"]
         if getattr(det, "novel", False):
             score = float(getattr(det, "generic_confidence", 0.0) or 0.0)
-            if not getattr(det, "graspable", False) or score < float(g.get("generic_min_confidence", 0.5)):
+            if not getattr(det, "graspable", not getattr(det, "ungraspable", False)) or score < float(g.get("generic_min_confidence", 0.5)):
                 return Plan(False, side=side, color=det.color, target_bin=bin_name,
                             reason=f"novel graspability {score:.2f} below threshold")
             if float(det.generic_width) > self.generic_hand_opening:

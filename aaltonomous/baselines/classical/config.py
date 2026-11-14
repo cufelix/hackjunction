@@ -51,6 +51,7 @@ FLAGS = {
     "brain.image_max_side_px": ("brain speed", 0, "downscale the head RGB to this longest side before encoding it for find()/decide (boxes are scaled back to original pixels); 0 = full size"),
     "brain.find_n_predict": ("brain speed", 400, "find() output token cap (box JSON); 400 = the old hard-coded cap"),
     "brain.find_to_detection": ("brain agent", False, "find() point that matches no detection -> a novel Detection from the depth blob there (region grow above the counter plane, generic_grasp, ungraspable -> skip); needs brain.find"),
+    "brain.ev_gate": ("universal", False, "per-object EV gate for novel objects: EV = p_grasp*(3*p_bin-1) < brain.ev_min -> leave the object (0 beats -1)"),
     "brain.closed_loop": ("brain agent", False, "agent loop: re-plan (async, capped) after every pick/place/find outcome with fresh world JSON + step history; last valid plan keeps running; 2 failed grasps -> other variant or skip; needs brain.planner"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),

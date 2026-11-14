@@ -1,11 +1,13 @@
-# finals_r22_agent = finals_r21 + the adaptive brain (planner + find + find_to_detection + closed_loop) on a LOCAL llama.cpp
-# server (Qwen3-VL-8B Q8, same container: tools/brain/Dockerfile.policy_brain). Brain unreachable = classical finals_r21.
-# was: finals_r21 (R29): finals_r20 flags on rc6 code = gate fk_dilate 0 / near_margin 0, footprint->colour fallback, first-look wait, bin_vote pitch_T, sat_floor, fixed_mapping.
+# finals_r22_agent = finals_r22 + the adaptive brain (planner + find + find_to_detection + closed_loop) on a LOCAL llama.cpp
+# server (Qwen3-VL-8B Q8, same container: tools/brain/Dockerfile.policy_brain). Brain unreachable = classical finals_r22.
+# Brain-only A/B arm; finals_r23_universal adds the novel-object perception/grasp layers on top.
 name: finals_r22_agent
 flags:
+  hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)
+  scene.counter_z_prior: 0.15                   # prior  NO-DEPTH fallback table height (pelvis frame, m); measured plane height (apply_height) overrides
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
@@ -16,7 +18,7 @@ flags:
   perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)
   perception.no_blob_shape: false               # Oliver     no top face -> no shape (never the 2D blob)
   perception.shape_diag: false                  # Oliver     passive [shape_diag] log lines
-  perception.hsv_set: robust_v2                  # r19: red<=22 | yellow 24-60, abstain band; real colour  stock | robust (one HSV set for sim + real head cam)
+  perception.hsv_set: robust   # r22 bisect
   perception.split_blobs: true                 # real colour  split touching same-colour objects
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
@@ -34,6 +36,7 @@ flags:
   policy.verify_yellow_unknown: false           # Felix #6r  yellow in-bin detection = unknown (needs verify)
   policy.max_corrections_per_episode: null      # Felix #6r  e.g. 1; set = counter picks first (needs verify)
   grasp.drop_slots: true                       # Timi 23    standalone drop slots (no verify needed)
+  grasp.drop_slot_grid: true                   # bin capacity six object-separated slots for finals layouts up to 6
   grasp.drop_slot_overflow: counter             # Felix #6r  counter | stack, when the slots are used up
   policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
@@ -51,17 +54,28 @@ flags:
   perception.color_gate.live_bins: true        # Felix gate  footprint = live bin estimate, else nominal + 10 cm near
   perception.color_gate.fk_mask: true          # Felix gate  FK arm/hand mask (dilated 15 px)
   motion.arm_vel_cap: 0.90                       # Timi vel   rad/s cap (sim profile 0.97)
-  instruction.normalize: true                   # Felix lang   rc1 language layer (Modal 106/117, 0 wrong)
-  perception.hue_guard.enabled: true            # r19 Felix  cross-label hue gap + top-face hue + red_min_s: orange/yellow abstain, never swap
+  motion.output_caps: {arm_vel: 0.85, arm_acc: 4.0, hand_vel: 1.5, hand_acc: 8.0}  # M4: every planner/policy route, including home/abort
+  instruction.normalize: true                   # New H3/H4: context-safe box + ambiguous shape normalisation (existing finals flag)
+  perception.hue_guard.enabled: false   # r22 bisect
   instruction.max_chars: 2000                   # r19 fuzz   cap absurd instruction length (clause boundary)
   safety.nan_guard: true                        # r19 fuzz   non-finite arm_q/hand_q -> hold last emitted action
-  instruction.strict: true                      # r19 Felix  never guess a bin: abstain (0) instead of FIXED/inferred (-1); Timi OK
-  policy.safety_shell: true                     # r19b P0 Hz
-  bin.vote.enabled: true                        # r20 R2  per-bin position vote (depth rim, tape, prior)
+  instruction.strict: true                      # H2: blank/error + ambiguous/multi-destination language truthily abstains, never FIXED
+  policy.safety_shell: false   # r22 bisect
+  bin.vote.enabled: true                         # C3/H4/H5 corrected signed, snapshot-consistent async vote pipeline
+  bin.vote.signed_rim_fit: true                  # C3  preserve physical +/-x,+/-y rim displacement through drop slots
+  bin.vote.async_extract: true                   # H5  copied frames compute in look worker; act() only polls/holds
+  bin.vote.frame_transform_snapshot: true        # H4  tape and rim share one non-zero-pitch transform per frame
   bin.geometry_runtime: true                    # r20 R2  every bin consumer follows the voted shift
   grasp.held_detector: finger_sum               # r20     bias-corrected held; empty close aborted early
   calib.plane.apply_height: true                # r20 R9  runtime counter_z from the depth plane (real table +5..14 cm), clamp 0.20, nominal fallback
   perception.color_gate.sat_floor: true
+  instruction.multilingual: true                # r22 FI/CZ + 10 languages (timi/multilang)
+  grasp.release_wait_s: 0.5                     # lag R44  hold >= 0.5 s after the open command before the retreat
+  grasp.release_confirm: true                   # lag R49  empty-hand check after the open; re-open once, else home + stop
+  perception.color_gate.fk_dilate_px: 3        # New H2     render-tested RGB/FK fringe; nearby spawn-object recall
+  perception.color_gate.near_margin_m: 0.10    # New H2/M1  prior/disagree union through full bin.vote.max_shift_m
+  policy.generation_workers: true               # H7: reset invalidates look workers immediately; stale generations never publish
+  grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort
   brain.enabled: true                           # r22 agent  closed-set brain layer (decides only where the resolver abstains)
   brain.backend: llamacpp                       # r22 agent  bounded async HTTP + GBNF
   brain.url: http://127.0.0.1:8080/completion   # r22 agent  llama-server inside the SAME container (finals run one container)
