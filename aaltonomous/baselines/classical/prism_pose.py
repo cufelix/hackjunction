@@ -18,9 +18,10 @@ from __future__ import annotations
 import numpy as np
 
 # ---- config constants ------------------------------------------------------------------------------------------
+# NOTE: TRIANGLE_MIN_POINTS is tuned for object size 0.045 and head fx~605; point count scales ~ (fx*size/Z)^2.
 TRIANGLE_MIN_POINTS = 40          # below this triangle_pose returns None (see test table: p90 yaw < 10 deg from ~this)
 ROBUST_MIN_POINTS = 5
-TRIANGLE_ALTITUDE = 0.045         # m, flat-to-apex (scene objects.size); inradius = altitude / 3
+TRIANGLE_ALTITUDE = 0.045         # m, DEFAULT only (= scene objects.size today); perception passes altitude=scene size. inradius = altitude / 3
 SUPPORT_PERCENTILE = 99.5         # robust "max" of the projection onto each edge normal
 SIZE_TOLERANCE = 0.5              # |r_fit / r_expected - 1| at which the size term of the confidence reaches 0
 FILL_MIN, FILL_FULL = 0.70, 0.85   # fill term of the confidence: 0 at/below FILL_MIN, 1 at/above FILL_FULL

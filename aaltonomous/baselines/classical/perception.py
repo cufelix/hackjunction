@@ -350,7 +350,7 @@ class Perception:
         Z = median valid depth of the blob, else the optical depth of the centroid ray at the object-top plane,
         else None -> split.fallback_area_px."""
         s = self.cfg.get("split") or {}
-        size, coef = float(s.get("object_size", 0.045)), float(s.get("area_coef", 1.2))
+        size, coef = float(s.get("object_size") or self.size), float(s.get("area_coef", 1.2))   # null -> scene objects.size
         fallback = float(s.get("fallback_area_px", 3000))
         if self.cal is None or self.cam not in getattr(self.cal, "cams", {}):
             return fallback
@@ -361,7 +361,7 @@ class Perception:
             d = depth[blob > 0].astype(float)
             d = d[(d >= dlo) & (d <= dhi)]
             if len(d) >= int(self.cfg["min_valid_depth_px"]):
-                z = float(np.median(d)) / 1000.0
+                z = float(np.median(d)) / (1.0 / float(getattr(self.cal.cams[self.cam], "depth_scale", 0.001)))   # mm -> m via calibration depth_scale (0.001 -> /1000.0 exactly)
         if z is None:
             try:
                 T = self.cal._T(self.cam)

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import numpy as np
 
+# NOTE: SHAPE_MIN_POINTS / BLOB_MIN_AREA_PX are tuned for object size 0.045 and head fx~605; the top-face point count scales ~ (fx*size/Z)^2.
 SHAPE_MIN_POINTS = 40       # top-face points needed for the metric decision (= prism_pose.TRIANGLE_MIN_POINTS)
 CONF_FULL_POINTS = 200      # point count at which the count term of the confidence saturates
 BLOB_MIN_AREA_PX = 60

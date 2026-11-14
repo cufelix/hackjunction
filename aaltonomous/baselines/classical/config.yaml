@@ -21,7 +21,7 @@ perception:
     blue:   [[[100, 70, 50], [130, 255, 255]]]
   erode_px: 2                 # shrink the mask before using depth (edge pixels mix object + counter depth)
   open_px: 3                  # morphological opening against speckle
-  min_area_px: 120            # smaller blobs are ignored
+  min_area_px: 120            # smaller blobs are ignored. NOTE: tuned for size 0.045 and head fx~605; scales ~ (fx*size/Zmax)^2
   min_valid_depth_px: 25      # fewer valid depth pixels -> fall back to ray / plane at known object height
   depth_range_mm: [150, 2000]
   top_band: 0.006             # points within this of the highest (robust) point count as the top face
@@ -79,7 +79,7 @@ perception:
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
                               # 94/120 orange pieces merged with a neighbour) at distance-transform peaks
   split:
-    object_size: 0.045        # m, expected object edge for the size gate
+    object_size: null         # m, expected object edge for the size gate; null = scene objects.size (perception.object_size)
     area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;
                               # two touching objects >= 2.1 -> gate 1.8 separates them)
     area_factor: 1.5          # only blobs larger than area_factor * expected area are candidates
