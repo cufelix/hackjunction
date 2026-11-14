@@ -239,6 +239,7 @@ perception:
     enabled: false
     min_gap_deg: 6.0
     red_min_s: 110             # layer 2b: red-labelled candidate with top-face S below this -> abstain (0-255)
+    yellow_fix: false          # FLAG: red-labelled cand with own hue in the yellow range -> yellow before layer 2b
   topface_mode: top35          # FLAG (recall P0). whole_blob falls back from brightest 35% when that subset is too small
   topface_min_px: 1024         # whole_blob fallback threshold for the brightest-35% subset (far cylinder ~850 px)
   sat_floor_adaptive: false    # FLAG (recall P0). Per-frame blue/purple S floor relative to counter background
@@ -285,6 +286,8 @@ perception:
   reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
   still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
   still_vote_params: {n_frames: 3, min_hits: 2, match_m: 0.02}
+  rim_z_from_depth: false     # FLAG: per-bin rim z from head depth -> planner rim clearance / drop / carry / wall collision
+  rim_z_params: {looks: 3, max_delta_m: 0.04, percentile: 90, min_points: 40, stride: 2, margin_m: 0.006, counter_tol_m: 0.015}
   # FLAG (Felix gate). perception.color_gate: post-filter at the end of detect(), default OFF. Rejects speckle below
   # area_frac * (fx * 0.045 / Z)^2 px (no Z: min_px_no_z); blobs over a bin or within edge_m of its edge (a rim blob
   # is kept only as a depth top face edge_h above the counter); top_k by n_px when > max_cands survive (degraded);
@@ -296,7 +299,7 @@ perception:
                live_bins: false, near_margin_m: 0.0, area_frac: 0.4, min_px_no_z: 1000,
                max_area_frac: 3.0, max_px_no_z: 6000, ws_x: [0.12, 0.45], ws_abs_y: 0.40, ws_edge_m: 0.01,
                edge_m: 0.02, edge_h: [0.03, 0.055], max_cands: 6,
-               sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}}   # sat_floor: median S (0-255) over the blob
+               sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}, workspace_fail_open: false, workspace_assumed_counter_z: 0.15}   # sat_floor: median S (0-255) over the blob
   depth_blob_recover: false   # FLAG (P0 perception): known-colour depth blobs missed by HSV; unknown colours abstain
   depth_blob_recover_params:
     stride: 6                 # 480x640 -> 80x107 height map; one bounded pass per perception update

@@ -55,6 +55,7 @@ class Scene:
 
     counter_z_runtime = None   # calib.plane.apply_height: runtime table height (pelvis frame); None = the nominal scene value
     mat_z_follows_counter = False   # calib.wide_counter_window: mat z = height above the RUNTIME counter (mat_to_pelvis / pelvis_to_mat)
+    rim_z_runtime = None       # perception.rim_z_from_depth: {bin: measured rim z (pelvis)}; None / missing bin = nominal
 
     def __post_init__(self):
         c = self.cfg
@@ -103,6 +104,21 @@ class Scene:
             if z is not None:
                 return float(z)
         return float(self.origin[2])
+
+    def rim_wall(self, name=None):
+        """Bin wall height above the counter the planner uses: the nominal scene.yaml value unless
+        perception.rim_z_from_depth measured bin(s). name=None -> the highest bin (carry height)."""
+        nominal = float(self.cfg["bins"]["wall_height"])
+        rz = self.rim_z_runtime   # one dict swapped atomically by the perception thread
+        if not rz:
+            return nominal
+        if name is not None:
+            return nominal if name not in rz else float(rz[name]) - self.counter_z
+        return max([nominal] + [float(z) - self.counter_z for z in rz.values()])
+
+    def rim_z(self, name=None):
+        """Bin rim height in the pelvis frame (nominal: counter_z + wall_height)."""
+        return self.counter_z + self.rim_wall(name)
 
     # ------------------------------------------------------------ geometry
     @property

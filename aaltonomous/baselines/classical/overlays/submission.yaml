@@ -59,6 +59,7 @@ flags:
   perception.color_gate.fk_dilate_px: 0         # New H2     per-link silhouette dilation (stock/off)
   perception.color_gate.live_bins: false        # Felix gate  per-bin confidence selects tight vote vs conservative union
   perception.color_gate.near_margin_m: 0.0      # New H2/M1  confidence-aware near hedge (stock/off)
+  perception.rim_z_from_depth: false            # rim z     per-bin rim height from head depth (planner clearance / drop / carry)
   perception.color_gate.sat_floor: false       # Felix gate  blue S<110 / yellow S<45 blobs rejected (shadow, sheen)
   perception.sat_floor_adaptive: false         # recall P0 adaptive counter-relative purple saturation floor
   perception.area_floor_geometric: false       # recall P0 projected prism/cube area bounds
@@ -66,6 +67,8 @@ flags:
   perception.partial_ok_near_hand: false       # recall P0 tentative FK-boundary fragments
   perception.relook_before_done: false         # recall P0 final retract + fresh-frame relook
   perception.depth_blob_recover: false          # P0 perception depth-supported recall recovery; OFF until real-frame A/B
+  perception.color_gate.workspace_fail_open: false  # recall  workspace rule fails open on the nominal-counter-z bias
+  perception.hue_guard.yellow_fix: false          # recall  red-labelled cand with a yellow hue -> yellow before low_s_red
   perception.split_blobs: true                 # real colour  split touching same-colour objects
   perception.assoc_radius_m: 0.06              # finals grasp same-colour retry association across frames
   perception.color_gate.fk_silhouette: false    # filled per-link FK silhouette
