@@ -7,6 +7,7 @@ Hi erkka! Team hackjunction (Felix, Tim, Oliver) would like to apply for the rea
 - Process: every feature is behind a flag, and flags stay off until a paired A/B passes. With all flags off the
   output is byte-identical to the baseline on 13 episodes. The full test suite runs 3x before a release, and we
   run fault drills (offline cold start, ws drop/reconnect, depth blackout).
+- A Wendy package is prepared (wendy.json for amd64, arm64 variant) with a local cold-start smoke test.
 - Evidence: sim language tasks 54/74 vs 1/74 for stock, 0 wrong; seeds 1040-1059: 74/82 objects, 0 wrong.
 
 **We took your advice and made our sim match your setup**
@@ -19,7 +20,7 @@ Hi erkka! Team hackjunction (Felix, Tim, Oliver) would like to apply for the rea
 
 **Questions**
 1. Which machine runs the Wendy agent: the RTX 5090 x86 PC, or the G1's onboard arm64 computer?
-2. How does the image get there without internet? Should we send a tarball / registry in advance? Size ~X GB.
+2. How does the image get there without internet? Our policy image is ~1.5 GB. The optional brain sidecar (llama.cpp CUDA + Qwen3-VL-8B Q8 weights) is a separate image of ~12-13 GB that we can ship as a tarball in advance.
 3. Which Wendy agent version and port should we target?
 4. Are robot DDS and the cameras reachable with host networking from the container?
 5. Could you share a ~10 s RGB-D recording of the finals setup (head cam), so we can check our calibration?
