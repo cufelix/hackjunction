@@ -23,7 +23,7 @@ STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config
 LIMITS = {"motion.carry_scale": (0.0, 1.0)}
 CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight"),
            "grasp.held_detector": ("stall", "finger_sum"),
-           "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust"),
+           "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust", "robust_v2"),
            "perception.principal_point": ("file", "center"),
            "perception.online_pitch_cal": (False, True, "table"), "brain.backend": ("stub", "llamacpp")}
 VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
@@ -56,7 +56,8 @@ FLAGS = {
     "perception.near_bin_guard": ("Oliver #7", False, "classify_shape abstains next to a bin (cut top face)"),
     "perception.no_blob_shape": ("Oliver #5/#7", False, "no metric top face -> shape None, never the 2D blob ratio"),
     "perception.shape_diag": ("Oliver #5/#7", False, "passive [shape_diag] log line per detection (no action change)"),
-    "perception.hsv_set": ("real colour", "stock", "stock | robust: one HSV set for sim + the real head cam (hsv_robust)"),
+    "perception.hsv_set": ("real colour", "stock", "stock | robust: one HSV set for sim + the real head cam (hsv_robust) | robust_v2: robust with red H 0-22, yellow H 24-52 (hsv_robust_v2)"),
+    "perception.hue_guard.enabled": ("hue guard", False, "robust_v2 band 22-24 + per-frame: adjacent red|yellow pair closer than min_gap_deg -> abstain (color_conf 0.3, off the bins)"),
     "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),
     "perception.principal_point": ("Oliver lane 3", "file", "file | center: Isaac renders cx,cy at the image centre"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
@@ -259,6 +260,9 @@ def check_flag_values(cfg):
         # the shell wraps planner.plan with closures bound to the stock planner: the first-pick scale would not reach it
         raise ValueError("policy.first_object_speed_scale cannot be combined with policy.safety_shell_vel_reserve > 0")
     _check_color_gate(cfg)
+    hg = cfg.get("perception", {}).get("hue_guard") or {}
+    if not 0.0 <= float(hg.get("red_min_s", 110.0)) <= 255.0:
+        raise ValueError(f"perception.hue_guard.red_min_s = {hg.get('red_min_s')}: want 0-255")
     g = cfg.get("grasp") or {}
     for key in ("generic_shape_min_conf", "generic_min_confidence"):
         if not 0.0 <= float(g.get(key, 0.5)) <= 1.0:
