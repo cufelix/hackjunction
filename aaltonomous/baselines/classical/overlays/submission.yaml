@@ -9,6 +9,7 @@ name: submission
 flags:
   profile_auto.auto_detect: false
   profile_auto.auto_frames: 5
+  profile_auto.require_rgb_cue: false
   profile_auto.sim_overrides: {}
   policy.fixed_instruction_first: false
   calib.hand_icp_primary: false
