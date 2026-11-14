@@ -33,6 +33,9 @@ perception:
   bin_pixel_margin: 0.004     # pixels whose 3D point is inside a bin footprint (+ margin) are dropped before grouping
   object_size: null           # null = scene.yaml objects.size (grasp width)
   principal_point: file      # FLAG (Oliver lane 3): file | center (sim renders cx,cy at the image centre)
+  inject_cam_error: null      # FLAG (TEST ONLY). [dpitch_deg, dyaw_deg, dx, dy, dz]: head T_pelvis_optical is rotated about
+                              # its own position (pitch about pelvis y, + = nose down; then yaw about z) and translated (m,
+                              # pelvis frame) before perception uses it. null = off
   y_affine: null              # FLAG (23-grasp-failure §11b/§13). [a, b]: perceived - true y = a*y + b -> y -= a*y + b
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
   hand_calibration:           # head-camera 6-DOF pose from the robot's own forearms/hands in depth (hand_calib.py)

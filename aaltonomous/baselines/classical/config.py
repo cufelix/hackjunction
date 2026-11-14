@@ -55,6 +55,8 @@ FLAGS = {
     "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),
     "perception.principal_point": ("Oliver lane 3", "file", "file | center: Isaac renders cx,cy at the image centre"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
+    "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
+                                                    "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
@@ -216,6 +218,10 @@ def check_flag_values(cfg):
         budget = float(budget)
         if not np.isfinite(budget) or budget <= 0.0:
             raise ValueError(f"policy.object_time_budget_s = {budget}: want null or a finite positive number of seconds")
+    ice = _get(cfg, "perception.inject_cam_error")
+    if ice is not None and not (isinstance(ice, (list, tuple)) and len(ice) == 5
+                                and all(isinstance(x, (int, float)) for x in ice)):
+        raise ValueError(f"perception.inject_cam_error = {ice!r}: want null or [dpitch_deg, dyaw_deg, dx, dy, dz]")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}
