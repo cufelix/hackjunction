@@ -140,6 +140,9 @@ class ClassicalPolicy:
             if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
                 from .normalize import normalize
                 text = normalize(text)
+            if (self.cfg.get("instruction") or {}).get("strict", False):   # never guess: abstain (Felix strict)
+                from .normalize import strict_mapping
+                return strict_mapping(text, resolve(text, fallback={}))
             return resolve(text) or None
         except Exception as e:                      # a parse bug must not cost the whole episode
             self.log(f"instruction resolve failed ({e}), using FIXED_MAPPING")

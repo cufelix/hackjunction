@@ -126,6 +126,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_fk_xcheck"] = nopp | {"calib.fk_xcheck"}   # rebased on cand_r17: log-only B2 arm
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
         expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
+        expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
+            | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
         expect["ab_inj_p7"] = expect["ab_inj_p4"] = expect["ab_inj_p7_yl"] = expect["ab_inj_p7_yr"] = nopp | inj
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
@@ -163,13 +165,15 @@ class TestFlags(unittest.TestCase):
     def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
-        self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
-                                      "finals_real", "rc1", "ab_decision", "ab_place_gate",
-                                      "ab_object_time_budget_s", "ab_colour_kmeans", "ab_cgate", "ab_plane_cgate", "ab_cgate_fk", "ab_cgate_live", "ab_plane_cgate_live", "ab_plane_cgate_live_fk", "ab_binvote", "ab_plane_cgate_live_vote", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90", "ab_isolated_first", "cand_r18", "finals_r18", "ab_generic_fallback",
-                                      "ab_first_object_speed_scale", "ab_drop_height_extra_m",
-                                      "ab_drop_lateral_margin_m", "ab_log_joint_offset", "safe_profile",
-                                      "ab_inj_p7", "ab_inj_p4", "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_plane_inj_p7",
-                                      "ab_plane_b1_inj_p7", "ab_b1_inj_p7", "ab_held_detector"})
+        self.assertEqual(set(retry), {"ab_b1_inj_p7", "ab_binvote", "ab_cgate", "ab_cgate_fk", "ab_cgate_live", "ab_colour_kmeans",
+                                      "ab_decision", "ab_drop_height_extra_m", "ab_drop_lateral_margin_m", "ab_first_object_speed_scale",
+                                      "ab_fk_xcheck", "ab_generic_fallback", "ab_hand_calib", "ab_held_detector", "ab_inj_p4",
+                                      "ab_inj_p7", "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_isolated_first", "ab_log_joint_offset",
+                                      "ab_object_time_budget_s", "ab_place_gate", "ab_plane_b1_inj_p7", "ab_plane_cgate",
+                                      "ab_plane_cgate_live", "ab_plane_cgate_live_fk", "ab_plane_cgate_live_vote", "ab_plane_inj_p7",
+                                      "ab_retry_vary", "ab_retry_vary_slots", "ab_safety", "ab_vel80", "ab_vel85", "ab_vel90",
+                                      "brain_llm", "cand_r16", "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18", "finals_real",
+                                      "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 

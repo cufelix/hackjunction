@@ -170,9 +170,185 @@ def name_colours(sentence: str) -> str:
     return sentence
 
 
+_LIFT_LR = re.compile(r"\(\s*lift\s+to\s+(right|left)\s*\)", re.I)   # "first bin (lift to right)": a left/right typo
+
+
 def normalize(sentence: str) -> str:
     """Map colour names and near-miss tokens onto the resolver's vocabulary, then drop colour-named-bin clauses."""
+    sentence = _LIFT_LR.sub(lambda m: f"(left to {m.group(1)})", sentence)
     return drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, name_colours(sentence))))
+
+
+# Strict mode (instruction.strict): the mapping never guesses. instruction.py is FROZEN, so this filters its output.
+# Every check only turns a key into an abstain (None) or drops it; abstain scores 0, a wrong bin scores -1.
+#   (a) the resolver parsed nothing, or a swap re-maps the whole sentence -> abstain on all (never the FIXED fallback);
+#   (b) a clause the resolver cannot read reliably (negation, condition, table placement, relation, quantity) abstains
+#       every key it names, and "default" is dropped;
+#   (c) a key whose colour/shape word is nowhere in the text is dropped (no inference by elimination); a colour-named
+#       bin ("the purple box") is a bin, not an object colour, so it names no key. "default" needs a catch-all phrase;
+#   (d) a key keeps its bin only if every clause that names it states that same bin. A bin-less clause borrows the bin
+#       of the next one in two shapes only: a list ("Rules: red: left") and a bare key joined by "and" ("Red and yellow
+#       go left"). The resolver's completion and clause-inheritance guesses name a bin no clause gives.
+#   Beyond the spec (found by the stress/novel residuals): (e) a bare colour key whose clause names a shape the mapping
+#       does not bind to that colour ("orange prism" under "red") is an over-generalisation; (f) a named object the
+#       resolver did not bind blocks the fall-through to "default"; "lift to right" in a bin list is "left to right".
+_CLAUSE_SEP = re.compile(r"(\s*(?:[;,.:!?\n]|\band\b|\bwhile\b|\bbut\b)\s*)", re.I)
+_TRIGGERS = tuple(re.compile(p, re.I) for p in (
+    r"\b(?:not|never|no|none|nor|neither|nothing|without|except|excluding|other\s+than|apart\s+from)\b|n't\b",
+    r"\b(?:if|unless|otherwise|in\s+case|when\s+there)\b",
+    r"\b(?:on\s+the\s+table|leave|in\s+front\s+of|behind|beside|next\s+to|near|between|on\s+top\s+of|outside)\b",
+    r"\b(?:closest|nearest|farthest|furthest|biggest|largest|smallest|tallest|left\s+of|right\s+of)\b",
+    r"\b(?:back\s+to)\b|\bfrom\s+the\s+(?:\w+\s+){0,2}(?:bins?|box(?:es)?|containers?|slots?|trays?|crates?|baskets?)\b",
+    r"\b(?:one|two|three|four|five|\d+)\s+of\b|\b(?:only|just)\s+(?:one|two|three)\b|\ba\s+single\b|\bhalf\b"
+    r"|\ball\s+but\b|\bfirst\s+(?:two|three)\b|\b(?:exactly|at\s+(?:most|least)|a\s+few|some\s+of|several)\b",
+))
+_SWAP = re.compile(r"\b(?:swap|switch|exchange|instead)\b", re.I)
+_BINCOL = re.compile(r"\b(?:red|orange|yellow|gold(?:en)?|blue|purple|violet|lilac|magenta|green|pink|white|black)"
+                     r"\s+(?:bins?|box(?:es)?|containers?|baskets?|crates?|tubs?|trays?|receptacles?|buckets?)\b", re.I)
+_CATCH_ALL = re.compile(r"\b(?:everything\s+else|anything\s+else|the\s+rest|remaining|all\s+(?:the\s+)?others?|"
+                        r"all\s+other|any\s+others?)\b(?!\s+(?:\w+\s+)?(?:colou?rs?|shapes?|cubes?|cylinders?|triangles?|"
+                        r"prisms?|red|yellow|blue|purple|violet|orange|lilac|gold\w*|cube|cylinder|triangle)\b)", re.I)
+_BLOCKS = re.compile(r"\bblocks?\b", re.I)
+
+
+def _strict_keys(text: str) -> tuple[set[str], set[str]]:
+    """(colours, shapes) the resolver reads as OBJECTS in text (purple/violet -> blue, orange -> red); bins are not objects."""
+    toks = _ins._tokens(_ins._colour_aliases(_BINCOL.sub(" bin ", text).lower()))
+    return ({_ins._COLOR_WORDS[t] for t in toks if t in _ins._COLOR_WORDS},
+            {_ins._SHAPE_WORDS[t] for t in toks if t in _ins._SHAPE_WORDS})
+
+
+_FILLER = frozenset("and or the all every ones one too also go goes should must be placed put".split())
+
+
+def _bins_in(text: str, ord_ok: bool = False) -> set[str]:
+    """Bins a piece states: position words, and ordinals the resolver itself would read as bins (ord_ok: the sentence
+    enumerates bins by ordinal, or this piece holds a lone ordinal bound to a bin noun)."""
+    toks = _ins._tokens(text)
+    bins = {_ins._BIN_WORDS[t] for t in toks if t in _ins._BIN_WORDS}
+    if ord_ok or _ins._lone_ordinal(toks):
+        bins |= {_ins._ORDINAL_BINS[t] for t in toks if t in _ins._ORDINAL_BINS and t not in ("a", "b", "c")}
+    return bins
+
+
+def _nonkey_words(text: str) -> int:
+    """Words that are neither a colour, a shape, a bin word nor filler: a bare key clause ("Red", "lilac ones too") has 0."""
+    return sum(1 for t in _ins._tokens(text) if t not in _ins._COLOR_WORDS and t not in _ins._SHAPE_WORDS
+               and t not in _ins._BIN_WORDS and t not in _FILLER)
+
+
+def _triggered(clause: str) -> bool:
+    return any(rx.search(clause) for rx in _TRIGGERS)
+
+
+def _cross_unbound(k, out: dict, named) -> bool:
+    """A bare colour key whose clause also names a shape the mapping does not bind to that colour (or the reverse) is an
+    over-generalisation: "orange prism" under "red" would also send orange cubes. Shape-only keys cover their colours."""
+    for cs, _, _ in named:
+        cols, shps = cs
+        if isinstance(k, tuple):
+            continue
+        if k in _ins.COLORS:
+            if any((k, s) not in out and s not in out for s in shps):
+                return True
+        else:
+            if any((c, k) not in out and c not in out for c in cols):
+                return True
+    return False
+
+
+def _names(k, cols: set[str], shps: set[str]) -> bool:
+    """True if the key k (colour, shape or (colour, shape)) is named by a text with these colours and shapes."""
+    if isinstance(k, tuple):
+        return k[0] in cols and k[1] in shps
+    return k in (cols if k in _ins.COLORS else shps)
+
+
+def _pieces(text: str) -> list[tuple[tuple[set[str], set[str]], set[str], bool, bool]]:
+    """Clauses (split at _CLAUSE_SEP) as (keys, bins, catch-all phrase, triggered). A bin-less clause right after a
+    triggered one is part of that trigger ("between the yellow cylinder and the orange cube"). A clause with keys (or a
+    catch-all) and no bin takes the bins of the next clause when that one has bins and no keys ("Rules: red: left")."""
+    parts = _CLAUSE_SEP.split(text)
+    raw = [(p, parts[i + 1] if i + 1 < len(parts) else "") for i, p in enumerate(parts[0::2]) if p and p.strip()]
+    ord_ok = _ins._ordinals_ok(_ins._tokens(text))
+    info, prev = [], False
+    for p, _ in raw:
+        ks, bs = _strict_keys(p), _bins_in(p, ord_ok)
+        t = _triggered(p) or (prev and not bs)
+        info.append([ks, bs, bool(_CATCH_ALL.search(p)), t, _nonkey_words(p)])
+        prev = t
+    out = []
+    for i, (ks, bs, c, t, nonkey) in enumerate(info):
+        if (ks[0] or ks[1] or c) and not bs and not t and i + 1 < len(info):
+            nk, nb, _, nt, _ = info[i + 1]
+            colon_list = nb and not (nk[0] or nk[1])          # "Rules: red: left"
+            and_joined = (nb and (nk[0] or nk[1]) and nonkey <= 2 and not nt   # "Red and yellow go in the left bin"
+                          and raw[i][1].strip().lower() == "and")
+            if not nt and (colon_list or and_joined):
+                bs = nb
+        out.append((ks, set() if t else bs, c, t))
+    return out
+
+
+def _strict(text, mapping: dict) -> dict:
+    text = "" if text is None else str(text)
+    if not text.strip():
+        return dict(mapping)
+    if not mapping or _SWAP.search(text):   # (a)
+        return {"default": None}
+    out = dict(mapping)
+    pieces = _pieces(text)
+    for (cols, shps), _, _, t in pieces:   # (b)
+        if not t:
+            continue
+        for k in (*cols, *shps):            # also keys the resolver never bound: None stops the lookup at this key
+            out[k] = None
+        for k in list(out):
+            if isinstance(k, tuple) and (k[0] in cols or k[1] in shps):
+                out[k] = None
+    if any(t for *_, t in pieces):
+        out.pop("default", None)
+    cols_all, shps_all = _strict_keys(text)
+    if _BLOCKS.search(text):                # "blocks" is the cube only beside another shape: the resolver decides that
+        shps_all = shps_all | {"cube"}
+    if "default" in out:                    # a named object the resolver did not bind must not fall through to "default"
+        tuple_cols = {k[0] for k in out if isinstance(k, tuple)}
+        tuple_shps = {k[1] for k in out if isinstance(k, tuple)}
+        for k in (cols_all - set(out) - tuple_cols) | (shps_all - set(out) - tuple_shps):
+            out[k] = None
+    catch = bool(_CATCH_ALL.search(text))
+    for k in list(out):
+        if out[k] is None:
+            continue
+        if k == "default":                  # (c) needs the catch-all phrase; (d) its piece states the bin
+            if not catch:
+                del out[k]
+            elif out[k] not in set().union(*(b for _, b, c, _ in pieces if c)):
+                out[k] = None
+            continue
+        if not _names(k, cols_all, shps_all):   # (c)
+            del out[k]
+            continue
+        named = [(cs, b, t) for cs, b, _, t in pieces if _names(k, *cs)]
+        if any(t for _, _, t in named):          # a triggered piece names it: the bin is not stated plainly
+            out[k] = None
+            continue
+        if _cross_unbound(k, out, named):        # (e) "orange prism" under a bare colour key
+            out[k] = None
+            continue
+        bs = [b for _, b, _ in named if b]     # (d) pieces with no bin defer to the ones that state one
+        ok = bool(bs) and all(len(b) > 1 or out[k] in b for b in bs) and any(out[k] in b for b in bs)
+        if not ok:
+            out[k] = None
+    return out or {"default": None}
+
+
+def strict_mapping(text: str, mapping: dict) -> dict:
+    """resolve(text, fallback={}) filtered to abstain rather than guess (instruction.strict). Never raises."""
+    try:
+        return _strict(text, mapping)
+    except Exception:
+        return {"default": None}
 
 
 def _selfcheck() -> None:
