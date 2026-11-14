@@ -57,6 +57,12 @@ class TestColourBinClauses(unittest.TestCase):
         for s in ("Put the first cube in the left bin.", "Yellow goes in the third bin."):
             self.assertEqual(normalize(s), s)   # no side word: untouched
 
+    def test_count_from_right_preamble_mirrors_third_to_left(self):
+        s = ("Count the bins from the right. Red objects go in the third bin, yellow objects in the second bin, "
+             "blue objects in the first bin.")
+        self.assertEqual(resolve(normalize(s), fallback={}),
+                         {"red": "left", "yellow": "center", "blue": "right"})
+
     def test_finals_colour_names_and_typos(self):
         # real objects: purple / yellow / orange (resolver keys blue / yellow / red)
         cases = {"Sorting: pruple -> right; yellow -> leeft; oange -> centre.": {"blue": "right", "yellow": "left", "red": "center"},
