@@ -123,11 +123,15 @@ class ClassicalPolicy:
                         or dict(FIXED_MAPPING))
         self.planner.mapping = self.mapping
         self.time_limit = info.get("time_limit", self.time_limit)
+        self._resolve_time_alias()
         self.state = "init"
         self.queue_a = self.queue_h = None
         self.arm_cmd = self.hand_cmd = None
         self.attempts = []          # (position, count) of objects we tried to pick
         self.attempt_tracks = []    # retry-vary: {color, latest xy, cumulative count} stable pushed-object tracks
+        self.object_time_tracks = []  # EV budget: {color, latest xy, cumulative planned motion seconds}
+        self.budget_abandoned = []  # (color, xy) objects whose hard per-object budget was exhausted
+        self.gate_skipped = []      # (color, xy) objects deliberately left on the counter by place_gate
         self.failed = []            # positions whose plans failed
         self.pending = None         # Plan waiting for the operator
         self.pending_text = ""      # what the operator is asked to confirm
@@ -336,13 +340,20 @@ class ClassicalPolicy:
         except Exception as e:  # never kill the control loop
             job["result"] = ("error", repr(e))
 
+    def _detect_kw(self):
+        """Only with perception.colour_kmeans: tell detect() whether the arm is out of view (parked at home)."""
+        if not self.cfg["perception"].get("colour_kmeans", False):
+            return {}
+        return {"arm_clear": bool(np.abs(self.arm_cmd - self.home).max() < 0.05)}
+
     def _look(self, obs):
         verify = self._verify_on()
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
-            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"])
+            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw())
             self.last_detections = dets
             return self._choose_retry(dets, obs, verify=False)
-        dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True)
+        dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
+                                                   **self._detect_kw())
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -385,7 +396,8 @@ class ClassicalPolicy:
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
         for d, source_bin, target_bin in corrections:
-            if self._vary_on():
+            budget_blocked = False
+            if self._vary_on():   # no place gate: the object is already in a bin
                 n = self._attempt_count(d.top[:2], d.color)
                 limit = self._attempt_limit(d.top[:2])
                 varied = self._max_attempts_vary()
@@ -396,14 +408,21 @@ class ClassicalPolicy:
                 p = self._plan_pick(d, dict(bin_name=target_bin, relocate=False,
                                             drop_slot=slot, source_bin=source_bin))
                 self.plans.append(p)
+                if p.ok and not self._object_time_allows(d, p.duration):
+                    budget_blocked = True
+                    break
                 if p.ok:
                     return ("plan", p, len(dets))
                 self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
+            if budget_blocked:
+                continue
             def cleanup(det, arm, hand, planner=None, **_):
                 return (planner or self.planner).plan_to_counter(det, arm, hand, source_bin,
                                                     obstacles=[o.top[:2] for o in dets])
             p = self._plan_pick(d, {}, plan_fn=cleanup)
             self.plans.append(p)
+            if p.ok and not self._object_time_allows(d, p.duration):
+                continue
             if p.ok:
                 return ("plan", p, len(dets))
             self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
@@ -475,6 +494,82 @@ class ClassicalPolicy:
             return False
         return self._attempt_count(xy, color) >= self._attempt_limit(xy)
 
+    def _tracked_here(self, tracks, color, xy):
+        """Nearest same-colour tracked item inside the existing attempt association radius."""
+        xy = np.asarray(xy, float)
+        near = [item for item in tracks if item[0] == color and np.linalg.norm(xy - item[1]) < self._attempt_radius()]
+        return None if not near else min(near, key=lambda item: np.linalg.norm(xy - item[1]))
+
+    GATE_MAX_SKIPS = 3
+
+    def _bin_confidence(self, d):
+        """Confidence in the destination: instruction mapping and bin geometry."""
+        mapping = float(self.mapping_conf.get(d.color, 1.0))
+        # Only a successful calibration is evidence; failed/fallback/rejected/none means nominal bins (safe, 1.0).
+        cal = self.calibration
+        calibration = float(cal.confidence) if cal is not None and getattr(cal, "success", False) is True else 1.0
+        return float(np.clip(min(mapping, calibration), 0.0, 1.0))
+
+    def _place_gate_allows(self, d, target_bin, remember=True):
+        """EV placement decision for a counter object.  Off is an unconditional pass."""
+        pol = self.cfg["policy"]
+        if not pol.get("place_gate", False):
+            return True
+        color_conf = float(getattr(d, "color_conf", 1.0))
+        bin_conf = self._bin_confidence(d)
+        color_min = float(pol.get("place_gate_colour_min", 0.6))
+        bin_min = float(pol.get("place_gate_bin_min", 0.5))
+        ok = np.isfinite(color_conf) and color_conf >= color_min and np.isfinite(bin_conf) and bin_conf >= bin_min
+        if not ok and remember:
+            xy = np.asarray(d.top[:2], float).copy()
+            tr = self._tracked_here(self.gate_skipped, d.color, xy)
+            if tr is None:
+                tr = [d.color, xy, 0]
+                self.gate_skipped.append(tr)
+            else:
+                tr[1] = xy
+            tr[2] += 1  # a skip is re-evaluated on later looks; _choose stops offering it after 3 skips
+            reason = "colour" if not np.isfinite(color_conf) or color_conf < color_min else "bin"
+            self.log(f"[gate] skip {d.color} target={target_bin} reason={reason} "
+                     f"colour_conf={color_conf:.3f} min={color_min:.3f} "
+                     f"bin_conf={bin_conf:.3f} min={bin_min:.3f}")
+        return bool(ok)
+
+    def _object_time_spent(self, color, xy):
+        tr = self._tracked_here([(item["color"], item["xy"], item) for item in self.object_time_tracks], color, xy)
+        return 0.0 if tr is None else float(tr[2]["spent_s"])
+
+    def _object_time_allows(self, d, duration, remember=True):
+        """Whether another plan fits the object's cumulative hard motion budget.
+
+        Retired: policy.object_time_budget_s is an alias of the decision cap (_resolve_time_alias), so this timer
+        never counts (budget None) and the cap is the only mechanism.
+        """
+        budget = self._budget_timer_s
+        if budget is None:
+            return True
+        budget = float(budget)
+        spent = self._object_time_spent(d.color, d.top[:2])
+        ok = spent + float(duration) <= budget + 1e-9
+        if not ok and remember:
+            xy = np.asarray(d.top[:2], float).copy()
+            if self._tracked_here(self.budget_abandoned, d.color, xy) is None:
+                self.budget_abandoned.append((d.color, xy))
+                self.log(f"[time_budget] abandon {d.color}: spent={spent:.1f}s + plan={float(duration):.1f}s "
+                         f"> budget={budget:.1f}s")
+        return bool(ok)
+
+    def _record_object_time(self, color, xy, duration):
+        if self._budget_timer_s is None:
+            return
+        xy = np.asarray(xy, float).copy()
+        tr = self._tracked_here([(item["color"], item["xy"], item) for item in self.object_time_tracks], color, xy)
+        if tr is None:
+            self.object_time_tracks.append({"color": color, "xy": xy, "spent_s": float(duration)})
+        else:
+            tr[2]["xy"] = xy
+            tr[2]["spent_s"] += float(duration)
+
     def _attempt_radius(self):
         """Association radius for executed attempts. Retry-vary uses its wider pushed-object track."""
         pol = self.cfg["policy"]
@@ -513,6 +608,7 @@ class ClassicalPolicy:
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
         cands, extra = [], []
         mav = self._max_attempts_vary()
+        pol = self.cfg["policy"]
         t = float(obs.get("t", 0.0))
         try:
             stop = self._decision_stop(dets, t)
@@ -524,6 +620,13 @@ class ClassicalPolicy:
         for d in dets:
             xy = d.top[:2]
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
+                continue
+            if pol.get("place_gate", False):
+                gs = self._tracked_here(self.gate_skipped, d.color, xy)
+                if gs is not None and gs[2] >= self.GATE_MAX_SKIPS:
+                    continue
+            if self._budget_timer_s is not None and self._tracked_here(
+                    self.budget_abandoned, d.color, xy) is not None:
                 continue
             n = self._attempt_count(xy, d.color)
             if n >= self._attempt_limit(xy):
@@ -546,7 +649,6 @@ class ClassicalPolicy:
             retry_key = min(retry) if retry else (0.0 if d.color in self.retry_colors else np.inf)
             return (not np.isfinite(retry_key), retry_key)
 
-        pol = self.cfg["policy"]
         triage = bool(pol.get("time_triage", False))
         if self._decision_on():
             try:
@@ -586,6 +688,8 @@ class ClassicalPolicy:
             target_bin = self._bin_of(d)
             if target_bin is None:
                 continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
+            if not self._place_gate_allows(d, target_bin):
+                continue
             if verify:  # #6: explicit target bin + a free, verified drop slot
                 slot = self._next_drop_slot(target_bin)
                 if slot is None:
@@ -605,6 +709,8 @@ class ClassicalPolicy:
             else:
                 p = self._plan_pick(d, dict(obstacles=others))
             self.plans.append(p)
+            if p.ok and not self._object_time_allows(d, p.duration):
+                continue
             if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
                 self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")
                 continue
@@ -635,7 +741,29 @@ class ClassicalPolicy:
         return ("none", None, len(dets))
 
     # ------------------------------------------------------------------ decision layer D1-D4 (decision.py)
+    def _resolve_time_alias(self):
+        """policy.object_time_budget_s is a DEPRECATED alias of the decision layer's object time cap (one timer only).
+
+        budget set, cap off  -> the cap mechanism runs with cap_min_s = cap_max_s = budget (self._cap_alias_s);
+        both set             -> the cap wins, one warning that the budget is ignored;
+        only the cap set     -> unchanged.
+        The old cumulative timer (_object_time_allows / _record_object_time) never runs: self._budget_timer_s is None.
+        """
+        pol = self.cfg["policy"]
+        budget = pol.get("object_time_budget_s")
+        self._cap_alias_s = None
+        self._budget_timer_s = None   # the cumulative per-object timer is retired in favour of the cap
+        if budget is None:
+            return
+        if pol.get("object_time_cap", False):
+            self.log(f"[time_cap] policy.object_time_budget_s={float(budget):g} ignored: "
+                     "deprecated alias, policy.object_time_cap is set")
+        else:
+            self._cap_alias_s = float(budget)
+
     def _dflag(self, name):
+        if name == "object_time_cap" and self._cap_alias_s is not None:
+            return True
         return bool(self.cfg["policy"].get(name, False))
 
     def _dec_fail(self, name, exc):
@@ -650,6 +778,8 @@ class ClassicalPolicy:
     def _dcfg(self):
         d = dict(dec.DEFAULTS)
         d.update(self.cfg.get("decision") or {})
+        if self._cap_alias_s is not None:   # deprecated policy.object_time_budget_s: a fixed per-object cap
+            d["cap_min_s"] = d["cap_max_s"] = self._cap_alias_s
         return d
 
     def _centre_name(self):
@@ -1200,6 +1330,7 @@ class ClassicalPolicy:
         xy = plan.waypoints["grasp"][:2]
         self.attempts.append((xy, 1))
         self._track_attempt(plan.color, xy)
+        self._record_object_time(plan.color, xy, plan.duration)
         self.n_started += 1
         if self._dflag("speed_tiers") and not plan.corrective:   # D3: the next look judges this pick
             self._pend_out = {"color": plan.color, "xy": np.asarray(xy, float).copy()}

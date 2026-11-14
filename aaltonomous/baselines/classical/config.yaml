@@ -114,6 +114,8 @@ perception:
     red:    [[[0, 70, 70], [16, 255, 255]], [[170, 70, 70], [180, 255, 255]]]
     yellow: [[[18, 45, 90], [52, 255, 255]]]
     blue:   [[[100, 70, 50], [145, 255, 255]]]
+  colour_kmeans: false       # FLAG (EV gate). Once per episode, bounded k=3 on robust object-blob HSV pixels;
+                              # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
                               # 94/120 orange pieces merged with a neighbour) at distance-transform peaks
   split:
@@ -266,6 +268,12 @@ policy:
   same_object_radius: 0.03
   verify_placement: false     # FLAG (#6, Timi). Look into the bins after every release: verify the placement, correct
                               # wrong-bin / unscored objects, distinct drop slots (grasp.drop_slot_*), time reserves below
+  place_gate: false           # FLAG (EV gate). Before planning a counter-object placement, require both confidence
+                              # thresholds below; otherwise leave it on the counter (0 points) and try another object
+  place_gate_colour_min: 0.6  # HSV/blob confidence: purity, support, hue-boundary margin, brightness-aware tape penalty
+  place_gate_bin_min: 0.5     # self-calibration's residual-derived confidence; nominal (uncalibrated) bins use 1.0
+  object_time_budget_s: null  # FLAG (EV gate). Cumulative planned motion seconds per tracked object; null = off.
+                              # Suggested real overlay: 35 s (120 s / 3--5 objects leaves room for settling/overhead).
   max_total_attempts: null    # global per-episode cap on started picks, any object (null = off). Guards against
                               # an object knocked > same_object_radius that is re-detected as 'new' forever
   drop_verify_radius: 0.04    # released top-face centre must be this close to its assigned slot to count as verified

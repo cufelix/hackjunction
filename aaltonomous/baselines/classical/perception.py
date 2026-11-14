@@ -22,6 +22,74 @@ from .shape_id import classify_top_face   # the ONE shape decision; swap this im
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
 
 
+def colour_confidence(hsv, blob, ranges_by_class, color, min_area_px=120):
+    """Cheap 0..1 confidence that ``blob`` is an object of ``color``.
+
+    The score combines class-mask purity, HSV threshold margin, V brightness,
+    and a brightness-aware penalty near the real orange bin tape (H 2..7,
+    V about 119).  Absolute brightness is not scored: shadow is not a colour error.  Hue distance is circular, so stock red at H=0 is correctly
+    treated as being inside the wrapped red range.
+    """
+    hsv = np.asarray(hsv, dtype=np.uint8)
+    use = np.asarray(blob, dtype=bool)
+    px = hsv[use]
+    if not len(px) or color not in ranges_by_class:
+        return 0.0
+
+    inside = np.zeros(len(px), bool)
+    sv_margin = np.zeros(len(px), float)
+    hue_allowed = np.zeros(180, bool)
+    for lo, hi in ranges_by_class[color]:
+        lo, hi = np.asarray(lo), np.asarray(hi)
+        hit = np.all((px >= lo) & (px <= hi), axis=1)
+        inside |= hit
+        # The meaningful S/V rejection edges are the lower limits.  Treating
+        # 255 as an uncertainty edge would incorrectly punish bright top faces.
+        margin = np.minimum(np.clip((px[:, 1].astype(float) - float(lo[1])) / 30.0, 0.0, 1.0),
+                            np.clip((px[:, 2].astype(float) - float(lo[2])) / 60.0, 0.0, 1.0))
+        sv_margin = np.maximum(sv_margin, np.where(hit, margin, 0.0))
+        hlo, hhi = max(0, int(lo[0])), min(179, int(hi[0]))
+        if hlo <= hhi:
+            hue_allowed[hlo:hhi + 1] = True
+    purity = float(inside.mean())
+    support = float(np.clip(len(px) / max(float(min_area_px), 1.0), 0.0, 1.0))
+
+    def distance_to(mask):
+        """Circular hue distance lookup; fixed 180x180 work, not blob-size squared."""
+        target = np.flatnonzero(mask)
+        if not len(target):
+            return np.full(180, 180.0)
+        h = np.arange(180)[:, None]
+        delta = np.abs(h - target[None, :])
+        return np.minimum(delta, 180 - delta).min(axis=1).astype(float)
+
+    h = px[:, 0].astype(int)
+    own_margin = distance_to(~hue_allowed)[h]
+    hue_factor = float(np.clip(np.median(own_margin[inside]) / 3.0, 0.0, 1.0)) if inside.any() else 0.0
+    sv_factor = float(np.median(sv_margin[inside])) if inside.any() else 0.0
+
+    # Also soften a class whose pixels sit within three hue units of another
+    # class.  This currently matters most around red/orange vs yellow.
+    neighbour = np.zeros(180, bool)
+    for other, ranges in ranges_by_class.items():
+        if other == color:
+            continue
+        for lo, hi in ranges:
+            hlo, hhi = max(0, int(lo[0])), min(179, int(hi[0]))
+            if hlo <= hhi:
+                neighbour[hlo:hhi + 1] = True
+    neighbour_distance = distance_to(neighbour)[h]
+    neighbour_factor = float(np.clip(np.median(neighbour_distance[inside]) / 3.0, 0.0, 1.0)) if inside.any() else 0.0
+
+    tape = np.zeros(180, bool)
+    tape[2:8] = True
+    tape_proximity = np.clip(1.0 - distance_to(tape)[h] / 4.0, 0.0, 1.0)
+    tape_dimness = np.clip((200.0 - px[:, 2].astype(float)) / 100.0, 0.0, 1.0)
+    tape_factor = 1.0 - float(np.mean(tape_proximity * tape_dimness))
+    return float(np.clip(support * purity * hue_factor * sv_factor * neighbour_factor * tape_factor,
+                         0.0, 1.0))
+
+
 @dataclass
 class Detection:
     color: str
@@ -39,6 +107,7 @@ class Detection:
     shape_path: str | None = None  # shape_id path ("metric" | "blob" | "abstain_*" | "off"), only filled when grasp.close_posture_by_shape
     shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
+    color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
 
     def __repr__(self):
         x, y, z = self.top
@@ -129,6 +198,16 @@ class Perception:
         # real colour (hf_perception 2026-11-14): one HSV set for sim + the real head cam; split touching objects
         self.hsv = self.cfg["hsv_robust"] if self.cfg.get("hsv_set", "stock") == "robust" else self.cfg["hsv"]
         self.split_blobs = bool(self.cfg.get("split_blobs", False))
+        self.place_gate = bool((cfg.get("policy") or {}).get("place_gate", False))
+        # Per-episode colour k-means always starts/falls back at the measured
+        # robust ranges, regardless of the separately selectable stock set.
+        self.colour_kmeans = bool(self.cfg.get("colour_kmeans", False))
+        self._colour_kmeans_base = self.cfg.get("hsv_robust")
+        if self.colour_kmeans:
+            self.hsv = self._colour_kmeans_base
+        self._colour_kmeans_done = False
+        self._colour_kmeans_tries = 0
+        self.colour_kmeans_info = None
         self.log = log if log is not None else print
 
     def reset_calibration(self):
@@ -137,6 +216,11 @@ class Perception:
         self.calibration = None
         self.pitch_calibration = None
         self.pitch_T = None
+        if self.colour_kmeans:
+            self.hsv = self._colour_kmeans_base
+            self._colour_kmeans_done = False
+            self._colour_kmeans_tries = 0
+            self.colour_kmeans_info = None
 
     def _T(self):
         """Episode-corrected camera pose, or the untouched nominal calibration."""
@@ -711,10 +795,14 @@ class Perception:
     def masks(self, rgb):
         import cv2
         hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+        return self._masks_hsv(hsv)
+
+    def _masks_hsv(self, hsv, ranges=None):
+        import cv2
         out = {}
-        for color, ranges in self.hsv.items():
+        for color, color_ranges in (ranges or self.hsv).items():
             m = np.zeros(hsv.shape[:2], np.uint8)
-            for lo, hi in ranges:
+            for lo, hi in color_ranges:
                 m |= cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
             k = int(self.cfg["open_px"])
             if k > 0:
@@ -722,19 +810,57 @@ class Perception:
             out[color] = m
         return out
 
-    def detect(self, rgb, depth, debug=False, include_bins=False):
+    def _fit_colour_kmeans(self, hsv, keep):
+        """One bounded k=3 attempt on robust object-blob pixels per episode."""
+        import cv2
+        from .colour_kmeans import fit_hue_ranges
+
+        self._colour_kmeans_tries += 1
+        pixels = []
+        try:
+            for m in self._masks_hsv(hsv, self._colour_kmeans_base).values():
+                m = m & keep
+                n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+                for i in range(1, n):
+                    if int(stats[i, cv2.CC_STAT_AREA]) >= int(self.cfg["min_area_px"]):
+                        pixels.append(hsv[lab == i])
+            px = np.concatenate(pixels, axis=0) if pixels else np.empty((0, 3), np.uint8)
+            self.hsv, self.colour_kmeans_info = fit_hue_ranges(px, self._colour_kmeans_base)
+            info = self.colour_kmeans_info
+            if info["status"] == "adapted":
+                self._colour_kmeans_done = True
+            self.log(f"[colour_kmeans] {info['status']} reason={info['reason']} "
+                     f"centres={info['centres']} sizes={info['sizes']} ranges={info['ranges']}")
+        except Exception as exc:
+            self.hsv = self._colour_kmeans_base
+            self.colour_kmeans_info = {"status": "fallback", "reason": f"{type(exc).__name__}: {exc}",
+                                       "centres": [], "sizes": [], "purities": [], "ranges": {}}
+            self.log(f"[colour_kmeans] fallback: {type(exc).__name__}: {exc}")
+        if self._colour_kmeans_tries >= 3:
+            self._colour_kmeans_done = True  # give up after the 3rd attempt; robust ranges stay
+
+    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True):
         """Detect coloured objects.
 
         ``include_bins`` keeps pixels over the known bin footprints long enough for
         :meth:`_reject` to label them ``in_bin:<name>``.  They are still returned
         only through the rejected half of the ``debug=True`` result, so existing
-        callers cannot accidentally pick an already sorted object.
+        callers cannot accidentally pick an already sorted object.  ``arm_clear``: the
+        policy says no arm is in view (looks happen at home); colour k-means only fits then.
         """
         import cv2
         c = self.cfg
         dets, rejected = [], []
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
-        for color, m in self.masks(rgb).items():
+        # Preserve the old path exactly when both new consumers are off.  When
+        # either is on, share one RGB->HSV conversion.
+        need_hsv = self.place_gate or self.colour_kmeans
+        hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None
+        if self.colour_kmeans and not self._colour_kmeans_done and arm_clear:
+            kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
+            self._fit_colour_kmeans(hsv, kkeep)
+        masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
+        for color, m in masks.items():
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
             k = int(c["open_px"])
             if k > 0:
@@ -747,12 +873,14 @@ class Perception:
                 blob = (lab == i).astype(np.uint8)
                 if self.split_blobs:
                     for part, p_area, p_cent in self.split_blob(blob, area, cent[i], depth):
-                        self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected)
+                        self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected,
+                                          hsv if self.place_gate else None)
                     continue
-                self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected)
+                self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected,
+                                  hsv if self.place_gate else None)
         return (dets, rejected) if debug else dets
 
-    def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected):
+    def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None):
         """One colour blob -> Detection (depth top face, else plane) -> dets or rejected (the stock per-blob body)."""
         import cv2
         c = self.cfg
@@ -775,6 +903,12 @@ class Perception:
                     det.shape_conf, det.shape_path = conf, self._last_path
                 if self.shape_diag:
                     det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
+        if det is not None and hsv is not None:
+            try:
+                det.color_conf = colour_confidence(hsv, blob, self.hsv, color, c["min_area_px"])
+            except Exception as exc:  # never raise into act()
+                det.color_conf = 0.0
+                self.log(f"[gate] colour_confidence failed for {color}: {type(exc).__name__}: {exc}")
         why = self._reject(det, bins_first=include_bins)
         if self.shape_diag and det is not None and det.shape_diag is not None:
             self._log_diag(det, why)

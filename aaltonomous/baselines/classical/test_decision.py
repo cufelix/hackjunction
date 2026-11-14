@@ -231,10 +231,10 @@ class TestFlagsOff(unittest.TestCase):
 
     def test_ab_decision_overlay_is_r16_nopp_plus_exactly_four_flags(self):
         a = {k for k, _, on, _, _ in effective_flags(load_config(overlay="ab_decision")) if on}
-        b = {k for k, _, on, _, _ in effective_flags(load_config(overlay="cand_r16_nopp")) if on}
+        b = {k for k, _, on, _, _ in effective_flags(load_config(overlay="cand_r17")) if on}
         self.assertEqual(a - b, {f"policy.{f}" for f in FLAGS4})
         self.assertEqual(b - a, set())
-        ca, cb = load_config(overlay="ab_decision"), load_config(overlay="cand_r16_nopp")
+        ca, cb = load_config(overlay="ab_decision"), load_config(overlay="cand_r17")
         for f in FLAGS4:
             ca["policy"].pop(f)
             cb["policy"].pop(f)
