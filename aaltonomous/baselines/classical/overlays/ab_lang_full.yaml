@@ -1,0 +1,10 @@
+# A/B overlay: full language path (round 8). Resolver v2 mapping + shape from the metric top face (no blob guess) +
+# scene.resolve_bin lookup: (colour, shape) -> colour -> shape -> "default"; None/abstain -> object stays on the counter.
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_lang_full <image>.
+name: ab_lang_full
+flags:
+  instruction.resolve: true
+  perception.classify_shape: true
+  perception.no_blob_shape: true
+  policy.bin_lookup: resolve_bin
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes
