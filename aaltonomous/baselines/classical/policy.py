@@ -120,6 +120,10 @@ class ClassicalPolicy:
             text = (info or {}).get("instruction") or ""
             if not text:
                 return None
+            from .brain.planner import MAX_INSTRUCTION_CHARS
+            if len(str(text)) > MAX_INSTRUCTION_CHARS:       # bounded: reset() has a 1.0 s watchdog
+                self.log(f"instruction resolve skipped ({len(str(text))} chars), using FIXED_MAPPING")
+                return None
             from .instruction import resolve
             if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
                 from .normalize import normalize
@@ -1751,6 +1755,9 @@ class ClassicalPolicy:
                 return dict(self.mapping), "fixed"
             if not (self.cfg.get("instruction") or {}).get("resolve", False):
                 return {}, "unresolved"
+            from .brain.planner import MAX_INSTRUCTION_CHARS
+            if len(str((info or {}).get("instruction") or "")) > MAX_INSTRUCTION_CHARS:
+                return {}, "unresolved"                     # bounded like _instruction_mapping
             from .instruction import resolve
             parsed = resolve(str((info or {}).get("instruction") or ""), fallback={}) or {}
             return dict(parsed), "resolver" if parsed else "unresolved"
