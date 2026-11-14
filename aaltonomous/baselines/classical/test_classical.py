@@ -788,5 +788,72 @@ class TestBinLookup(unittest.TestCase):
         self.assertEqual(res[0], "none")
 
 
+class TestPostureByShape(unittest.TestCase):
+    """grasp.close_posture_by_shape: demo posture only for triangle AND path == metric AND conf >= min_conf."""
+    OV = {"grasp.close_posture": "closed_tight", "hand.closed_tight": [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6],
+          "grasp.point_in_palm": [0.0862, -0.0864, 0.0143], "grasp.close_posture_by_shape": True}
+
+    def _plan(self, cfg, **det_kw):
+        from .perception import Detection
+        post, home = hand_postures(cfg), home_arm(cfg)
+        pl = Planner(cfg, SC, post, home)
+        L = SC.cfg["layout"]
+        top = SC.mat_to_pelvis([np.mean(L["region_x"]) + 0.08, np.mean(L["region_y"]), SC.object_height()])
+        d = Detection("yellow", top, 0, 0, "depth")
+        for k, v in det_kw.items():
+            setattr(d, k, v)
+        p = pl.plan(d, home, post["open"])
+        self.assertTrue(p.ok, p.reason)
+        return p, post, pl
+
+    def test_gate(self):
+        cfg = load_config(overrides=self.OV)
+        cases = [("triangle", 0.9, "metric", "closed_demo"), ("triangle", 0.5, "metric", "closed_demo"),
+                 ("triangle", 0.49, "metric", "closed_tight"), ("triangle", 0.9, "blob", "closed_tight"),
+                 ("cube", 0.9, "metric", "closed_tight"), ("cylinder", 0.99, "metric", "closed_tight"),
+                 (None, 0.0, "abstain_few_points", "closed_tight")]
+        for label, conf, path, want in cases:
+            p, post, pl = self._plan(cfg, shape=label, shape_conf=conf, shape_path=path)
+            self.assertEqual(p.posture[0], want, (label, conf, path))
+            sl = ArmKinematics.sl(p.side)
+            i = [n for n, _, _ in p.phases].index("close")
+            end = p.phases[i][2] - 1
+            np.testing.assert_allclose(p.hand[end][sl], post[want][sl], atol=1e-9)
+            self.assertEqual(pl._posture, None)
+
+    def test_grasp_point_follows_posture_and_is_restored(self):
+        cfg = load_config(overrides=self.OV)
+        p1, _, pl = self._plan(cfg, shape="cube", shape_conf=0.9, shape_path="metric")
+        off = {k: v.copy() for k, v in pl.kin.offset.items()}
+        p2, _, pl2 = self._plan(cfg, shape="triangle", shape_conf=0.9, shape_path="metric")
+        np.testing.assert_allclose(pl.kin.offset["left"], [0.0862, -0.0864, 0.0143])  # restored after the plan
+        np.testing.assert_allclose(pl2.kin.offset["right"], [0.0862, 0.0864, 0.0143])
+        self.assertTrue(p1.arm.shape != p2.arm.shape or not np.allclose(p1.arm, p2.arm))            # different grasp point -> different arm trajectory
+
+    def test_off_ignores_shape(self):
+        cfg = load_config(overrides={**self.OV, "grasp.close_posture_by_shape": False})
+        p, _, _ = self._plan(cfg, shape="triangle", shape_conf=0.9, shape_path="metric")
+        self.assertIsNone(p.posture)
+
+    def test_episode_logs_every_choice(self):
+        cfg = load_config(overrides={**self.OV, "perception.classify_shape": True, "policy.grasp_diag_log": True})
+        logs = []
+        env = make_mock_env(seed=1, cfg=cfg)
+        pol = ClassicalPolicy(config=cfg, log=logs.append, safety=env.filter.cfg)
+        obs = env.reset()
+        pol.reset({"instruction": obs["instruction"]})
+        while True:
+            obs, info = env.step(pol.act(obs))
+            if info["episode_over"]:
+                break
+        lines = [m for m in logs if m.startswith("[grasp_posture]")]
+        self.assertEqual(len(lines), pol.n_started)
+        for m in lines:
+            self.assertIn("label=", m)
+            self.assertIn("conf=", m)
+            self.assertIn("path=", m)
+            self.assertIn("posture=", m)
+
+
 if __name__ == "__main__":
     unittest.main()

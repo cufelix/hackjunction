@@ -33,6 +33,8 @@ class Detection:
     shape: str | None = None   # "cube" | "cylinder" | "triangle" | None (unknown)
     apex_yaw: float | None = None  # triangle only: pelvis-frame heading (rad, x fwd, y left) centre -> any one vertex (mod 120 deg)
     apex_conf: float = 0.0     # confidence of apex_yaw, 0..1 (from perception.triangle_pose)
+    shape_conf: float = 0.0    # shape_id confidence (0..1) behind `shape`
+    shape_path: str | None = None  # shape_id path ("metric" | "blob" | "abstain_*" | "off"), only filled when grasp.close_posture_by_shape
     shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
 
@@ -69,6 +71,8 @@ class Perception:
         self.calibration = None
         # opt-in shape / triangle pose (all default OFF = stock behaviour)
         self.classify_shape = bool(self.cfg.get("classify_shape", False))
+        self.want_path = bool(cfg.get("grasp", {}).get("close_posture_by_shape", False))  # shape_id path for the posture gate
+        self._last_path = None
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
         # #7 near-bin guard: abstain on shape when the top face may be cut by the bin exclusion (needs classify_shape)
         self.near_bin_guard = bool(self.cfg.get("near_bin_guard", False))
@@ -312,6 +316,8 @@ class Perception:
                     det = self._from_plane(color, cent[i], area, int(ok.sum()))
                     if det is not None:
                         det.shape, conf, path = self._shape_conf(None, blob)
+                        if self.want_path:
+                            det.shape_conf, det.shape_path = conf, self._last_path
                         if self.shape_diag:
                             det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
                 why = self._reject(det, bins_first=include_bins)
@@ -394,12 +400,19 @@ class Perception:
 
     def _shape_conf(self, top_xy, blob, near_bin=False):
         """(label, conf, path): path is "off" / "abstain_near_bin" when decided here, else None (= the seam's)."""
+        self._last_path = None
         if not (self.classify_shape or self.triangle_pose):
+            self._last_path = "off"
             return None, 0.0, "off"
         if near_bin:
+            self._last_path = "abstain_near_bin"
             return None, 0.0, "abstain_near_bin"
         shape = None if blob is None else blob.shape
-        label, conf = classify_top_face(top_xy, blob, shape, use_blob=not self.no_blob_shape)
+        if self.want_path:
+            label, conf, info = classify_top_face_diag(top_xy, blob, shape, use_blob=not self.no_blob_shape)
+            self._last_path = info.get("path")
+        else:
+            label, conf = classify_top_face(top_xy, blob, shape, use_blob=not self.no_blob_shape)
         return label, float(conf), None
 
     def _diag(self, det, source, top_xy, blob, conf, path, near_bin):
@@ -456,6 +469,8 @@ class Perception:
         det = Detection(color, np.array([xy[0], xy[1], z]), area, len(u), "depth", _yaw(top[:, :2]),
                         (float(np.median(u)), float(np.median(v))))
         det.shape = shape
+        if self.want_path:
+            det.shape_conf, det.shape_path = conf, self._last_path
         if apex_yaw is not None:
             det.apex_yaw, det.apex_conf = apex_yaw, apex_conf
         if self.shape_diag:

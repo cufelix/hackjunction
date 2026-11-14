@@ -70,6 +70,12 @@ grasp:
   # tips are 57 mm apart (URDF): centred between them (auto) a 45 mm object wedges between the two fingers and is
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
+  # grasp.close_posture_by_shape (FLAG, default off): triangle posture ("demo", Oliver FK a44dd79) used only when the
+  # shape is "triangle" AND shape_id path == "metric" AND shape confidence (shape_id._label conf * point-count
+  # factor, 0..1) >= posture_by_shape_min_conf; every other pick uses grasp.close_posture + point_in_palm.
+  close_posture_by_shape: false
+  posture_by_shape_min_conf: 0.5
+  point_in_palm_demo: [0.1094, -0.0694, 0.0142]   # used only with close_posture_by_shape (right = y mirrored)
   approach_axis_in_palm: [0.0, -1.0, 0.0]   # palm-frame axis that must point down (left; right mirrors y)
   finger_hint: [1.0, 0.0, 0.0]              # weak preference for the finger direction (pelvis frame)
   finger_hints:               # tried in turn (LEFT arm; right mirrors y): forward, forward-inward, inward
@@ -163,6 +169,7 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
                                                          # centre: in the sim the cube got wedged between index and middle)
   closed_tight: [0.0, -0.1, 1.2, -1.0, -0.6, -1.0, -0.6]  # FLAG value (pinch fix, round 4): = closed until Oliver's FK
                                                          # values (jaw 41 mm, midpoint) arrive; used with grasp.close_posture
+  closed_demo: [0.00, 0.92, 0.25, -0.50, -1.41, -0.49, -1.21]  # triangle posture for close_posture_by_shape only (thumb0 = 0)
   release:  [0.0, -0.5, 1.5, -0.05, -0.05, -0.05, -0.05] # let go: thumb back + up, fingers straight (sim: the cube
                                                          # stayed hooked in half-bent fingers with `open`/`preshape`)
   right: null                  # optional explicit right-hand postures {open, preshape, closed} in RIGHT DDS order

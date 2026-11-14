@@ -612,6 +612,10 @@ class ClassicalPolicy:
         self.n_started += 1
         if plan.corrective:
             self.n_corrections += 1
+        if plan.posture is not None and self.cfg["policy"].get("grasp_diag_log", False):
+            nm, label, conf, path = plan.posture
+            self.log(f"[grasp_posture] t={t:.1f} {plan.color} {plan.side} label={label} conf={conf:.2f} path={path} "
+                     f"posture={'pinch_demo' if nm == 'closed_demo' else 'pinch_v1'} ({nm})")
         if self.cfg["policy"].get("grasp_diag_log", False) and plan.side in ("left", "right"):
             ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
             if "close" in ph and "lift" in ph:
@@ -652,7 +656,7 @@ class ClassicalPolicy:
         self._gdiag = None
         plan = g["plan"]
         sl = ArmKinematics.sl(plan.side)
-        closed = self.post[self.cfg["grasp"].get("close_posture", "closed")][sl]
+        closed = self.post[(plan.posture[0] if plan.posture else self.cfg["grasp"].get("close_posture", "closed"))][sl]
         parts = []
         held = None
         for key in ("close", "lift"):

@@ -53,6 +53,7 @@ class Plan:
     arm: np.ndarray | None = None                      # (T, 14)
     hand: np.ndarray | None = None                     # (T, 14)
     phases: list = field(default_factory=list)         # (name, start tick, end tick)
+    posture: tuple | None = None                       # (posture, shape label, conf, path) with grasp.close_posture_by_shape
     safety_clips: int | None = None
 
     @property
@@ -117,6 +118,7 @@ class Planner:
         self.kin = kin or ArmKinematics(cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=dt)
         self.dt = dt
+        self._posture = None   # grasp.close_posture_by_shape: posture of the pick being planned
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
 
@@ -479,7 +481,34 @@ class Planner:
             self.kin.hint, self.kin.w_hint = saved
         return None
 
+    def _posture_choice(self, det):
+        """grasp.close_posture_by_shape: (posture name, grasp point or None, label, conf, path). demo only for a
+        confident metric triangle; everything else (incl. unknown shape / blob / abstain) keeps the configured posture."""
+        g = self.cfg["grasp"]
+        label = getattr(det, "shape", None)
+        conf = float(getattr(det, "shape_conf", 0.0) or 0.0)
+        path = getattr(det, "shape_path", None)
+        if label == "triangle" and path == "metric" and conf >= float(g.get("posture_by_shape_min_conf", 0.5)):
+            return "closed_demo", np.asarray(g["point_in_palm_demo"], float), label, conf, path
+        return g.get("close_posture", "closed"), None, label, conf, path
+
     def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
+        if not self.cfg["grasp"].get("close_posture_by_shape", False):
+            self._posture = None
+            return self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin)
+        name, pt, label, conf, path = self._posture_choice(det)
+        saved = self.kin.offset
+        if pt is not None:
+            self.kin.offset = {"left": pt, "right": pt * np.array([1.0, -1.0, 1.0])}
+        self._posture = name
+        try:
+            p = self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin)
+        finally:
+            self.kin.offset, self._posture = saved, None
+        p.posture = (name, label, conf, path)
+        return p
+
+    def _plan_side_inner(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
         sc, zc = self.scene, self.scene.counter_z
         plan = Plan(False, side=side, color=det.color, target_bin=bin_name if place_xy is None else "counter",
@@ -488,7 +517,7 @@ class Planner:
         sl = ArmKinematics.sl(side)
         H, post = self.height, self.post
         hand_pre = hand_q.copy(); hand_pre[sl] = post["preshape"][sl]
-        hand_cls = hand_q.copy(); hand_cls[sl] = post[g.get("close_posture", "closed")][sl]  # grasp.close_posture
+        hand_cls = hand_q.copy(); hand_cls[sl] = post[self._posture or g.get("close_posture", "closed")][sl]  # grasp.close_posture
         hand_open = hand_q.copy(); hand_open[sl] = post["open"][sl]
         hand_rel = hand_q.copy(); hand_rel[sl] = post[g.get("release_posture", "preshape")][sl]
 
