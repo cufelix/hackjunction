@@ -1,0 +1,571 @@
+diff --git a/aaltonomous/baselines/classical/perception.py b/aaltonomous/baselines/classical/perception.py
+index c462f93..29b8733 100644
+--- a/aaltonomous/baselines/classical/perception.py
++++ b/aaltonomous/baselines/classical/perception.py
+@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
+ 
+ import numpy as np
+ 
++from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
++
+ 
+ @dataclass
+ class Detection:
+@@ -49,8 +51,6 @@ class Perception:
+         # opt-in shape / triangle pose (all default OFF = stock behaviour)
+         self.classify_shape = bool(self.cfg.get("classify_shape", False))
+         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
+-        shapes = (getattr(scene, "cfg", None) or {}).get("objects", {}).get("shapes") or []
+-        self.scene_shape = shapes[0] if len(shapes) == 1 else None   # only one shape in the scene -> known
+ 
+     def masks(self, rgb):
+         import cv2
+@@ -91,13 +91,12 @@ class Perception:
+                 d = depth[v, u].astype(float) if depth is not None else np.zeros(len(u))
+                 ok = (d >= dlo) & (d <= dhi)
+                 det = None
+-                shape = self._shape_of(blob)
+                 if ok.sum() >= c["min_valid_depth_px"]:
+-                    det = self._from_depth(color, u[ok], v[ok], d[ok], area, shape)
++                    det = self._from_depth(color, u[ok], v[ok], d[ok], area, blob)
+                 if det is None:
+                     det = self._from_plane(color, cent[i], area, int(ok.sum()))
+                     if det is not None:
+-                        det.shape = shape
++                        det.shape = self._shape_of(None, blob)
+                 why = self._reject(det)
+                 if why:
+                     rejected.append((det, why))
+@@ -146,16 +145,14 @@ class Perception:
+             cv2.fillConvexPoly(keep, hull, 0)
+         return keep
+ 
+-    def _shape_of(self, blob):
+-        """2D-blob shape label, or None (flags off, abstain). A single-shape scene gives the label directly."""
++    def _shape_of(self, top_xy, blob):
++        """Shape label, or None (flags off / abstain). Delegates to `classify_top_face` and decides nothing itself."""
+         if not (self.classify_shape or self.triangle_pose):
+             return None
+-        if self.scene_shape is not None:
+-            return self.scene_shape
+-        from .prism_pose import classify_blob
+-        return classify_blob(blob)[0]
++        shape = None if blob is None else blob.shape
++        return classify_top_face(top_xy, blob, shape)[0]
+ 
+-    def _from_depth(self, color, u, v, d, area, shape=None):
++    def _from_depth(self, color, u, v, d, area, blob=None):
+         P = self.cal.pixel_to_pelvis(self.cam, u, v, d)
+         z_top = np.percentile(P[:, 2], self.cfg["top_percentile"])
+         top = P[P[:, 2] >= z_top - self.cfg["top_band"]]
+@@ -165,10 +162,11 @@ class Perception:
+         w = (d[P[:, 2] >= z_top - self.cfg["top_band"]] / 1000.0) ** 2
+         xy = (top[:, :2] * w[:, None]).sum(0) / w.sum()
+         z = float(np.median(top[:, 2]))
++        shape = self._shape_of(top[:, :2], blob)
+         apex_yaw, apex_conf = None, 0.0
+         if shape == "triangle" and self.triangle_pose:
+             from .prism_pose import robust_center, triangle_pose
+-            tp = triangle_pose(top[:, :2])
++            tp = triangle_pose(top[:, :2], altitude=self.size)
+             if tp is not None:
+                 apex_yaw, apex_conf = float(tp[1]), float(tp[2])
+             rc = robust_center(top[:, :2])
+diff --git a/aaltonomous/baselines/classical/planner.py b/aaltonomous/baselines/classical/planner.py
+index 203a8b3..432d014 100644
+--- a/aaltonomous/baselines/classical/planner.py
++++ b/aaltonomous/baselines/classical/planner.py
+@@ -343,15 +343,17 @@ class Planner:
+         return [a for _, a in sorted(out)][: int(g.get("yaw_max_hints", 2))]
+ 
+     @staticmethod
+-    def _tri_shift(phi, r=0.030):
++    def _tri_shift(phi, r):
+         """Midpoint (m, along f) of the triangle's extent in direction f at angle phi from the apex direction
+-        (vertices r from the centroid): phi=0 -> +7.5 mm towards the apex, phi=60 deg -> -7.5 mm."""
++        (vertices r = 2/3 altitude from the centroid): phi=0 -> +7.5 mm towards the apex, phi=60 deg -> -7.5 mm."""
+         v = np.radians([0.0, 120.0, 240.0])
+         return 0.5 * (r * np.cos(phi - v).max() - r * np.cos(phi + np.pi - v).max())
+ 
+     def _finger_err(self, plan, side, a):
+         """Angle (deg) between the palm x axis (finger direction) at the end of the descend and the heading a."""
+-        e = next(e for name, s, e in plan.phases if name == "descend")
++        e = next((e for name, s, e in plan.phases if name == "descend"), None)
++        if e is None:
++            return float("inf")   # no descend phase to measure -> never counts as aligned
+         self.kin._fk(plan.arm[e - 1])
+         x = self.kin.data.oMf[self.kin.palm[side]].rotation[:, 0]
+         d = np.arctan2(x[1], x[0]) - a
+@@ -367,7 +369,7 @@ class Planner:
+                 f = np.array([np.cos(a), np.sin(a), 0.0])
+                 d2 = copy.copy(det)
+                 if g.get("yaw_tri_shift", True):  # pinch midpoint along f is not the centroid
+-                    d2.top = det.top + self._tri_shift(a - float(det.apex_yaw)) * f
++                    d2.top = det.top + self._tri_shift(a - float(det.apex_yaw), 2.0 / 3.0 * float(self.scene.size)) * f
+                 self.kin.hint, self.kin.w_hint = f, float(g.get("yaw_hint_weight", 3.0))
+                 p = self._plan_side(d2, side, bin_name, arm_q, hand_q, **kw)
+                 if p.ok:
+diff --git a/aaltonomous/baselines/classical/prism_pose.py b/aaltonomous/baselines/classical/prism_pose.py
+index fd95f0f..52ed359 100644
+--- a/aaltonomous/baselines/classical/prism_pose.py
++++ b/aaltonomous/baselines/classical/prism_pose.py
+@@ -1,8 +1,7 @@
+-"""Robust top-face pose helpers for the classical perception (pure numpy/cv2, not wired into the planner).
++"""Robust top-face pose helpers for the classical perception (pure numpy/cv2). Shape decisions live ONLY in shape_id.classify_top_face.
+ 
+     robust_center(xy)            trimmed centre of a point cloud (metres)
+     triangle_pose(xy)            (centre_xy, yaw, confidence) of an equilateral-triangle top face, or None
+-    classify_blob(mask)          ("cube"|"cylinder"|"triangle"|None, area ratio) from the 2D colour blob
+ 
+ Equilateral triangle: the top face has a 3-fold symmetry, so the geometry only fixes the yaw modulo 120 deg. The
+ returned yaw is the vertex direction (centroid -> a vertex) that lies closest to `prefer_yaw` (default +y = the
+@@ -24,12 +23,8 @@ ROBUST_MIN_POINTS = 5
+ TRIANGLE_ALTITUDE = 0.045         # m, flat-to-apex (scene objects.size); inradius = altitude / 3
+ SUPPORT_PERCENTILE = 99.5         # robust "max" of the projection onto each edge normal
+ SIZE_TOLERANCE = 0.5              # |r_fit / r_expected - 1| at which the size term of the confidence reaches 0
++FILL_MIN, FILL_FULL = 0.70, 0.85   # fill term of the confidence: 0 at/below FILL_MIN, 1 at/above FILL_FULL
+ CONF_FULL_POINTS = 200            # point count at which the count term of the confidence saturates
+-# blob classifier
+-BLOB_MIN_AREA_PX = 60
+-BLOB_BORDER_PX = 1                # blob pixels within this many px of the image edge -> abstain (clipped blob)
+-RATIO_CUBE_MIN = 0.88             # area / minAreaRect-area: cube ~1.0, cylinder ~0.785, triangle ~0.5
+-RATIO_CYL_MIN = 0.66
+ 
+ 
+ def robust_center(xy, trim: float = 0.2):
+@@ -69,7 +64,8 @@ def triangle_fit(xy, q: float = SUPPORT_PERCENTILE):
+     return c, th % (2 * np.pi / 3), float(h.mean())
+ 
+ 
+-def triangle_pose(xy_metres, prefer_yaw: float = np.pi / 2, min_points: int = TRIANGLE_MIN_POINTS):
++def triangle_pose(xy_metres, prefer_yaw: float = np.pi / 2, min_points: int = TRIANGLE_MIN_POINTS,
++                  altitude: float = TRIANGLE_ALTITUDE):
+     """Top-face point cloud (N,2) in metres -> (centre_xy (2,), yaw in [0,2pi), confidence in [0,1]) or None.
+ 
+     yaw points from the centroid to a vertex (the "apex"), the one closest to prefer_yaw (see module docstring)."""
+@@ -83,38 +79,20 @@ def triangle_pose(xy_metres, prefer_yaw: float = np.pi / 2, min_points: int = TR
+     k = np.round((prefer_yaw - base) / (2 * np.pi / 3))
+     yaw = float((base + k * 2 * np.pi / 3) % (2 * np.pi))
+     # confidence: enough points, fitted size matches the known object, minAreaRect offset agrees (h/6 toward vertex)
+-    r_exp = TRIANGLE_ALTITUDE / 3.0
++    r_exp = altitude / 3.0
+     f_n = min(1.0, len(xy) / CONF_FULL_POINTS)
+     f_s = float(np.clip(1.0 - abs(r / r_exp - 1.0) / SIZE_TOLERANCE, 0.0, 1.0))
+     import cv2
++    # fill: hull area / area of the fitted triangle. ~0.9+ for a real triangle, ~0.6 for a cube or cylinder that was
++    # mistaken for one (their smallest enclosing triangle is mostly empty). Independent of the object size, so a wrong
++    # shape label still ends in low confidence (-> planner falls back to the stock finger hints).
++    fill = float(cv2.contourArea(cv2.convexHull(xy.astype(np.float32)))) / (3.0 * np.sqrt(3.0) * r * r)
++    f_f = float(np.clip((fill - FILL_MIN) / (FILL_FULL - FILL_MIN), 0.0, 1.0))
+     (rx, ry), _, _ = cv2.minAreaRect(xy.astype(np.float32))
+     off = np.array([rx, ry]) - robust_center(xy)
+     # any of the 3 vertices is valid, so compare against the nearest one
+     d = np.arctan2(off[1], off[0]) - yaw
+     d = (d + np.pi / 3) % (2 * np.pi / 3) - np.pi / 3
+-    agree = abs(np.linalg.norm(off) - TRIANGLE_ALTITUDE / 6) < 0.006 and abs(d) < np.radians(30)
+-    conf = float(f_n * f_s * (0.75 + 0.25 * bool(agree)))
++    agree = abs(np.linalg.norm(off) - altitude / 6) < 0.006 and abs(d) < np.radians(30)
++    conf = float(f_n * f_s * f_f * (0.75 + 0.25 * bool(agree)))
+     return c, yaw, conf
+-
+-
+-def classify_blob(mask, min_area_px: int = BLOB_MIN_AREA_PX, border_px: int = BLOB_BORDER_PX):
+-    """2D colour blob (uint8/bool mask, single object) -> (label, ratio). label is "cube" | "cylinder" | "triangle",
+-    or None to abstain: blob touches the image edge (clipped), or is smaller than min_area_px, or is empty.
+-    ratio = pixel area / minAreaRect area (cube ~1.0, cylinder ~0.785, triangle ~0.5)."""
+-    import cv2
+-    m = (np.asarray(mask) > 0).astype(np.uint8)
+-    H, W = m.shape
+-    b = max(int(border_px), 1)
+-    if m[:b].any() or m[-b:].any() or m[:, :b].any() or m[:, -b:].any():
+-        return None, float("nan")
+-    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+-    if not cnts:
+-        return None, float("nan")
+-    cnt = max(cnts, key=cv2.contourArea)
+-    area = float(m.sum()) if len(cnts) == 1 else float(cv2.contourArea(cnt))
+-    if area < min_area_px:
+-        return None, float("nan")
+-    _, (w, h), _ = cv2.minAreaRect(cnt)
+-    ratio = area / max((w + 1.0) * (h + 1.0), 1e-9)       # +1 px: contour runs through pixel centres
+-    label = "cube" if ratio >= RATIO_CUBE_MIN else "cylinder" if ratio >= RATIO_CYL_MIN else "triangle"
+-    return label, float(ratio)
+diff --git a/aaltonomous/baselines/classical/shape_id.py b/aaltonomous/baselines/classical/shape_id.py
+new file mode 100644
+index 0000000..2ec07d3
+--- /dev/null
++++ b/aaltonomous/baselines/classical/shape_id.py
+@@ -0,0 +1,85 @@
++"""The ONE place a shape is decided: `classify_top_face`.
++
++    label, conf = classify_top_face(top_xy, blob_mask=None, image_shape=None)
++
++    top_xy       (N,2) top-face points in the pelvis frame (metres), or None / too few points
++    blob_mask    full-frame 2D colour blob of the object (uint8/bool), or None
++    image_shape  (H, W) of the frame the blob was cut from
++
++    -> (label, conf): label is "cube" | "cylinder" | "triangle" or None = abstain (never guess); conf in [0, 1].
++
++Perception._shape_of is the only caller; nothing else (planner, prism_pose) may decide a shape. To swap in another
++classifier (e.g. Felix's), keep this signature and change the single import line in perception.py.
++
++Default implementation: ratio = area / minAreaRect area (cube ~1.0, cylinder ~0.785, triangle ~0.5), measured on the
++metric top-face cloud (convex hull area) when it has >= SHAPE_MIN_POINTS points, else on the 2D blob (pixels).
++Border guard: a blob touching the image edge is clipped, so its top face is partial -> abstain.
++"""
++from __future__ import annotations
++
++import numpy as np
++
++SHAPE_MIN_POINTS = 40       # top-face points needed for the metric decision (= prism_pose.TRIANGLE_MIN_POINTS)
++CONF_FULL_POINTS = 200      # point count at which the count term of the confidence saturates
++BLOB_MIN_AREA_PX = 60
++BLOB_BORDER_PX = 1          # blob pixels within this many px of the image edge -> abstain
++RATIO_CUBE_MIN = 0.88       # cube ~1.0, cylinder ~0.785, triangle ~0.5
++RATIO_CYL_MIN = 0.66
++CONF_MARGIN = 0.06          # distance of the ratio to the nearest decision boundary at which conf reaches 1
++
++
++def _label(ratio):
++    """(label, confidence from the margin to the nearest threshold)."""
++    label = "cube" if ratio >= RATIO_CUBE_MIN else "cylinder" if ratio >= RATIO_CYL_MIN else "triangle"
++    margin = min(abs(ratio - RATIO_CUBE_MIN), abs(ratio - RATIO_CYL_MIN))
++    return label, float(min(1.0, margin / CONF_MARGIN))
++
++
++def _touches_border(mask, image_shape, b=BLOB_BORDER_PX):
++    m = np.asarray(mask) > 0
++    if m.ndim != 2 or (image_shape is not None and tuple(m.shape) != tuple(image_shape[:2])):
++        return True                        # not a full-frame mask: the border cannot be checked -> abstain
++    b = max(int(b), 1)
++    return bool(m[:b].any() or m[-b:].any() or m[:, :b].any() or m[:, -b:].any())
++
++
++def _ratio_cloud(xy):
++    import cv2
++    hull = cv2.convexHull(xy.astype(np.float32))
++    (_, _), (w, h), _ = cv2.minAreaRect(hull)
++    if w * h < 1e-12:
++        return None
++    return float(cv2.contourArea(hull)) / float(w * h)
++
++
++def _ratio_blob(mask):
++    import cv2
++    m = (np.asarray(mask) > 0).astype(np.uint8)
++    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
++    if not cnts:
++        return None
++    cnt = max(cnts, key=cv2.contourArea)
++    area = float(m.sum()) if len(cnts) == 1 else float(cv2.contourArea(cnt))
++    if area < BLOB_MIN_AREA_PX:
++        return None
++    _, (w, h), _ = cv2.minAreaRect(cnt)
++    return area / max((w + 1.0) * (h + 1.0), 1e-9)      # +1 px: contour runs through pixel centres
++
++
++def classify_top_face(top_xy, blob_mask=None, image_shape=None):
++    """See module docstring. Returns (label | None, confidence)."""
++    if blob_mask is not None and _touches_border(blob_mask, image_shape):
++        return None, 0.0
++    if top_xy is not None:
++        xy = np.asarray(top_xy, float).reshape(-1, 2)
++        xy = xy[np.all(np.isfinite(xy), axis=1)]
++        if len(xy) >= SHAPE_MIN_POINTS:
++            r = _ratio_cloud(xy)
++            if r is not None:
++                label, conf = _label(r)
++                return label, conf * min(1.0, len(xy) / CONF_FULL_POINTS)
++    if blob_mask is not None:
++        r = _ratio_blob(blob_mask)
++        if r is not None:
++            return _label(r)
++    return None, 0.0
+diff --git a/aaltonomous/baselines/classical/test_prism_pose.py b/aaltonomous/baselines/classical/test_prism_pose.py
+index 24b93d4..2dd9f4d 100644
+--- a/aaltonomous/baselines/classical/test_prism_pose.py
++++ b/aaltonomous/baselines/classical/test_prism_pose.py
+@@ -1,4 +1,4 @@
+-"""Synthetic tests for prism_pose (triangle pose, robust centre, blob classifier). Run:
++"""Synthetic tests for prism_pose (triangle pose, robust centre; shape decisions are tested in test_shape_id.py). Run:
+     python -m pytest aaltonomous/baselines/classical/test_prism_pose.py -q
+     python -m aaltonomous.baselines.classical.test_prism_pose        # prints the full error table (about 1 min)
+ Yaw errors are measured modulo 120 deg (equilateral symmetry): 'flip' = error > 30 deg, i.e. the wrong vertex wedge.
+@@ -6,7 +6,7 @@ Yaw errors are measured modulo 120 deg (equilateral symmetry): 'flip' = error >
+ import cv2
+ import numpy as np
+ 
+-from .prism_pose import (TRIANGLE_MIN_POINTS, classify_blob, robust_center, triangle_pose)
++from .prism_pose import (TRIANGLE_MIN_POINTS, robust_center, triangle_pose)
+ 
+ SIDE = 0.045 / (np.sqrt(3) / 2)          # 0.052 m
+ ALT = 0.045
+@@ -135,37 +135,32 @@ def test_robust_center_ignores_outliers():
+     assert robust_center(xy[:3]) is None
+ 
+ 
+-def _blob(kind, size=40, shift=(0, 0), canvas=(120, 160), rot=0.3):
+-    m = np.zeros(canvas, np.uint8)
+-    c = np.array([canvas[1] / 2 + shift[0], canvas[0] / 2 + shift[1]])
++def _wrong_shape_cloud(kind, side, n=400, seed=0, rot=0.4):
++    rng = np.random.default_rng(seed)
+     if kind == "cube":
+-        pts = size / 2 * np.array([[1, 1], [-1, 1], [-1, -1], [1, -1]])
+-    elif kind == "triangle":
+-        R = size * 2 / 3
+-        pts = R * np.array([[np.cos(a), np.sin(a)] for a in 2 * np.pi * np.arange(3) / 3 + 1.2])
+-    if kind == "cylinder":
+-        cv2.circle(m, tuple(int(v) for v in c), size // 2, 255, -1)
+-    else:
+-        Rm = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
+-        cv2.fillPoly(m, [np.round(pts @ Rm.T + c).astype(np.int32)], 255)
+-    return m
+-
+-
+-def test_classifier_shapes():
+-    for kind in ("cube", "cylinder", "triangle"):
+-        for size in (30, 40, 60):
+-            for rot in (0.0, 0.3, 0.785):
+-                lab, ratio = classify_blob(_blob(kind, size, rot=rot))
+-                assert lab == kind, (kind, size, rot, ratio)
+-
+-
+-def test_classifier_border_guard_and_tiny():
+-    m = _blob("cube", 40, shift=(70, 0))              # pushed against the right edge
+-    assert m[:, -1].any()
+-    assert classify_blob(m)[0] is None
+-    assert classify_blob(_blob("cube", 40, shift=(-65, 0)))[0] is None   # touches the left edge
+-    assert classify_blob(_blob("cube", 6))[0] is None                    # too small
+-    assert classify_blob(np.zeros((50, 50), np.uint8))[0] is None
++        p = rng.uniform(-side / 2, side / 2, (n, 2))
++        R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
++        return p @ R.T
++    a, r = rng.uniform(0, 2 * np.pi, n), side / 2 * np.sqrt(rng.uniform(0, 1, n))   # cylinder, diameter = side
++    return np.stack([r * np.cos(a), r * np.sin(a)], -1)
++
++
++def test_wrong_shape_gives_low_triangle_confidence():
++    """A cube / cylinder wrongly labelled triangle must end in conf < the planner's yaw_min_conf (0.5), whatever
++    its size (size term alone is fooled by a 30 mm cube; the fill term is not)."""
++    for kind in ("cube", "cylinder"):
++        for side in (0.03, 0.045, 0.06):
++            for seed in range(3):
++                tp = triangle_pose(_wrong_shape_cloud(kind, side, seed=seed))
++                assert tp is not None and tp[2] < 0.5, (kind, side, seed, tp[2])
++
++
++def test_altitude_param_follows_scene_size():
++    rng = np.random.default_rng(3)
++    xy, c, a = make_cloud(rng, 400, 0.0, 0.0, apex=0.3)
++    xy50 = c + (xy - c) * (0.065 / ALT)
++    assert triangle_pose(xy50, altitude=0.065)[2] > 0.7
++    assert triangle_pose(xy50)[2] < 0.5          # default 45 mm expectation rejects a 65 mm part
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/aaltonomous/baselines/classical/test_shape_id.py b/aaltonomous/baselines/classical/test_shape_id.py
+new file mode 100644
+index 0000000..e0e57b1
+--- /dev/null
++++ b/aaltonomous/baselines/classical/test_shape_id.py
+@@ -0,0 +1,91 @@
++"""Tests for the shape seam shape_id.classify_top_face (the only place a shape is decided). Run:
++    python -m pytest aaltonomous/baselines/classical/test_shape_id.py -q"""
++import cv2
++import numpy as np
++
++from .shape_id import SHAPE_MIN_POINTS, classify_top_face
++
++KINDS = ("cube", "cylinder", "triangle")
++
++
++def _blob(kind, size=40, shift=(0, 0), canvas=(120, 160), rot=0.3):
++    m = np.zeros(canvas, np.uint8)
++    c = np.array([canvas[1] / 2 + shift[0], canvas[0] / 2 + shift[1]])
++    if kind == "cube":
++        pts = size / 2 * np.array([[1, 1], [-1, 1], [-1, -1], [1, -1]])
++    elif kind == "triangle":
++        R = size * 2 / 3
++        pts = R * np.array([[np.cos(a), np.sin(a)] for a in 2 * np.pi * np.arange(3) / 3 + 1.2])
++    if kind == "cylinder":
++        cv2.circle(m, tuple(int(v) for v in c), size // 2, 255, -1)
++    else:
++        Rm = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
++        cv2.fillPoly(m, [np.round(pts @ Rm.T + c).astype(np.int32)], 255)
++    return m
++
++
++def _cloud(kind, side=0.045, n=300, seed=0, rot=0.4, c=(0.3, 0.1)):
++    """Uniform top-face points (m): cube side = cylinder diameter = triangle altitude = side."""
++    rng = np.random.default_rng(seed)
++    if kind == "cylinder":
++        a, r = rng.uniform(0, 2 * np.pi, n), side / 2 * np.sqrt(rng.uniform(0, 1, n))
++        return np.stack([r * np.cos(a), r * np.sin(a)], -1) + c
++    if kind == "cube":
++        return _rotate(rng.uniform(-side / 2, side / 2, (n, 2)), rot) + c
++    V = side * 2 / 3 * np.array([[np.cos(a), np.sin(a)] for a in rot + 2 * np.pi * np.arange(3) / 3])
++    return rng.dirichlet(np.ones(3), n) @ V + c
++
++
++def _rotate(p, rot):
++    R = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
++    return p @ R.T
++
++
++def test_cloud_path_all_shapes():
++    for kind in KINDS:
++        for rot in (0.0, 0.3, 0.785, 1.9):
++            lab, conf = classify_top_face(_cloud(kind, rot=rot))
++            assert lab == kind and conf > 0.5, (kind, rot, lab, conf)
++
++
++def test_cloud_path_wins_over_wrong_blob():
++    """With enough points the metric cloud decides, not the blob."""
++    lab, _ = classify_top_face(_cloud("triangle"), _blob("cube", 40), (120, 160))
++    assert lab == "triangle"
++
++
++def test_blob_path_all_shapes():
++    for kind in KINDS:
++        for size in (30, 40, 60):
++            for rot in (0.0, 0.3, 0.785):
++                lab, conf = classify_top_face(None, _blob(kind, size, rot=rot), (120, 160))
++                assert lab == kind and conf > 0.3, (kind, size, rot, lab, conf)
++
++
++def test_few_points_fall_back_to_blob_or_abstain():
++    few = _cloud("triangle", n=SHAPE_MIN_POINTS - 1)
++    assert classify_top_face(few, _blob("cube", 40), (120, 160))[0] == "cube"      # blob decides
++    assert classify_top_face(few) == (None, 0.0)                                   # nothing to decide with
++    assert classify_top_face(None) == (None, 0.0)
++    assert classify_top_face(np.full((100, 2), np.nan)) == (None, 0.0)
++
++
++def test_border_guard_abstains_even_with_a_good_cloud():
++    for shift in ((70, 0), (-65, 0), (0, 50), (0, -50)):
++        m = _blob("cube", 40, shift=shift)
++        assert classify_top_face(None, m, (120, 160)) == (None, 0.0), shift
++        assert classify_top_face(_cloud("cube"), m, (120, 160)) == (None, 0.0), shift   # top face is clipped too
++
++
++def test_blob_edge_cases():
++    assert classify_top_face(None, _blob("cube", 6), (120, 160))[0] is None            # too small
++    assert classify_top_face(None, np.zeros((50, 50), np.uint8), (50, 50))[0] is None  # empty
++    assert classify_top_face(None, _blob("cube", 40), (480, 640))[0] is None           # not a full-frame mask
++
++
++def test_confidence_low_near_a_threshold():
++    # a square with one corner clipped sits near the cube/cylinder boundary: it may be labelled but not confidently
++    p = _cloud("cube", n=400)
++    q = p[(p[:, 0] + p[:, 1]) < (p[:, 0] + p[:, 1]).max() - 0.012]
++    lab, conf = classify_top_face(q)
++    assert conf < classify_top_face(p)[1]
+diff --git a/aaltonomous/baselines/classical/test_yaw_align.py b/aaltonomous/baselines/classical/test_yaw_align.py
+index f98163a..a81cb61 100644
+--- a/aaltonomous/baselines/classical/test_yaw_align.py
++++ b/aaltonomous/baselines/classical/test_yaw_align.py
+@@ -10,7 +10,9 @@ from aaltonomous.interface.calibration import Calibration
+ from aaltonomous.scene.scene import Scene
+ 
+ from .config import hand_postures, home_arm, load_config
++from . import perception
+ from .perception import Detection, Perception
++from .prism_pose import TRIANGLE_MIN_POINTS
+ from .planner import Planner
+ 
+ SC = Scene.load()
+@@ -126,18 +128,38 @@ class TestPerceptionWiring(unittest.TestCase):
+         xy = V[0] + u[:, :1] * (V[1] - V[0]) + u[:, 1:] * (V[2] - V[0]) + np.array([0.3, 0.1])
+         return xy
+ 
+-    def _det(self, perc, shape):
+-        xy = self._cloud()
++    def _det(self, perc, label=None, xy=None, conf=0.9):
++        """_from_depth with the shape seam answering (label, conf): the only way a shape enters perception."""
++        xy = self._cloud() if xy is None else xy
+         # pixel_to_pelvis stub takes (u, v, d); d is z in "metres" here, depth weight uses d/1000 (uniform)
+-        return perc._from_depth("red", xy[:, 0], xy[:, 1], np.full(len(xy), 0.9), 500, shape)
++        with mock.patch.object(perception, "classify_top_face", return_value=(label, conf)) as seam:
++            d = perc._from_depth("red", xy[:, 0], xy[:, 1], np.full(len(xy), 0.9), 500, None)
++        self.seam_args = seam.call_args
++        return d
+ 
+     def test_flags_off_unchanged(self):
+         p = self._perc()
+-        d = self._det(p, None)
++        with mock.patch.object(perception, "classify_top_face", side_effect=AssertionError("seam called")):
++            d = p._from_depth("red", *self._cloud().T, np.full(400, 0.9), 500, None)
++            self.assertIsNone(p._shape_of(None, np.ones((10, 10), np.uint8)))
+         self.assertIsNone(d.shape)
+         self.assertIsNone(d.apex_yaw)
+         self.assertEqual(d.apex_conf, 0.0)
+-        self.assertIsNone(p._shape_of(np.ones((10, 10), np.uint8)))
++
++    def test_seam_receives_top_face_and_blob(self):
++        p = self._perc(classify_shape=True)
++        blob = np.zeros((20, 30), np.uint8)
++        with mock.patch.object(perception, "classify_top_face", return_value=("cube", 1.0)) as seam:
++            p._from_depth("red", *self._cloud().T, np.full(400, 0.9), 500, blob)
++        top, b, shape = seam.call_args[0]
++        self.assertEqual(top.shape, (400, 2))
++        self.assertIs(b, blob)
++        self.assertEqual(shape, (20, 30))
++
++    def test_label_comes_only_from_seam(self):
++        p = self._perc(classify_shape=True)
++        for lab in ("cube", "cylinder", "triangle", None):
++            self.assertEqual(self._det(p, lab).shape, lab)
+ 
+     def test_triangle_pose_set(self):
+         p = self._perc(triangle_pose=True)
+@@ -154,15 +176,42 @@ class TestPerceptionWiring(unittest.TestCase):
+         np.testing.assert_array_equal(base.top, on.top)
+         self.assertIsNone(on.apex_yaw)
+ 
+-    def test_classify_from_blob(self):
+-        import cv2
++    def test_wrong_triangle_label_degrades_to_fallback(self):
++        """Seam says triangle for a cube / cylinder: apex_conf stays below yaw_min_conf, planner does not use yaw."""
++        pl = _planner(yaw_align=True)
++        p = self._perc(triangle_pose=True)
++        rng = np.random.default_rng(1)
++        cube = np.array([0.3, 0.1]) + rng.uniform(-0.0225, 0.0225, (400, 2))
++        a, r = rng.uniform(0, 2 * np.pi, 400), 0.0225 * np.sqrt(rng.uniform(0, 1, 400))
++        cyl = np.array([0.3, 0.1]) + np.stack([r * np.cos(a), r * np.sin(a)], -1)
++        for xy in (cube, cyl):
++            d = self._det(p, "triangle", xy=xy)
++            self.assertLess(d.apex_conf, pl.cfg["grasp"]["yaw_min_conf"])
++            self.assertFalse(pl._yaw_align_on(d))
++
++    def test_too_few_points_no_apex(self):
++        p = self._perc(triangle_pose=True)
++        d = self._det(p, "triangle", xy=self._cloud(n=TRIANGLE_MIN_POINTS - 1))
++        self.assertIsNone(d.apex_yaw)
++        self.assertEqual(d.apex_conf, 0.0)
++        self.assertFalse(_planner(yaw_align=True)._yaw_align_on(d))
++
++    def test_plane_fallback_asks_seam_with_blob_only(self):
+         p = self._perc(classify_shape=True)
+-        p.scene_shape = None
+-        m = np.zeros((120, 120), np.uint8)
+-        cv2.fillPoly(m, [np.array([[60, 20], [95, 85], [25, 85]])], 1)
+-        self.assertEqual(p._shape_of(m), "triangle")
+-        m[:] = 0; m[30:90, 30:90] = 1
+-        self.assertEqual(p._shape_of(m), "cube")
++        blob = np.zeros((20, 30), np.uint8)
++        with mock.patch.object(perception, "classify_top_face", return_value=("triangle", 0.8)) as seam:
++            lab = p._shape_of(None, blob)
++        self.assertEqual(lab, "triangle")
++        self.assertIsNone(seam.call_args[0][0])
++
++    def test_no_other_shape_logic(self):
++        """classify_blob / area-ratio thresholds exist only in shape_id."""
++        import pathlib
++        d = pathlib.Path(perception.__file__).parent
++        for f in ("perception.py", "planner.py", "prism_pose.py"):
++            src = (d / f).read_text()
++            self.assertNotIn("classify_blob", src, f)
++            self.assertNotIn("RATIO_C", src, f)
+ 
+ 
+ if __name__ == "__main__":
