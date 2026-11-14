@@ -642,6 +642,34 @@ class Planner:
             last.reason += f"; relocate: {r.reason}"
         return last
 
+    def plan_place_at(self, det, arm_q, hand_q, table_xy, obstacles=()):
+        """Dry-run/produce the existing pick-and-place motion with a table release point.
+
+        Geometry policy (table bounds, 6 cm clearances, 2 cm margin) is kept in
+        the caller's validator.  This method supplies the same IK, trajectory,
+        collision and SafetyFilter checks as ordinary bin placement.
+        """
+        xy = np.asarray(table_xy, float)
+        if xy.shape != (2,) or not np.all(np.isfinite(xy)):
+            return Plan(False, color=det.color, target_bin="counter", reason="invalid table_xy")
+        g = self.cfg["grasp"]
+        side0 = "left" if xy[1] > g["y_split"] else "right"
+        last, good, reasons = Plan(False, color=det.color, target_bin="counter"), [], []
+        for side in (side0, "right" if side0 == "left" else "left"):
+            p = self._plan_side_hints(det, side, None, np.asarray(arm_q, float), np.asarray(hand_q, float),
+                                      place_xy=xy)
+            if p.ok:
+                if g.get("arm", "best") != "best":
+                    return p
+                good.append(p)
+            else:
+                reasons.append(f"{side}: {p.reason}")
+                last = p
+        if good:
+            return min(good, key=lambda p: p.duration)
+        last.reason = "; ".join(reasons) or "no safe table placement"
+        return last
+
     def relocation_spots(self, det, bin_name, obstacles=()):
         """Candidate counter spots (pelvis xy) for a relocation, nearest the target bin first."""
         rc = self.cfg["grasp"].get("relocate", {})
@@ -1131,16 +1159,16 @@ class Planner:
         z_drop = zc + wall + H / 2 + g["drop_above_rim"]
         if self.drop_extra.get(bin_name):  # bin.vote low-confidence bin: release higher, never above the carry height
             z_drop = min(z_drop + self.drop_extra[bin_name], z_carry)
-        if drop_slot is None:  # stock: one release point per bin (#6 off)
+        if place_xy is not None:  # relocation / place_at: put it down on the counter (release just above the grasp height)
+            bxy, z_drop = np.asarray(place_xy, float), z + 0.005   # bin_name may be None here
+        elif drop_slot is None:  # stock: one release point per bin (#6 off)
             bxy = self.drop_xy(bin_name)
         else:                  # #6: the assigned drop slot
             slots = self.drop_slots(bin_name)
             bxy = slots[min(int(drop_slot), len(slots) - 1)]
         stock_bxy, stock_z_drop = np.asarray(bxy, float).copy(), float(z_drop)
         drop_adjustment_on, adjusted = False, False
-        if place_xy is not None:  # relocation: put it down on the counter (release just above the grasp height)
-            bxy, z_drop = np.asarray(place_xy, float), z + 0.005
-        elif g.get("drop_height_extra_m", 0.0) or g.get("drop_lateral_margin_m", 0.0):
+        if place_xy is None and (g.get("drop_height_extra_m", 0.0) or g.get("drop_lateral_margin_m", 0.0)):
             drop_adjustment_on = True
             bxy, z_drop, adjusted = self._adjusted_drop_target(side, bin_name, bxy, z_drop, qg, z_max=z_carry)
         P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry) + float(g.get("approach_extra_m", 0.0))], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],
