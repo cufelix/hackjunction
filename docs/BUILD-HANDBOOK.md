@@ -1133,7 +1133,60 @@ scoring decision, not a scheduling detail.**
 
 **Done when:** an episode that previously stopped early now keeps sorting, measured on the same seeds.
 
-### 4. Endgame: settle, and release rather than carry 💻+🖥
+### 4. Endgame 💻+🖥 ⚠️ **SCOPE CUT 14 Nov 01:35 — most of this item is worth zero points**
+
+I wrote this item believing that being cut off mid-carry was expensive. It is not. The scoring
+rule, read in full (`scene.py classify_cube`, which `layout.py:110` calls):
+
+```python
+p = self.pelvis_to_mat(pos_pelvis)
+if not self.on_counter(p):      return "off"        # -1
+b = self.bin_of(p)
+if b is None or speed > at_rest_speed:  return "counter"   # 0
+return "correct" if resolve_bin(mapping, color, shape) == b else "wrong"
+```
+
+And `on_counter` is a **2D footprint plus a floor, with no ceiling**:
+
+| | pelvis frame |
+|---|---|
+| x | **0.09 … 0.69 m** (= `0.14 + mat_y`) |
+| y | **−0.55 … 0.55 m** (= `−0.45 + mat_x`) |
+| z | **> −0.02 m — a floor only, no upper bound** |
+
+*(computed from `scene.yaml` `mat_size [0.90, 0.50]`, `counter_size [1.10, 0.60]`,
+`mat_origin_in_pelvis [0.14, −0.45, 0.01]`, `off_counter_drop 0.03`.)*
+
+> 🔴 **So an object still in the gripper, held in the air over the counter, scores `counter` = 0 —
+> exactly the same as one deliberately set down.** "Release rather than carry" buys **nothing**
+> there. Setting it down gently and being cut off mid-air are worth the same, and so is simply
+> holding. The whole premise of this item, as I originally wrote it, was wrong.
+
+**What IS worth points, and it is one narrow case.** `off` is −1, and it fires when the object ends
+**outside** that footprint. The near edge is `pelvis_x = 0.09` — **9 cm in front of the pelvis** —
+and `home_arm_q` is *"arms down, elbows bent"*. In the normal path nothing is held by then
+(`hand("open", …)` runs before `retreat`, and `move("home", …, hand_to=hand_open)` opens again). But
+a **wedged** object — ✅ the organisers' own named cylinder failure, §3.5 — survives the open phase
+and gets carried through `retreat` and `home`.
+
+> ⚠️ **OPEN, and it decides whether this item is worth building at all:** does the home pose put the
+> palm inside `pelvis_x ∈ [0.09, 0.69]`? If **inside**, a wedged object is 0 and this item is worth
+> nothing — close it. If **outside**, every wedge is **−1 instead of 0**, and the guard below is
+> worth one point per wedge. **This is an FK evaluation, not an opinion.** Oliver's session already
+> has pinocchio FK driving the G1 URDF, so it is minutes of work there and should not be guessed.
+
+**If the FK says "outside", the whole item is this:** before `retreat`, if the gripper still holds
+something (hand did not reach the open posture, or a detection persists at the palm), open the hand
+while the palm is still over the footprint. Nothing else. No settle logic, no release-before-buzzer,
+no time margin for carrying — those are all score-neutral.
+
+⚠️ The time **margin** on the plan-time check is a separate question and still live, but note what
+it is now worth: not starting a plan we cannot finish is valuable because it **keeps the time for an
+object we can** — which is item **#3**, Oliver's. The margin itself only avoids `counter` = 0, and
+not starting is also 0. See `policy.py:220` and §3.4.1 for why `plan.duration` (= `len(arm)/30`,
+perfect tracking, zero latency) is an optimistic estimate.
+
+### 4b. Original scope, kept for the record 💻+🖥
 
 Three separate facts converge on the last five seconds of an episode:
 
@@ -1431,6 +1484,7 @@ listed here, not inline, so the body reads as fact and this reads as history.
 | 13 | *"The baseline scores zero on the language episodes."* | ✅ Wrong as a deterministic claim. It always applies FIXED, so it scores **+2a − b**: +2N if the true mapping happens to match (1/6), 0 on a single swap (3/6), −N on a derangement (2/6). **Expectation zero, realised value −N to +2N** — so a lucky step-0 draw can look like a working policy | §1.1 |
 | 14 | *"Zero clips is the gate; 30 ends the episode."* | ✅ There is no 30-abort budget. 30 is `safety.py:74 max_clipped_steps` and **exceeding it aborts**. Also found: an **undocumented wall-clock `policy_hz_rt >= 27`** check at `evaluate.py:137-139`, in neither the rules nor the flags | §2.1 |
 | 15 | *"Five objects at ~19 s each is ~97 s of 120 s."* | ✅ Overstated. Recomputed from `ta + S/vmax`: **≈31 s fast profile, ≈61 s on base gains, ≈76 s with latency.** Still tight, not as tight as claimed. Also found: a submitted container defaults to the **fast** `sim` profile | §3.4.1 |
+| 18 | *"Endgame: settle, and release rather than carry"* (my own build item #4) | ⚠️ **Mostly worth zero.** `on_counter` is a 2D footprint plus a floor with **no ceiling**, so an object held in the air over the counter scores `counter` = 0 — identical to setting it down. Release-rather-than-carry buys nothing there. The only −1 case is ending **outside** `pelvis_x ∈ [0.09, 0.69]`, which a **wedged** object carried to home might do. Whether it does is an **FK question, not yet computed** | §5 item 4 |
 | 17 | *"Chunk seams must be blended, and we need our own rate limiter in front of anything that produces targets."* | ✅ **Wrong, and it would have been wasted work.** `_pop` slices one pre-planned trajectory, `time_scale` guarantees ≤ vmax and excludes `Qs[0]`, every `go_to` starts from the last emitted target, and a hold is a zero delta. The stream is **velocity-continuous by construction**. The real exposure is the **3.1 % margin between the `sim` profile's `arm_max_vel 0.97` and the filter's 1.0** | §2.1 |
 | 16 | *"The real robot grants no settle time."* | ⚠️ **UNVERIFIED and was stated as fact.** Not in any code we have read — `evaluate.py` is the sim path only. An inference from rules line 25, not a measurement. Plan for no grace; do not quote it as fact | §3.4.4 |
 | 11 | *"The organisers ship a model of real camera noise harsher than the DR — depth σ 3 mm, 20 % holes on the object."* | ✅ Those are **test-fixture values**. `capture.py:133` `MockSource` is *"Synthetic static scene for offline tests"* and `test_drop1.py:22` injects them so `stats.py` can be checked against them. Caught by Oliver's session. What survives: `train.yaml` has **no object-hole parameter** and `stats.py` **measures one**, so the structural gap is real and the magnitude is unknown | §3.6.5 |
