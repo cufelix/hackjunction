@@ -1,0 +1,42 @@
+# Does a bin-mask cut mislabel the top face, and does an area floor catch it?
+
+repo:        24a7376da22fffa4c838f7daeda91a9cbaccf7d7
+script:      scripts/measure_mask_cut.py  sha256 f2f601cb7c94f8ae4dbb71f3cadb0be5f8f9cf8a319df5065bb75a6508c354e5
+reuses:      scripts/measure_shape_feature.py  sha256 4278944e7e50c6316d4dafa246119562595ba8fe603d4613c6063707b1c55237
+  File "<string>", line 1
+    import sys,numpy,cv2;print(f\"python {sys.version.split()[0]}, numpy {numpy.__version__}, cv2 {cv2.__version__}\")
+                                 ^
+SyntaxError: unexpected character after line continuation character
+interpreter: 
+command:     /home/felix/.venvs/gd/bin/python3 -I scripts/measure_mask_cut.py
+grid:        3 x 3 positions x 5 yaws x 12 cut directions x 6 cut fractions, seeds 7 / 11
+cut model:   drop the furthest fraction along a direction = ONE straight edge, which is what
+             the 3D bin-footprint test at perception.py:115-118 does to the top-face points
+
+Hull area of the UNCUT top face, mm^2 (ideal in brackets)
+  cube      min    1959  median    2078  max    2178   [2025]
+  cylinder  min    1379  median    1592  max    1664   [1590]
+  triangle  min    1158  median    1244  max    1296   [1169]
+
+Cut fraction -> label accuracy, and how many wrong labels an area floor would catch
+  shape       cut    acc  wrong   wrong & area<floor  median area
+  cube         0% 100.0%      0                    0         2068
+  cube        10%  21.7%    423                    0         1844
+  cube        20%  19.1%    437                    0         1636
+  cube        30%  16.1%    453                    0         1433
+  cube        40%  10.9%    481                    0         1230
+  cube        50%   8.3%    495                  287         1026
+  cylinder     0% 100.0%      0                    0         1595
+  cylinder    10%  98.5%      8                    5         1382
+  cylinder    20%  97.0%     16                   15         1119
+  cylinder    30%  95.4%     25                   25          968
+  cylinder    40%  91.5%     46                   46          870
+  cylinder    50%  86.1%     75                   75          781
+  triangle     0% 100.0%      0                    0         1248
+  triangle    10%  94.8%     28                    6         1090
+  triangle    20%  74.6%    137                  128          964
+  triangle    30%  70.9%    157                  157          844
+  triangle    40%  72.8%    147                  147          720
+  triangle    50%  79.3%    112                  112          599
+
+area floor used = 0.90 * thinnest honest triangle = 1042 mm^2
