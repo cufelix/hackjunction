@@ -56,6 +56,16 @@ class TestFlags(unittest.TestCase):
         self.assertIn("perception.depth_blob_recover", FLAGS)
         self.assertFalse(load_config(overlay="submission")["perception"]["depth_blob_recover"])
 
+    def test_finals_r22_auto_is_r22_plus_only_the_auto_profile_flag(self):
+        base = load_config(overlay="finals_r22")
+        got = load_config(overlay="finals_r22_auto")
+        base["overlay"] = "finals_r22_auto"
+        base["profile_auto"]["auto_detect"] = True
+        self.assertEqual(got, base)
+        self.assertEqual({k for k, _, on, _, _ in effective_flags(got) if on}
+                         - {k for k, _, on, _, _ in effective_flags(load_config(overlay="finals_r22")) if on},
+                         {"profile_auto.auto_detect"})
+
     def test_finals_r22_enables_only_the_grasp_reliability_flags_over_r22(self):
         base = load_config(overlay="finals_r22")
         got = load_config(overlay="finals_r22_grasp")
@@ -355,16 +365,17 @@ class TestFlags(unittest.TestCase):
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
                                       "finals_r21", "finals_r22", "finals_r22_agent",
-                                      "finals_r22_bare", "finals_r22_bins", "finals_r22_brain",
-                                      "finals_r22_cage", "finals_r22_cal", "finals_r22_chunk",
-                                      "finals_r22_coloralias", "finals_r22_counter",
-                                      "finals_r22_done", "finals_r22_failopen", "finals_r22_gate",
-                                      "finals_r22_grasp", "finals_r22_langzip",
-                                      "finals_r22_lyingarm", "finals_r22_lyingprism",
-                                      "finals_r22_neutral", "finals_r22_novel", "finals_r22_order",
-                                      "finals_r22_recall", "finals_r22_rimz", "finals_r22_softgrip",
-                                      "finals_r22_verify", "finals_r23_candidate", "finals_real",
-                                      "rc1", "rc1_strict", "safe_profile"})
+                                      "finals_r22_auto", "finals_r22_bare", "finals_r22_bins",
+                                      "finals_r22_brain", "finals_r22_cage", "finals_r22_cal",
+                                      "finals_r22_chunk", "finals_r22_coloralias",
+                                      "finals_r22_counter", "finals_r22_done",
+                                      "finals_r22_failopen", "finals_r22_gate", "finals_r22_grasp",
+                                      "finals_r22_langzip", "finals_r22_lyingarm",
+                                      "finals_r22_lyingprism", "finals_r22_neutral",
+                                      "finals_r22_novel", "finals_r22_order", "finals_r22_recall",
+                                      "finals_r22_rimz", "finals_r22_softgrip", "finals_r22_verify",
+                                      "finals_r23_candidate", "finals_real", "rc1", "rc1_strict",
+                                      "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
