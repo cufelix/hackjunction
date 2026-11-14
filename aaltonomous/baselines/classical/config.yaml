@@ -734,6 +734,19 @@ policy:
   retry_same_xy_m: 0.01       # two grasps closer than this, same posture and heading within retry_same_yaw_deg = identical
   retry_same_yaw_deg: 20.0
   retry_jitter_m: 0.0         # FLAG. Retry offsets: +x, -x, +y, -y; zero keeps the detected grasp point
+  retry_cross_relocate: false # FLAG (grasp-r23, Timi). With retry_vary_grasp: after a LEFT-arm miss on an object at y < retry_cross_relocate_y
+                              # (cross-body, A95 sim: left 15 empty / 11 held there vs right 1 / 16 on its own side) the retry is a
+                              # RELOCATION: the right arm picks it and puts it on the counter where the left arm can finish
+                              # (planner.plan_relocation); the left arm then picks it from there as a fresh object.
+  retry_cross_relocate_y: -0.03         # pelvis y (m): object at or below this counts as cross-body for the left arm
+  retry_cross_relocate_min_left_s: 30.0 # needs plan duration + this many seconds before the time limit
+  retry_cross_relocate_max: 2           # relocations per episode
+  late_sweep: false           # FLAG (grasp-r23, Timi). Nothing left to plan, objects still detected (attempt limit / skipped by a
+                              # failed retry plan) and >= late_sweep_min_s left: they get late_sweep_extra more tries (kept history,
+                              # +jitter if retry_jitter_m; a try identical to an earlier one is allowed in the sweep).
+  late_sweep_min_s: 28.0
+  late_sweep_extra: 1
+  late_sweep_max: 3           # sweeps per episode
   retry_max_variants: 3       # grasp variants planned per retry (each costs one plan() call)
   first_object_speed_scale: null  # FLAG (finals safe). null | (0,1]: arm speed x this for every plan made before the first pick starts
   # Decision layer D1-D4 (decision.py, numbers in `decision:` below). All default off = stock behaviour.

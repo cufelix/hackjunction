@@ -151,6 +151,9 @@ FLAGS = {
                                                      "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
     "policy.retry_jitter_m": ("finals grasp", 0.0, "retry grasp-point jitter magnitude; 0 disables the deterministic +/-xy pattern"),
+    "policy.retry_cross_relocate": ("grasp-r23", False, "retry after a left-arm miss at y<retry_cross_relocate_y: right arm relocates the object "
+                                                         "to the left arm's side (needs retry_vary_grasp)"),
+    "policy.late_sweep": ("grasp-r23", False, "nothing left but excluded objects remain and >= late_sweep_min_s is left: extra tries"),
     "policy.first_object_speed_scale": ("finals safe", None,
                                           "null | (0,1]: arm speed x this for every plan made before the first pick starts"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
