@@ -60,6 +60,8 @@ flags:
   policy.safety_shell: true                     # r19b P0 Hz
   bin.vote.enabled: false                        # r20 R2  per-bin position vote (depth rim, tape, prior)   # OFF: Codex C3 rim vote mirrors the shift (nominal - delta)
   bin.geometry_runtime: true                    # r20 R2  every bin consumer follows the voted shift
+  grasp.release_wait_s: 0.5                     # lag R44  hold >= 0.5 s after the open command before the retreat
+  grasp.release_confirm: true                   # lag R49  empty-hand check after the open; re-open once, else home + stop
   grasp.held_detector: finger_sum               # r20     bias-corrected held; empty close aborted early
   calib.plane.apply_height: true                # r20 R9  runtime counter_z from the depth plane (real table +5..14 cm), clamp 0.20, nominal fallback
   perception.color_gate.sat_floor: true

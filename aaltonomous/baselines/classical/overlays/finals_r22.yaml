@@ -68,3 +68,5 @@ flags:
   calib.plane.apply_height: true                # r20 R9  runtime counter_z from the depth plane (real table +5..14 cm), clamp 0.20, nominal fallback
   perception.color_gate.sat_floor: true
   instruction.multilingual: true                # r22 FI/CZ + 10 languages (timi/multilang)
+  grasp.release_wait_s: 0.5                     # lag R44  hold >= 0.5 s after the open command before the retreat
+  grasp.release_confirm: true                   # lag R49  empty-hand check after the open; re-open once, else home + stop

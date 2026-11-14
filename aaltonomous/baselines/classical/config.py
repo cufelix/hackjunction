@@ -95,6 +95,8 @@ FLAGS = {
     "policy.object_time_budget_s": ("EV gate", None, "cumulative planned motion budget per tracked object; null = off"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
     "grasp.held_detector": ("real held", "stall", "stall (legacy max error) | finger_sum (bias-corrected Dex3 fingers)"),
+    "grasp.release_wait_s": ("lag R44", None, "null | s: hold at least this long after the open command before the retreat (Dex3 lags 300-380 ms)"),
+    "grasp.release_confirm": ("lag R49", False, "after open + wait the fingers must read an empty hand: re-open once, else home and stop picking"),
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),

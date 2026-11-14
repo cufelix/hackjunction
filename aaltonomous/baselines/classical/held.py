@@ -65,6 +65,15 @@ class HeldDetector:
             return int(close_end)
         return max(int(close_end), int(close_start) + int(math.ceil(self.SETTLE_S * float(hz))))
 
+    def empty(self, side, command, measured):
+        """Open hand: no finger of `side` is still closed past the commanded (open) posture by threshold_rad
+        (bias-corrected like held(), but on measured - command, the direction an open command cannot hide)."""
+        off = 0 if side == "left" else 7
+        native = np.asarray(measured, float) - np.asarray(command, float) + self.reference
+        sign = self._CLOSING_SIGN[side]
+        return all(sign * native[off + np.asarray(pair)].sum() < self.threshold_rad
+                   for pair in self._FINGERS[side].values())
+
     def held(self, side, command, measured):
         command, measured = np.asarray(command, float), np.asarray(measured, float)
         off = 0 if side == "left" else 7

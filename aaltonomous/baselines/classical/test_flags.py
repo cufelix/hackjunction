@@ -139,7 +139,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_fk_xcheck"] = nopp | {"calib.fk_xcheck"}   # rebased on cand_r17: log-only B2 arm
         expect["ab_cylinder"] = nopp | {"grasp.cylinder_no_yaw_vary"}   # cand_r17 + the cylinder yaw flag
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
-        expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
+        expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize", "grasp.release_wait_s", "grasp.release_confirm"}   # finals candidate + lag R44/R49
         expect["finals_r19"] = expect["finals_r18"] | {"perception.hue_guard.enabled", "instruction.max_chars", "safety.nan_guard",
                                                         "instruction.strict"}   # r18 + hue + fuzz + strict
         expect["finals_r19b"] = expect["finals_r19"] | {"policy.safety_shell", "perception.color_gate.sat_floor"}   # P0 Hz
@@ -189,6 +189,7 @@ class TestFlags(unittest.TestCase):
         sim["policy"]["fixed_mapping"] = real["policy"]["fixed_mapping"]   # organisers P0
         self.assertTrue(real["hand"]["mirror_index_middle"])
         sim["hand"]["mirror_index_middle"] = True                          # R42a
+        sim["grasp"].update(release_wait_s=0.5, release_confirm=True)   # lag R44/R49 (finals only)
         self.assertEqual(real, sim)
 
         calibration = Calibration.load()

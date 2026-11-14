@@ -37,6 +37,8 @@ flags:
   policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
+  grasp.release_wait_s: 0.5                     # lag R44  hold >= 0.5 s after the open command before the retreat
+  grasp.release_confirm: true                   # lag R49  empty-hand check after the open; re-open once, else home + stop
   motion.lift_on_stall.enabled: false           # round 9    lift on finger stall (min close_hold_s, max timeout_s)
   motion.lift_on_stall.timeout_s: 1.2           # round 9    stock 1.2
   grasp.point_in_palm: [0.0862, -0.0864, 0.0143]  # pinch fix  ON 2026-11-14 = ab_pinch_v1; LEFT palm frame, right mirrored

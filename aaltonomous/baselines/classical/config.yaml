@@ -231,6 +231,9 @@ grasp:
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
   held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
+  release_wait_s: null        # FLAG (lag R44): null = today (open_hold_s); s = hold >= this after the open command before the retreat starts
+  release_confirm: false      # FLAG (lag R49): after open + wait the finger state must read empty (held detector); not empty -> re-open once, then home and stop picking
+  release_confirm_s: 1.5      # release_confirm: how long to poll for an empty hand after each open (Dex3 lag 0.3-0.4 s)
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
   # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
   # gates, not independently switchable features. The classifier is consulted even when classify_shape is off.
