@@ -317,6 +317,7 @@ class Perception:
             self.colour_kmeans_info = None
         self.cal = self.cal_nominal   # B1: a hand-calibrated copy never outlives its episode
         self._still_frames = []
+        self.bin_rim_hint = {}        # a rim hint must not survive into the next episode
 
     def _T(self):
         """Episode-corrected camera pose, or the untouched nominal calibration."""
@@ -1076,8 +1077,11 @@ class Perception:
         self.update_counter_height(depth)    # calib.plane.apply_height (inert when off)
         self._image_bin_gate_active = False
         self._below_bin_row = None
+        self._incomplete_rim = False
+        self.bin_rim_hint = {}        # a missed frame must not keep the previous rim shift
         early_hsv = None
         rim_tape = None
+        trusted = False
         if self.bins_from_image:
             self.bin_rims, trusted = None, self._live_bins_trusted()
             early_hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
@@ -1095,6 +1099,15 @@ class Perception:
             self._below_bin_row = self._observed_bin_bottom(early_hsv)
             self._below_bin_margin = float(self.gate_below_cfg.get("margin_px", 3))
             self._image_bin_gate_active = self._below_bin_row is not None
+        # A partial rim set is not a bin row: publishing it turned off every 3D bin test, and the nominal
+        # footprint does not contain a bin that has moved farther (a valid depth point there is a pick, -1).
+        # Abstain above the nominal near edge — the closest the bins can be — and do not guess a shift.
+        if (self._incomplete_rim and not self._image_bin_gate_active and not trusted and early_hsv is not None):
+            near = self._nominal_near_row()
+            if near is not None:
+                self._below_bin_row = np.full(early_hsv.shape[1], near, np.float64)
+                self._below_bin_margin = 0.0
+                self._image_bin_gate_active = True
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
         blocked_by_image_gate = None
         keep_before_image_gate = None
@@ -1268,6 +1281,16 @@ class Perception:
             if nom:
                 uc = 0.5 * (rb.u0 + rb.u1)
                 rb.name = min(nom, key=lambda t: abs(t[1] - uc))[0]
+        params = dict(rim_detect.DEFAULTS)
+        params.update(self.bins_img_cfg.get("detect") or {})
+        names = [rb.name for rb in res.bins]
+        # min_bins, and a unique cover of the nominal names.  Anything less is not published: detect()
+        # abstains above the nominal near edge instead of treating the partial row as the whole frame.
+        cover = len(res.bins) >= int(params["min_bins"]) and (
+            not nom or (len(names) == len(set(names)) and set(names) == {t[0] for t in nom}))
+        if not cover:
+            self._incomplete_rim = True
+            return None
         self.bin_rims = res
         self.bin_rim_hint = self._rim_hint(res) if self.bins_img_cfg.get("hint", False) else {}
         return res
@@ -1300,7 +1323,16 @@ class Perception:
             dx = float(p[0]) - nominal_near_x
             if abs(dx) <= max_dx:
                 out[rb.name] = (dx, 0.0)
-        return out
+        names = tuple(self.scene.bin_names)
+        if not out or not names:
+            return {}
+        # Clipped side rims are skipped, so a uniform shift often yields a centre-only hint.  Applying that
+        # to the centre alone moves one box and leaves the others.  Every nominal bin is shifted by the
+        # median dx unless each bin already has its own hint.
+        if set(names) <= set(out):
+            return {n: out[n] for n in names}
+        dx = float(np.median([v[0] for v in out.values()]))
+        return {n: (dx, 0.0) for n in names}
 
     def _crosscheck_rims(self, res):
         """Runtime bin poses are trusted: keep them, only log where the image rim disagrees with the projected one."""
@@ -1313,6 +1345,36 @@ class Perception:
                 dv = float(rb.v_at(0.5 * (rb.u0 + rb.u1))) - nom[rb.name]
                 if abs(dv) > float(self.bins_img_cfg.get("crosscheck_px", 12.0)):
                     self.log(f"[bins_from_image] {rb.name}: rim line {dv:+.0f} px from the trusted projected rim")
+
+    def _rim_column_unknown(self, u):
+        """True when the 3D bin test must still run for this image column.
+
+        The image gate replaces that test only where ``row_limit`` is a measured rim row.  The -1e6 sentinel
+        (and a column off the image) means there is no rim, so guessing that the pixel is "below the bin"
+        would accept an object that is already inside one.  Flag off: the gate is inactive and this is True,
+        which is the stock 3D test.
+        """
+        if not self._image_bin_gate_active:
+            return True
+        return bool(self._rim_columns_unknown(np.asarray([np.nan if u is None else u], float))[0])
+
+    def _rim_columns_unknown(self, u):
+        row = self._below_bin_row
+        u = np.asarray(u, float)
+        if not self._image_bin_gate_active or row is None:
+            return np.ones(u.shape, bool)
+        finite = np.isfinite(u)
+        ui = np.clip(np.where(finite, np.round(u), 0), 0, len(row) - 1).astype(int)
+        return ~finite | (u < 0) | (u >= len(row)) | (row[ui] <= -1e5)
+
+    def _nominal_near_row(self):
+        """Image row of the nominal near edge (the closest the bin row can be). None if it does not project."""
+        try:
+            nom = self._nominal_bin_px()
+        except ValueError:
+            return None
+        rows = [r for _n, _u, _w, r in nom]
+        return float(np.median(rows)) if rows else None
 
     def _live_bins_trusted(self):
         """The image gate is unnecessary only when all live bin positions have trusted evidence."""
@@ -1675,6 +1737,16 @@ class Perception:
             half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + c["bin_pixel_margin"]
             for ctr in self._bin_centres_mat().values():
                 ok &= ~np.all(np.abs(pm[:, :2] - ctr) <= half, axis=1)
+        elif exclude_bins:
+            # Image gate is on, but a sentinel row_limit (-1e6) means this column has no rim.  Keep the 3D
+            # footprint there; every other column was already limited by the rim line.
+            unknown = self._rim_columns_unknown(uu)
+            if np.any(unknown):
+                half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + c["bin_pixel_margin"]
+                inside = np.zeros(len(uu), bool)
+                for ctr in self._bin_centres_mat().values():
+                    inside |= np.all(np.abs(pm[:, :2] - ctr) <= half, axis=1)
+                ok &= ~(unknown & inside)
         keep[vv[~ok], uu[~ok]] = 0
         return keep
 
@@ -1920,7 +1992,8 @@ class Perception:
             return "off_mat"
         bm = c["bin_exclusion_margin"]
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + bm
-        if not self._image_bin_gate_active:
+        u = None if det.uv is None else det.uv[0]
+        if self._rim_column_unknown(u):
             for name, ctr in self._bin_centres_mat().items():
                 if np.all(np.abs(pm[:2] - ctr) <= half):
                     return f"in_bin:{name}"
@@ -2052,7 +2125,8 @@ class Perception:
     def _color_gate_bin(self, det, g):
         """Rule 2, 3D in the mat frame (nominal footprint, no margin). Inside a bin -> in_bin. Within edge_m outside
         one -> kept only as a depth top face edge_h above the counter (a bin rim), else bin_edge. Else keep."""
-        if self._image_bin_gate_active:
+        u = None if det.uv is None else det.uv[0]
+        if self._image_bin_gate_active and not self._rim_column_unknown(u):
             return None
         sc = self.scene
         pm = sc.pelvis_to_mat(det.top)[:2]

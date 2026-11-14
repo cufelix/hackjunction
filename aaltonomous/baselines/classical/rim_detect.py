@@ -196,5 +196,10 @@ def detect_bin_rims(hsv, params=None, expect_w_px=None):
         c0, c1 = max(0, rb.u0 - lm), min(W - 1, rb.u1 + lm)
         cols = np.arange(c0, c1 + 1)
         rl[cols] = np.maximum(rl[cols], rb.v_at(cols) + float(p["rim_margin_px"]))
+    # Gaps between segments have no rim.  Same fallback as the observed-bin-bottom gate: the median
+    # measured rim row, so those columns are not a hole (row > -1e6 is true for every pixel).
+    known = rl > -1e5
+    if np.any(known):
+        rl[~known] = float(np.median(rl[known]))
     res.row_limit = rl
     return res
