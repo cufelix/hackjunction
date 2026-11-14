@@ -11,7 +11,7 @@ from aaltonomous.scene.scene import Scene
 
 from .config import load_config
 from .mock_world import Renderer
-from .perception import Detection, Perception
+from .perception import BinCalibration, Detection, Perception
 from .planner import lookup_bin
 
 SC, CAL = Scene.load(), Calibration.load()
@@ -173,3 +173,38 @@ class TestColorGate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestColorGateLiveBins(unittest.TestCase):
+    """perception.color_gate.live_bins: the footprint follows the policy's live bin estimate."""
+    G = None
+
+    def _p(self, live=True):
+        cfg = load_config(overlay="none", overrides={"perception.color_gate.enabled": True,
+                                                     "perception.color_gate.live_bins": live})
+        p = Perception(cfg, SC, CAL, log=lambda *_: None)
+        return p, p.color_gate_cfg
+
+    def _near(self, dy):   # mat point on the centre bin's axis, dy in front of its NEAR edge (towards the robot)
+        return _det(_top([BIN[0], BIN[1] - HALF[1] - dy]), method="plane", n_depth=0)
+
+    def test_no_estimate_grows_the_near_side_by_10cm(self):
+        p, g = self._p()
+        self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")   # 5 cm in front: inside the margin
+        self.assertIsNone(p._color_gate_why(self._near(0.15), g))                       # beyond margin + edge band
+
+    def test_flag_off_is_the_nominal_footprint(self):
+        p, g = self._p(live=False)
+        self.assertIsNone(p._color_gate_why(self._near(0.05), g))
+
+    def test_calibrate_bins_success_counts_as_an_estimate(self):
+        p, g = self._p()
+        p.calibration = BinCalibration(True, True, 0.9, np.zeros(2), 100, 0.002, 1.0, "ok")
+        self.assertIsNone(p._color_gate_why(self._near(0.05), g))                       # nominal again, no margin
+
+    def test_bin_vote_shift_moves_the_footprint(self):
+        p, g = self._p()
+        p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([-0.07, 0.0])}})()   # pelvis dx -7 cm
+        self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")   # inside the SHIFTED box
+        far = _det(_top([BIN[0], BIN[1] + HALF[1] - 0.03]), method="plane", n_depth=0)  # nominal far strip, now outside
+        self.assertIsNone(p._color_gate_why(far, g))

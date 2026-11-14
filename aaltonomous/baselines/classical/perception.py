@@ -217,6 +217,11 @@ class Perception:
         self.color_gate = bool((self.cfg.get("color_gate") or {}).get("enabled", False))
         self.color_gate_cfg = dict(self.cfg.get("color_gate") or {})
         self.color_gate_degraded = False
+        self.fk_mask = bool(self.color_gate_cfg.get("fk_mask", False))   # perception.color_gate.fk_mask (FLAG)
+        self._arm_surface = None   # lazily built FK surface for fk_mask (own instance: never shares B1's lock)
+        self.fk_mask_px = 0        # pixels the last fk mask removed (diagnostics)
+        self.live_bins = bool(self.color_gate_cfg.get("live_bins", False))   # perception.color_gate.live_bins (FLAG)
+        self.bin_shift_src = None  # live_bins: object with .bin_shift {bin: pelvis dxy} (the policy's planner, bin.vote)
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
@@ -910,7 +915,7 @@ class Perception:
         if self._colour_kmeans_tries >= 3:
             self._colour_kmeans_done = True  # give up after the 3rd attempt; robust ranges stay
 
-    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True):
+    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None):
         """Detect coloured objects.
 
         ``include_bins`` keeps pixels over the known bin footprints long enough for
@@ -924,6 +929,10 @@ class Perception:
         dets, rejected = [], []
         self.color_gate_degraded = False
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
+        if self.fk_mask and robot_q is not None:   # the robot's own arms / hands are never objects
+            arm = self._fk_arm_mask(keep.shape, *robot_q)
+            if arm is not None:
+                keep[arm] = 0
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
         need_hsv = self.place_gate or self.colour_kmeans
@@ -1284,6 +1293,31 @@ class Perception:
             return f"height {h:.2f} sizes"
         return None
 
+    def _fk_arm_mask(self, shape, arm_q, hand_q=None):
+        """perception.color_gate.fk_mask: bool image mask of the FK-posed arm + hand surface points projected with the
+        CURRENT camera pose (pitch-cal / B1 corrected), dilated by fk_dilate_px. None on any failure (= no mask)."""
+        import cv2
+        try:
+            if self._arm_surface is None:
+                from .hand_calib import ArmSurface
+                self._arm_surface = ArmSurface()
+            P, _ = self._arm_surface.posed(arm_q, hand_q)
+            uvz = self._project(P)
+            h, w = shape
+            ok = np.all(np.isfinite(uvz), axis=1) & (uvz[:, 2] > 0)
+            u, v = np.round(uvz[ok, 0]).astype(int), np.round(uvz[ok, 1]).astype(int)
+            inb = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+            m = np.zeros(shape, np.uint8)
+            m[v[inb], u[inb]] = 1
+            r = int(self.color_gate_cfg.get("fk_dilate_px", 15))
+            if r > 0:
+                m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+            self.fk_mask_px = int(m.sum())
+            return m.astype(bool)
+        except Exception as e:   # never raises into detect(): no mask is the stock behaviour
+            self.log(f"[color_gate] fk mask failed ({type(e).__name__}: {e}); unmasked")
+            return None
+
     def _color_gate(self, dets, rejected):
         """perception.color_gate (FLAG): post-filter of the accepted detections. Rejected ones are appended to
         `rejected` as (det, "color_gate:<why>"). More than max_cands survivors -> top_k by n_px and degraded."""
@@ -1329,10 +1363,9 @@ class Perception:
         one -> kept only as a depth top face edge_h above the counter (a bin rim), else bin_edge. Else keep."""
         sc = self.scene
         pm = sc.pelvis_to_mat(det.top)[:2]
-        half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2
         near_edge = False
-        for ctr in sc.cfg["bins"]["centers"].values():
-            outside = np.maximum(np.abs(pm - np.asarray(ctr, float)) - half, 0.0)
+        for lo, hi in self._color_gate_boxes(g):
+            outside = np.maximum(lo - pm, 0.0) + np.maximum(pm - hi, 0.0)
             gap = float(np.hypot(*outside))
             if gap == 0.0:
                 return "color_gate:in_bin"
@@ -1340,6 +1373,25 @@ class Perception:
         if near_edge and not self._color_gate_rim_ok(det, g):
             return "color_gate:bin_edge"
         return None
+
+    def _color_gate_boxes(self, g):
+        """[(lo, hi)] mat-frame footprint of every bin. Flag live_bins off: nominal scene.yaml. On: the policy's live
+        estimate (bin.vote shift; a calibrate_bins success already moves the DETECTIONS onto the nominal bins), and with
+        no estimate at all the nominal box grown near_margin_m towards the robot (mat -y = pelvis -x, the drop_2 shift)."""
+        sc = self.scene
+        half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2
+        shift = dict(getattr(self.bin_shift_src, "bin_shift", None) or {}) if self.live_bins else {}
+        estimate = bool(shift) or (self.calibration is not None and self.calibration.success)
+        out = []
+        for name, ctr in sc.cfg["bins"]["centers"].items():
+            c = np.asarray(ctr, float)
+            if name in shift:
+                c = c + np.asarray(shift[name], float)[::-1]   # pelvis (dx, dy) -> mat (dy, dx)
+            lo, hi = c - half, c + half
+            if self.live_bins and not estimate:
+                lo = lo - np.array([0.0, float(g.get("near_margin_m", 0.10))])
+            out.append((lo, hi))
+        return out
 
     def _color_gate_rim_ok(self, det, g):
         h = float(det.top[2] - self.scene.counter_z)

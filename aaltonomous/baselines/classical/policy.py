@@ -84,6 +84,7 @@ class ClassicalPolicy:
                 self.hand_calib = None
                 (log or print)(f"hand calibration disabled: {type(e).__name__}: {e}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
+        self.perception.bin_shift_src = self.planner   # perception.color_gate.live_bins reads planner.bin_shift (bin.vote)
         self.require_confirm = require_confirm
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
         if self._shell:   # policy.safety_shell: all heavy work off the 30 Hz loop (look/plan thread), plans within the reserve
@@ -571,14 +572,21 @@ class ClassicalPolicy:
             return {}
         return {"arm_clear": bool(np.abs(self.arm_cmd - self.home).max() < 0.05)}
 
+    def _fk_kw(self, obs):
+        """Only with perception.color_gate.fk_mask: the measured arm / hand pose for detect()'s arm mask."""
+        if not (self.cfg["perception"].get("color_gate") or {}).get("fk_mask", False) or obs.get("arm_q") is None:
+            return {}
+        return {"robot_q": (np.asarray(obs["arm_q"], float),
+                            None if obs.get("hand_q") is None else np.asarray(obs["hand_q"], float))}
+
     def _look(self, obs):
         verify = self._verify_on()
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
-            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw())
+            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs))
             self.last_detections = dets
             return self._choose_retry(dets, obs, verify=False)
         dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
-                                                   **self._detect_kw())
+                                                   **self._detect_kw(), **self._fk_kw(obs))
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -1229,7 +1237,7 @@ class ClassicalPolicy:
             if depth is not None and np.ndim(depth) == 2:
                 lo, hi = self.cfg["perception"]["depth_range_mm"]
                 c["depth"].append(float(((depth >= lo) & (depth <= hi)).mean()))
-            dets = self.perception.detect(obs.get("head_rgb"), depth)
+            dets = self.perception.detect(obs.get("head_rgb"), depth, **self._fk_kw(obs))
             self.last_detections = dets
             self._push_frame(dets)
         except Exception as e:   # the hold must never kill the control loop
