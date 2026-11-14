@@ -49,6 +49,7 @@ FLAGS = {
     "calib.refit_per_look": ("finals calibration", False,
                              "freshness-guarded bounded counter-plane update on every look, with a plane-tilt hand-fit cross-check"),
     "calib.wide_counter_window": ("counter-z", False, "counter-z estimation window nominal -8 .. +22 cm (dominant-layer seed, then the usual +-3 cm plane fit with tilt/inlier gates; estimate outside = nominal), runtime height estimated even without calib.plane.apply_height, mat z follows the runtime counter; see COUNTERZ.md"),
+    "planner.lift_from_contact": ("real-only", False, "startup from a table-resting start: pure vertical lift (hand unchanged, half speed, never below start clearance) before the home route; no joint-space go_to fallback (real-only)"),
     "planner.bin_wall_extra_m": ("counter-z", 0.0, "extra bin wall height (m) on the release/carry height and the rim keepout (planner)"),
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),

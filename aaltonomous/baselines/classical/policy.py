@@ -1255,12 +1255,20 @@ class ClassicalPolicy:
             if (self.cfg.get("calib") or {}).get("plane", {}).get("apply_height", False):
                 if self._stg is None:
                     self._stg = {"phase": "safe", "t0": t, "why": []}
+                if self.planner._lift_from_contact_on() and self._stg["phase"] == "safe" and not self._stg.get("lift_logged"):
+                    self._stg["lift_logged"] = True
+                    c0 = min(self.planner.clearance(sd, self.arm_cmd, self.hand_cmd) for sd in ("left", "right"))
+                    self._note(t, f"[stage] lift_from_contact: start clearance {c0 * 1000:.1f} mm")
                 route, reason = self._stage_route(t, self._stg, "startup_route", self.arm_cmd.copy(),
                                                   self.hand_cmd.copy(), ("left", "right"), None)
                 if route is None and reason is None:
                     return self._hold()
                 self._stg = None
                 if route is None:   # never deadlock: the rc6 home route replaces a forever staging_hold
+                    if self.planner._lift_from_contact_on():   # never the joint-space go_to through the table
+                        self._note(t, "[stage] lift_from_contact: hold")
+                        self._stg = None
+                        return self._hold()
                     self._note(t, f"[staging] fallback rc6 home route: {reason}")
                     a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
                 else:

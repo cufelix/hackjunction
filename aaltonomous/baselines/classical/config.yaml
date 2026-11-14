@@ -614,6 +614,7 @@ motion:
 
 planner:
   bin_wall_extra_m: 0.0      # FLAG (counter-z): extra bin wall height (m) added to the release/carry height and the rim keepout; finals 0.01
+  lift_from_contact: false    # FLAG (real-only). startup from a table-resting hand: vertical lift first, then the home route
   per_target_guard: false     # FLAG (finals done). A failed/raising target cannot stop planning for other detections
   per_target_cooldown_s: 2.0  # after a target fails planning, wait this long before offering it again
 

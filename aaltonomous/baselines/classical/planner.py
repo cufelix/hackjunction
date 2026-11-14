@@ -472,6 +472,34 @@ class Planner:
                 return False
         return True
 
+    def _lift_from_contact_on(self):
+        return bool((self.cfg.get("planner") or {}).get("lift_from_contact", False))
+
+    def _contact_lift(self, sides, arm, hand, allowed_inside=None, rise=0.06):
+        """planner.lift_from_contact: pure vertical lift of both grasp points (hand posture unchanged, half speed).
+        Each sample must not go below its own side's start clearance - 1 mm and must not enter a bin wall.
+        Returns (arm, hand) or None when IK or the clearance proof fails."""
+        mo = self.cfg["motion"]
+        floors = {s: self.clearance(s, arm, hand) - 1e-3 for s in sides}
+        p0 = {s: np.asarray(self.kin.grasp_pose(s, arm)[0], float) for s in sides}
+        n = max(1, int(np.ceil(rise / float(mo["cart_step"]))))
+        cur, waypoints = arm.copy(), [arm.copy()]
+        for i in range(1, n + 1):
+            for s in sides:
+                z = p0[s][2] + rise * i / n
+                q, ok, _, _ = self.kin.solve(s, np.r_[p0[s][:2], z], cur, top_down=False, restarts=False)
+                if not ok or np.abs(q - cur).max() > float(mo.get("max_joint_step", 0.4)):
+                    return None
+                cur = q
+            waypoints.append(cur.copy())
+        a = time_scale(waypoints, mo["arm_max_vel"] * 0.5, mo["arm_max_acc"] * 0.5, self.dt)
+        h = np.repeat(hand[None], len(a), 0)
+        for k in range(len(a)):
+            for s in sides:
+                if self.clearance(s, a[k], h[k]) < floors[s] or self.hits_bin_wall(s, a[k], h[k], allowed_inside=allowed_inside):
+                    return None
+        return a, h
+
     def safe_home_route(self, arm_from, hand_from, sides=("left", "right"), allowed_inside=None, open_first=True):
         """Prove an open-hand, vertical escape above the runtime table/rims, then a dry-run-safe route home.
         open_first=False: lift-first-then-open (hand as-is during lift + home, opened at home, same keepout proof).
@@ -502,6 +530,11 @@ class Planner:
         for side in sides:
             sl = ArmKinematics.sl(side)
             hand_open[sl] = self.post["open"][sl]
+        if self._lift_from_contact_on() and not self._route_pose_safe(cur_a, cur_h, sides, 0.003, allowed_inside):
+            lift = self._contact_lift(sides, cur_a, cur_h, allowed_inside)
+            if lift is None:
+                return SafeRoute(False, reason="lift_from_contact: no proved vertical lift from the contact start")
+            add("lift_from_contact", *lift)
         if open_first:
             h = ramp(cur_h, hand_open, mo["hand_max_vel"], self.dt)
             a = np.repeat(cur_a[None], len(h), 0)
