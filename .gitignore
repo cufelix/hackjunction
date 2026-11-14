@@ -7,3 +7,6 @@ __pycache__/
 *.pem
 *.key
 logs/
+
+# submission flag overlay baked into the image (see overlays/submission.yaml); never in the repo
+aaltonomous/baselines/classical/overlay.yaml
