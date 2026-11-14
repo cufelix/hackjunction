@@ -27,6 +27,7 @@ from .shape_id import classify_top_face   # the ONE shape decision; swap this im
 from .shape_2d import decide_shape2d, shape2d_features
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
 from .hue_guard import AMBIGUOUS_CONF, Cand, classify_hue, judge, top_face_hsv
+from . import bare_table
 
 
 def colour_confidence(hsv, blob, ranges_by_class, color, min_area_px=120):
@@ -238,7 +239,14 @@ class Perception:
         scene.counter_z_prior = (cfg.get("scene") or {}).get("counter_z_prior")   # None = nominal
         self.ah = (cfg.get("calib") or {}).get("plane") or {}   # calib.plane.apply_height (FLAG, default OFF)
         self._ah_est, self._ah_tries = [], 0
-        self._ah_done = not bool(self.ah.get("apply_height"))
+        # calib.wide_counter_window (FLAG, default OFF): estimation window nominal -wide_lo .. +wide_hi, runtime height
+        # estimated even without apply_height, mat z follows the runtime counter (see COUNTERZ.md)
+        self.wide = bool(((cfg.get("calib") or {}).get("wide_counter_window", False)))
+        self.wide_lo = float(self.ah.get("wide_lo_m", 0.08))
+        self.wide_hi = float(self.ah.get("wide_hi_m", 0.22))
+        if self.wide:
+            self.scene.mat_z_follows_counter = True
+        self._ah_done = not self._ah_on()
         self._ah_committed = None
         calib_cfg = cfg.get("calib") or {}
         self.counter_after_hand = bool(calib_cfg.get("counter_after_hand", False))
@@ -311,6 +319,14 @@ class Perception:
         self.hue_guard_red_min_s = float(hg.get("red_min_s", 110.0))
         self.topface_mode = self.cfg.get("topface_mode", "top35")
         self.topface_min_px = int(self.cfg.get("topface_min_px", 1024))
+        # bare / glossy table (all default OFF): glare_reject, reflection_reject, local_bg (bare_table.py)
+        self.glare_cfg = dict(self.cfg.get("glare_reject") or {})
+        self.glare_reject = bool(self.glare_cfg.get("enabled", False))
+        self.reflect_cfg = dict(self.cfg.get("reflection_reject") or {})
+        self.reflection_reject = bool(self.reflect_cfg.get("enabled", False))
+        self.local_bg_cfg = dict(self.cfg.get("local_bg") or {})
+        self.local_bg = bool(self.local_bg_cfg.get("enabled", False))
+        self.bare_stats = {"glare_px": 0, "reflection": 0, "local_bg": 0}   # last detect(): diagnostics only
         # Per-episode colour k-means always starts/falls back at the measured
         # robust ranges, regardless of the separately selectable stock set.
         self.colour_kmeans = bool(self.cfg.get("colour_kmeans", False))
@@ -366,7 +382,7 @@ class Perception:
         """Restore the configured fallback at the start of every episode."""
         self.scene.counter_z_runtime = None
         self._ah_est, self._ah_tries = [], 0
-        self._ah_done = not bool(self.ah.get("apply_height"))
+        self._ah_done = not self._ah_on()
         self._ah_committed = None
         self.camera_pose_selected = False
         if self.counter_tracker is not None:
@@ -904,7 +920,7 @@ class Perception:
                                           float(elapsed_ms), str(reason))
         return self.calibration
 
-    def _counter_plane(self, depth, c, z0=None, transform_snapshot=None):
+    def _counter_plane(self, depth, c, z0=None, transform_snapshot=None, wide_seed=False):
         """Pelvis points of `depth` (stride-subsampled) and the counter plane z = ax + by + c fitted to them.
         (P, coef, None) or (None, None, reason). Shared by calibrate_bins and the bin.vote rim vote."""
         dlo, dhi = self.cfg["depth_range_mm"]
@@ -922,6 +938,12 @@ class Perception:
         # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.
         pm = sc.pelvis_to_mat(P)
         mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
+        if self.wide and z0 is None and (wide_seed or sc.counter_z_runtime is None):
+            # calib.wide_counter_window: no runtime height yet -> seed the +-window from the dominant z layer inside
+            # nominal -wide_lo .. +wide_hi over the mat (bins / objects are minor layers)
+            z0 = self._wide_seed(P, pm, mat, int(c.get("min_plane_points", 500)))
+            if z0 is None:
+                return (None, None, "counter plane not visible")
         counter = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) &
                    (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03) &
                    (np.abs(P[:, 2] - (sc.counter_z if z0 is None else z0)) < float(c.get("plane_z_window", 0.06))))
@@ -943,6 +965,41 @@ class Perception:
             return (None, None, "counter plane fit rejected")
         return P, coef, None
 
+    def counter_z_prior(self):
+        """calib.wide_counter_window: configured counter z prior (scene.counter_z_prior, else calib.plane.counter_z_prior_m,
+        pelvis frame), clamped to the window; None if neither is set."""
+        v = getattr(self.scene, "counter_z_prior", None)
+        if v is None:
+            v = self.ah.get("counter_z_prior_m")
+        if v is None or not np.isfinite(float(v)):
+            return None
+        nom = self.scene.nominal_counter_z
+        return float(np.clip(float(v), nom - self.wide_lo, nom + self.wide_hi))
+
+    def _wide_seed(self, P, pm, mat, min_points):
+        """calib.wide_counter_window: z of the counter layer = the lowest well-populated peak of the 1 cm z histogram of
+        mat points inside nominal -wide_lo .. +wide_hi (bin rims / objects are smaller layers ABOVE the counter). None if
+        no layer has min_points."""
+        nom = self.scene.nominal_counter_z
+        lo, hi = nom - self.wide_lo, nom + self.wide_hi
+        on = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) & (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03)
+              & (P[:, 2] >= lo) & (P[:, 2] <= hi))
+        if int(on.sum()) < min_points:
+            return None
+        z = P[on, 2]
+        edges = np.arange(lo, hi + 0.01, 0.01)
+        h = np.histogram(z, bins=edges)[0].astype(float)
+        smooth = h + np.r_[0.0, h[:-1]] + np.r_[h[1:], 0.0]    # +-1 cm
+        top = smooth.max()
+        if top < min_points:
+            return None
+        for i in np.nonzero(smooth >= 0.6 * top)[0]:           # lowest peak of comparable mass
+            if i == 0 or smooth[i] >= smooth[i - 1]:
+                if i == len(smooth) - 1 or smooth[i] >= smooth[i + 1]:
+                    sel = z[(z >= edges[max(i - 1, 0)]) & (z <= edges[min(i + 2, len(edges) - 1)])]
+                    return float(np.median(sel))
+        return None
+
     def _plane_height(self, depth, a):
         """(z at the mat centre, tilt deg, n inliers, None) from the existing counter-plane fit, or (nan, tilt, n, why)."""
         nan = float("nan")
@@ -953,6 +1010,14 @@ class Perception:
         c = {"plane_z_window": float(a.get("window_m", 0.40)), "min_plane_points": int(a.get("min_inliers", 500))}
         xy = sc.mat_to_pelvis([*(np.asarray(sc.cfg["counter"]["mat_size"], float) / 2), 0.0])[:2]
         z = nom
+        if self.wide:   # calib.wide_counter_window: pass 1 seeds z0 from the nominal -wide_lo .. +wide_hi histogram
+            c["plane_z_window"] = 0.03
+            P, coef, why = self._counter_plane(depth, c, wide_seed=True)
+            if why:
+                return nan, nan, 0, why
+            z = float(coef @ np.r_[xy, 1.0])
+            if not nom - self.wide_lo <= z <= nom + self.wide_hi:
+                return z, nan, 0, f"z {z - nom:+.3f} outside the window"
         for _ in range(2):          # pass 1 coarse (wide window), pass 2 tight around pass 1's plane
             P, coef, why = self._counter_plane(depth, c, z0=z)
             if why:
@@ -980,10 +1045,14 @@ class Perception:
             z, tilt, n, why = float("nan"), float("nan"), 0, f"{type(exc).__name__}"
         return CounterHeightSample(float(z), float(tilt), int(n), why)
 
+    def _ah_on(self):
+        """calib.plane.apply_height or calib.wide_counter_window: either runs the counter-height estimator."""
+        return bool(self.ah.get("apply_height")) or self.wide
+
     def accept_counter_height_sample(self, sample, commit_scene=True):
         """Apply the N-sample spread/MAD gate and latch at most one runtime height per episode."""
         a = self.ah
-        if not a.get("apply_height") or self._ah_done:
+        if not self._ah_on() or self._ah_done:
             return self._ah_done, self._ah_committed
         self._ah_tries += 1
         n_looks = max(1, int(a.get("looks", 3)))
@@ -999,7 +1068,8 @@ class Perception:
         fallback = sample.reason or "collecting"
         if consistent:
             nom, lim = self.scene.nominal_counter_z, float(a.get("max_dz_m", 0.20))
-            applied = float(np.clip(est, nom - lim, nom + lim))
+            lo, hi = (nom - self.wide_lo, nom + self.wide_hi) if self.wide else (nom - lim, nom + lim)
+            applied = float(np.clip(est, lo, hi))
             self._ah_done, self._ah_committed = True, applied
             if commit_scene:
                 self.scene.counter_z_runtime = applied
@@ -1009,6 +1079,10 @@ class Perception:
         if not self._ah_done and self._ah_tries >= 3 * n_looks:
             self._ah_done, self._ah_committed = True, None
             fallback = "sample_gate_exhausted"
+        if self.wide and not self._ah_est and commit_scene:   # unmeasured: the configured prior, never the nominal scene value
+            prior = self.counter_z_prior()
+            if prior is not None:
+                self.scene.counter_z_runtime = prior
         shown = self.scene.nominal_counter_z if applied is None else applied
         self.log(f"[apply_height] est={est:.4f} applied={shown:.4f} n={len(window)}/{n_looks} "
                  f"spread={spread:.4f} mad={mad:.4f} tilt_deg={sample.tilt_deg:.2f} fallback={fallback}")
@@ -1035,7 +1109,7 @@ class Perception:
                      f"z={update.counter_z} n={update.n_samples} tilt_deg={update.tilt_deg:.2f} "
                      f"rms_mm={update.residual_m * 1000.0:.2f} ({update.reason})")
             return update
-        if not self.ah.get("apply_height") or self._ah_done:
+        if not self._ah_on() or self._ah_done:
             return self._ah_committed
         return self.accept_counter_height_sample(self.measure_counter_height(depth))[1]
 
@@ -1299,6 +1373,7 @@ class Perception:
         c = self.cfg
         dets, rejected = [], []
         self.color_gate_degraded = False
+        self.bare_stats = {"glare_px": 0, "reflection": 0, "local_bg": 0}   # last detect(): diagnostics only
         self.update_counter_height(depth, calibration_frame)    # inert when its flags are off
         self._image_bin_gate_active = False
         self._below_bin_row = None
@@ -1333,7 +1408,8 @@ class Perception:
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
         need_hsv = (self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor or self.sat_floor_adaptive
-                    or self.depth_blob_recover or self.tape_value_cut or self.split_by_solidity or self.gate_below_bins)
+                    or self.depth_blob_recover or self.tape_value_cut or self.split_by_solidity or self.gate_below_bins
+                    or self.glare_reject or self.reflection_reject or self.local_bg)
         hsv = early_hsv if early_hsv is not None else (
             cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None)
         colour_records = [] if self.depth_blob_recover else None
@@ -1344,6 +1420,13 @@ class Perception:
             masks = self._adaptive_saturation_masks(hsv, keep)
         else:
             masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
+        if self.glare_reject:
+            masks = self._glare_filter(masks, hsv, depth)
+        all_masks = None
+        if self.local_bg:
+            all_masks = np.zeros(keep.shape, np.uint8)
+            for m_ in masks.values():
+                all_masks |= (m_ > 0).astype(np.uint8)
         if self.hue_guard:
             # H1: the red|yellow union is grouped and split before any colour is
             # assigned.  Each resulting part is then classified and guarded
@@ -1367,6 +1450,8 @@ class Perception:
             if k > 0:
                 m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
             n, lab, stats, cent = cv2.connectedComponentsWithStats(m, connectivity=8)
+            skip = (self._reflection_skip(lab, stats, c["min_area_px"], hsv, depth)
+                    if self.reflection_reject and n > 2 else ())
             for i in range(1, n):
                 area = int(stats[i, cv2.CC_STAT_AREA])
                 x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
@@ -1380,7 +1465,13 @@ class Perception:
                     if self.reject_log:
                         rejected.append((self._blob_placeholder(color, area, cent[i]), "min_area"))
                     continue
+                if i in skip:
+                    continue
                 blob = (lab == i).astype(np.uint8)
+                if i in skip:
+                    continue
+                if all_masks is not None and self._local_bg_reject(blob, hsv, all_masks):
+                    continue
                 parts = [(blob, area, cent[i])]
                 if self.split_by_solidity:
                     lo, hi = self.split_solidity_cfg.get("area_px", [520, 15500])
@@ -1602,6 +1693,76 @@ class Perception:
             voted.append(replace(rep, top=np.asarray(top, float), uv=uv,
                                  n_px=int(np.median([d.n_px for d in ds]))))
         return voted
+    def _counter_heights(self, ys, xs, depth, n=12):
+        """Median object-heights above the counter of up to n valid-depth pixels, None = no valid depth / any failure."""
+        if depth is None or np.ndim(depth) != 2 or not len(ys):
+            return None
+        try:
+            dlo, dhi = self.cfg["depth_range_mm"]
+            sel = np.linspace(0, len(ys) - 1, min(n * 4, len(ys))).astype(int)
+            d = np.asarray(depth)[ys[sel], xs[sel]].astype(float)
+            ok = (d >= dlo) & (d <= dhi)
+            if not ok.any():
+                return None
+            P = self._pixel_to_pelvis(xs[sel][ok][:n], ys[sel][ok][:n], d[ok][:n])
+            return float(np.median((P[:, 2] - self.scene.counter_z) / self.height))
+        except Exception:
+            return None
+
+    def _glare_filter(self, masks, hsv, depth):
+        """perception.glare_reject: remove small specular highlights on the counter plane (and their low-S halo) from the
+        colour masks. Fails open: any error returns the masks unchanged."""
+        g = self.glare_cfg
+        try:
+            hmax = float(g.get("plane_h_max", 0.5))
+
+            def on_plane(ys, xs):
+                h = self._counter_heights(ys, xs, depth)
+                return h is None or h < hmax
+            kill = bare_table.glare_kill_mask(hsv, int(g.get("v_min", 245)), int(g.get("s_max", 40)),
+                                              int(g.get("max_px", 900)), int(g.get("dilate_px", 6)),
+                                              int(g.get("halo_s_max", 65)), on_plane)
+        except Exception as exc:
+            self.log(f"[glare_reject] error {type(exc).__name__}: {exc}")
+            return masks
+        if kill is None:
+            return masks
+        self.bare_stats["glare_px"] = int(kill.sum())
+        keep = (kill == 0).astype(np.uint8) * 255
+        return {c: m & keep for c, m in masks.items()}
+
+    def _reflection_skip(self, lab, stats, min_area, hsv, depth):
+        """perception.reflection_reject: component ids (of one colour) that mirror a stronger blob above them."""
+        try:
+            ids = [i for i in range(1, len(stats)) if stats[i, cv2.CC_STAT_AREA] >= min_area]
+            if len(ids) < 2:
+                return ()
+            r = self.reflect_cfg
+            p = {"max_gap_px": float(r.get("max_gap_px", 40)), "dx_frac": float(r.get("dx_frac", 0.6)),
+                 "width_ratio": tuple(r.get("width_ratio", (0.5, 1.8))), "s_ratio": float(r.get("s_ratio", 0.9)),
+                 "min_iou": float(r.get("min_iou", 0.45)), "h_max": float(r.get("h_max", 0.5))}
+            blobs = []
+            for i in ids:
+                x, y, w, h = (int(stats[i, k]) for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
+                blobs.append((lab[y:y + h, x:x + w] == i, x, y))
+            bad = bare_table.reflection_indices(blobs, hsv, p, lambda ys, xs: self._counter_heights(ys, xs, depth))
+            self.bare_stats["reflection"] += len(bad)
+            return {ids[k] for k in bad}
+        except Exception as exc:
+            self.log(f"[reflection_reject] error {type(exc).__name__}: {exc}")
+            return ()
+
+    def _local_bg_reject(self, blob, hsv, all_masks):
+        """perception.local_bg: blob whose median H/S equals its surrounding ring (the table) is not an object."""
+        try:
+            l = self.local_bg_cfg
+            if bare_table.low_contrast_with_ring(hsv, blob, all_masks, int(l.get("ring_px", 10)),
+                                                 float(l.get("dh", 5)), float(l.get("ds", 25))):
+                self.bare_stats["local_bg"] += 1
+                return True
+        except Exception as exc:
+            self.log(f"[local_bg] error {type(exc).__name__}: {exc}")
+        return False
 
     def _hue_guard_items(self, masks, hsv):
         """perception.hue_guard layer 3: red and yellow pixels form one component per object, so an object whose side
@@ -2351,6 +2512,8 @@ class Perception:
         ws_x = g.get("ws_x")
         if ws_x is None:
             return None
+        if self.wide and self.scene.counter_z_runtime is None:
+            return None   # calib.wide_counter_window: counter height unmeasured and no prior -> the xy are unreliable: fail OPEN
         x, y = float(det.top[0]), float(det.top[1])
         if self._image_bin_gate_active:
             return "color_gate:workspace" if x < ws_x[0] or abs(y) > g["ws_abs_y"] else None

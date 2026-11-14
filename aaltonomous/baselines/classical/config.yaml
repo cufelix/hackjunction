@@ -65,7 +65,11 @@ calib:
     max_dz_m: 0.20            # clamp |z - nominal|
     max_tilt_deg: 8.0         # plane tilt above this -> nominal (tilt is only reported, never corrected)
     min_inliers: 500          # plane inliers needed
+    counter_z_prior_m: null   # wide_counter_window: absolute pelvis z used while the height is unmeasured (null = none: workspace rule fails open)
+    wide_lo_m: 0.08           # wide_counter_window: counter z window below nominal
+    wide_hi_m: 0.22           # wide_counter_window: counter z window above nominal (estimate outside = rejected)
     window_m: 0.40            # coarse z window around nominal for the first pass (then 0.03 around that pass's plane)
+  wide_counter_window: false  # FLAG (counter-z): estimation window nominal -wide_lo_m .. +wide_hi_m, runtime height estimated (also without apply_height), mat z follows it; see COUNTERZ.md
   fk_xcheck: false            # FLAG (B2, log-only): RGB head-pose residual vs Dex3 hand FK (fk_xcheck.py)
   fk_xcheck_config:
     period_s: 0.5             # worker-thread cadence; act() never waits for the search
@@ -240,6 +244,28 @@ perception:
   partial_ok_near_hand_params: {min_area_px: 30, boundary_px: 2, max_relooks: 2}
   relook_before_done: false    # FLAG (recall P0). Retract, wait for fresh frames, then one final detection
   relook_fresh_frames: 2
+  # Bare / glossy table flags (default OFF; see BARETABLE.md). Helpers in bare_table.py, all fail open.
+  glare_reject:              # FLAG: small V >= v_min & S <= s_max components on the counter plane (+ halo S <= halo_s_max) leave the colour masks
+    enabled: false
+    v_min: 245
+    s_max: 40
+    max_px: 900
+    dilate_px: 6
+    halo_s_max: 65
+    plane_h_max: 0.5         # object heights above the counter; a highlight on an object top is above this and is kept
+  reflection_reject:         # FLAG: blob B below a stronger same-colour blob A, mirrored, lower S, at / below the plane -> reflection
+    enabled: false
+    max_gap_px: 40
+    dx_frac: 0.6
+    width_ratio: [0.5, 1.8]
+    s_ratio: 0.9
+    min_iou: 0.45
+    h_max: 0.5
+  local_bg:                  # FLAG: blob median H/S within dh / ds of the ring around it = table colour, not an object
+    enabled: false
+    ring_px: 10
+    dh: 5
+    ds: 25
   colour_kmeans: false       # FLAG (EV gate). Once per episode, bounded k=3 on robust object-blob HSV pixels;
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
@@ -311,6 +337,9 @@ perception:
     min_aspect: 1.4           # no distance-transform neck: cut along the major axis only if this elongated (mock: one
                               # object <= 1.35, two touching >= 1.48)
     max_parts: 3
+
+planner:
+  bin_wall_extra_m: 0.0      # FLAG (counter-z): extra bin wall height (m) added to the release/carry height and the rim keepout; finals 0.01
 
 bin:
   geometry_runtime: false     # FLAG (bin geo). perception follows planner.bin_shift for every bin consumer (needs bin.vote.enabled for a shift)
@@ -481,6 +510,8 @@ instruction:
   normalize: false            # FLAG (Felix). resolve(normalize(text)): fixes typos/synonyms; needs resolve
   multilingual: false         # FLAG. cached FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK -> English; needs resolve
   strict: false               # FLAG (Felix strict). never guess: abstain instead of FIXED / inferred keys; needs resolve
+  structured: false           # FLAG (langzip). deterministic complete list/conditional rules before strict; needs resolve + strict
+  venue_colour_aliases: false # FLAG (T10). venue colour words in EN/FI/CS incl. inflections, before normalize; amber = orange; needs resolve
   max_chars: 0                # FLAG (fuzz). >0: cap the text at this many chars, cut at the last sentence/clause boundary
                               # (. ; ! ? newline) else the last space; the resolver is quadratic (50k chars = 19 s). 0 = off
 

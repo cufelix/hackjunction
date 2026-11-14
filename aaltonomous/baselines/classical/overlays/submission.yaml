@@ -25,6 +25,8 @@ flags:
   instruction.normalize: false                  # Felix lang  typo/synonym normaliser (RC1 overlay turns it on)
   instruction.multilingual: false               # FI/CZ       conservative Finnish/Czech instruction canonicalizer
   instruction.strict: false                     # Felix strict never guess (rc1_strict overlay turns it on)
+  instruction.structured: false                 # langzip deterministic parallel lists (finals_r22_langzip overlay turns it on)
+  instruction.venue_colour_aliases: false       # T10 venue colour words EN/FI/CS, amber = orange (finals_r22_coloralias turns it on)
   brain.backend: stub
   brain.url: http://127.0.0.1:8080/completion
   brain.find: false
@@ -34,6 +36,9 @@ flags:
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
   perception.hue_guard.enabled: false           # tech lead  per-frame orange/yellow hue judge (hue_guard.py); OFF until its A/B
+  perception.glare_reject.enabled: false        # bare table  specular highlights off the colour masks
+  perception.reflection_reject.enabled: false   # bare table  mirror blobs below an object
+  perception.local_bg.enabled: false            # bare table  blob colour == local ring colour -> table
   perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
   perception.sim_center_principal_point: false # centred intrinsics only for the sim profile
   perception.aim_z_frac: 0.25                  # no-depth centroid-ray aim below the object top
@@ -144,3 +149,5 @@ flags:
   perception.inject_cam_error: null             # TEST ONLY [dpitch_deg, dyaw_deg, dx, dy, dz]: perturb the head extrinsics
   instruction.max_chars: 0                      # fuzz fix   0 = off; N>0 caps the instruction text at N chars (boundary cut)
   safety.nan_guard: false                       # fuzz fix   non-finite arm_q/hand_q -> hold last action, no planner tick
+  calib.wide_counter_window: false              # counter-z   nominal -8..+22 cm estimation window (finals_r22_counter turns it on)
+  planner.bin_wall_extra_m: 0.0                 # counter-z   extra bin wall height on release/carry and rim keepout (finals_r22_counter: 0.01)

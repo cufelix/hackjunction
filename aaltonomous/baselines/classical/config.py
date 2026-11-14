@@ -45,6 +45,8 @@ FLAGS = {
                                  "estimate counter height only after the camera pose is selected; require a MAD-consistent sample set"),
     "calib.refit_per_look": ("finals calibration", False,
                              "freshness-guarded bounded counter-plane update on every look, with a plane-tilt hand-fit cross-check"),
+    "calib.wide_counter_window": ("counter-z", False, "counter-z estimation window nominal -8 .. +22 cm (dominant-layer seed, then the usual +-3 cm plane fit with tilt/inlier gates; estimate outside = nominal), runtime height estimated even without calib.plane.apply_height, mat z follows the runtime counter; see COUNTERZ.md"),
+    "planner.bin_wall_extra_m": ("counter-z", 0.0, "extra bin wall height (m) on the release/carry height and the rim keepout (planner)"),
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
@@ -54,6 +56,8 @@ FLAGS = {
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.multilingual": ("multilingual", False, "closed-grammar FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK instructions -> cached English canonical form before resolve; unsupported foreign input stays unparsed (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
+    "instruction.structured": ("langzip", False, "complete deterministic zip/colon/positional/conditional lists before the strict filter (needs instruction.resolve + strict)"),
+    "instruction.venue_colour_aliases": ("T10 coloralias", False, "venue colour words (purple/violet/lilac/lavender/magenta, orange/amber/tangerine, yellow/gold, FI/CS red+blue and inflections) named before normalize; amber = orange (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
     "policy.generation_workers": ("H7", False, "generation-tagged look workers compute on an episode snapshot; reset invalidates immediately and never waits for stale work"),
     "policy.fixed_mapping": ("organisers P0", None, "explicit sort_fixed scene metadata passed by server reset (null = shared FIXED_MAPPING; finals venue: yellow left, blue center, red right); never a language fallback"),
@@ -79,6 +83,9 @@ FLAGS = {
     "perception.shape_2d_v2": ("r17", False, "yellow: 2D cube/cylinder from the blob top edge (quad_rms + n_vert) where the shape would be None / the blob fallback"),
     "perception.hsv_set": ("real colour", "stock", "stock | robust: one HSV set for sim + the real head cam (hsv_robust) | robust_v2: robust with red H 0-22, yellow H 24-52 (hsv_robust_v2)"),
     "perception.hue_guard.enabled": ("hue guard", False, "robust_v2 band 22-24 + per-frame: adjacent red|yellow pair closer than min_gap_deg -> abstain (color_conf 0.3, off the bins)"),
+    "perception.glare_reject.enabled": ("bare table", False, "drop small specular highlights (V >= v_min, S <= s_max) on the counter plane, and their low-S halo, from the colour masks (glossy bare table: glare must not read as yellow/white objects)"),
+    "perception.reflection_reject.enabled": ("bare table", False, "drop a colour blob directly below a stronger same-colour blob with mirrored shape, lower S and table-plane / no depth (reflection in a glossy table)"),
+    "perception.local_bg.enabled": ("bare table", False, "drop a colour blob whose median H/S equals the ring of pixels around it (local table colour; no global mat / background statistic)"),
     "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),
     "perception.principal_point": ("Oliver lane 3", "file", "file | center: Isaac renders cx,cy at the image centre"),
     "perception.sim_center_principal_point": ("gate fix", False, "use centred camera intrinsics only under the sim profile"),
@@ -418,6 +425,8 @@ def check_flag_values(cfg):
     if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)) \
             or not np.isfinite(cooldown) or cooldown <= 0.0:
         raise ValueError(f"planner.per_target_cooldown_s = {cooldown!r}: want finite seconds > 0")
+    if not isinstance(_get(cfg, "calib.wide_counter_window"), bool):
+        raise ValueError("calib.wide_counter_window: want true or false")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
@@ -437,7 +446,7 @@ def check_flag_values(cfg):
     first_scale = _get(cfg, "policy.first_object_speed_scale")
     if first_scale is not None and not 0.0 < float(first_scale) <= 1.0:
         raise ValueError("policy.first_object_speed_scale must be null or in (0, 1]")
-    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m"):
+    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m", "planner.bin_wall_extra_m"):
         v = float(_get(cfg, k))
         if not np.isfinite(v) or v < 0.0:
             raise ValueError(f"{k} must be a finite non-negative distance")

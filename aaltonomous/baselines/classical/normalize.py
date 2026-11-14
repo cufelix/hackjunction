@@ -234,6 +234,34 @@ def name_foreign(sentence: str) -> str:
     return sentence
 
 
+# instruction.venue_colour_aliases (flag, default off): the finals venue's object colours in the words a person uses for them,
+# in the supported languages (English, Finnish, Czech), inflections included. Output is a canonical English colour word
+# that the resolver already reads: purple/violet/lilac/lavender/magenta -> purple (blue class), orange/amber/tangerine ->
+# orange (red class; amber is orange here, the resolver alone reads it as yellow), gold -> yellow, Finnish/Czech red and
+# blue -> red and blue. Finnish/Czech bin words are NOT here: normalize (FI/CS bin table) owns them. Czech endings are
+# matched with and without diacritics; Finnish words are matched on explicit endings ("sinister" is not "sininen").
+_CS_END = r"(?:á|a|é|e|ý|y|í|i|ou|ého|eho|ému|emu|ém|em|ých|ych|ými|ymi)"
+_FI_BLUE_END = r"(?:nen|s(?:en|t[aä]|et|i[aä]|ess[aä]|ell[aä]|iin|ten|in|ille|illa))"
+_VENUE_COLOURS = tuple((re.compile(p, re.I), w) for p, w in (
+    (r"\b(?:purple|violet|lilac|lavender|lavendar|magenta|liila|purppur|syreeni|laventel|mauve|amethyst)\w*", "purple"),
+    (r"\bfialov" + _CS_END + r"\b|\blevandulov" + _CS_END + r"\b", "purple"),
+    (r"\b(?:orange|tangerine|amber)\w*|\bmandariin\w*|\bmeripihk\w*|\bjantarov" + _CS_END + r"?\b", "orange"),
+    (r"\boranssi\w*", "orange"),
+    (r"\boran[žz]ov" + _CS_END + r"\b", "orange"),
+    (r"\bmandarinkov" + _CS_END + r"\b", "orange"),
+    (r"\b(?:yellow|gold|golden|keltai\w*|kultai\w*)\w*|\b[žz]lut" + _CS_END + r"\b|\bzlat" + _CS_END + r"\b", "yellow"),
+    (r"\b[čc]erven" + _CS_END + r"\b|\bpunai\w*", "red"),
+    (r"\bmodr" + _CS_END + r"\b|\bsini" + _FI_BLUE_END + r"\b", "blue"),
+))
+
+
+def venue_colour_aliases(sentence: str) -> str:
+    """Name the venue colours (incl. Finnish/Czech and inflected forms) with canonical English words; see _VENUE_COLOURS."""
+    for rx, word in _VENUE_COLOURS:
+        sentence = rx.sub(lambda m, w=word: w.capitalize() if m.group(0)[0].isupper() else w, sentence)
+    return sentence
+
+
 # Ambiguous scene nouns are shapes only inside an actionable object placement. In particular, relational descriptions
 # ("the red roof is above the left bin", "the red rod points to the left bin") must remain unknown so strict mode cannot
 # manufacture a sortable compound key from them.
@@ -725,7 +753,7 @@ def normalize(sentence: str) -> str:
     return _box_objects(drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, sentence))))
 
 
-# Strict mode (instruction.strict): the mapping never guesses. instruction.py is FROZEN, so this filters its output.
+# Strict mode (instruction.strict): the mapping never guesses, so this filters the permissive resolver's output.
 # Every check only turns a key into an abstain (None) or drops it; abstain scores 0, a wrong bin scores -1.
 #   (a) the resolver parsed nothing, or a swap re-maps the whole sentence -> abstain on all (never the FIXED fallback);
 #   (b) a clause the resolver cannot read reliably (negation, condition, table placement, relation, quantity) abstains
@@ -818,6 +846,312 @@ def _names(k, cols: set[str], shps: set[str]) -> bool:
     if isinstance(k, tuple):
         return k[0] in cols and k[1] in shps
     return k in (cols if k in _ins.COLORS else shps)
+
+
+# instruction.structured: small, deterministic grammars for parallel lists.  This is separate from the
+# permissive resolver and the conservative strict filter: a recognised structure returns either a complete,
+# conflict-free mapping or a truthy whole-instruction abstain.  None means "not this grammar" and preserves the
+# old strict path byte-for-byte when the flag is off or the sentence is an ordinary clause instruction.
+_STRUCT_MARKER = re.compile(r"\b(?:respectively|in\s+that\s+order)\b", re.I)
+_STRUCT_POLITE_HEAD = re.compile(r"^\s*(?:(?:please|kindly)\s*,?\s*|could\s+you\s+please\s+|when\s+you\s+can\s*,?\s*)", re.I)
+_STRUCT_POLITE_TAIL = re.compile(r"(?:\s*,?\s*please|[.!?]?\s*thanks)\s*[.!?]*\s*$", re.I)
+_STRUCT_BAD = re.compile(
+    r"\b(?:not|never|no|none|unless|except|excluding|without|swap|switch|exchange|otherwise|either|neither|both)\b|n't\b",
+    re.I,
+)
+_STRUCT_ASSIGN_BAD = re.compile(
+    r"\b(?:avoid|avoids|away|beside|near|outside|out|stay|stays|remain|remains|table|counter|nowhere|"
+    r"forbid|forbids|forbidden|leave|leaves|skip|skips|from)\b", re.I,
+)
+_STRUCT_ZIP = tuple((re.compile(p, re.I), order) for p, order in (
+    (r"^(?:put|place|move|send|sort|drop)\s+(?P<a>.+?)\s+(?:in|into|to|onto)\s+(?P<b>.+)$", "keys_bins"),
+    (r"^(?P<a>.+?)\s+(?:go|goes|belong|belongs)(?:\s+(?:in|into|to|onto))?\s+(?P<b>.+)$", "keys_bins"),
+    (r"^(?P<a>.+?)\s+(?:receive|receives|take|takes|hold|holds|are\s+for)\s+(?P<b>.+)$", "bins_keys"),
+))
+_STRUCT_DIRECTION = re.compile(
+    r"^(?:(?:reading|listed|ordered)\s+)?(?:from\s+)?(left|right)(?:most|hand)?\s*(?:-|to)\s*"
+    r"(?:the\s+)?(left|right)(?:most|hand)?\s*:\s*(.+)$", re.I,
+)
+_STRUCT_ORD_HEAD = re.compile(
+    r"^(?:(?:(?:count|number)\s+the\s+(?:bins|boxes|containers)\s+"
+    r"(?:(?:starting|beginning)\s+)?from)|(?:(?:starting|beginning)\s+at)|(?:counting\s+from))\s+"
+    r"(?:the\s+)?(left|right)(?:most|hand)?\s*[.,:]?\s*(.+)$", re.I,
+)
+_STRUCT_ORD_BIN = re.compile(r"\b(first|1st|second|2nd|third|3rd)\s+(?:bin|box|container|one)\b", re.I)
+_STRUCT_PLACE = re.compile(r"\b(?:put|place|send|move|drop|sort|go|goes|belong|belongs|use|take)\b", re.I)
+_STRUCT_HEADER = re.compile(r"^(?:rules?|sorting|assignments?|destinations?|as\s+follows)\s*:?$", re.I)
+_STRUCT_FILLER = frozenset(
+    "a an the all every each object objects item items piece pieces thing things one ones block blocks bin bins box "
+    "boxes container containers slot slots tray trays crate crates basket baskets receptacle receptacles in into to "
+    "onto inside for is are be should must it you see then goes go belong belongs receive receives take takes hold "
+    "holds put place send move drop sort use coloured colored and".split()
+) | frozenset(("first", "1st", "second", "2nd", "third", "3rd", "1", "2", "3", "st", "nd", "rd"))
+
+
+def _struct_clean(text: str) -> str:
+    text = str(text).strip()
+    while True:
+        new = _STRUCT_POLITE_HEAD.sub("", text)
+        if new == text:
+            break
+        text = new
+    return _STRUCT_POLITE_TAIL.sub("", text).strip(" \t,.;!?")
+
+
+def _struct_keys(text: str):
+    """Ordered semantic keys, [] for no keys, or None when colour/shape mentions were only partly consumed."""
+    low = _ins._colour_aliases(_BINCOL.sub(" bin ", text).lower())
+    ms = _ins._mentions(_ins._tokens(low), False)
+    mentions = [(i, k, v) for i, k, v in ms if k != "bin"]
+    keys, kind = _ins._keys_from(ms)
+    out = [k for k, _ in keys]
+    ncol = sum(k == "color" for _, k, _ in mentions)
+    nshp = sum(k == "shape" for _, k, _ in mentions)
+    if ncol and nshp:
+        if kind != "compound" or len(out) != ncol or len(out) != nshp:
+            return None
+    elif len(out) != len(mentions):
+        return None
+    return out
+
+
+def _struct_bins(text: str) -> list[str]:
+    return [v for _, k, v in _ins._mentions(_ins._tokens(text), False) if k == "bin"]
+
+
+def _struct_unknown(text: str) -> set[str]:
+    low = _ins._colour_aliases(text.lower())
+    known = set(_ins._COLOR_WORDS) | set(_ins._SHAPE_WORDS) | set(_ins._BIN_WORDS) | set(_ins._BIN_NOUNS)
+    return {t for t in _ins._tokens(low) if t not in known and t not in _STRUCT_FILLER}
+
+
+def _struct_slots(text: str) -> int:
+    """Number of comma/and separated list members, including unknown members."""
+    # Treat an Oxford comma as one separator, but retain every other empty member so a dangling/duplicate
+    # separator cannot turn an incomplete list into an apparently complete one.
+    text = re.sub(r",\s*and\b", " and ", text, flags=re.I)
+    parts = re.split(r"\s*(?:,|/|\band\b)\s*", text, flags=re.I)
+    return -1 if any(not part.strip() for part in parts) else len(parts)
+
+
+def _struct_merge(rules) -> dict | None:
+    out = {}
+    for key, bin_name in rules:
+        if key in out and out[key] != bin_name:
+            return None
+        out[key] = bin_name
+    return out or None
+
+
+def _struct_pair(a: str, b: str):
+    """Return rules for one pure key:bin or bin:key pair, [] if it is not a pair, None if malformed."""
+    ak, bk = _struct_keys(a), _struct_keys(b)
+    ab, bb = _struct_bins(a), _struct_bins(b)
+    if (ak is None or bk is None or _STRUCT_ASSIGN_BAD.search(a) or _STRUCT_ASSIGN_BAD.search(b)
+            or _struct_unknown(a) or _struct_unknown(b)):
+        return None
+    if ak and not ab and not bk and len(bb) == 1:
+        return [(k, bb[0]) for k in ak]
+    if bk and not bb and not ak and len(ab) == 1:
+        return [(k, ab[0]) for k in bk]
+    return []
+
+
+def _struct_zip(text: str):
+    marker = _STRUCT_MARKER.search(text)
+    if not marker:
+        return None
+    if (text[marker.end():].strip(" \t,.;!?") or _STRUCT_BAD.search(text)
+            or _STRUCT_ASSIGN_BAD.search(text[:marker.start()])):
+        return {"default": None}
+    body = text[:marker.start()].strip(" \t,.;!?")
+    for rx, order in _STRUCT_ZIP:
+        m = rx.fullmatch(body)
+        if not m:
+            continue
+        a, b = m.group("a").strip(" ,"), m.group("b").strip(" ,")
+        ak, bk = _struct_keys(a), _struct_keys(b)
+        ab, bb = _struct_bins(a), _struct_bins(b)
+        if ak is None or bk is None:
+            return {"default": None}
+        if order == "keys_bins" and ak and not ab and not bk and bb:
+            keys, bins = ak, bb
+        elif order == "bins_keys" and bk and not bb and not ak and ab:
+            keys, bins = bk, ab
+        else:
+            return {"default": None}
+        key_text, bin_text = (a, b) if keys is ak else (b, a)
+        if (_struct_unknown(key_text) or _struct_unknown(bin_text)
+                or len(keys) != _struct_slots(key_text) or len(bins) != _struct_slots(bin_text)
+                or len(keys) != len(bins) or len(keys) < 2 or len(set(keys)) != len(keys)):
+            return {"default": None}
+        merged = _struct_merge(zip(keys, bins))
+        return merged if merged is not None else {"default": None}
+    return {"default": None}
+
+
+def _struct_directional(text: str):
+    m = _STRUCT_DIRECTION.fullmatch(text)
+    if not m:
+        return None
+    if (m.group(1).lower() == m.group(2).lower() or _STRUCT_BAD.search(text)
+            or _STRUCT_ASSIGN_BAD.search(m.group(3)) or _struct_unknown(m.group(3))):
+        return {"default": None}
+    keys = _struct_keys(m.group(3))
+    if (keys is None or len(keys) != 3 or len(set(keys)) != 3 or _struct_bins(m.group(3))
+            or _struct_slots(m.group(3)) != 3 or _STRUCT_PLACE.search(m.group(3))):
+        return {"default": None}
+    bins = _ins.BINS if m.group(1).lower() == "left" else tuple(reversed(_ins.BINS))
+    return dict(zip(keys, bins))
+
+
+def _struct_colons(text: str):
+    if ":" not in text:
+        return None
+    segments = [s.strip() for s in re.split(r"[.;!?\n]+", text) if s.strip()]
+    rules, candidates, malformed = [], 0, False
+    for segment in segments:
+        if ":" not in segment:
+            if not _STRUCT_HEADER.fullmatch(segment):
+                malformed = True
+            continue
+        left, right = segment.split(":", 1)
+        pair = _struct_pair(left, right)
+        if pair:
+            candidates += 1
+            rules.extend(pair)
+        elif (pair is None or _struct_keys(left) or _struct_keys(right) or _struct_bins(left)
+              or _struct_bins(right) or not _STRUCT_HEADER.fullmatch(segment)):
+            malformed = True
+    if not candidates:
+        # A single prose introducer still belongs to the legacy resolver. Multiple colons, or a lone semantic
+        # member opposite an empty side, are recognisably structured but incomplete and must fail closed.
+        semantic_half = any(
+            bool(_struct_keys(side) or _struct_bins(side)) and not other.strip()
+            for segment in segments if ":" in segment
+            for side, other in (tuple(reversed(segment.split(":", 1))), segment.split(":", 1))
+        )
+        return {"default": None} if malformed and (text.count(":") > 1 or semantic_half) else None
+    if malformed or _STRUCT_BAD.search(text):
+        return {"default": None}
+    merged = _struct_merge(rules)
+    return merged if merged is not None else {"default": None}
+
+
+def _struct_ordinals(text: str):
+    m = _STRUCT_ORD_HEAD.fullmatch(text)
+    if not m:
+        return None
+    if _STRUCT_BAD.search(text):
+        return {"default": None}
+    side, body = m.group(1).lower(), m.group(2)
+    walk = _ins.BINS if side == "left" else tuple(reversed(_ins.BINS))
+    index = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2}
+    rules = []
+    for clause in [s.strip() for s in re.split(r"[.;!?\n]+", body) if s.strip()]:
+        keys, ords = _struct_keys(clause), _STRUCT_ORD_BIN.findall(clause)
+        # A positional word here competes with the ordinal direction and is therefore ambiguous.
+        if (keys is None or len(keys) != 1 or len(ords) != 1 or _struct_bins(clause)
+                or _STRUCT_ASSIGN_BAD.search(clause) or _struct_unknown(clause)):
+            return {"default": None}
+        rules.append((keys[0], walk[index[ords[0].lower()]]))
+    merged = _struct_merge(rules)
+    return merged if merged is not None else {"default": None}
+
+
+def _struct_positionals(text: str):
+    """Verb-less positional rows separated by semicolons: "left bin, red; center bin, yellow"."""
+    segments = [s.strip() for s in re.split(r"[.;!?\n]+", text) if s.strip()]
+    rules, candidates, malformed = [], 0, False
+    for segment in segments:
+        if "," not in segment or _STRUCT_PLACE.search(segment):
+            if not _STRUCT_HEADER.fullmatch(segment):
+                malformed = True
+            continue
+        left, right = segment.split(",", 1)
+        pair = _struct_pair(left, right)
+        if pair:
+            candidates += 1
+            rules.extend(pair)
+        else:
+            malformed = True
+    if not candidates:
+        return None
+    if malformed or _STRUCT_BAD.search(text):
+        return {"default": None}
+    merged = _struct_merge(rules)
+    return merged if merged is not None else {"default": None}
+
+
+def _struct_object_action(action: str) -> bool:
+    """The condition's object, not its destination bin, must be the thing acted on."""
+    tokens = _ins._tokens(_ins._colour_aliases(action.lower()))
+    if any(token in ("and", "or") for token in tokens):
+        return False
+    mentions = _ins._mentions(tokens, False)
+    bin_positions = [i for i, kind, _ in mentions if kind == "bin"]
+    if len(bin_positions) != 1:
+        return False
+    destination = bin_positions[0]
+    object_positions = {i for i, kind, _ in mentions if kind != "bin"}
+    object_positions.update(i for i, token in enumerate(tokens)
+                            if token in ("it", "object", "objects", "item", "items", "piece", "pieces",
+                                         "thing", "things", "one", "ones"))
+    imperative = {i for i, token in enumerate(tokens)
+                  if token in ("put", "place", "send", "move", "drop", "sort", "take", "use")}
+    flow = {i for i, token in enumerate(tokens) if token in ("go", "goes", "belong", "belongs")}
+    def bridge_ok(start: int) -> bool:
+        bridge = tokens[start + 1:destination]
+        return not any(token in ("and", "or") for token in bridge)
+
+    return (any(verb < obj < destination and bridge_ok(obj)
+                for verb in imperative for obj in object_positions)
+            or any(obj < verb < destination and bridge_ok(verb)
+                   for verb in flow for obj in object_positions))
+
+
+def _struct_conditionals(text: str):
+    if not re.search(r"\bif\b", text, re.I):
+        return None
+    if _STRUCT_BAD.search(text):
+        return {"default": None}
+    segments = [s.strip() for s in re.split(r"[.;!?\n]+", text) if s.strip()]
+    rules = []
+    for segment in segments:
+        m = re.fullmatch(r"if\s+(.+?)(?:\s*,\s*|\s+then\s+)(.+)", segment, re.I)
+        if not m or re.search(r"\b(?:or|and)\b", m.group(1), re.I):
+            return {"default": None}
+        cond, action = m.group(1), m.group(2)
+        keys, action_keys, bins = _struct_keys(cond), _struct_keys(action), _struct_bins(action)
+        if keys is None or action_keys is None or len(keys) != 1 or _struct_bins(cond) or len(bins) != 1:
+            return {"default": None}
+        if (_STRUCT_ASSIGN_BAD.search(cond) or _STRUCT_ASSIGN_BAD.search(action)
+                or _struct_unknown(cond) or _struct_unknown(action)
+                or not _struct_object_action(action) or any(k != keys[0] for k in action_keys)):
+            return {"default": None}
+        rules.append((keys[0], bins[0]))
+    merged = _struct_merge(rules)
+    return merged if merged is not None else {"default": None}
+
+
+def _structured(text: str):
+    text = _struct_clean(text)
+    if not text:
+        return None
+    for parser in (_struct_conditionals, _struct_zip, _struct_directional, _struct_ordinals,
+                   _struct_colons, _struct_positionals):
+        result = parser(text)
+        if result is not None:
+            return result
+    return None
+
+
+def structured_mapping(text: str):
+    """Parse strict parallel-list forms; None defers to strict_mapping, a dict is final. Never raises."""
+    try:
+        return _structured("" if text is None else str(text))
+    except Exception:
+        return {"default": None}
 
 
 def _pieces(text: str) -> list[tuple[tuple[set[str], set[str]], set[str], bool, bool]]:
