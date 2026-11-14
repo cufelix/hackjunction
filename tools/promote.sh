@@ -21,6 +21,7 @@ SUB_REL="$OVL_DIR/submission.yaml"
 WRITE_SET=("$SUB_REL" RELEASE.md RELEASE.flags.json RELEASE.equivalence.txt)
 
 die()   { echo "promote: $*" >&2; exit 1; }
+"$PYTHON" -c "import numpy, yaml" 2>/dev/null || die "$PYTHON lacks numpy/pyyaml (release_gate needs them): run inside the policy image or set PYTHON=<venv python>"
 step()  { echo; echo "== $*"; }
 usage() { echo "usage: tools/promote.sh [--dry-run] [--no-equiv] <overlay>" >&2; exit 2; }
 
