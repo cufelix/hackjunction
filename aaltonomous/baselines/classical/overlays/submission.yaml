@@ -11,6 +11,7 @@ flags:
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   instruction.normalize: false                  # Felix lang  typo/synonym normaliser (RC1 overlay turns it on)
+  instruction.strict: false                     # Felix strict never guess (rc1_strict overlay turns it on)
   brain.backend: stub
   brain.url: http://127.0.0.1:8080/completion
   brain.find: false

@@ -118,6 +118,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_cgate_live_vote"] = expect["ab_plane_cgate_live"] | {"bin.vote.enabled"}
         expect["ab_isolated_first"] = nopp | {"decision.isolated_first"}   # rebased on cand_r17
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
+        expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
+            | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
         expect["ab_inj_p7"] = expect["ab_inj_p4"] = expect["ab_inj_p7_yl"] = expect["ab_inj_p7_yr"] = nopp | inj
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
@@ -156,7 +158,7 @@ class TestFlags(unittest.TestCase):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
-                                      "finals_real", "rc1", "ab_decision", "ab_place_gate",
+                                      "finals_real", "rc1", "rc1_strict", "ab_decision", "ab_place_gate",
                                       "ab_object_time_budget_s", "ab_colour_kmeans", "ab_cgate", "ab_plane_cgate", "ab_cgate_fk", "ab_cgate_live", "ab_plane_cgate_live", "ab_plane_cgate_live_fk", "ab_binvote", "ab_plane_cgate_live_vote", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90", "ab_isolated_first", "cand_r18",
                                       "ab_inj_p7", "ab_inj_p4", "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_plane_inj_p7",
                                       "ab_plane_b1_inj_p7", "ab_b1_inj_p7"})

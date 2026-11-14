@@ -252,6 +252,7 @@ ik:
 instruction:
   resolve: false
   normalize: false            # FLAG (Felix). resolve(normalize(text)): fixes typos/synonyms; needs resolve
+  strict: false               # FLAG (Felix strict). never guess: abstain instead of FIXED / inferred keys; needs resolve
 
 # AI brain (brain/): closed-set tool choice over the classical planner. Off = byte-identical to before.
 brain:
