@@ -32,8 +32,66 @@ perception:
   min_valid_frac: 0.2         # below this fraction of valid depth pixels the frame counts as 'no depth'
   bin_pixel_margin: 0.004     # pixels whose 3D point is inside a bin footprint (+ margin) are dropped before grouping
   object_size: null           # null = scene.yaml objects.size (grasp width)
+  y_affine: null              # FLAG (23-grasp-failure §11b/§13). [a, b]: perceived - true y = a*y + b -> y -= a*y + b
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
+  self_calibration:
+    enabled: false            # FLAG (calib, Timi). Once per episode, align depth-only bin walls to their fixed known geometry
+    max_offset_m: 0.030       # reject rather than applying a correction outside this Euclidean gate
+    pixel_stride: 3           # calibration-only depth subsampling; keeps first-act latency well below the watchdog
+    min_valid_frac: 0.20
+    plane_z_window: 0.060     # initial counter-plane candidate band around nominal counter z
+    plane_inlier_m: 0.006
+    min_plane_points: 500
+    min_wall_height_m: 0.008  # reject the bin floor/counter; retain vertical walls and horizontal rim
+    max_wall_height_m: 0.075
+    min_wall_points: 180
+    max_points: 6000
+    grid_resolution_m: 0.001
+    coarse_step_m: 0.003
+    fine_step_m: 0.0005
+    score_truncate_m: 0.012
+    inlier_m: 0.006
+    min_inlier_ratio: 0.35
+    min_axis_points: 35
+    min_confidence: 0.30
   object_height: null         # null = scene.yaml size * height_ratio
+  classify_shape: false       # set Detection.shape from the metric top-face cloud (shape_id); no top face -> 2D blob, or None with no_blob_shape
+  triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
+  near_bin_guard: false       # FLAG (#7, Oliver). With classify_shape: abstain on shape (None) when the top face is
+                              # within a bin footprint + margin + object size (face possibly cut by the bin exclusion)
+  shape_diag: false           # FLAG (Oliver). Passive: Detection.shape_diag + one [shape_diag] log line per detection
+  no_blob_shape: false        # FLAG (Oliver, f857054). With classify_shape: no metric top face -> abstain (None) instead of
+                              # the 2D-blob ratio (blob includes side faces: prism -> 'cylinder'). Off = blob fallback
+  hsv_set: stock              # FLAG (real colour, Timi). stock = `hsv` above | robust = `hsv_robust` below
+  # One set for sim AND the real head cam (no AALTO_PROFILE needed). Measured (hf_perception, 2026-11-14):
+  #   sim DR objects  red H 0-7/170-179 S>=75 | yellow H 23-31 S>=81 | blue H 100-116 S>=73 (V >= 122 everywhere)
+  #   real HF objects orange H 9-15 S>=96 | yellow H 22-50 S>=51 (top faces overexposed: V~250, hue drifts green,
+  #                   S drops) | violet H 108-123 S>=112;  lab 2026-11-11: orange H 11-14, yellow H 25 S 185, purple
+  #                   H 127 S 97
+  #   bins            sim H ~12 (nominal), 15-24 (DR) | real H 2-7  -> every set overlaps some bin; the bins are
+  #                   removed by the 3D bin-footprint cut (_keep_mask, depth) and the in_bin reject, as before.
+  # Kept from stock: blue H >= 100 (sim blue starts at 100, so the real robot-arm/background FPs at H 100-107 are
+  # NOT removed by colour; they rely on the depth height / mat filters like before).
+  hsv_robust:
+    red:    [[[0, 70, 70], [16, 255, 255]], [[170, 70, 70], [180, 255, 255]]]
+    yellow: [[[18, 45, 90], [52, 255, 255]]]
+    blue:   [[[100, 70, 50], [145, 255, 255]]]
+  split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
+                              # 94/120 orange pieces merged with a neighbour) at distance-transform peaks
+  require_depth_for_new: false  # FLAG (Felix review). A blob with < min_valid_depth_px valid depth px is never a pick
+                              # target (no plane fallback: arm / hand blob with a depth dropout); in-bin blobs of the
+                              # placement verification still use the plane estimate
+  split:
+    object_size: 0.045        # m, expected object edge for the size gate
+    area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;
+                              # two touching objects >= 2.1 -> gate 1.8 separates them)
+    area_factor: 1.5          # only blobs larger than area_factor * expected area are candidates
+    fallback_area_px: 3000    # expected single-object area when neither depth nor extrinsics give Z
+    peak_frac: [0.5, 0.6, 0.7, 0.8]   # sure-foreground thresholds (fraction of the max distance) tried in order
+    min_part_frac: 0.3        # every part must have >= this fraction of the expected single-object area
+    min_aspect: 1.4           # no distance-transform neck: cut along the major axis only if this elongated (mock: one
+                              # object <= 1.35, two touching >= 1.48)
+    max_parts: 3
 
 grasp:
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
@@ -42,6 +100,22 @@ grasp:
   # tips are 57 mm apart (URDF): centred between them (auto) a 45 mm object wedges between the two fingers and is
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
+  # grasp.close_posture_by_shape (FLAG, default off): triangle posture ("demo", Oliver FK a44dd79) used only when the
+  # shape is "triangle" AND shape_id path == "metric" AND shape confidence (shape_id._label conf * point-count
+  # factor, 0..1) >= posture_by_shape_min_conf; every other pick uses grasp.close_posture + point_in_palm.
+  close_posture_by_shape: false
+  posture_by_shape_min_conf: 0.5
+  point_in_palm_demo: [0.1094, -0.0694, 0.0142]   # used only with close_posture_by_shape (right = y mirrored)
+  # grasp.posture_apex_gate (FLAG, default off, needs close_posture_by_shape): the demo posture additionally needs
+  # a real prism top face. On the top-face points (mm, pelvis xy): triangle_pose apex_conf >= posture_apex_min_conf
+  # AND the largest vertex angle of cv2.minEnclosingTriangle <= posture_apex_max_angle_deg; else fall back to
+  # close_posture. Geometric, not tuned: an equilateral prism top is 60 deg, a cube top cut by an occluder keeps a
+  # 90 deg corner, 75 deg is the midpoint; apex_conf 0.5 is the middle of 0..1 (Modal diag run: cut cubes 89.7/90.0
+  # deg + conf 0.00, prisms 60.6-61.9 deg + conf 0.75-0.77). Computation from Oliver's apex_conf_eval.py
+  # (origin/feat/grasp-yaw e0f1ca2, mm fix).
+  posture_apex_gate: false
+  posture_apex_min_conf: 0.5
+  posture_apex_max_angle_deg: 75.0
   approach_axis_in_palm: [0.0, -1.0, 0.0]   # palm-frame axis that must point down (left; right mirrors y)
   finger_hint: [1.0, 0.0, 0.0]              # weak preference for the finger direction (pelvis frame)
   finger_hints:               # tried in turn (LEFT arm; right mirrors y): forward, forward-inward, inward
@@ -49,13 +123,33 @@ grasp:
     - [1.0, -1.0, 0.0]
     - [0.0, -1.0, 0.0]
   finger_hint_weight: 0.3
+  # Triangle prisms: finger direction from the detected apex yaw (needs Detection.shape == "triangle" + apex_yaw).
+  # Tried before finger_hints; a plan only counts if the achieved finger heading is within yaw_tol_deg, else the
+  # stock hints run. Finger heading = apex + yaw_phi_deg (left; right mirrors the sign) + k * 120 deg. TUNE (sweep phi)
+  yaw_align: false
+  yaw_phi_deg: 105            # sim grasp_test (left arm, n=6 per phi): 105 4/6, 90 ~3/6, 60 and 0 worst
+  yaw_hint_weight: 3.0        # IK weight of that finger direction (stock 0.3 is a weak preference)
+  yaw_tol_deg: 12.0
+  yaw_ref_deg: 25.0           # natural finger direction: forward, this far inward
+  yaw_max_dev_deg: 75.0       # candidates further from it are not tried
+  yaw_max_hints: 2
+  yaw_min_conf: 0.5
+  yaw_tri_shift: true         # move the grasp point to the midpoint of the object's extent along the finger direction
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)
+  drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
+  drop_slot_wall_margin: 0.03 # object-centre margin from the inner side walls in the reachable near-wall band
+  drop_slot_count: 3          # one near-wall row; planner checks every selected slot with IK + safety dry-run
+  drop_slots: false           # FLAG (23-grasp-failure). Standalone drop slots (no verification): each successive object
+                              # in a bin gets the next slot instead of the one fixed drop_xy (STEP 0: 6/30 stacked)
+  drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
+  drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
+  close_posture: closed       # FLAG (pinch fix): hand posture for the grasp, closed | closed_tight (hand.closed_tight)
   release_posture: release     # hand posture for letting go (hand.<name>); back to `open` on the way home
   arm: by_y                   # by_y = preferred arm first (bin side; centre bin: object side), other on failure | best = plan both, keep the faster
   relocate:                   # cross-body: no arm can do object -> bin; pick with one arm, put down where the other can finish
@@ -77,13 +171,26 @@ ik:
   max_step: 0.2
   random_restarts: 8
 
+# Rung 2 (sort_language): resolve the instruction TEXT to a mapping instead of using FIXED_MAPPING.
+# Off by default so the step-0 reference run is unchanged. The mapping is never sent over the wire
+# (reset info carries only {"instruction": ...}), so with this off a language episode silently
+# sorts by the fixed colour->bin mapping.
+instruction:
+  resolve: false
+
 motion:
   arm_max_vel: 0.5            # rad/s per joint (safety filter allows 1.0)
   arm_max_acc: 1.5            # rad/s^2
+  carry_scale: 1.0            # FLAG (Felix). <= 1: vmax/amax scale for the lift + carry phases only (slower carry)
   hand_max_vel: 1.2           # rad/s (filter allows 3.0)
   cart_step: 0.02             # Cartesian segments are split into IK waypoints this far apart
   max_joint_step: 0.4         # rad between neighbouring Cartesian IK waypoints (more = branch flip, bisect / fail)
   close_hold_s: 0.4           # wait after the hand reaches the closed posture
+  lift_on_stall:              # FLAG (27-dataset-mining: human close->lift median 0.90 s, lift ~0.27 s after the stall)
+    enabled: false            # on: hold up to timeout_s, lift as soon as the fingers stall (>= close_hold_s)
+    timeout_s: 1.2
+    stall_rad: 0.01           # max |dq| per tick (active hand) that counts as "not moving"
+    settle_ticks: 3
   open_hold_s: 0.4
   settle_s: 0.5               # hold at home before looking (arm lag, motion blur)
   chunk: 10                   # ticks returned per act() (0.33 s)
@@ -105,6 +212,9 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
                                                          # palm frame: 3.6 cm gap = 0.9 cm squeeze on a 4.5 cm object. TUNE
                                                          # (old [0, 0.5, 0.8, ...] closed the tips onto ONE point = the object
                                                          # centre: in the sim the cube got wedged between index and middle)
+  closed_tight: [0.0, -0.1, 1.2, -1.0, -0.6, -1.0, -0.6]  # FLAG value (pinch fix, round 4): = closed until Oliver's FK
+                                                         # values (jaw 41 mm, midpoint) arrive; used with grasp.close_posture
+  closed_demo: [0.00, 0.92, 0.25, -0.50, -1.41, -0.49, -1.21]  # triangle posture for close_posture_by_shape only (thumb0 = 0)
   release:  [0.0, -0.5, 1.5, -0.05, -0.05, -0.05, -0.05] # let go: thumb back + up, fingers straight (sim: the cube
                                                          # stayed hooked in half-bent fingers with `open`/`preshape`)
   right: null                  # optional explicit right-hand postures {open, preshape, closed} in RIGHT DDS order
@@ -112,7 +222,34 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 policy:
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   same_object_radius: 0.03
+  verify_placement: false     # FLAG (#6, Timi). Look into the bins after every release: verify the placement, correct
+                              # wrong-bin / unscored objects, distinct drop slots (grasp.drop_slot_*), time reserves below
+  max_total_attempts: null    # global per-episode cap on started picks, any object (null = off). Guards against
+                              # an object knocked > same_object_radius that is re-detected as 'new' forever
+  drop_verify_radius: 0.04    # released top-face centre must be this close to its assigned slot to count as verified
+  verify_relooks: 1           # one extra settled frame before giving up on an occluded/missed placement
+  correction_reserve_s: 9.0  # do not start a new placement without time for one typical corrective cycle
+  grasp_diag_log: false       # FLAG (passive). One [grasp_diag] line per pick: hand_q vs cmd vs closed, held yes/no
+  verify_yellow_unknown: false   # FLAG (Felix #6 review). A yellow in-bin detection = unknown, never a mismatch
+  max_corrections_per_episode: null   # FLAG (Felix #6 review). Cap on corrective picks; set = counter picks first,
+                                      # an unplannable correction no longer ends the episode (null = stock #6)
   order: nearest_bin          # nearest_bin | largest
+  bin_lookup: colour          # FLAG (round 8). colour = stock mapping[colour] | resolve_bin = scene.resolve_bin
+                              # ((colour, shape) -> colour -> shape -> default; None/abstain -> stays on the counter)
+  # Time triage (default off = old behaviour: the first plan that does not fit the time left ends the episode).
+  # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
+  # lazily; the episode ends only when nothing fits. Plans are NOT computed for every candidate (IK 0.3-6 s each).
+  time_triage: false
+  triage_order: duration      # duration = cheap-estimate order only | priority = estimate ties (within triage_tie_m) go by
+                              # shape cost (policy.shape_cost, detection.shape) then mapping confidence
+  triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority
+  shape_cost: {cube: 0, cylinder: 1, triangle: 2}
+  time_margin_s: 0.0          # a plan must end this long before time_limit (applies with and without triage)
+  # Retry pass (default off): once per episode, when nothing is left but objects excluded by max_attempts are still
+  # detected, they get retry_extra_attempts more tries (failed/IK-skipped objects stay excluded). Normal time check.
+  retry_pass: false           # FLAG (#3, Oliver 40fb22a)
+  retry_extra_attempts: 2
+  episode_summary_log: false  # FLAG (#3, Oliver). One passive log line per episode end (attempts/failed/too_long/started)
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.
