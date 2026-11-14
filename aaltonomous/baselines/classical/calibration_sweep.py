@@ -67,7 +67,7 @@ def jittered_camera(T_nominal, translation, rotvec):
 
 def run_sweep(trials=100, seed=2026, depth_noise_mm=2.0, hole_frac=0.05):
     rng = np.random.default_rng(seed)
-    scene, cal, cfg = Scene.load(), Calibration.load(), load_config()
+    scene, cal, cfg = Scene.load(), Calibration.load(), load_config(overrides={"perception.self_calibration.enabled": True})
     nominal = cal._T("head")
     before, after, times = [], [], []
     calibration_failures = detection_failures = 0

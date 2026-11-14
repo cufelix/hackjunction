@@ -14,10 +14,15 @@ from .calibration_sweep import jittered_camera, run_sweep
 from .kinematics import ArmKinematics
 from .mock_world import Renderer, make_mock_env
 from .perception import Perception
-from .planner import Planner
+from .planner import Plan, Planner
 from .policy import ClassicalPolicy
 
 SC, CAL, CFG = Scene.load(), Calibration.load(), load_config()
+# Opt-in features are default OFF (integration branch); their tests switch on exactly their own flag.
+CAL_ON = {"perception.self_calibration.enabled": True}
+VERIFY_ON = {"policy.verify_placement": True}
+CFG_CAL = load_config(overrides=CAL_ON)
+CFG_VERIFY = load_config(overrides=VERIFY_ON)
 
 
 def scene_objects(rng, n=3, shapes=("cube", "cylinder")):
@@ -69,6 +74,19 @@ class TestPerception(unittest.TestCase):
         rgb, depth = self.r.render([])
         self.assertEqual(self.p.detect(rgb, depth), [])
 
+    def test_object_in_bin_is_exposed_only_for_verification(self):
+        cfg = load_config()
+        pl = Planner(cfg, SC, hand_postures(cfg), home_arm(cfg))
+        xy = pl.drop_slots("center")[0]
+        lo, _ = SC.bin_inner_box("center")
+        ob = dict(color="red", shape="cube", yaw=0.0, size=SC.size, height=SC.object_height(),
+                  pos=np.r_[xy, SC.counter_z + lo[2] + SC.object_height() / 2])
+        rgb, depth = self.r.render([ob])
+        self.assertEqual(self.p.detect(rgb, depth), [])
+        dets, rejected = self.p.detect(rgb, depth, debug=True, include_bins=True)
+        self.assertEqual(dets, [])
+        self.assertEqual([why for _, why in rejected], ["in_bin:center"])
+
 
 class TestSelfCalibration(unittest.TestCase):
     def test_recovers_known_camera_translation(self):
@@ -78,7 +96,7 @@ class TestSelfCalibration(unittest.TestCase):
         objects = scene_objects(rng)
         rgb, depth = Renderer(SC, CAL, T_pelvis_optical=actual).render(
             objects, rng, depth_noise_mm=2.0, hole_frac=0.05)
-        perception = Perception(CFG, SC, CAL)
+        perception = Perception(CFG_CAL, SC, CAL)
         before = {d.color: d for d in perception.detect(rgb, depth)}
         result = perception.calibrate_bins(depth)
         after = {d.color: d for d in perception.detect(rgb, depth)}
@@ -91,7 +109,7 @@ class TestSelfCalibration(unittest.TestCase):
         self.assertLess(after_error, 0.5 * before_error)
 
     def test_failure_keeps_configured_fallback(self):
-        cfg = load_config(overrides={"perception.xy_offset": [0.004, -0.003]})
+        cfg = load_config(overrides={"perception.xy_offset": [0.004, -0.003], **CAL_ON})
         perception = Perception(cfg, SC, CAL)
         depth = np.full((480, 640), 500, np.uint16)
         result = perception.calibrate_bins(depth)
@@ -109,7 +127,7 @@ class TestSelfCalibration(unittest.TestCase):
 
     def test_policy_retries_invalid_frame_latches_valid_and_resets(self):
         env = make_mock_env(seed=3)
-        policy = ClassicalPolicy(log=None, safety=env.filter.cfg)
+        policy = ClassicalPolicy(config=CFG_CAL, log=None, safety=env.filter.cfg)
         obs = env.reset()
         policy.reset({"instruction": obs["instruction"]})
         invalid = dict(obs, head_depth=np.zeros_like(obs["head_depth"]))
@@ -129,7 +147,7 @@ class TestSelfCalibration(unittest.TestCase):
         np.testing.assert_allclose(policy.perception.xy_offset, policy.perception.base_xy_offset)
 
     def test_policy_calibration_exception_uses_fallback(self):
-        cfg = load_config(overrides={"perception.xy_offset": [0.004, -0.003]})
+        cfg = load_config(overrides={"perception.xy_offset": [0.004, -0.003], **CAL_ON})
         env = make_mock_env(seed=4, cfg=cfg)
         policy = ClassicalPolicy(config=cfg, log=None, safety=env.filter.cfg)
         obs = env.reset()
@@ -208,6 +226,26 @@ class TestPlanner(unittest.TestCase):
         self.assertEqual(p.safety_clips, 0)
         np.testing.assert_allclose(p.arm[-1], home, atol=1e-9)  # ends at home
 
+    def test_all_drop_slots_are_separated_reachable_and_safe(self):
+        from .perception import Detection
+        post, home = hand_postures(CFG), home_arm(CFG)
+        pl = Planner(CFG, SC, post, home)
+        L = SC.cfg["layout"]
+        top = SC.mat_to_pelvis([np.mean(L["region_x"]), np.mean(L["region_y"]), SC.object_height()])
+        colors = {"left": "red", "center": "yellow", "right": "blue"}
+        spacing = CFG["grasp"]["drop_slot_spacing"]
+        for name in SC.bin_names:
+            slots = pl.drop_slots(name)
+            self.assertGreaterEqual(len(slots), 2)
+            for i, a in enumerate(slots):
+                for b in slots[i + 1:]:
+                    self.assertGreaterEqual(np.linalg.norm(a - b), spacing - 1e-9)
+                p = pl.plan(Detection(colors[name], top, 1000, 1000, "depth"), home, post["open"],
+                            bin_name=name, drop_slot=i, relocate=False)
+                self.assertTrue(p.ok, f"{name} slot {i}: {p.reason}")
+                self.assertEqual(p.safety_clips, 0)
+                np.testing.assert_allclose(p.waypoints["drop"][:2], a, atol=1e-9)
+
 
     def test_cross_body_object_is_relocated(self):
         """Relocation fallback: the right arm puts a red (left bin) object down on the counter where the left arm has a
@@ -281,6 +319,99 @@ class TestEpisode(unittest.TestCase):
         obs, info = env.step(pol.act(obs))
         self.assertFalse(pol.waiting)
         self.assertEqual(pol.state, "executing")
+
+    def test_delayed_confirmation_rechecks_time_budget(self):
+        pol = ClassicalPolicy(config=CFG_VERIFY, log=None, require_confirm=True, time_limit=20.0)
+        pol.arm_cmd = pol.home.copy()
+        pol.hand_cmd = pol.post["open"].copy()
+        plan = Plan(True, color="red", target_bin="left", drop_slot=0,
+                    waypoints={"grasp": np.zeros(3)}, arm=np.zeros((300, 14)), hand=np.zeros((300, 14)))
+        pol.pending, pol.waiting, pol.state = plan, True, "await"
+        pol.confirm()
+        action = pol.act({"t": 15.0, "arm_q": pol.arm_cmd, "hand_q": pol.hand_cmd})
+        self.assertEqual(pol.state, "done")
+        self.assertTrue(action["done"])
+
+
+class TestPlacementVerification(unittest.TestCase):
+    def setUp(self):
+        self.renderer = Renderer(SC, CAL)
+        self.pol = ClassicalPolicy(config=CFG_VERIFY, log=None)
+        self.pol.arm_cmd = self.pol.home.copy()
+        self.pol.hand_cmd = self.pol.post["open"].copy()
+
+    @staticmethod
+    def _object(color, pos):
+        return dict(color=color, shape="cube", yaw=0.0, size=SC.size, height=SC.object_height(),
+                    pos=np.asarray(pos, float))
+
+    def _obs(self, objects):
+        rgb, depth = self.renderer.render(objects)
+        return {"head_rgb": rgb, "head_depth": depth}
+
+    def _bin_object(self, color, bin_name, slot):
+        xy = self.pol.planner.drop_slots(bin_name)[slot]
+        lo, _ = SC.bin_inner_box(bin_name)
+        return self._object(color, np.r_[xy, SC.counter_z + lo[2] + SC.object_height() / 2])
+
+    def _pending(self, color, bin_name, slot):
+        self.pol.reserved_drop_slots[bin_name].add(slot)
+        self.pol.verification_pending = {"color": color, "target_bin": bin_name,
+                                         "drop_slot": slot, "corrective": False}
+
+    def test_object_left_on_counter_after_release_is_retried(self):
+        self._pending("red", "left", 0)
+        pos = SC.mat_to_pelvis([0.40, 0.15, SC.object_height() / 2])
+        result = self.pol._look(self._obs([self._object("red", pos)]))
+        self.assertEqual(result[0], "plan")
+        self.assertIn("red", self.pol.retry_colors)
+        self.assertEqual((result[1].target_bin, result[1].drop_slot), ("left", 1))
+        self.assertEqual(result[1].safety_clips, 0)
+
+    def test_object_in_wrong_bin_schedules_corrective_pick(self):
+        result = self.pol._look(self._obs([self._bin_object("red", "center", 0)]))
+        self.assertEqual(len(self.pol.scheduled_corrections), 1)
+        self.assertEqual(result[0], "plan")
+        plan = result[1]
+        self.assertTrue(plan.corrective)
+        self.assertEqual((plan.source_bin, plan.target_bin), ("center", "left"))
+        self.assertEqual(plan.safety_clips, 0)
+
+    def test_wrong_bin_with_full_target_is_removed_to_counter(self):
+        self.pol.used_drop_slots["left"].update(range(3))
+        result = self.pol._look(self._obs([self._bin_object("red", "center", 0)]))
+        self.assertEqual(result[0], "plan")
+        plan = result[1]
+        self.assertTrue(plan.corrective)
+        self.assertEqual((plan.source_bin, plan.target_bin), ("center", "counter"))
+        self.assertEqual(plan.safety_clips, 0)
+
+    def test_unseen_release_gets_one_settled_relook_before_done(self):
+        self._pending("red", "left", 0)
+        result = self.pol._look(self._obs([]))
+        self.assertEqual(result[0], "relook")
+        self.assertIn("red", self.pol.retry_colors)
+        action = self.pol._after_look(result, 10.0)
+        self.assertEqual(self.pol.state, "settle")
+        self.assertFalse(action["done"])
+
+    def test_unseen_release_relooks_before_sorting_unrelated_object(self):
+        self._pending("red", "left", 0)
+        other = self._object("blue", SC.mat_to_pelvis([0.40, 0.15, SC.object_height() / 2]))
+        result = self.pol._look(self._obs([other]))
+        self.assertEqual(result[0], "relook")
+        self.assertFalse(any(p.color == "blue" for p in self.pol.plans))
+
+    def test_second_object_uses_a_different_verified_slot(self):
+        self._pending("red", "left", 0)
+        placed = self._bin_object("red", "left", 0)
+        waiting = self._object("red", SC.mat_to_pelvis([0.40, 0.15, SC.object_height() / 2]))
+        result = self.pol._look(self._obs([placed, waiting]))
+        self.assertEqual(self.pol.last_verification[0], "ok")
+        self.assertEqual(result[0], "plan")
+        self.assertEqual(result[1].drop_slot, 1)
+        slots = self.pol.planner.drop_slots("left")
+        self.assertGreaterEqual(np.linalg.norm(slots[1] - slots[0]), CFG["grasp"]["drop_slot_spacing"] - 1e-9)
 
 
 if __name__ == "__main__":

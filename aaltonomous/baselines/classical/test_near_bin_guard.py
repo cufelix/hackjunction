@@ -23,10 +23,11 @@ class _PointsCal:
         return self.P[np.asarray(u, int)]
 
 
-def _perception(P, classify_shape):
+def _perception(P, classify_shape, guard=True):
     cfg = copy.deepcopy(CFG)
     cfg["perception"]["classify_shape"] = classify_shape
     cfg["perception"]["triangle_pose"] = False
+    cfg["perception"]["near_bin_guard"] = guard
     return Perception(cfg, SC, _PointsCal(P))
 
 
@@ -79,6 +80,18 @@ def test_same_cube_far_from_bins_is_cube():
     assert det.shape == "cube"
     p = _perception(P, True)
     assert not p._near_bin(P)
+
+
+def test_guard_flag_off_is_not_evaluated():
+    """perception.near_bin_guard (integration flag, default off): classify_shape alone never calls the guard."""
+    P = _cut_cube(0.10)
+    p = _perception(P, True, guard=False)
+
+    def boom(_top):
+        raise AssertionError("guard evaluated with near_bin_guard off")
+    p._near_bin = boom
+    n = len(P)
+    p._from_depth("red", np.arange(n), np.zeros(n, int), np.full(n, 600.0), n)
 
 
 def test_flag_off_unchanged_and_guard_not_evaluated():

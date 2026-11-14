@@ -34,7 +34,7 @@ perception:
   object_size: null           # null = scene.yaml objects.size (grasp width)
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
   self_calibration:
-    enabled: true             # once per episode, align depth-only bin walls to their fixed known geometry
+    enabled: false            # FLAG (calib, Timi). Once per episode, align depth-only bin walls to their fixed known geometry
     max_offset_m: 0.030       # reject rather than applying a correction outside this Euclidean gate
     pixel_stride: 3           # calibration-only depth subsampling; keeps first-act latency well below the watchdog
     min_valid_frac: 0.20
@@ -56,6 +56,8 @@ perception:
   object_height: null         # null = scene.yaml size * height_ratio
   classify_shape: false       # set Detection.shape from the 2D blob (prism_pose.classify_blob); single-shape scenes: that shape
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
+  near_bin_guard: false       # FLAG (#7, Oliver). With classify_shape: abstain on shape (None) when the top face is
+                              # within a bin footprint + margin + object size (face possibly cut by the bin exclusion)
 
 grasp:
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
@@ -88,6 +90,9 @@ grasp:
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)
+  drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
+  drop_slot_wall_margin: 0.03 # object-centre margin from the inner side walls in the reachable near-wall band
+  drop_slot_count: 3          # one near-wall row; planner checks every selected slot with IK + safety dry-run
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   release_posture: release     # hand posture for letting go (hand.<name>); back to `open` on the way home
@@ -153,8 +158,13 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 policy:
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   same_object_radius: 0.03
+  verify_placement: false     # FLAG (#6, Timi). Look into the bins after every release: verify the placement, correct
+                              # wrong-bin / unscored objects, distinct drop slots (grasp.drop_slot_*), time reserves below
   max_total_attempts: null    # global per-episode cap on started picks, any object (null = off). Guards against
                               # an object knocked > same_object_radius that is re-detected as 'new' forever
+  drop_verify_radius: 0.04    # released top-face centre must be this close to its assigned slot to count as verified
+  verify_relooks: 1           # one extra settled frame before giving up on an occluded/missed placement
+  correction_reserve_s: 9.0  # do not start a new placement without time for one typical corrective cycle
   order: nearest_bin          # nearest_bin | largest
   # Time triage (default off = old behaviour: the first plan that does not fit the time left ends the episode).
   # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
@@ -165,6 +175,7 @@ policy:
   triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority
   shape_cost: {cube: 0, cylinder: 1, triangle: 2}
   time_margin_s: 0.0          # a plan must end this long before time_limit (applies with and without triage)
+  episode_summary_log: false  # FLAG (#3, Oliver). One passive log line per episode end (attempts/failed/too_long/started)
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.

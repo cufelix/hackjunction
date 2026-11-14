@@ -164,10 +164,10 @@ class TestTriage(unittest.TestCase):
         self.assertIsNone(p["max_total_attempts"])
 
 
-def run_rolling(cap, n_looks=6, logs=None):
+def run_rolling(cap, n_looks=6, logs=None, **policy):
     """A rolling object knocked 5 cm (> same_object_radius) per attempt: every look it is a 'new' object.
     Returns (policy, number of looks that ended done)."""
-    pol = make({"red": 5.0}, [det("red", 0.30)], time_limit=1000.0, max_total_attempts=cap)
+    pol = make({"red": 5.0}, [det("red", 0.30)], time_limit=1000.0, max_total_attempts=cap, **policy)
     if logs is not None:
         pol.log = logs.append
     for i in range(n_looks):
@@ -194,10 +194,15 @@ class TestAttemptCap(unittest.TestCase):
 
     def test_episode_end_summary_logged_once(self):
         logs = []
-        pol, _ = run_rolling(2, logs=logs)
+        pol, _ = run_rolling(2, logs=logs, episode_summary_log=True)
         pol.act(obs(99.0))                                     # further done ticks do not repeat the summary
         lines = [m for m in logs if "episode end" in m]
         self.assertEqual(lines, ["[classical] episode end: attempts=2 failed=0 too_long=0 started=2"])
+
+    def test_episode_end_summary_off_by_default(self):
+        logs = []
+        pol, _ = run_rolling(2, logs=logs)
+        self.assertFalse(any("episode end" in m for m in logs))
 
 
 if __name__ == "__main__":
