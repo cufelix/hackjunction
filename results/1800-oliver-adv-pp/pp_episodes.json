@@ -1,0 +1,691 @@
+{
+ "meta": {
+  "checkout": "/data/work/oliver/adv2/rc1",
+  "sha": "7a4168e9",
+  "overlay": "rc1",
+  "profile": "pp",
+  "seed0": 1000,
+  "n": 10,
+  "task": "sort_fixed",
+  "sim_instance": "c"
+ },
+ "stats": {
+  "n": 10,
+  "mean": 3.8,
+  "std": 0.748,
+  "mean_minus_std": 3.052,
+  "safety_stops": 0,
+  "correct": 38,
+  "wrong": 0,
+  "counter": 2,
+  "off": 0,
+  "objects": 40,
+  "t_median": 51.92,
+  "t_p95": 83.3,
+  "t_total": 568.8,
+  "placements": 38,
+  "t_per_placed": 14.97
+ },
+ "episodes": [
+  {
+   "seed": 1000,
+   "episode": 0,
+   "n_objects": 3,
+   "correct": 3,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 3,
+   "safety_stop": false,
+   "score": 3,
+   "clips": 0,
+   "command_hz": 29.97,
+   "policy_hz_rt": 83.13,
+   "end_reason": "done",
+   "sim_s": 32.47,
+   "rtf": 0.301,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1001,
+   "episode": 1,
+   "n_objects": 5,
+   "correct": 5,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 5,
+   "safety_stop": false,
+   "score": 5,
+   "clips": 0,
+   "command_hz": 29.98,
+   "policy_hz_rt": 82.47,
+   "end_reason": "done",
+   "sim_s": 69.37,
+   "rtf": 0.302,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1002,
+   "episode": 2,
+   "n_objects": 4,
+   "correct": 4,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 4,
+   "safety_stop": false,
+   "score": 4,
+   "clips": 0,
+   "command_hz": 29.98,
+   "policy_hz_rt": 80.54,
+   "end_reason": "done",
+   "sim_s": 48.17,
+   "rtf": 0.302,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1003,
+   "episode": 3,
+   "n_objects": 3,
+   "correct": 3,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 3,
+   "safety_stop": false,
+   "score": 3,
+   "clips": 0,
+   "command_hz": 29.98,
+   "policy_hz_rt": 85.02,
+   "end_reason": "done",
+   "sim_s": 55.67,
+   "rtf": 0.303,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1004,
+   "episode": 4,
+   "n_objects": 5,
+   "correct": 3,
+   "wrong": 0,
+   "counter": 2,
+   "off": 0,
+   "raw_score": 3,
+   "safety_stop": false,
+   "score": 3,
+   "clips": 0,
+   "command_hz": 29.99,
+   "policy_hz_rt": 83.64,
+   "end_reason": "done",
+   "sim_s": 77.27,
+   "rtf": 0.298,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1005,
+   "episode": 5,
+   "n_objects": 4,
+   "correct": 4,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 4,
+   "safety_stop": false,
+   "score": 4,
+   "clips": 0,
+   "command_hz": 29.98,
+   "policy_hz_rt": 81.49,
+   "end_reason": "done",
+   "sim_s": 46.8,
+   "rtf": 0.3,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1006,
+   "episode": 6,
+   "n_objects": 4,
+   "correct": 4,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 4,
+   "safety_stop": false,
+   "score": 4,
+   "clips": 0,
+   "command_hz": 30.0,
+   "policy_hz_rt": 82.06,
+   "end_reason": "done",
+   "sim_s": 69.5,
+   "rtf": 0.299,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1007,
+   "episode": 7,
+   "n_objects": 3,
+   "correct": 3,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 3,
+   "safety_stop": false,
+   "score": 3,
+   "clips": 0,
+   "command_hz": 30.0,
+   "policy_hz_rt": 87.8,
+   "end_reason": "done",
+   "sim_s": 33.57,
+   "rtf": 0.299,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1008,
+   "episode": 8,
+   "n_objects": 4,
+   "correct": 4,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 4,
+   "safety_stop": false,
+   "score": 4,
+   "clips": 0,
+   "command_hz": 29.97,
+   "policy_hz_rt": 79.99,
+   "end_reason": "done",
+   "sim_s": 47.74,
+   "rtf": 0.297,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  },
+  {
+   "seed": 1009,
+   "episode": 9,
+   "n_objects": 5,
+   "correct": 5,
+   "wrong": 0,
+   "counter": 0,
+   "off": 0,
+   "raw_score": 5,
+   "safety_stop": false,
+   "score": 5,
+   "clips": 0,
+   "command_hz": 30.0,
+   "policy_hz_rt": 68.64,
+   "end_reason": "done",
+   "sim_s": 88.24,
+   "rtf": 0.295,
+   "adv": {
+    "cam": {
+     "pitch_deg": 0.0,
+     "yaw_deg": 0.0,
+     "xyz_m": [
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "bin_dx_m": {
+     "left": 0.0,
+     "center": 0.0,
+     "right": 0.0
+    },
+    "render_colors": null,
+    "bin_rgb": null,
+    "tape_rgb": null,
+    "ensure_object": null,
+    "object_region": null,
+    "table_dy_m": 0.0,
+    "counter_dz_m": 0.0,
+    "hand": {
+     "hand_kp": null,
+     "hand_kd": null,
+     "hand_gain_scale": null
+    },
+    "start": {
+     "jitter": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ],
+     "arm_q": {},
+     "hand_open": false
+    }
+   }
+  }
+ ]
+}
