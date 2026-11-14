@@ -1,0 +1,5 @@
+# A/B overlay for the opt-in unknown/low-shape-confidence grasp path.
+name: ab_generic_fallback
+flags:
+  grasp.generic_fallback: true
+  policy.grasp_diag_log: true

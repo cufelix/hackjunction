@@ -38,6 +38,16 @@ def lookup_bin(cfg, mapping, color, shape=None):
     return None if b in (None, "abstain") else b
 
 
+def lookup_detection_bin(cfg, mapping, det):
+    """Target for a detection, resolving generic grasps without a shape guess."""
+    if getattr(det, "generic_required", False):
+        if getattr(det, "generic_width", None) is None:
+            return None
+        b = resolve_bin(mapping, det.color, None)
+        return None if b in (None, "abstain") else b
+    return lookup_bin(cfg, mapping, det.color, getattr(det, "shape", None))
+
+
 @dataclass
 class Plan:
     ok: bool
@@ -55,10 +65,7 @@ class Plan:
     phases: list = field(default_factory=list)         # (name, start tick, end tick)
     posture: tuple | None = None                       # (posture, shape label, conf, path) with grasp.close_posture_by_shape
     close_hold: tuple | None = None                    # (first, end) tick of the closed-hand hold (lift_on_stall)
-    abort: tuple | None = None                         # policy.retry_vary_grasp: (lift start tick, arm, hand) = lift +
-                                                       # straight home, executed instead of the carry on held=no
     safety_clips: int | None = None
-    grasp_key: tuple | None = None                     # policy.retry_vary_grasp: (grasp xy, finger heading, posture)
 
     @property
     def duration(self):
@@ -124,8 +131,6 @@ class Planner:
         self.dt = dt
         self._posture = None   # grasp.close_posture_by_shape: posture of the pick being planned
         self._apex = None      # grasp.posture_apex_gate: (pass, apex_conf, max angle) of the pick being planned
-        self.vary = None       # policy.retry_vary_grasp: {"posture": name | None, "yaw": rad | None} for the next plan()
-        self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
 
@@ -308,7 +313,7 @@ class Planner:
         the next look re-detects the object there. obstacles: (n, 2) pelvis xy of the other detected objects.
         Returns the first Plan that passes every check, else the last failure."""
         g = self.cfg["grasp"]
-        bin_name = bin_name or lookup_bin(self.cfg, self.mapping, det.color, getattr(det, "shape", None))
+        bin_name = bin_name or lookup_detection_bin(self.cfg, self.mapping, det)
         by = self.bin_xy(bin_name)[1] if bin_name is not None else 0.0
         ref = by if abs(by) > 0.1 else det.top[1]
         side0 = "left" if ref > g["y_split"] else "right"
@@ -359,7 +364,7 @@ class Planner:
         some arm has a full plan to `bin_name` (checked from home). Returns a Plan with target_bin 'counter'."""
         from dataclasses import replace
         last = Plan(False, color=det.color, reason="no relocation spot")
-        H = self.height
+        H = self._object_height(det)
         for spot in self.relocation_spots(det, bin_name, obstacles):
             d2 = replace(det, top=np.r_[spot, self.scene.counter_z + H])
             by = self.bin_xy(bin_name)[1]
@@ -387,7 +392,7 @@ class Planner:
         """
         last = Plan(False, color=det.color, source_bin=source_bin, corrective=True,
                     reason="no safe counter cleanup spot")
-        target_bin = lookup_bin(self.cfg, self.mapping, det.color, getattr(det, "shape", None))
+        target_bin = lookup_detection_bin(self.cfg, self.mapping, det)
         for spot in self.relocation_spots(det, target_bin, obstacles):
             for side in ("left", "right"):
                 p = self._plan_side_hints(det, side, target_bin, np.asarray(arm_q, float), np.asarray(hand_q, float),
@@ -398,13 +403,15 @@ class Planner:
                 last = p
         last.reason = last.reason or "no safe counter cleanup spot"
         return last
+
     def _plan_side_hints(self, det, side, bin_name, arm_q, hand_q, **kw):
         """Triangle prisms with `grasp.yaw_align`: finger directions derived from the detected apex yaw first; else
         (and as the fallback) _plan_side with each finger direction of grasp.finger_hints in turn (fingers forward
         can reach over the centre bin's wall when the object is close to it; then fingers inward/sideways)."""
-        vy = (self.vary or {}).get("yaw")
-        if vy is not None and kw.get("place_xy") is None:   # policy.retry_vary_grasp: one fixed finger heading
-            return self._plan_side_heading(det, side, bin_name, arm_q, hand_q, float(vy), **kw)
+        if self._generic_on(det):
+            # Width is valid only across the proposal's minor axis. Never fall
+            # through to legacy orientations after accepting a generic proposal.
+            return self._plan_side_generic(det, side, bin_name, arm_q, hand_q, **kw)
         if self._yaw_align_on(det) and kw.get("place_xy") is None:
             p = self._plan_side_yaw(det, side, bin_name, arm_q, hand_q, **kw)
             if p is not None:
@@ -469,6 +476,50 @@ class Planner:
         d = np.arctan2(x[1], x[0]) - a
         return float(np.degrees(abs((d + np.pi) % (2 * np.pi) - np.pi)))
 
+    def _generic_on(self, det):
+        return (bool(self.cfg["grasp"].get("generic_fallback", False))
+                and getattr(det, "generic_required", False)
+                and getattr(det, "generic_width", None) is not None)
+
+    def _object_height(self, det):
+        """Measured height for accepted generic geometry; configured height otherwise."""
+        return float(det.top[2] - self.scene.counter_z) if self._generic_on(det) else self.height
+
+    def _plan_side_generic(self, det, side, bin_name, arm_q, hand_q, **kw):
+        """Align palm-x (the fingers) with the proposal's major axis."""
+        g = self.cfg["grasp"]
+        yaw = getattr(det, "yaw", None)
+        if yaw is None or not np.isfinite(yaw):
+            return Plan(False, side=side, color=det.color, target_bin=bin_name,
+                        reason="generic proposal has no finite yaw")
+        saved = (self.kin.hint, self.kin.w_hint)
+        sign = 1.0 if side == "left" else -1.0
+        natural = -sign * np.radians(float(g.get("yaw_ref_deg", 25.0)))
+        # The fingers extend along palm x; with them parallel to the object's
+        # major axis, the thumb-to-finger closure spans the reported minor-axis
+        # width. Try both directions of the undirected major axis.
+        angles = [float(yaw), float(yaw) + np.pi]
+        angle = min(angles, key=lambda a: abs((a - natural + np.pi) % (2 * np.pi) - np.pi))
+        deviation = abs((angle - natural + np.pi) % (2 * np.pi) - np.pi)
+        if deviation > np.radians(float(g.get("generic_yaw_max_dev_deg", 45.0))):
+            return Plan(False, side=side, color=det.color, target_bin=bin_name,
+                        reason=f"generic yaw {np.degrees(angle):.0f} deg outside natural range")
+        try:
+            self.kin.hint = np.array([np.cos(angle), np.sin(angle), 0.0])
+            self.kin.w_hint = float(g.get("generic_yaw_hint_weight", 3.0))
+            p = self._plan_side(det, side, bin_name, arm_q, hand_q, **kw)
+            if not p.ok:
+                return p
+            err = self._finger_err(p, side, angle)
+            if err > float(g.get("generic_yaw_tol_deg", 15.0)):
+                p.ok = False
+                p.reason = f"generic yaw error {err:.0f} deg"
+                return p
+            p.reason = f"generic yaw ({np.degrees(angle):.0f} deg), width {1000 * det.generic_width:.0f} mm"
+            return p
+        finally:
+            self.kin.hint, self.kin.w_hint = saved
+
     def _plan_side_yaw(self, det, side, bin_name, arm_q, hand_q, **kw):
         """Try the yaw-derived finger directions (strong hint weight, grasp point moved to the pinch midpoint).
         Returns the first Plan whose achieved finger direction is within yaw_tol_deg, else None (-> legacy hints)."""
@@ -491,36 +542,6 @@ class Planner:
             self.kin.hint, self.kin.w_hint = saved
         return None
 
-    def _plan_side_heading(self, det, side, bin_name, arm_q, hand_q, a, **kw):
-        """policy.retry_vary_grasp: plan with the finger heading `a` (pelvis rad) as a strong IK hint (yaw_hint_weight);
-        the plan only counts if the achieved heading is within yaw_tol_deg (else a failed Plan)."""
-        g = self.cfg["grasp"]
-        saved = (self.kin.hint, self.kin.w_hint)
-        try:   # the strong heading only for pregrasp / descend / lift; carry on with the stock forward hint
-            h0 = np.asarray(self.cfg["grasp"].get("finger_hint", [1.0, 0.0, 0.0]), float)
-            h0 = h0 * ([1.0, -1.0, 1.0] if side == "right" else 1.0)
-            self._carry_hint = (h0 / np.linalg.norm(h0), float(g.get("finger_hint_weight", 0.3)))
-            self.kin.hint = np.array([np.cos(a), np.sin(a), 0.0])
-            self.kin.w_hint = float(g.get("yaw_hint_weight", 3.0))
-            p = self._plan_side(det, side, bin_name, arm_q, hand_q, **kw)
-        finally:
-            self.kin.hint, self.kin.w_hint = saved
-            self._carry_hint = None
-        if p.ok:
-            err = self._finger_err(p, side, a)
-            if err > float(g.get("yaw_tol_deg", 12.0)):
-                p.ok, p.reason = False, f"retry heading {np.degrees(a):.0f} deg not reached (err {err:.0f})"
-        return p
-
-    def finger_heading(self, plan):
-        """Achieved finger heading (pelvis rad, palm x axis) at the end of the descend, None without a descend."""
-        e = next((e for name, s, e in plan.phases if name == "descend"), None)
-        if e is None or plan.arm is None or plan.side not in ("left", "right"):
-            return None
-        self.kin._fk(plan.arm[e - 1])
-        x = self.kin.data.oMf[self.kin.palm[plan.side]].rotation[:, 0]
-        return float(np.arctan2(x[1], x[0]))
-
     def _posture_choice(self, det):
         """grasp.close_posture_by_shape: (posture name, grasp point or None, label, conf, path). demo only for a
         confident metric triangle; everything else (incl. unknown shape / blob / abstain) keeps the configured posture."""
@@ -528,6 +549,11 @@ class Planner:
         label = getattr(det, "shape", None)
         conf = float(getattr(det, "shape_conf", 0.0) or 0.0)
         path = getattr(det, "shape_path", None)
+        width = getattr(det, "generic_width", None)
+        if getattr(det, "generic_required", False) and width is not None:
+            if float(width) <= float(g.get("generic_narrow_width", 0.035)):
+                return "closed_demo", np.asarray(g["point_in_palm_demo"], float), None, conf, "generic_width"
+            return g.get("close_posture", "closed"), None, None, conf, "generic_width"
         if label == "triangle" and path == "metric" and conf >= float(g.get("posture_by_shape_min_conf", 0.5)):
             if not g.get("posture_apex_gate", False):
                 return "closed_demo", np.asarray(g["point_in_palm_demo"], float), label, conf, path
@@ -542,20 +568,14 @@ class Planner:
         return g.get("close_posture", "closed"), None, label, conf, path
 
     def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
-        g = self.cfg["grasp"]
-        vp = (self.vary or {}).get("posture")
-        border = self._border_posture(det)
-        if not g.get("close_posture_by_shape", False) and vp is None and border is None:
+        generic = (self.cfg["grasp"].get("generic_fallback", False)
+                   and getattr(det, "generic_required", False)
+                   and getattr(det, "generic_width", None) is not None)
+        if not self.cfg["grasp"].get("close_posture_by_shape", False) and not generic:
             self._posture = None
             return self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin)
         self._apex = None
-        if vp is not None or border is not None:   # policy.retry_vary_grasp / grasp.border_posture: forced posture
-            name = vp if vp is not None else border
-            pt = np.asarray(g["point_in_palm_demo"], float) if name == "closed_demo" else None
-            label, conf, path = (getattr(det, "shape", None), float(getattr(det, "shape_conf", 0.0) or 0.0),
-                                 getattr(det, "shape_path", None))
-        else:
-            name, pt, label, conf, path = self._posture_choice(det)
+        name, pt, label, conf, path = self._posture_choice(det)
         saved = self.kin.offset
         if pt is not None:
             self.kin.offset = {"left": pt, "right": pt * np.array([1.0, -1.0, 1.0])}
@@ -567,15 +587,6 @@ class Planner:
         p.posture = (name, label, conf, path) if self._apex is None else (name, label, conf, path, self._apex)
         return p
 
-    def _border_posture(self, det):
-        """grasp.border_posture (FLAG, default off): an abstain_border detection (label None, blob cut by the image
-        border = near counter edge) -> the demo posture instead of grasp.close_posture. None = flag off / not applicable."""
-        if not self.cfg["grasp"].get("border_posture", False):
-            return None
-        if getattr(det, "shape", None) is None and getattr(det, "shape_path", None) == "abstain_border":
-            return "closed_demo"
-        return None
-
     def _plan_side_inner(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
         sc, zc = self.scene, self.scene.counter_z
@@ -583,7 +594,12 @@ class Planner:
                     source_bin=source_bin, drop_slot=drop_slot if place_xy is None else None,
                     corrective=source_bin is not None)
         sl = ArmKinematics.sl(side)
-        H, post = self.height, self.post
+        H, post = self._object_height(det), self.post
+        if self._generic_on(det):
+            hlo, hhi = cfg["perception"].get("height_range", (0.4, 2.0))
+            if not np.isfinite(H) or not float(hlo) * self.height <= H <= float(hhi) * self.height:
+                plan.reason = f"generic object height {1000 * H:.0f} mm outside safe range"
+                return plan
         hand_pre = hand_q.copy(); hand_pre[sl] = post["preshape"][sl]
         hand_cls = hand_q.copy(); hand_cls[sl] = post[self._posture or g.get("close_posture", "closed")][sl]  # grasp.close_posture
         hand_open = hand_q.copy(); hand_open[sl] = post["open"][sl]
@@ -628,16 +644,10 @@ class Planner:
         plan.waypoints["grasp"] = np.r_[xy, z]
         down = self._cartesian(side, P["pregrasp"], P["grasp"], q_pre, "descend", plan)
         up = down and self._cartesian(side, P["grasp"], P["lift"], down[-1], "lift", plan)
-        hint_saved = (self.kin.hint, self.kin.w_hint)
-        if self._carry_hint is not None:   # retry heading variant: the wrist may turn back while carrying
-            self.kin.hint, self.kin.w_hint = self._carry_hint
-        try:
-            carry = up and (self._cartesian(side, P["lift"], P["above_bin"], up[-1], "carry", plan)
-                            or self._joint_carry(side, up[-1], P["lift"], P["above_bin"], z_drop, "carry", plan))
-            lower = carry and self._cartesian(side, P["above_bin"], P["drop"], carry[-1], "lower", plan)
-            retreat = lower and self._cartesian(side, P["drop"], P["retreat"], lower[-1], "retreat", plan)
-        finally:
-            self.kin.hint, self.kin.w_hint = hint_saved
+        carry = up and (self._cartesian(side, P["lift"], P["above_bin"], up[-1], "carry", plan)
+                        or self._joint_carry(side, up[-1], P["lift"], P["above_bin"], z_drop, "carry", plan))
+        lower = carry and self._cartesian(side, P["above_bin"], P["drop"], carry[-1], "lower", plan)
+        retreat = lower and self._cartesian(side, P["drop"], P["retreat"], lower[-1], "retreat", plan)
         if not retreat:
             plan.reason = plan.reason or f"IK failed on {[k for k, v in plan.ik.items() if not v[0]]} ({side})"
             return plan
@@ -736,38 +746,7 @@ class Planner:
             plan.reason = f"{plan.safety_clips} safety clips in dry run"
             return plan
         plan.ok = True
-        if (cfg.get("policy") or {}).get("retry_vary_grasp", False) and place_xy is None and source_bin is None:
-            plan.abort = self._abort_branch(side, plan, arm_q, hand_q, home, hand_open)
         return plan
-
-    def _abort_branch(self, side, plan, arm_q, hand_q, home, hand_open):
-        """policy.retry_vary_grasp: the plan's own lift ticks, then a joint move straight home (hand opening on the way)
-        at the configured arm_max_vel / arm_max_acc / hand_max_vel. The policy switches to it when the hand closed on
-        nothing (held=no). Checked like the plan (counter + bin-rim clearance, safety dry run from the start); None if
-        any check fails (then the stock carry runs)."""
-        mo, g = self.cfg["motion"], self.cfg["grasp"]
-        ph = {name: (s, e) for name, s, e in plan.phases}
-        if "lift" not in ph:
-            return None
-        ls, le = ph["lift"]
-        q_top, h_top = plan.arm[le - 1], plan.hand[le - 1]
-        a = time_scale([q_top, home], mo["arm_max_vel"], mo["arm_max_acc"], self.dt)
-        hr = ramp(h_top, hand_open, mo["hand_max_vel"], self.dt)
-        if len(hr) > len(a):
-            a = np.vstack([a, np.repeat((a[-1] if len(a) else q_top)[None], len(hr) - len(a), 0)])
-        h = np.repeat(np.asarray(hand_open, float)[None], len(a), 0)
-        h[:len(hr)] = hr
-        arm = np.vstack([plan.arm[ls:le], a])
-        hand = np.vstack([plan.hand[ls:le], h])
-        nl = le - ls
-        for k in range(nl, len(arm), 3):
-            if self.clearance(side, arm[k], hand[k]) < mo["counter_clearance"] - 2e-3:
-                return None
-            if self.bin_clearance(side, arm[k], hand[k]) < 0.003:
-                return None
-        if self.dry_run_safety(arm_q, hand_q, np.vstack([plan.arm[:ls], arm]), np.vstack([plan.hand[:ls], hand])):
-            return None
-        return (ls, arm, hand)
 
     def dry_run_safety(self, arm_q, hand_q, arm, hand):
         f = SafetyFilter(self.spec, self.safety)
