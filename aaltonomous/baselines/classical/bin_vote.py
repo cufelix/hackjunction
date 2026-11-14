@@ -98,7 +98,7 @@ def _box_edge_dist(Q, ctr, half):
     return np.abs(sd)
 
 
-def rim_votes(perception, depth, centers, v):
+def rim_votes(perception, depth, centers, v, transform_snapshot=None):
     """{bin: xy|None}: per-bin fit of the outer+inner rim rectangles to elevated depth points, +-search_m window."""
     sc, cfg = perception.scene, perception.cfg
     c = cfg.get("self_calibration") or {}
@@ -106,7 +106,11 @@ def rim_votes(perception, depth, centers, v):
     out = {n: None for n in centers}
     if depth is None or np.ndim(depth) != 2:
         return out
-    P, coef, why = perception._counter_plane(np.nan_to_num(np.asarray(depth, float), nan=0.0), c)
+    clean_depth = np.nan_to_num(np.asarray(depth, float), nan=0.0)
+    if transform_snapshot is None:
+        P, coef, why = perception._counter_plane(clean_depth, c)
+    else:
+        P, coef, why = perception._counter_plane(clean_depth, c, transform_snapshot=transform_snapshot)
     if why:
         return out
     height = P[:, 2] - (np.c_[P[:, :2], np.ones(len(P))] @ coef)
@@ -120,9 +124,11 @@ def rim_votes(perception, depth, centers, v):
         if len(Q) < int(v["min_rim_points"]):
             continue
         Q = Q[np.linspace(0, len(Q) - 1, min(len(Q), 1500)).astype(int)]
+        signed = bool(v.get("signed_rim_fit", False))
 
         def score(off):
-            d = np.minimum(_box_edge_dist(Q + off, centers[n], outer), _box_edge_dist(Q + off, centers[n], inner))
+            fit = Q - off if signed else Q + off
+            d = np.minimum(_box_edge_dist(fit, centers[n], outer), _box_edge_dist(fit, centers[n], inner))
             return float(np.mean(np.minimum(d, trunc) ** 2))
 
         def search_grid(ctr, span, step):
@@ -134,7 +140,8 @@ def rim_votes(perception, depth, centers, v):
         off = search_grid(np.zeros(2), search, 0.01)
         off = search_grid(off, 0.01, 0.002)
         off = search_grid(off, 0.002, 0.0005)
-        d = np.minimum(_box_edge_dist(Q + off, centers[n], outer), _box_edge_dist(Q + off, centers[n], inner))
+        fit = Q - off if signed else Q + off
+        d = np.minimum(_box_edge_dist(fit, centers[n], outer), _box_edge_dist(fit, centers[n], inner))
         if float(np.mean(d <= 0.006)) < 0.35:
             continue
         out[n] = np.asarray(centers[n], float) + off
@@ -171,7 +178,7 @@ def _bin_blob_vote(blobs, elong):
     return _blob_vote(blobs[0], elong)
 
 
-def tape_votes(perception, rgb, depth, centers, v):
+def tape_votes(perception, rgb, depth, centers, v, transform_snapshot=None):
     """{bin: xy|None}: per orange-tape blob near the bin's rim (8-connected in the image), lifted via depth or via the
     rim-height plane where depth is missing; the blob votes its centroid, or its inner end when elongated (see
     _blob_vote). Ambiguous or missing -> None. # ponytail: no per-edge tape layout model; upgrade once the real
@@ -198,11 +205,16 @@ def tape_votes(perception, rgb, depth, centers, v):
     ok = (d >= lo_d) & (d <= hi_d)
     pts = np.zeros((len(vv), 3))
     if ok.any():
-        pts[ok] = perception._pixel_to_pelvis(uu[ok], vv[ok], d[ok])
+        pts[ok] = (perception._pixel_to_pelvis(uu[ok], vv[ok], d[ok]) if transform_snapshot is None else
+                   perception._pixel_to_pelvis(uu[ok], vv[ok], d[ok], transform_snapshot))
     if (~ok).any():  # pelvis z is linear in depth along a ray: solve z(d) = rim_z from two samples
         u, w = uu[~ok], vv[~ok]
-        p1 = perception._pixel_to_pelvis(u, w, np.full(len(u), 1000.0))
-        p2 = perception._pixel_to_pelvis(u, w, np.full(len(u), 2000.0))
+        if transform_snapshot is None:
+            p1 = perception._pixel_to_pelvis(u, w, np.full(len(u), 1000.0))
+            p2 = perception._pixel_to_pelvis(u, w, np.full(len(u), 2000.0))
+        else:
+            p1 = perception._pixel_to_pelvis(u, w, np.full(len(u), 1000.0), transform_snapshot)
+            p2 = perception._pixel_to_pelvis(u, w, np.full(len(u), 2000.0), transform_snapshot)
         dz = p2[:, 2] - p1[:, 2]
         t = np.where(np.abs(dz) > 1e-9, (rim_z - p1[:, 2]) / np.where(np.abs(dz) > 1e-9, dz, 1.0), np.nan)
         pts[~ok] = p1 + (p2 - p1) * t[:, None]
@@ -245,8 +257,13 @@ def vote_bins(perception, planner, frames, cfg, log=print):
     try:
         rims, tapes = [], []
         for f in frames:
-            rims.append(rim_votes(perception, f.get("head_depth"), priors, v))
-            tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v))
+            if v.get("frame_transform_snapshot", False):
+                T = f["transform_snapshot"]
+                rims.append(rim_votes(perception, f.get("head_depth"), priors, v, T))
+                tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v, T))
+            else:
+                rims.append(rim_votes(perception, f.get("head_depth"), priors, v))
+                tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v))
         rim = {n: _med(rims, n) for n in names}
         tape = {n: _med(tapes, n) for n in names}
         shift, extra, info = resolve(priors, rim, tape, v)

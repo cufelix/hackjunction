@@ -207,6 +207,9 @@ bin:
   geometry_runtime: false     # FLAG (bin geo). perception follows planner.bin_shift for every bin consumer (needs bin.vote.enabled for a shift)
   vote:                       # FLAG (bin vote). Per-bin position from 3 votes (depth rim, orange tape, nominal prior)
     enabled: false
+    signed_rim_fit: false     # FLAG (C3). Fit Q-shift to nominal so the returned shift has the physical sign
+    async_extract: false      # FLAG (H5). Copy frames, extract in the look worker, and let act() only poll/hold
+    frame_transform_snapshot: false  # FLAG (H4). Rim+tape from one frame share one immutable camera transform
     agree_m: 0.04             # two votes closer than this agree -> mean of the closest pair
     search_m: 0.10            # per-bin rim search window and tape window around the prior
     max_shift_m: 0.10         # a result further than this from the prior is discarded (prior kept)

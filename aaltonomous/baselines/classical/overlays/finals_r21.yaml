@@ -1,4 +1,4 @@
-# finals_r21 (R29): finals_r20 flags on rc6 code = gate fk_dilate 0 / near_margin 0, footprint->colour fallback, first-look wait, bin_vote pitch_T, sat_floor, fixed_mapping.
+# finals_r21: finals_r20 plus C3 signed rim fit, H4 frame-pose snapshots, and H5 async bin-vote extraction.
 name: finals_r21
 flags:
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
@@ -55,7 +55,10 @@ flags:
   safety.nan_guard: true                        # r19 fuzz   non-finite arm_q/hand_q -> hold last emitted action
   instruction.strict: true                      # r19 Felix  never guess a bin: abstain (0) instead of FIXED/inferred (-1); Timi OK
   policy.safety_shell: true                     # r19b P0 Hz
-  bin.vote.enabled: false                        # r20 R2  per-bin position vote (depth rim, tape, prior)   # OFF: Codex C3 rim vote mirrors the shift (nominal - delta)
+  bin.vote.enabled: true                         # C3/H4/H5 corrected signed, snapshot-consistent async vote pipeline
+  bin.vote.signed_rim_fit: true                  # C3  preserve physical +/-x,+/-y rim displacement through drop slots
+  bin.vote.async_extract: true                   # H5  copied frames compute in look worker; act() only polls/holds
+  bin.vote.frame_transform_snapshot: true        # H4  tape and rim share one non-zero-pitch transform per frame
   bin.geometry_runtime: true                    # r20 R2  every bin consumer follows the voted shift
   grasp.held_detector: finger_sum               # r20     bias-corrected held; empty close aborted early
   calib.plane.apply_height: true                # r20 R9  runtime counter_z from the depth plane (real table +5..14 cm), clamp 0.20, nominal fallback
