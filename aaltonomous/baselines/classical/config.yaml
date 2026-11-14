@@ -280,6 +280,8 @@ grasp:
   drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
   border_posture: false       # FLAG (retry-vary). Label None from abstain_border (blob cut by the image border, near
                               # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
+  cylinder_no_yaw_vary: false # FLAG (cyl yaw). Retry on a detected cylinder: no finger-yaw variants (it is rotationally
+                              # symmetric); only the posture variant remains. Off = stock (+-retry_yaw_deg[cylinder]).
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   close_posture: closed       # FLAG (pinch fix): hand posture for the grasp, closed | closed_tight (hand.closed_tight)
