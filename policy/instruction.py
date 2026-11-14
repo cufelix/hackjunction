@@ -111,7 +111,35 @@ _DEFAULT_PATTERNS = tuple(p + _NOT_A_BIN for p in (
 # A clause that says "everything"/"all of them" and names a bin, with no key of its own, is also a
 # catch-all: "Everything goes in the center bin, except red, which goes right."
 _BLANKET = re.compile(r"\b(?:everything|anything|every\s+object|all\s+(?:the\s+)?(?:objects|items|"
-                      r"pieces|shapes|of\s+them))\b")
+                      r"pieces|shapes|of\s+them)|"
+                      # A catch-all NOUN PHRASE: "all remaining pieces", "the other colour", "whatever
+                      # remains". The head noun is what separates it from "the remaining BIN", which
+                      # stays an elimination bin reference.
+                      r"(?:remaining|other|leftover|unnamed|last|final)\s+(?:colou?rs?|shapes?|objects?|pieces?|items?)|"
+                      r"whatever\s+remains|everything\s+(?:that\s+)?remains)\b")
+
+_KW = "|".join(sorted([*_COLOR_WORDS, *_SHAPE_WORDS], key=len, reverse=True))
+# "all but X" / "everything except the cubes": X is EXCLUDED, everything else is the catch-all.
+_EXC = r"(?:but|except(?:\s+for)?|excluding|apart\s+from|other\s+than|save\s+for|with\s+the\s+exception\s+of)"
+_EXC_KEYS = r"((?:\s*(?:the|and|or|,)?\s*\b(?:" + _KW + r")\b)+)"
+_ALL_BUT = re.compile(r"\b(?:all|everything|anything|everyone|every|each)(?:\s+(?:the\s+)?(?:colou?rs?|shapes?|objects?|items?|pieces?|one))?\s+"
+                      + _EXC + r"\s+" + _EXC_KEYS)
+# Prefix form, at a sentence start: "Excluding the cylinders, everything goes left."
+_EXC_FIRST = re.compile(r"(^|[.;!?]\s*)" + _EXC + r"\s+" + _EXC_KEYS + r"\s*,?")
+# "everything else, i.e. the yellow stuff": the appositive colour/shape IS the key, not a blanket.
+_APPOS = re.compile(r"\b(?:everything\s+else|anything\s+else|the\s+rest|(?:all\s+)?the\s+others?)\s*[,(]?\s*"
+                    r"(?:i\.\s?e\.?|that\s+is|namely|meaning|which\s+is|which\s+means|i\s+mean)[,:]?\s*"
+                    r"(?:the\s+)?(?=(?:" + _KW + r")\b)")
+# Phrases whose "left" is NOT the left bin: rewrite them into the elimination vocabulary first.
+_LEFT_NOUN = re.compile(r"\b(whatever|what|(?:the|any)\s+(?:colou?rs?|shapes?|objects?|pieces?))"
+                        r"(?:\s+(?:colou?rs?|shapes?|objects?|pieces?|items?))?(?:'s|\s+(?:is|are))\s+left"
+                        r"(?:\s+over)?\b")
+# Not-yet-used, said negatively: "whatever colour has not been mentioned", "the bin nobody has used".
+_UNUSED_KEY = re.compile(r"\bwhatever\s+(?:colou?rs?|shapes?|objects?|pieces?)\s+(?:has|have|is|are)(?:\s+not|n't)\s+(?:been\s+)?\w+")
+_UNUSED_BIN = re.compile(r"\b(bin|box|slot|one)\s+(?:that\s+)?(?:(?:nobody|no\s+one)\s+(?:has\s+)?\w+|"
+                         r"(?:is|has)(?:\s+not|n't)\s+(?:been\s+)?\w+)")
+_LEFT_BIN = re.compile(r"\b(bin|box|slot|one)\s+(?:that(?:'s|\s+is)\s+|which\s+is\s+)?"
+                       r"(?:left|remains|remaining)(?:\s+over)?\b(?!\s+of\b)")  # "left of centre" is a direction
 
 # Clause boundaries. Punctuation, plus the words that introduce an exception or an aside: those
 # carry a key that belongs to a DIFFERENT bin than the clause before them.
@@ -141,7 +169,10 @@ def _mentions(toks, allow_ordinals):
     """(index, kind, value) for every colour, shape and bin word in one clause, in order."""
     out = []
     for i, t in enumerate(toks):
-        if t in _BIN_WORDS:
+        # "left of the middle one": the word after "<bin> of" is a landmark, not a bin being named.
+        k = i - 1 - (i >= 1 and toks[i - 1] == "the")  # step back over "the"
+        landmark = k >= 1 and toks[k] == "of" and (toks[k - 1] in _BIN_WORDS or toks[k - 1] in _BIN_NOUNS)
+        if t in _BIN_WORDS and not landmark:
             out.append((i, "bin", _BIN_WORDS[t]))
         if t in _COLOR_WORDS:
             out.append((i, "color", _COLOR_WORDS[t]))
@@ -260,7 +291,9 @@ def _clauses(low, ord_ok):
         # the left, | center and right bins"). Counting decides it: if what remains has MORE bins
         # than keys, those spare bins belong to the keys sitting here, so keep reading.
         k_here, b_here = counts(here)
-        if len(k_here) > len(b_here) and len(b_rest) > len(k_rest):
+        # (A rest that is a keyless catch-all owns its bin: "cubes and cylinders go left; any leftover
+        # objects go right" must not hand the spare bin to the cylinders.)
+        if len(k_here) > len(b_here) and len(b_rest) > len(k_rest) and not _BLANKET.search(rest):
             continue
         out.append(here)
         buf = []
@@ -301,6 +334,22 @@ def resolve(text, fallback=None):
     if not text or not str(text).strip():
         return dict(FIXED_MAPPING if fallback is None else fallback)
     low = str(text).lower()
+    # Structural pre-pass (see the patterns above). Order matters: appositive first, so the key
+    # word survives; all-but second, so the excluded key never reaches clause parsing.
+    low = _APPOS.sub("the ", low)
+    low = _LEFT_NOUN.sub("the remaining objects", low)
+    low = _LEFT_BIN.sub(r"remaining \1", low)
+    low = _UNUSED_KEY.sub("the remaining objects", low)
+    low = _UNUSED_BIN.sub(r"remaining \1", low)
+    excluded = []
+
+    def _exclude(m):
+        ks = [_COLOR_WORDS.get(t) or _SHAPE_WORDS[t] for t in _TOKEN_RE.findall(m.group(1)) if t in _COLOR_WORDS or t in _SHAPE_WORDS]
+        cs = [k for k in ks if k in COLORS]
+        excluded.extend(cs or ks)
+        return "all remaining objects "
+    low = _ALL_BUT.sub(_exclude, low)
+    low = _EXC_FIRST.sub(lambda m: m.group(1) + ("" if _exclude(m) else ""), low)
 
     # Both of these are decided over the WHOLE sentence, because a clause sees too little.
     all_toks = _tokens(low)
@@ -379,6 +428,14 @@ def resolve(text, fallback=None):
         free = [b for b in BINS if b not in set(mapping.values())]
         for k, b in zip(missing, free):
             mapping[k] = b
+
+    # "all but X": X is not the catch-all's bin. Guess it from the leftovers (+0.5 expected) rather
+    # than let it fall through to "default" (-1 certain).
+    if "default" in mapping:
+        for k in excluded:
+            free = [b for b in BINS if b not in set(mapping.values())]
+            if k not in mapping and free:
+                mapping[k] = free[0]
 
     if not mapping:
         return dict(FIXED_MAPPING if fallback is None else fallback)
