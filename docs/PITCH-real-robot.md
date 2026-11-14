@@ -92,6 +92,11 @@ Sources: blind results posted in the room after each hash, e.g. the 05242eae run
   GPU sort_language 54/74 = 0.730 [0.619, 0.818]. The v2 gain 0.667 -> 0.800 is +8 sentences on the SAME fixed
   set, a within-set comparison and better determined than either absolute number. If one headline accuracy is
   needed, use v1 0.934 (largest n).
+- Our absolute number is uncertain, our improvement is not. First resolver 8fcfb5f3 vs integrated 05242eae, sentence
+  by sentence on the same sealed sets (paired, exact McNemar on discordant pairs; verified by re-running both hashes):
+  v2: 13 sentences gained, 0 lost (35 right in both, 12 wrong in both), two-sided p = 0.00024;
+  v1: 10 gained, 0 lost, p = 0.002; many-to-one: 3 gained, 0 lost, p = 0.25 (too few to say).
+  No sentence went from right to wrong in any set.
 - Process claim a judge can re-run: before the leave-tail fix we predicted it would change NOTHING on the sealed
   sets; comparing the raw resolver output for all 241 sentences (not the scores), 0 changed. Identical scores alone
   would prove much less, since offsetting errors look the same.
