@@ -165,6 +165,79 @@ class TestSelfCalibration(unittest.TestCase):
         np.testing.assert_allclose(policy.perception.xy_offset, [0.004, -0.003])
 
 
+class TestShapeDiag(unittest.TestCase):
+    """No shape from the 2D blob (plane path abstains) + the passive perception.shape_diag log."""
+    FIELDS = {"source", "n_top", "ratio_cloud", "ratio_blob", "path", "label", "conf", "near_bin", "dz_top", "top_xy"}
+
+    def _perc(self, **flags):
+        import copy
+        cfg = copy.deepcopy(CFG)
+        cfg["perception"].update(flags)
+        self.lines = []
+        return Perception(cfg, SC, CAL, log=self.lines.append)
+
+    def _scene(self, seed=0, depth=True):
+        rng = np.random.default_rng(seed)
+        objs = scene_objects(rng)
+        rgb, d = Renderer(SC, CAL).render(objs, rng, depth_noise_mm=1.0, hole_frac=0.05)
+        return rgb, (d if depth else np.zeros(rgb.shape[:2], np.uint16))
+
+    def test_plane_path_gives_no_shape(self):
+        rgb, depth = self._scene(1, depth=False)
+        p = self._perc(classify_shape=True, triangle_pose=True, shape_diag=True, no_blob_shape=True)
+        dets = p.detect(rgb, depth)
+        self.assertEqual(len(dets), 3)
+        for d in dets:
+            self.assertEqual(d.method, "plane")
+            self.assertIsNone(d.shape)
+            self.assertIsNone(d.apex_yaw)
+            self.assertEqual(d.shape_diag["source"], "plane")
+            self.assertIn(d.shape_diag["path"], ("abstain_plane", "abstain_border"))
+            self.assertIsNotNone(d.shape_diag["ratio_blob"])     # measured for the log, never used
+            self.assertIsNone(d.shape_diag["top_xy"])
+
+    def test_diag_has_all_fields_and_one_line_per_detection(self):
+        rgb, depth = self._scene(0)
+        p = self._perc(classify_shape=True, triangle_pose=True, shape_diag=True)
+        dets, rej = p.detect(rgb, depth, debug=True)
+        self.assertEqual(len(dets), 3)
+        self.assertEqual(len(self.lines), len(dets) + sum(d is not None for d, _ in rej))
+        self.assertTrue(all(l.startswith("[shape_diag]") for l in self.lines))
+        for d in dets:
+            g = d.shape_diag
+            self.assertEqual(set(g), self.FIELDS)
+            self.assertEqual(g["source"], "depth")
+            self.assertEqual(g["label"], d.shape)
+            self.assertEqual(len(g["top_xy"]), g["n_top"])
+            self.assertIn(g["path"], ("metric", "blob", "abstain_few_points", "abstain_border", "abstain_near_bin"))
+            self.assertAlmostEqual(g["dz_top"], d.top[2] - SC.counter_z)
+            self.assertIsInstance(g["near_bin"], bool)
+
+    def test_no_blob_flag_off_keeps_blob_fallback(self):
+        """perception.no_blob_shape off (integration default): the plane path still labels from the 2D blob."""
+        rgb, depth = self._scene(1, depth=False)
+        self.assertFalse(CFG["perception"]["no_blob_shape"])
+        dets = self._perc(classify_shape=True, shape_diag=True).detect(rgb, depth)
+        self.assertEqual(len(dets), 3)
+        self.assertTrue(all(d.method == "plane" for d in dets))
+        self.assertTrue(any(d.shape is not None for d in dets))
+        self.assertTrue(all(d.shape_diag["path"] in ("blob", "abstain_plane", "abstain_border") for d in dets))
+
+    def test_diag_off_by_default_and_passive(self):
+        self.assertFalse(CFG["perception"]["shape_diag"])
+        rgb, depth = self._scene(0)
+        for flags in ({}, {"classify_shape": True, "triangle_pose": True}):
+            off = self._perc(**flags).detect(rgb, depth)
+            self.assertEqual(self.lines, [])
+            self.assertTrue(all(d.shape_diag is None for d in off))
+            on = self._perc(shape_diag=True, **flags).detect(rgb, depth)
+            self.assertEqual(len(self.lines), len(on))
+            self.assertEqual([repr(d) for d in off], [repr(d) for d in on])
+            for a, b in zip(off, on):
+                self.assertEqual((a.shape, a.apex_yaw, a.apex_conf, a.yaw), (b.shape, b.apex_yaw, b.apex_conf, b.yaw))
+                np.testing.assert_array_equal(a.top, b.top)
+
+
 class TestPostures(unittest.TestCase):
     def test_mirror_and_limits(self):
         post = hand_postures(CFG)  # raises if outside joint_spec limits

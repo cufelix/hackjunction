@@ -12,8 +12,15 @@ Perception._shape_of is the only caller; nothing else (planner, prism_pose) may 
 classifier (e.g. Felix's), keep this signature and change the single import line in perception.py.
 
 Default implementation: ratio = area / minAreaRect area (cube ~1.0, cylinder ~0.785, triangle ~0.5), measured on the
-metric top-face cloud (convex hull area) when it has >= SHAPE_MIN_POINTS points, else on the 2D blob (pixels).
+metric top-face cloud (convex hull area) only. Fewer than SHAPE_MIN_POINTS top-face points (or none) -> abstain.
+The 2D blob is NEVER used to decide a shape: the head looks down ~48 deg, so a prism's colour blob includes its side
+faces, which pushes its area ratio from ~0.5 into the cylinder band. `_ratio_blob` is kept for diagnostics only.
 Border guard: a blob touching the image edge is clipped, so its top face is partial -> abstain.
+Integration flag perception.no_blob_shape (default OFF): Perception passes use_blob=True unless the flag is on, i.e.
+with the flag off a missing metric top face falls back to the 2D-blob ratio exactly as in grasp-yaw-review (6f4cdbd);
+flag on = the no-blob abstain above. Called directly, the module default stays use_blob=False (no-blob).
+
+`classify_top_face_diag` is the same decision plus an info dict (path, n_top, ratio_cloud, ratio_blob) for logging.
 """
 from __future__ import annotations
 
@@ -66,20 +73,62 @@ def _ratio_blob(mask):
     return area / max((w + 1.0) * (h + 1.0), 1e-9)      # +1 px: contour runs through pixel centres
 
 
-def classify_top_face(top_xy, blob_mask=None, image_shape=None):
-    """See module docstring. Returns (label | None, confidence)."""
-    if blob_mask is not None and _touches_border(blob_mask, image_shape):
-        return None, 0.0
+def _safe(fn, *a):
+    try:
+        return fn(*a)
+    except Exception:          # diagnostics must never raise into perception
+        return None
+
+
+def _classify(top_xy, blob_mask, image_shape, info=None, use_blob=False):
+    """The decision. `info` (a dict, diagnostics only) is filled with path / n_top / ratio_cloud / ratio_blob; the
+    extra ratios are computed only when it is given, so the plain seam does no extra work."""
+    if info is not None:
+        info.update(path=None, n_top=0, ratio_cloud=None, ratio_blob=None)
+        if blob_mask is not None:
+            info["ratio_blob"] = _safe(_ratio_blob, blob_mask)
+    xy = None
     if top_xy is not None:
         xy = np.asarray(top_xy, float).reshape(-1, 2)
         xy = xy[np.all(np.isfinite(xy), axis=1)]
-        if len(xy) >= SHAPE_MIN_POINTS:
-            r = _ratio_cloud(xy)
-            if r is not None:
-                label, conf = _label(r)
-                return label, conf * min(1.0, len(xy) / CONF_FULL_POINTS)
-    if blob_mask is not None:
+        if info is not None:
+            info["n_top"] = int(len(xy))
+            if 3 <= len(xy) < SHAPE_MIN_POINTS:
+                info["ratio_cloud"] = _safe(_ratio_cloud, xy)
+    if blob_mask is not None and _touches_border(blob_mask, image_shape):
+        if info is not None:
+            info["path"] = "abstain_border"
+            if xy is not None and len(xy) >= SHAPE_MIN_POINTS:
+                info["ratio_cloud"] = _safe(_ratio_cloud, xy)
+        return None, 0.0
+    if xy is not None and len(xy) >= SHAPE_MIN_POINTS:
+        r = _ratio_cloud(xy)
+        if info is not None:
+            info["ratio_cloud"] = r
+        if r is not None:
+            label, conf = _label(r)
+            if info is not None:
+                info["path"] = "metric"
+            return label, conf * min(1.0, len(xy) / CONF_FULL_POINTS)
+    if use_blob and blob_mask is not None:   # perception.no_blob_shape off: the review-patch 2D-blob fallback
         r = _ratio_blob(blob_mask)
         if r is not None:
+            if info is not None:
+                info["path"] = "blob"
             return _label(r)
-    return None, 0.0
+    if info is not None:
+        info["path"] = "abstain_few_points"
+    return None, 0.0           # no metric top face: ABSTAIN, never fall back to the 2D blob
+
+
+def classify_top_face_diag(top_xy, blob_mask=None, image_shape=None, use_blob=False):
+    """classify_top_face + info dict {path, n_top, ratio_cloud, ratio_blob} for logging. path is "metric" |
+    "abstain_border" | "abstain_few_points". The blob only feeds the border guard and the diagnostic ratio_blob."""
+    info = {}
+    label, conf = _classify(top_xy, blob_mask, image_shape, info, use_blob=use_blob)
+    return label, conf, info
+
+
+def classify_top_face(top_xy, blob_mask=None, image_shape=None, use_blob=False):
+    """See module docstring. Returns (label | None, confidence)."""
+    return _classify(top_xy, blob_mask, image_shape, use_blob=use_blob)

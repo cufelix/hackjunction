@@ -17,6 +17,9 @@ class FakePerception:
     def detect(self, rgb, depth):
         return list(self.dets)
 
+    def reset_calibration(self):   # integration: policy.reset() resets the (flag-gated) self-calibration state
+        pass
+
 
 class FakePlanner:
     """plan() returns a scripted duration per colour (None = IK failure) and counts the calls."""
@@ -162,6 +165,8 @@ class TestTriage(unittest.TestCase):
         self.assertEqual(p["triage_order"], "duration")
         self.assertEqual(p["time_margin_s"], 0.0)
         self.assertIsNone(p["max_total_attempts"])
+        self.assertFalse(p["retry_pass"])
+        self.assertEqual(p["retry_extra_attempts"], 2)
 
 
 def run_rolling(cap, n_looks=6, logs=None, **policy):
@@ -197,12 +202,85 @@ class TestAttemptCap(unittest.TestCase):
         pol, _ = run_rolling(2, logs=logs, episode_summary_log=True)
         pol.act(obs(99.0))                                     # further done ticks do not repeat the summary
         lines = [m for m in logs if "episode end" in m]
-        self.assertEqual(lines, ["[classical] episode end: attempts=2 failed=0 too_long=0 started=2"])
+        self.assertEqual(lines, ["[classical] episode end: attempts=2 failed=0 too_long=0 started=2 retry_pass_used=0"])
 
     def test_episode_end_summary_off_by_default(self):
         logs = []
-        pol, _ = run_rolling(2, logs=logs)
+        run_rolling(2, logs=logs)
         self.assertFalse(any("episode end" in m for m in logs))
+
+
+def run_stuck(n_looks=8, dt=10.0, dur=5.0, logs=None, **policy):
+    """An object whose grasp always fails: it stays put, so every look re-detects it at the same spot.
+    Returns (policy, index of the look that ended done or None)."""
+    pol = make({"red": dur}, [det("red", 0.30)], time_limit=policy.pop("time_limit", 1000.0), **policy)
+    if logs is not None:
+        pol.log = logs.append
+    for i in range(n_looks):
+        pol.state, pol.queue_a, pol.queue_h = "look", None, None
+        if pol.act(obs(dt * i))["done"]:
+            return pol, i
+    return pol, None
+
+
+class TestRetryPass(unittest.TestCase):
+    def test_off_ends_after_max_attempts(self):
+        pol, done_at = run_stuck()
+        self.assertEqual((done_at, pol.n_started), (2, 2))
+        self.assertFalse(pol.retry_pass_used)
+        self.assertIn("nothing left to sort (1 detections)", pol.events[-1][1])
+
+    def test_on_retries_two_more_then_ends(self):
+        logs = []
+        pol, done_at = run_stuck(retry_pass=True, logs=logs, episode_summary_log=True)
+        self.assertEqual((done_at, pol.n_started), (4, 4))     # 2 normal + 2 extra, then excluded again
+        self.assertTrue(pol.retry_pass_used)
+        self.assertEqual(sum("retry pass" in m for _, m in pol.events), 1)
+        self.assertIn("nothing left to sort", pol.events[-1][1])
+        self.assertIn("retry_pass_used=1", [m for m in logs if "episode end" in m][0])
+
+    def test_extra_attempts_configurable(self):
+        pol, done_at = run_stuck(retry_pass=True, retry_extra_attempts=1)
+        self.assertEqual((done_at, pol.n_started), (3, 3))
+
+    def test_pass_only_once(self):
+        pol, done_at = run_stuck(retry_pass=True)
+        self.assertEqual(done_at, 4)
+        for i in range(3):                                     # further looks: no second pass
+            pol.state, pol.queue_a, pol.queue_h = "look", None, None
+            self.assertTrue(pol.act(obs(100.0 + i))["done"])
+        self.assertEqual(pol.n_started, 4)
+        self.assertEqual(sum("retry pass" in m for _, m in pol.events), 1)
+
+    def test_no_retry_start_when_plan_does_not_fit(self):
+        # look 2 at t=20 with a 5 s plan and a 24 s limit: the retry plan does not fit, nothing is started
+        for triage in (False, True):
+            pol, done_at = run_stuck(retry_pass=True, time_limit=24.0, time_triage=triage)
+            self.assertEqual((done_at, pol.n_started), (2, 2), f"triage={triage}")
+            self.assertIn("not enough time" if not triage else "no candidate fits", pol.events[-1][1])
+        # exactly fits (20 + 5 = 25): the retry attempt runs
+        pol, _ = run_stuck(retry_pass=True, time_limit=25.0, n_looks=3)
+        self.assertEqual(pol.n_started, 3)
+
+    def test_respects_max_total_attempts(self):
+        pol, done_at = run_stuck(retry_pass=True, max_total_attempts=3)
+        self.assertEqual((done_at, pol.n_started), (3, 3))
+        self.assertIn("attempt cap reached", pol.events[-1][1])
+        pol, done_at = run_stuck(retry_pass=True, max_total_attempts=2)   # cap hit first: no pass at all
+        self.assertEqual((done_at, pol.n_started), (2, 2))
+        self.assertFalse(pol.retry_pass_used)
+
+    def test_failed_objects_stay_excluded(self):
+        pol2 = make({"red": None}, [det("red", 0.30)], retry_pass=True)
+        self.assertTrue(pol2.act(obs(0.0))["done"])            # IK failure -> failed, not retried by the pass
+        self.assertFalse(pol2.retry_pass_used)
+        self.assertEqual(pol2.planner.calls, ["red"])
+
+    def test_reset_clears_flag(self):
+        pol, _ = run_stuck(retry_pass=True)
+        pol.reset()
+        self.assertFalse(pol.retry_pass_used)
+        self.assertEqual(pol.retry_allow, [])
 
 
 if __name__ == "__main__":

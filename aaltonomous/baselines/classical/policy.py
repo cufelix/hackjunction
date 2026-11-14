@@ -55,7 +55,7 @@ class ClassicalPolicy:
         self.home = home_arm(self.cfg, self.spec)
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
-        self.perception = Perception(self.cfg, self.scene, self.cal)
+        self.perception = Perception(self.cfg, self.scene, self.cal, log=log or (lambda *a: None))
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.require_confirm = require_confirm
         self.threaded = threaded
@@ -109,6 +109,8 @@ class ClassicalPolicy:
         self.mapping_conf = dict(info.get("mapping_conf") or {})   # colour -> confidence (default 1.0), triage tie-break
         self.too_long = []          # (position, plan duration) of feasible plans that did not fit the time left
         self.n_started = 0          # executed plans started this episode, whatever object they were for
+        self.retry_allow = []       # (position, extra attempts) granted by the retry pass; replaces max_attempts there
+        self.retry_pass_used = False
         self._summary_logged = False
         self.perception.reset_calibration()
         self.calibration = None
@@ -242,7 +244,7 @@ class ClassicalPolicy:
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
             dets = self.perception.detect(obs["head_rgb"], obs["head_depth"])
             self.last_detections = dets
-            return self._choose(dets, obs, verify=False)
+            return self._choose_retry(dets, obs, verify=False)
         dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
@@ -284,7 +286,43 @@ class ClassicalPolicy:
             elif self.verify_relooks_remaining > 0:
                 self.verify_relooks_remaining -= 1
                 return ("relook", None, len(dets))
-        return self._choose(dets, obs, verify=True)
+        return self._choose_retry(dets, obs, verify=True)
+
+    def _choose_retry(self, dets, obs, verify):
+        """_choose + #3 retry pass (Oliver 40fb22a, policy.retry_pass, default off)."""
+        res = self._choose(dets, obs, verify)
+        pol = self.cfg["policy"]
+        if res[0] == "none" and dets and pol.get("retry_pass", False) and not self.retry_pass_used:
+            # Retry pass (once per episode): objects excluded only by max_attempts get retry_extra_attempts more
+            # tries. `failed` (IK failure / operator skip) stays excluded. The time check is the normal one on the
+            # real plan duration: triage skips misfits, without triage _after_look refuses a plan that does not fit.
+            rad = pol["same_object_radius"]
+            excl = [d.top[:2] for d in dets if self._attempt_excluded(d.top[:2])]
+            if excl:
+                self.retry_pass_used = True
+                extra = int(pol.get("retry_extra_attempts", 2))
+                self.attempts = [(p, c) for p, c in self.attempts
+                                 if not any(np.linalg.norm(xy - p) < rad for xy in excl)]
+                self.retry_allow += [(xy, extra) for xy in excl]
+                self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
+                res = self._choose(dets, obs, verify)
+        return res
+
+    def _attempt_excluded(self, xy):
+        """True when the object at xy is skipped for its attempt count only (not in `failed`)."""
+        rad = self.cfg["policy"]["same_object_radius"]
+        if any(np.linalg.norm(xy - f) < rad for f in self.failed):
+            return False
+        n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < rad)
+        return n >= self._attempt_limit(xy)
+
+    def _attempt_limit(self, xy):
+        """max_attempts, or the retry pass's extra attempts for an object it re-admitted."""
+        rad = self.cfg["policy"]["same_object_radius"]
+        for p, extra in self.retry_allow:
+            if np.linalg.norm(xy - p) < rad:
+                return extra
+        return self.cfg["policy"]["max_attempts"]
 
     def _choose(self, dets, obs, verify):
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
@@ -294,7 +332,7 @@ class ClassicalPolicy:
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
                 continue
             n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < self.cfg["policy"]["same_object_radius"])
-            if n >= self.cfg["policy"]["max_attempts"]:
+            if n >= self._attempt_limit(xy):
                 continue
             cands.append(d)
         if self.cfg["policy"]["order"] == "nearest_bin":
@@ -528,7 +566,8 @@ class ClassicalPolicy:
             # passive end-of-episode summary (log only, once)
             self._summary_logged = True
             self.log(f"[classical] episode end: attempts={len(self.attempts)} failed={len(self.failed)} "
-                     f"too_long={len(getattr(self, 'too_long', []))} started={self.n_started}")
+                     f"too_long={len(getattr(self, 'too_long', []))} started={self.n_started} "
+                     f"retry_pass_used={int(self.retry_pass_used)}")
         return {"arm_q_target": np.repeat(self.arm_cmd[None], k, 0), "hand_q_target": np.repeat(self.hand_cmd[None], k, 0),
                 "done": bool(done)}
 

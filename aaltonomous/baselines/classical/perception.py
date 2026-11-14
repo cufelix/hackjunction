@@ -18,6 +18,7 @@ import time
 import numpy as np
 
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
+from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
 
 
 @dataclass
@@ -32,6 +33,8 @@ class Detection:
     shape: str | None = None   # "cube" | "cylinder" | "triangle" | None (unknown)
     apex_yaw: float | None = None  # triangle only: pelvis-frame heading (rad, x fwd, y left) centre -> any one vertex (mod 120 deg)
     apex_conf: float = 0.0     # confidence of apex_yaw, 0..1 (from perception.triangle_pose)
+    shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
+                                    # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
 
     def __repr__(self):
         x, y, z = self.top
@@ -53,7 +56,7 @@ class BinCalibration:
 
 
 class Perception:
-    def __init__(self, cfg, scene, calibration):
+    def __init__(self, cfg, scene, calibration, log=None):
         self.cfg = cfg["perception"]
         self.scene = scene
         self.cal = calibration
@@ -69,6 +72,11 @@ class Perception:
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
         # #7 near-bin guard: abstain on shape when the top face may be cut by the bin exclusion (needs classify_shape)
         self.near_bin_guard = bool(self.cfg.get("near_bin_guard", False))
+        # passive shape diagnostics: Detection.shape_diag + one log line per detection (default OFF, no action change)
+        self.shape_diag = bool(self.cfg.get("shape_diag", False))
+        # no-blob shape (Oliver f857054): no metric top face -> abstain instead of the 2D-blob ratio (default OFF)
+        self.no_blob_shape = bool(self.cfg.get("no_blob_shape", False))
+        self.log = log if log is not None else print
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
@@ -296,8 +304,12 @@ class Perception:
                 if det is None:
                     det = self._from_plane(color, cent[i], area, int(ok.sum()))
                     if det is not None:
-                        det.shape = self._shape_of(None, blob)
+                        det.shape, conf, path = self._shape_conf(None, blob)
+                        if self.shape_diag:
+                            det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
                 why = self._reject(det, bins_first=include_bins)
+                if self.shape_diag and det is not None and det.shape_diag is not None:
+                    self._log_diag(det, why)
                 if why:
                     rejected.append((det, why))
                 else:
@@ -364,12 +376,44 @@ class Perception:
     def _shape_of(self, top_xy, blob, near_bin=False):
         """Shape label, or None (flags off / abstain). Delegates to `classify_top_face` and decides nothing itself;
         `near_bin` (top face possibly cut by the bin exclusion) only forces an abstain."""
+        return self._shape_conf(top_xy, blob, near_bin)[0]
+
+    def _shape_conf(self, top_xy, blob, near_bin=False):
+        """(label, conf, path): path is "off" / "abstain_near_bin" when decided here, else None (= the seam's)."""
         if not (self.classify_shape or self.triangle_pose):
-            return None
+            return None, 0.0, "off"
         if near_bin:
-            return None
+            return None, 0.0, "abstain_near_bin"
         shape = None if blob is None else blob.shape
-        return classify_top_face(top_xy, blob, shape)[0]
+        label, conf = classify_top_face(top_xy, blob, shape, use_blob=not self.no_blob_shape)
+        return label, float(conf), None
+
+    def _diag(self, det, source, top_xy, blob, conf, path, near_bin):
+        """Passive shape diagnostics (perception.shape_diag). Reads only; never changes det's fields."""
+        try:
+            _, _, info = classify_top_face_diag(top_xy, blob, None if blob is None else blob.shape,
+                                                use_blob=not self.no_blob_shape)
+        except Exception as e:   # diagnostics must never break detection
+            info = {"path": f"diag_error:{e!r}", "n_top": 0, "ratio_cloud": None, "ratio_blob": None}
+        if path is None:          # the seam decided: report the default classifier's path
+            path = info["path"]
+            if source == "plane" and path == "abstain_few_points":
+                path = "abstain_plane"
+        top_list = None
+        if top_xy is not None:
+            top_list = np.asarray(top_xy, float).reshape(-1, 2).tolist()
+        return {"source": source, "n_top": int(info["n_top"]), "ratio_cloud": info["ratio_cloud"],
+                "ratio_blob": info["ratio_blob"], "path": path, "label": det.shape, "conf": float(conf),
+                "near_bin": near_bin, "dz_top": float(det.top[2] - self.scene.counter_z), "top_xy": top_list}
+
+    def _log_diag(self, det, why=None):
+        g = det.shape_diag
+
+        def f(x, n=3):
+            return "None" if x is None else f"{x:.{n}f}"
+        self.log(f"[shape_diag] {det.color} src={g['source']} n_top={g['n_top']} r_cloud={f(g['ratio_cloud'])} "
+                 f"r_blob={f(g['ratio_blob'])} path={g['path']} label={g['label']} conf={g['conf']:.2f} "
+                 f"near_bin={g['near_bin']} dz_top={f(g['dz_top'], 4)}" + (f" rej={why}" if why else ""))
 
     def _from_depth(self, color, u, v, d, area, blob=None):
         P = self.cal.pixel_to_pelvis(self.cam, u, v, d)
@@ -382,7 +426,7 @@ class Perception:
         xy = (top[:, :2] * w[:, None]).sum(0) / w.sum()
         z = float(np.median(top[:, 2]))
         near_bin = self.near_bin_guard and self.classify_shape and self._near_bin(top)   # near-bin guard: abstain on shape only
-        shape = self._shape_of(top[:, :2], blob, near_bin)
+        shape, conf, path = self._shape_conf(top[:, :2], blob, near_bin)
         apex_yaw, apex_conf = None, 0.0
         if shape == "triangle" and self.triangle_pose:
             from .prism_pose import robust_center, triangle_pose
@@ -398,6 +442,9 @@ class Perception:
         det.shape = shape
         if apex_yaw is not None:
             det.apex_yaw, det.apex_conf = apex_yaw, apex_conf
+        if self.shape_diag:
+            nb = bool(near_bin) if (self.classify_shape and self.near_bin_guard) else _safe_near_bin(self, top)
+            det.shape_diag = self._diag(det, "depth", top[:, :2], blob, conf, path, nb)
         return det
 
     def _from_plane(self, color, uv, area, n_depth):
@@ -439,6 +486,14 @@ class Perception:
                 return f"in_bin:{name}"
         if bins_first and not lo <= h <= hi:
             return f"height {h:.2f} sizes"
+        return None
+
+
+def _safe_near_bin(perc, top):
+    """Diagnostics only: the near-bin test even when the guard is off (classify_shape false)."""
+    try:
+        return bool(perc._near_bin(top))
+    except Exception:
         return None
 
 

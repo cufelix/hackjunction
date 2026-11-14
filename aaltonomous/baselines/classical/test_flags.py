@@ -35,6 +35,18 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(cfg["profile"], "sim")      # applied on top of the sim profile
         self.assertEqual(cfg["motion"]["arm_max_vel"], load_config(overlay="none")["motion"]["arm_max_vel"])
 
+    def test_ab_overlays_flip_exactly_their_flags(self):
+        expect = {"ab_retry": {"policy.retry_pass"}, "ab_maxatt4": {"policy.max_attempts"},
+                  "ab_resolver": {"instruction.resolve"}, "ab_verify": {"policy.verify_placement"},
+                  "ab_triage": {"policy.time_triage", "policy.max_total_attempts"}}
+        for name, keys in expect.items():
+            cfg = load_config(overlay=name)
+            self.assertEqual(cfg["overlay"], name)
+            on = {k for k, _, is_on, _, _ in effective_flags(cfg) if is_on}
+            self.assertEqual(on, keys, name)
+        self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
+        self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
+
     def test_unknown_overlay_key_fails_loudly(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "typo.yaml"

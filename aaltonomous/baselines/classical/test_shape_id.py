@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 
-from .shape_id import SHAPE_MIN_POINTS, classify_top_face
+from .shape_id import SHAPE_MIN_POINTS, _ratio_blob, classify_top_face, classify_top_face_diag
 
 KINDS = ("cube", "cylinder", "triangle")
 
@@ -54,17 +54,37 @@ def test_cloud_path_wins_over_wrong_blob():
     assert lab == "triangle"
 
 
-def test_blob_path_all_shapes():
+def test_blob_alone_never_decides():
+    """No metric top face -> abstain, however clear the 2D blob (side faces make it lie: prism -> 'cylinder')."""
     for kind in KINDS:
         for size in (30, 40, 60):
             for rot in (0.0, 0.3, 0.785):
-                lab, conf = classify_top_face(None, _blob(kind, size, rot=rot), (120, 160))
+                assert classify_top_face(None, _blob(kind, size, rot=rot), (120, 160)) == (None, 0.0), (kind, size)
+
+
+def test_use_blob_restores_the_review_patch_blob_path():
+    """Integration flag perception.no_blob_shape OFF -> Perception passes use_blob=True: old 6f4cdbd behaviour."""
+    for kind in KINDS:
+        for size in (30, 40, 60):
+            for rot in (0.0, 0.3, 0.785):
+                lab, conf = classify_top_face(None, _blob(kind, size, rot=rot), (120, 160), use_blob=True)
                 assert lab == kind and conf > 0.3, (kind, size, rot, lab, conf)
-
-
-def test_few_points_fall_back_to_blob_or_abstain():
     few = _cloud("triangle", n=SHAPE_MIN_POINTS - 1)
-    assert classify_top_face(few, _blob("cube", 40), (120, 160))[0] == "cube"      # blob decides
+    assert classify_top_face(few, _blob("cube", 40), (120, 160), use_blob=True)[0] == "cube"
+    assert classify_top_face_diag(few, _blob("cube", 40), (120, 160), use_blob=True)[2]["path"] == "blob"
+
+
+def test_blob_ratio_helper_still_measures_shapes():
+    """_ratio_blob stays as a diagnostic: it still separates clean synthetic blobs."""
+    for kind, (lo, hi) in {"cube": (0.88, 1.1), "cylinder": (0.66, 0.88), "triangle": (0.3, 0.66)}.items():
+        r = _ratio_blob(_blob(kind, 40))
+        assert lo <= r < hi, (kind, r)
+
+
+def test_few_points_abstain_even_with_a_clear_triangle_blob():
+    few = _cloud("triangle", n=SHAPE_MIN_POINTS - 1)
+    assert classify_top_face(few, _blob("triangle", 40), (120, 160)) == (None, 0.0)
+    assert classify_top_face(few, _blob("cube", 40), (120, 160)) == (None, 0.0)
     assert classify_top_face(few) == (None, 0.0)                                   # nothing to decide with
     assert classify_top_face(None) == (None, 0.0)
     assert classify_top_face(np.full((100, 2), np.nan)) == (None, 0.0)
@@ -89,3 +109,22 @@ def test_confidence_low_near_a_threshold():
     q = p[(p[:, 0] + p[:, 1]) < (p[:, 0] + p[:, 1]).max() - 0.012]
     lab, conf = classify_top_face(q)
     assert conf < classify_top_face(p)[1]
+
+
+def test_diag_matches_seam_and_reports_path():
+    m = _blob("triangle", 40)
+    few = _cloud("triangle", n=SHAPE_MIN_POINTS - 1)
+    cases = [((_cloud("triangle"), m, (120, 160)), "metric"),
+             ((few, m, (120, 160)), "abstain_few_points"),
+             ((None, m, (120, 160)), "abstain_few_points"),
+             ((_cloud("cube"), _blob("cube", 40, shift=(70, 0)), (120, 160)), "abstain_border")]
+    for args, path in cases:
+        lab, conf, info = classify_top_face_diag(*args)
+        assert (lab, conf) == classify_top_face(*args)
+        assert set(info) == {"path", "n_top", "ratio_cloud", "ratio_blob"}
+        assert info["path"] == path, (path, info)
+    _, _, info = classify_top_face_diag(few, m, (120, 160))
+    assert info["n_top"] == SHAPE_MIN_POINTS - 1 and info["ratio_cloud"] is not None
+    assert 0.3 < info["ratio_blob"] < 0.66                       # measured, but not used
+    _, _, info = classify_top_face_diag(None)
+    assert info == {"path": "abstain_few_points", "n_top": 0, "ratio_cloud": None, "ratio_blob": None}

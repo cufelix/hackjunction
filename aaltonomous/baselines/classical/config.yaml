@@ -54,10 +54,13 @@ perception:
     min_axis_points: 35
     min_confidence: 0.30
   object_height: null         # null = scene.yaml size * height_ratio
-  classify_shape: false       # set Detection.shape from the 2D blob (prism_pose.classify_blob); single-shape scenes: that shape
+  classify_shape: false       # set Detection.shape from the metric top-face cloud (shape_id); no top face -> 2D blob, or None with no_blob_shape
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
   near_bin_guard: false       # FLAG (#7, Oliver). With classify_shape: abstain on shape (None) when the top face is
                               # within a bin footprint + margin + object size (face possibly cut by the bin exclusion)
+  shape_diag: false           # FLAG (Oliver). Passive: Detection.shape_diag + one [shape_diag] log line per detection
+  no_blob_shape: false        # FLAG (Oliver, f857054). With classify_shape: no metric top face -> abstain (None) instead of
+                              # the 2D-blob ratio (blob includes side faces: prism -> 'cylinder'). Off = blob fallback
 
 grasp:
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
@@ -175,6 +178,10 @@ policy:
   triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority
   shape_cost: {cube: 0, cylinder: 1, triangle: 2}
   time_margin_s: 0.0          # a plan must end this long before time_limit (applies with and without triage)
+  # Retry pass (default off): once per episode, when nothing is left but objects excluded by max_attempts are still
+  # detected, they get retry_extra_attempts more tries (failed/IK-skipped objects stay excluded). Normal time check.
+  retry_pass: false           # FLAG (#3, Oliver 40fb22a)
+  retry_extra_attempts: 2
   episode_summary_log: false  # FLAG (#3, Oliver). One passive log line per episode end (attempts/failed/too_long/started)
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES

@@ -12,9 +12,13 @@ flags:
   perception.classify_shape: false              # Oliver #5/#7 shape from the top face
   perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre
   perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)
+  perception.no_blob_shape: false               # Oliver     no top face -> no shape (never the 2D blob)
+  perception.shape_diag: false                  # Oliver     passive [shape_diag] log lines
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   policy.time_triage: false                     # Oliver #3  skip plans that do not fit, try the next object
   policy.max_total_attempts: null               # Oliver #3  e.g. 12; null = off
+  policy.max_attempts: 2                        # stock 2    tries per object
+  policy.retry_pass: false                      # Oliver #3  once-per-episode retry pass (retry_extra_attempts 2)
   policy.time_margin_s: 0.0                     # Oliver #3  e.g. 1.0; 0 = off
   policy.episode_summary_log: false             # Oliver #3  one log line per episode end
   policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
