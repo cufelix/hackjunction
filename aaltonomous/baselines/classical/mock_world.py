@@ -180,6 +180,8 @@ class RenderMockBackend(MockBackend):
         self._cache = None
 
     def reset_scene(self, layout, instruction):
+        if getattr(self, "n_objects", None) is not None:   # make_mock_env(n_objects=): fixed count, own rng
+            layout = fixed_count_layout(self.scene, self.n_objects, self.rng)
         super().reset_scene(layout, instruction)
         sc = self.scene
         self.objects = [{"color": c["color"], "shape": c.get("shape", "cube"), "yaw": c.get("yaw", 0.0), "size": sc.size,
@@ -236,8 +238,57 @@ class RenderMockBackend(MockBackend):
         return [self.scene.classify_cube(o["pos"], 0.0, o["color"], mapping) for o in self.objects]  # colour rule (rung 1)
 
 
-def make_mock_env(scene_path=None, seed=0, cfg=None, realtime=False, **backend_kw):
-    """AaltoEnv(backend="mock") with the render/grasp mock backend. scene_path overrides scene.yaml."""
+def _place_grid(rng, n, lo, hi, spacing, budget):
+    """n points in [lo, hi] (2-vectors, metres) with pairwise distance >= spacing, or None. Depth-first over a 1 cm
+    grid with jitter, candidates in random order, rounded to the 1 mm the layout is stored at."""
+    xs, ys = np.arange(lo[0], hi[0] + 1e-9, 0.01), np.arange(lo[1], hi[1] + 1e-9, 0.01)
+    grid = np.array([(x, y) for x in xs for y in ys])
+    pts, spent = [], [0]
+
+    def place(k):
+        if k == n:
+            return True
+        for i in rng.permutation(len(grid)):
+            spent[0] += 1
+            if spent[0] > budget:
+                return False
+            x, y = np.round(np.clip(grid[i] + rng.uniform(-0.003, 0.003, 2), lo, hi), 3)
+            if all(np.hypot(x - px, y - py) >= spacing for px, py in pts):
+                pts.append((x, y))
+                if place(k + 1):
+                    return True
+                pts.pop()
+        return False
+
+    return pts if place(0) else None
+
+
+def fixed_count_layout(scene, n, rng, attempts=50, budget=200000):
+    """n objects, mixed colours (as even as possible), spawn region and min spacing from the scene's layout block.
+    tasks.sample_layout's greedy placement fails for 6 objects in the stock strip (about half the seeds), so the
+    positions come from _place_grid (retried with fresh draws; the rng is the backend's, not the env's)."""
+    from aaltonomous.interface.tasks import COLORS, SHAPES
+    kw = scene.layout_kwargs()
+    (x0, x1), (y0, y1) = kw["region"]
+    pts = None
+    for _ in range(attempts):
+        pts = _place_grid(rng, n, np.array([x0, y0]), np.array([x1, y1]), kw["min_spacing"], budget)
+        if pts is not None:
+            break
+    if pts is None:
+        raise RuntimeError(f"could not place {n} objects with min_spacing {kw['min_spacing']} in the spawn region")
+    colors = [c for c in COLORS for _ in range(n // len(COLORS))]
+    colors += list(rng.permutation(COLORS)[: n - len(colors)])
+    colors = rng.permutation(colors)
+    yaw_lo, yaw_hi = kw["yaw_range"]
+    return [{"color": str(colors[i]), "x": float(x), "y": float(y),
+             "yaw": round(float(rng.uniform(yaw_lo, yaw_hi)), 3),
+             "shape": str(SHAPES[int(rng.integers(len(SHAPES)))])} for i, (x, y) in enumerate(pts)]
+
+
+def make_mock_env(scene_path=None, seed=0, cfg=None, realtime=False, n_objects=None, **backend_kw):
+    """AaltoEnv(backend="mock") with the render/grasp mock backend. scene_path overrides scene.yaml.
+    n_objects: fixed object count (mixed colours, same scene spawn region and spacing); None = scene.yaml n_cubes."""
     from aaltonomous.interface.env import AaltoEnv
     from .config import hand_postures, load_config
     from .kinematics import ArmKinematics
@@ -247,4 +298,13 @@ def make_mock_env(scene_path=None, seed=0, cfg=None, realtime=False, **backend_k
         env.scene = Scene.load(scene_path)
     env.backend = RenderMockBackend(env.scene, Calibration.load(), ArmKinematics(cfg), hand_postures(cfg),
                                     seed=seed, **backend_kw)
+    if n_objects is not None:   # the backend draws its own fixed-count layout on every reset (env.rng untouched)
+        env.backend.n_objects = int(n_objects)
+        reset = env.reset
+
+        def reset_fixed():
+            obs = reset()
+            env.layout = env.backend.layout
+            return obs
+        env.reset = reset_fixed
     return env
