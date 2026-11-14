@@ -111,8 +111,13 @@ _COLOUR = re.compile(rf"\b{_C}\b", re.I)
 _SPLIT = re.compile(r"\s*(?:[;,.:]|\band\b|\bwhile\b|\bbut\b)\s*", re.I)
 
 
+# A position word names the bin even when it is colour-named ("the orange box on the left": the real bins ARE
+# orange), so such a clause is kept for the resolver.
+_POS = re.compile(r"\b(?:left|right|centre|center|middle|leftmost|rightmost)\b", re.I)
+
+
 def _colour_bin_clause(clause: str) -> bool:
-    if not _CB.search(clause):
+    if not _CB.search(clause) or _POS.search(clause):
         return False
     return bool(_TO_CB.search(clause)) or len({c.lower() for c in _COLOUR.findall(clause)}) >= 2
 
@@ -120,14 +125,34 @@ def _colour_bin_clause(clause: str) -> bool:
 def drop_colour_bin_clauses(sentence: str) -> str:
     """Remove every clause that sends objects to a colour-named bin; unchanged when there is none."""
     parts = [p for p in _SPLIT.split(sentence) if p]
-    if not any(_colour_bin_clause(p) for p in parts):
+    kept = [p for p in parts if not _colour_bin_clause(p)]
+    if len(kept) == len(parts) or not kept:   # nothing left = the resolver's FIXED fallback: never worse than raw
         return sentence
-    return "; ".join(p for p in parts if not _colour_bin_clause(p))
+    return "; ".join(kept)
+
+
+# Ordinal bins counted from one side ("the third bin (left to right)", "second box from the right"): the resolver
+# would read the side word as the bin. Rewritten to the position; a bare ordinal without a side is left alone.
+_ORD = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2, "last": 2}
+_ORD_RE = re.compile(
+    rf"\b(first|1st|second|2nd|third|3rd|last)(?:\s+(?:one|{_B}))?\s*"
+    r"(?:\(\s*)?(?:counting\s+|when\s+counting\s+)?(?:(?:from\s+(?:the\s+)?|starting\s+(?:from|at)\s+the\s+)(left|right)"
+    r"|(left|right)\s+to\s+(?:the\s+)?(?:left|right))(?:\s+side)?(?:\s*\))?", re.I)
+_SIDE = ("left", "middle", "right")
+
+
+def _ord_sub(m: re.Match[str]) -> str:
+    i, side = _ORD[m.group(1).lower()], (m.group(2) or m.group(3)).lower()
+    return f"{_SIDE[i] if side == 'left' else _SIDE[2 - i]} bin"
+
+
+def rewrite_ordinal_bins(sentence: str) -> str:
+    return _ORD_RE.sub(_ord_sub, sentence)
 
 
 def normalize(sentence: str) -> str:
     """Map near-miss tokens onto the resolver's closed vocabulary, then drop colour-named-bin clauses."""
-    return drop_colour_bin_clauses(_WORD.sub(_fix, sentence))
+    return drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, sentence)))
 
 
 def _selfcheck() -> None:
