@@ -77,3 +77,5 @@ flags:
   brain.enabled: true   # brain  closed-set tool choice at look decisions (EV-gated, known bins protected)
   brain.backend: llamacpp   # brain  bounded async HTTP + GBNF; model = whatever the llama.cpp server loaded
   brain.url: http://127.0.0.1:8080/completion   # brain  single-container finals: the LLM runs inside the policy image
+  brain.timeout_s: 1.0   # brain  decision deadline (s)
+  brain.request_timeout_s: 1.0   # brain  llama.cpp HTTP deadline (s)

@@ -232,6 +232,7 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_counter"] = expect["finals_r22"] | {"calib.wide_counter_window", "planner.bin_wall_extra_m"}   # counter-z A/B
         expect["finals_r22_coloralias"] = expect["finals_r22"] | {"instruction.venue_colour_aliases"}   # T10 colour aliases A/B
         expect["finals_r22_lyingprism"] = expect["finals_r22"] | {"perception.prism_orientation", "grasp.lying_prism"}   # prism A/B
+        expect["finals_r22_brain"] = expect["finals_r22"] | {"brain.enabled", "brain.backend", "brain.timeout_s", "brain.request_timeout_s"}   # brain R22 at 1.0 s deadlines
         expect["finals_r22_lyingarm"] = expect["finals_r22_lyingprism"] | {"grasp.lying_prism_arm_by_reach"}   # T6 arm by reach A/B
         expect["finals_r22_softgrip"] = expect["finals_r22"] | {"grasp.soft_hand", "grasp.soft_squeeze",
                                                                  "held.soft_detector"}   # softgrip A/B: r22 + its 3 flags
@@ -251,11 +252,13 @@ class TestFlags(unittest.TestCase):
                   "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk",
                   "finals_r22_novel", "finals_r22_verify", "finals_r22_cage", "finals_r22_order", "finals_r22_done",
                   "finals_r22_langzip", "finals_r22_counter", "finals_r22_bare", "finals_r22_coloralias",
-                  "finals_r22_lyingprism", "finals_r22_lyingarm", "finals_r22_softgrip", "finals_r22_failopen", "finals_r22_rimz"):
+                  "finals_r22_lyingprism", "finals_r22_lyingarm", "finals_r22_softgrip", "finals_r22_failopen", "finals_r22_rimz",
+                  "finals_r22_brain"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_cage", "finals_r22_novel", "finals_r22_verify", "finals_r22_counter", "finals_r22_coloralias",
                   "finals_r22_order", "finals_r22_done", "finals_r22_softgrip", "finals_r22_langzip", "finals_r22_bare", "finals_r22_lyingprism",
-                  "finals_r22_lyingarm", "finals_r22_failopen", "finals_r22_rimz"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+                  "finals_r22_lyingarm", "finals_r22_failopen", "finals_r22_rimz",
+                  "finals_r22_brain"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
@@ -326,12 +329,13 @@ class TestFlags(unittest.TestCase):
                                       "finals_r21", "finals_r22", "finals_r22_bare",
                                       "finals_r22_brain", "finals_r22_cage", "finals_r22_cal",
                                       "finals_r22_chunk", "finals_r22_coloralias",
-                                      "finals_r22_counter", "finals_r22_done", "finals_r22_gate",
-                                      "finals_r22_grasp", "finals_r22_langzip",
-                                      "finals_r22_lyingarm", "finals_r22_lyingprism",
-                                      "finals_r22_novel", "finals_r22_order", "finals_r22_recall",
+                                      "finals_r22_counter", "finals_r22_done",
+                                      "finals_r22_failopen", "finals_r22_gate", "finals_r22_grasp",
+                                      "finals_r22_langzip", "finals_r22_lyingarm",
+                                      "finals_r22_lyingprism", "finals_r22_novel",
+                                      "finals_r22_order", "finals_r22_recall", "finals_r22_rimz",
                                       "finals_r22_softgrip", "finals_r22_verify", "finals_real",
-                                      "rc1", "rc1_strict", "safe_profile", "finals_r22_failopen", "finals_r22_rimz"})
+                                      "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 

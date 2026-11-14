@@ -29,6 +29,8 @@ flags:
   instruction.venue_colour_aliases: false       # T10 venue colour words EN/FI/CS, amber = orange (finals_r22_coloralias turns it on)
   brain.backend: stub
   brain.url: http://127.0.0.1:8080/completion
+  brain.timeout_s: 2.0                          # brain    stock config.yaml decision deadline (s)
+  brain.request_timeout_s: 1.5                  # brain    stock config.yaml llama.cpp HTTP deadline (s)
   brain.find: false
   brain.enabled: false                          # brain    off: closed-set tool choice (stub = classical), not in the submission
   policy.fixed_mapping: null                    # organisers P0: null = sim FIXED_MAPPING

@@ -36,6 +36,8 @@ FLAGS = {
     "brain.backend": ("brain", "stub", "stub (= classical choice) | llamacpp (bounded async HTTP + GBNF)"),
     "brain.url": ("brain", "http://127.0.0.1:8080/completion", "llama.cpp server for brain.backend=llamacpp"),
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),
+    "brain.timeout_s": ("brain", 2.0, "brain decision deadline (s); stock config.yaml brain.timeout_s"),
+    "brain.request_timeout_s": ("brain", 1.5, "brain llama.cpp HTTP deadline (s); stock config.yaml brain.request_timeout_s"),
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
     "calib.plane.apply_height": ("P0 table", False, "pre-motion runtime counter_z from N mutually consistent head-depth plane fits (spread/MAD gated, once per episode, clamped to +-max_dz_m); atomically shared by scene and planner keepouts before a checked staging route"),
     "scene.counter_z_prior": ("prior", None, "null | table height in the pelvis frame (m, 0..0.3) used while no depth plane fit is available (apply_height overrides); null = nominal scene.yaml z"),
@@ -407,6 +409,10 @@ def check_flag_values(cfg):
         raise ValueError("tape_value_cut S/V thresholds must be in [0, 255]")
     if not 0.0 <= float(tp.get("min_core_frac", 0.2)) <= 1.0 or float(tp.get("min_aspect", 3.0)) < 1.0:
         raise ValueError("invalid tape_value_cut core/aspect")
+    for k in ("brain.timeout_s", "brain.request_timeout_s"):
+        v = _get(cfg, k)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or v <= 0.0:
+            raise ValueError(f"{k} = {v!r}: want a finite float > 0")
     for k in ("policy.chunk_ticks", "policy.hold_ticks"):
         v = _get(cfg, k)
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
