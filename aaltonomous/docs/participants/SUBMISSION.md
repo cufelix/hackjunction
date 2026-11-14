@@ -104,7 +104,7 @@ python -m aaltonomous.deploy.runner --backend mock --container myteam/policy:v1 
 
 # 3. scored episodes + the sim gate in Isaac (cloud RTX instance, sim running; see the Quickstart)
 python -m aaltonomous.sim.evaluate --policy ws://localhost:8000 --team myteam --task sort_fixed --trials 20
-python -m aaltonomous.sim.evaluate --container myteam/policy:v1 --team myteam --task sort_language --trials 20
+python -m aaltonomous.sim.evaluate --container myteam/policy:v1 --policy ws://localhost:8000 --team myteam --task sort_language --trials 20
 #   exit code 0 = gate passed, 2 = failed; results in runs/eval/<name>_<task>_<variant>_<ts>/eval.json
 #   Inside the aalto-sim container there is no docker CLI: start your image on the host
 #   (docker run -d --gpus all -p 8000:8000 myteam/policy:v1) and use --policy ws://localhost:8000
