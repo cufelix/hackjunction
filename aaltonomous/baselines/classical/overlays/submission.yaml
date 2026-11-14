@@ -12,6 +12,7 @@ flags:
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
+  perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
   perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
   perception.classify_shape: true              # Oliver #5/#7 shape from the top face
   perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre

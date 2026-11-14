@@ -64,6 +64,22 @@ class Perception:
         self.scene = scene
         self.cal = calibration
         self.cam = self.cfg["camera"]
+        # perception.principal_point (Oliver lane 3): "file" = calibration.yaml K (stock, right for the real D435i);
+        # "center" = cx, cy at the image centre and fx = fy = mean, which is what Isaac renders: IsaacLab drops
+        # aperture offsets ("c_x and c_y will be half of width and height", utils/sensors.py).
+        # Perception gets its own shallow copy of the calibration, so every path (pixel_to_pelvis, project, the ray
+        # fallbacks) uses the same K and nothing outside perception changes.
+        if self.cfg.get("principal_point", "file") == "center":
+            import copy
+            import dataclasses
+            cam = calibration.cams[self.cam]
+            K = np.array(cam.K, float).copy()
+            f = 0.5 * (K[0, 0] + K[1, 1])
+            K[0, 0] = K[1, 1] = f
+            K[0, 2], K[1, 2] = cam.width / 2.0, cam.height / 2.0
+            self.cal = copy.copy(calibration)
+            self.cal.cams = dict(calibration.cams)
+            self.cal.cams[self.cam] = dataclasses.replace(cam, K=K)
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
