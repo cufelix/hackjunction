@@ -1,6 +1,7 @@
 # finals_r21 (R29): finals_r20 flags on rc6 code = gate fk_dilate 0 / near_margin 0, footprint->colour fallback, first-look wait, bin_vote pitch_T, sat_floor, fixed_mapping.
 name: finals_r21
 flags:
+  hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)

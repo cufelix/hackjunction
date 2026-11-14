@@ -2,6 +2,7 @@
 # cand_r16 remains the sim overlay and keeps its Isaac-centred principal point.
 name: finals_real
 flags:
+  hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
   instruction.resolve: true
   policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)
   policy.insert_guard: true

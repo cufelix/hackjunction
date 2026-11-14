@@ -159,6 +159,8 @@ class TestFlags(unittest.TestCase):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for n in ("finals_r20", "finals_r21"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
+        for n in [k for k in expect if k.startswith("finals_")]:
+            expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -182,6 +184,8 @@ class TestFlags(unittest.TestCase):
         sim["overlay"] = real["overlay"]
         sim["perception"]["principal_point"] = "file"
         sim["policy"]["fixed_mapping"] = real["policy"]["fixed_mapping"]   # organisers P0
+        self.assertTrue(real["hand"]["mirror_index_middle"])
+        sim["hand"]["mirror_index_middle"] = True                          # R42a
         self.assertEqual(real, sim)
 
         calibration = Calibration.load()

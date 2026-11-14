@@ -1,6 +1,7 @@
 # finals_r18: FINALS CANDIDATE = cand_r18 + instruction.normalize (typo/synonym/colour names + T-BOX). After H2: change ONLY the arm_vel_cap line (sweep winner) / drop a flag that lost.
 name: finals_r18
 flags:
+  hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)
