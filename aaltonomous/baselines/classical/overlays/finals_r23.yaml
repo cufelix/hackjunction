@@ -75,7 +75,8 @@ flags:
   policy.generation_workers: true               # H7: reset invalidates look workers immediately; stale generations never publish
   grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort
   profile_auto.auto_detect: true
+  policy.fixed_instruction_first: true   # sort_fixed: instruction beats the venue map only when it maps every colour
   perception.gate_below_bins: true   # r23 candidate
   instruction.structured: true   # r23 candidate
   instruction.hazard_guard: true   # r23 candidate
-  profile_auto.sim_overrides: {bin.vote.enabled: false, calib.plane.apply_height: false, grasp.held_calibration.enabled: false, grasp.held_detector: stall, grasp.release_confirm: false, grasp.release_wait_s: null, hand.mirror_index_middle: false, motion.arm_vel_cap: null, motion.output_caps: null, perception.online_pitch_cal: false, policy.fixed_mapping: null, scene.counter_z_prior: null}  # sim only (rc1 values): X8 add-one losers round 1 (6) + round 2 mild losers (6); real robot keeps r22
+  profile_auto.sim_overrides: {bin.vote.enabled: false, calib.plane.apply_height: false, grasp.held_calibration.enabled: false, grasp.held_detector: stall, grasp.release_confirm: false, grasp.release_wait_s: null, hand.mirror_index_middle: false, motion.arm_vel_cap: null, motion.output_caps: null, perception.online_pitch_cal: false, policy.fixed_mapping: null, scene.counter_z_prior: null, policy.fixed_instruction_first: false}  # sim only (rc1 values): X8 add-one losers round 1 (6) + round 2 mild losers (6); real robot keeps r22

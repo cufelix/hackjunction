@@ -357,6 +357,20 @@ class ClassicalPolicy:
         except Exception as e:
             self.log(f"[fixed_mapping] conflict check failed ({e})")
 
+    def _instruction_fixed(self, info, venue):
+        """sort_fixed with policy.fixed_instruction_first: the instruction's mapping when it names a valid bin for
+        EVERY venue colour, else None (venue). NEVER raises: any error falls back to the venue map."""
+        try:
+            parsed = self._instruction_mapping(info) or {}
+            if venue and all(parsed.get(c) in ("left", "center", "right") for c in venue):
+                given = {c: parsed[c] for c in venue}
+                self.log(f"[fixed_mapping] instruction resolves all colours, using it: {given}")
+                return given
+            return None
+        except Exception as e:
+            self.log(f"[fixed_mapping] instruction-first failed ({e}), using venue")
+            return None
+
     def _episode_mapping(self, info):
         """Return (mapping, insert_guard_mapping) for one reset without touching motion/perception state."""
         # Episode mapping precedence is explicit and task-scoped. A reset-supplied mapping is authoritative; otherwise
@@ -364,7 +378,11 @@ class ClassicalPolicy:
         given = info.get("mapping")
         if not given and info.get("task") == "sort_fixed":
             given = dict(self.fixed_mapping)
-            self._log_fixed_conflict(info, given)
+            first = (self.cfg.get("policy") or {}).get("fixed_instruction_first", False) and self._instruction_fixed(info, given)
+            if first:
+                given = first
+            else:
+                self._log_fixed_conflict(info, given)
         guarded = None if given else self._insert_guard_mapping(info)
         resolved = None if given or guarded else self._instruction_mapping(info)
         legacy = dict(FIXED_MAPPING) if not (self.cfg.get("instruction") or {}).get("resolve", False) else {"default": None}
