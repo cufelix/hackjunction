@@ -1,0 +1,3326 @@
+{
+ "colours_found_in_detections": {
+  "yellow": 4266,
+  "blue": 14888,
+  "red": 4162
+ },
+ "alias": "orange<->red, purple<->blue, yellow=yellow",
+ "sanity": "colour-agnostic reimplementation reproduces e1_fair_recall headline, per-class and FP census exactly on all 33 arm dirs (a_r21_rc6 195/538 = 0.362; repro_submission 321/538 = 0.597)",
+ "n_visible_gt": 538,
+ "arms": [
+  {
+   "arm": "ab/a2_r21_recalltree",
+   "agnostic": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "ab/a_r21_rc6",
+   "agnostic": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "ab/b_r22_recall",
+   "agnostic": {
+    "n": 538,
+    "matched": 139,
+    "recall": 0.258,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 28,
+      "recall": 0.452
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 26,
+      "recall": 0.329
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 9,
+      "recall": 0.08
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 32,
+      "recall": 0.17
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 44,
+      "recall": 0.458
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 2152,
+     "other": 33,
+     "phantom": 819
+    },
+    "fp_total": 3004,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "blue": 2949,
+     "yellow": 13,
+     "red": 42
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 136,
+    "recall": 0.253,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 25,
+      "recall": 0.403
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 26,
+      "recall": 0.329
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 9,
+      "recall": 0.08
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 32,
+      "recall": 0.17
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 44,
+      "recall": 0.458
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 2152,
+     "other": 33,
+     "phantom": 822
+    },
+    "fp_total": 3007,
+    "wrong_colour": 6,
+    "wrong_colour_pairs": {
+     "orange-cube->blue": 3,
+     "orange-cube->yellow": 2,
+     "orange-prism->blue": 1
+    },
+    "fp_by_colour": {
+     "blue": 2951,
+     "yellow": 15,
+     "red": 41
+    }
+   },
+   "drop": -0.005
+  },
+  {
+   "arm": "ab/d1_sat_floor_adaptive",
+   "agnostic": {
+    "n": 538,
+    "matched": 194,
+    "recall": 0.361,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 147,
+     "other": 37,
+     "phantom": 79
+    },
+    "fp_total": 263,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 256,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 190,
+    "recall": 0.353,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 147,
+     "other": 37,
+     "phantom": 83
+    },
+    "fp_total": 267,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 256,
+     "red": 5
+    }
+   },
+   "drop": -0.008
+  },
+  {
+   "arm": "ab/d2_area_floor_geometric",
+   "agnostic": {
+    "n": 538,
+    "matched": 137,
+    "recall": 0.255,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 27,
+      "recall": 0.435
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 26,
+      "recall": 0.329
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 8,
+      "recall": 0.071
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 32,
+      "recall": 0.17
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 44,
+      "recall": 0.458
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 284,
+     "other": 0,
+     "phantom": 18
+    },
+    "fp_total": 302,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 3,
+     "blue": 292,
+     "red": 7
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 135,
+    "recall": 0.251,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 25,
+      "recall": 0.403
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 26,
+      "recall": 0.329
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 8,
+      "recall": 0.071
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 32,
+      "recall": 0.17
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 44,
+      "recall": 0.458
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 284,
+     "other": 0,
+     "phantom": 20
+    },
+    "fp_total": 304,
+    "wrong_colour": 2,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 2
+    },
+    "fp_by_colour": {
+     "yellow": 5,
+     "blue": 292,
+     "red": 7
+    }
+   },
+   "drop": -0.004
+  },
+  {
+   "arm": "ab/d3_topface_whole_blob",
+   "agnostic": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "ab/d4_partial_ok_near_hand",
+   "agnostic": {
+    "n": 538,
+    "matched": 196,
+    "recall": 0.364,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 43,
+      "recall": 0.694
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 1910,
+     "other": 0,
+     "phantom": 523
+    },
+    "fp_total": 2433,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 13,
+     "blue": 2379,
+     "red": 41
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 1910,
+     "other": 0,
+     "phantom": 528
+    },
+    "fp_total": 2438,
+    "wrong_colour": 7,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4,
+     "orange-cube->blue": 2,
+     "orange-prism->blue": 1
+    },
+    "fp_by_colour": {
+     "yellow": 17,
+     "blue": 2381,
+     "red": 40
+    }
+   },
+   "drop": -0.009
+  },
+  {
+   "arm": "ab/d5_relook_before_done",
+   "agnostic": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "ab/repro_submission",
+   "agnostic": {
+    "n": 538,
+    "matched": 321,
+    "recall": 0.597,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 51,
+      "recall": 0.823
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 30,
+      "recall": 0.38
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 57,
+      "recall": 0.504
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 131,
+      "recall": 0.697
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 52,
+      "recall": 0.542
+     }
+    },
+    "fp": {
+     "tape": 28,
+     "bin_wall": 80,
+     "hand": 767,
+     "other": 40,
+     "phantom": 654
+    },
+    "fp_total": 1569,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "red": 133,
+     "blue": 1390,
+     "yellow": 46
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 319,
+    "recall": 0.593,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 51,
+      "recall": 0.823
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 30,
+      "recall": 0.38
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 57,
+      "recall": 0.504
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 129,
+      "recall": 0.686
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 52,
+      "recall": 0.542
+     }
+    },
+    "fp": {
+     "tape": 28,
+     "bin_wall": 80,
+     "hand": 767,
+     "other": 40,
+     "phantom": 657
+    },
+    "fp_total": 1572,
+    "wrong_colour": 10,
+    "wrong_colour_pairs": {
+     "orange-cube->blue": 4,
+     "yellow-cube->blue": 3,
+     "yellow-cylinder->blue": 1,
+     "yellow-cube->red": 1,
+     "orange-prism->blue": 1
+    },
+    "fp_by_colour": {
+     "red": 132,
+     "blue": 1395,
+     "yellow": 45
+    }
+   },
+   "drop": -0.004
+  },
+  {
+   "arm": "ab/x1_no_colorgate",
+   "agnostic": {
+    "n": 538,
+    "matched": 282,
+    "recall": 0.524,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 44,
+      "recall": 0.71
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 103,
+      "recall": 0.548
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 22,
+     "bin_wall": 55,
+     "hand": 1027,
+     "other": 37,
+     "phantom": 539
+    },
+    "fp_total": 1680,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 33,
+     "blue": 1552,
+     "red": 95
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 270,
+    "recall": 0.502,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 39,
+      "recall": 0.629
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 97,
+      "recall": 0.516
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 22,
+     "bin_wall": 55,
+     "hand": 1027,
+     "other": 37,
+     "phantom": 552
+    },
+    "fp_total": 1693,
+    "wrong_colour": 17,
+    "wrong_colour_pairs": {
+     "yellow-cube->red": 5,
+     "orange-cube->yellow": 4,
+     "orange-cube->blue": 3,
+     "yellow-cube->blue": 3,
+     "yellow-cylinder->red": 1,
+     "yellow-cylinder->blue": 1
+    },
+    "fp_by_colour": {
+     "yellow": 36,
+     "blue": 1557,
+     "red": 100
+    }
+   },
+   "drop": -0.022
+  },
+  {
+   "arm": "ab/x2_no_hueguard",
+   "agnostic": {
+    "n": 538,
+    "matched": 218,
+    "recall": 0.405,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 51,
+      "recall": 0.823
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 69,
+      "recall": 0.367
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 50,
+      "recall": 0.521
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 12
+    },
+    "fp_total": 128,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "blue": 116,
+     "red": 9,
+     "yellow": 3
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 218,
+    "recall": 0.405,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 51,
+      "recall": 0.823
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 69,
+      "recall": 0.367
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 50,
+      "recall": 0.521
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 12
+    },
+    "fp_total": 128,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "blue": 116,
+     "red": 9,
+     "yellow": 3
+    }
+   },
+   "drop": 0.0
+  },
+  {
+   "arm": "ab/x3_hsv_robust",
+   "agnostic": {
+    "n": 538,
+    "matched": 187,
+    "recall": 0.348,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 41,
+      "recall": 0.661
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 24,
+      "recall": 0.304
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 58,
+      "recall": 0.309
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 44,
+      "recall": 0.458
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "blue": 116,
+     "yellow": 2,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 183,
+    "recall": 0.34,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 37,
+      "recall": 0.597
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 24,
+      "recall": 0.304
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 58,
+      "recall": 0.309
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 44,
+      "recall": 0.458
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "blue": 116,
+     "yellow": 6,
+     "red": 5
+    }
+   },
+   "drop": -0.008
+  },
+  {
+   "arm": "ab/x4_hsv_robust_no_hueguard",
+   "agnostic": {
+    "n": 538,
+    "matched": 220,
+    "recall": 0.409,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 51,
+      "recall": 0.823
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 70,
+      "recall": 0.372
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 51,
+      "recall": 0.531
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 9
+    },
+    "fp_total": 125,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "blue": 116,
+     "red": 5,
+     "yellow": 4
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 220,
+    "recall": 0.409,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 51,
+      "recall": 0.823
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 70,
+      "recall": 0.372
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 51,
+      "recall": 0.531
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 9
+    },
+    "fp_total": 125,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "blue": 116,
+     "red": 5,
+     "yellow": 4
+    }
+   },
+   "drop": 0.0
+  },
+  {
+   "arm": "ab/x5_r22bisect_no_cg",
+   "agnostic": {
+    "n": 538,
+    "matched": 323,
+    "recall": 0.6,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 52,
+      "recall": 0.839
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 30,
+      "recall": 0.38
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 131,
+      "recall": 0.697
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 52,
+      "recall": 0.542
+     }
+    },
+    "fp": {
+     "tape": 26,
+     "bin_wall": 77,
+     "hand": 1027,
+     "other": 40,
+     "phantom": 563
+    },
+    "fp_total": 1733,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "red": 135,
+     "blue": 1553,
+     "yellow": 45
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 321,
+    "recall": 0.597,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 52,
+      "recall": 0.839
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 30,
+      "recall": 0.38
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 129,
+      "recall": 0.686
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 52,
+      "recall": 0.542
+     }
+    },
+    "fp": {
+     "tape": 26,
+     "bin_wall": 77,
+     "hand": 1027,
+     "other": 40,
+     "phantom": 566
+    },
+    "fp_total": 1736,
+    "wrong_colour": 8,
+    "wrong_colour_pairs": {
+     "orange-cube->blue": 3,
+     "yellow-cube->blue": 3,
+     "yellow-cylinder->blue": 1,
+     "yellow-cube->red": 1
+    },
+    "fp_by_colour": {
+     "red": 135,
+     "blue": 1557,
+     "yellow": 44
+    }
+   },
+   "drop": -0.003
+  },
+  {
+   "arm": "ab/x6_no_fkmask",
+   "agnostic": {
+    "n": 538,
+    "matched": 193,
+    "recall": 0.359,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 41,
+      "recall": 0.661
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 226,
+     "other": 0,
+     "phantom": 9
+    },
+    "fp_total": 235,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "blue": 227,
+     "red": 6,
+     "yellow": 2
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 190,
+    "recall": 0.353,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 226,
+     "other": 0,
+     "phantom": 13
+    },
+    "fp_total": 239,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "blue": 227,
+     "yellow": 6,
+     "red": 6
+    }
+   },
+   "drop": -0.006
+  },
+  {
+   "arm": "ab/x7_no_satfloor",
+   "agnostic": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 125,
+     "other": 19,
+     "phantom": 14
+    },
+    "fp_total": 158,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 3,
+     "blue": 150,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 125,
+     "other": 19,
+     "phantom": 18
+    },
+    "fp_total": 162,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 150,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "gf/base",
+   "agnostic": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "gf/both",
+   "agnostic": {
+    "n": 538,
+    "matched": 264,
+    "recall": 0.491,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 88,
+      "recall": 0.468
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 12,
+     "bin_wall": 40,
+     "hand": 119,
+     "other": 0,
+     "phantom": 9
+    },
+    "fp_total": 180,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 3,
+     "blue": 126,
+     "red": 51
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 260,
+    "recall": 0.483,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 88,
+      "recall": 0.468
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 12,
+     "bin_wall": 40,
+     "hand": 119,
+     "other": 0,
+     "phantom": 13
+    },
+    "fp_total": 184,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 126,
+     "red": 51
+    }
+   },
+   "drop": -0.008
+  },
+  {
+   "arm": "gf/both2",
+   "agnostic": {
+    "n": 538,
+    "matched": 299,
+    "recall": 0.556,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 117,
+      "recall": 0.622
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 53,
+      "recall": 0.552
+     }
+    },
+    "fp": {
+     "tape": 12,
+     "bin_wall": 3,
+     "hand": 119,
+     "other": 0,
+     "phantom": 10
+    },
+    "fp_total": 144,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 4,
+     "blue": 125,
+     "red": 15
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 295,
+    "recall": 0.548,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 117,
+      "recall": 0.622
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 53,
+      "recall": 0.552
+     }
+    },
+    "fp": {
+     "tape": 12,
+     "bin_wall": 3,
+     "hand": 119,
+     "other": 0,
+     "phantom": 14
+    },
+    "fp_total": 148,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 8,
+     "blue": 125,
+     "red": 15
+    }
+   },
+   "drop": -0.008
+  },
+  {
+   "arm": "gf/ws",
+   "agnostic": {
+    "n": 538,
+    "matched": 264,
+    "recall": 0.491,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 88,
+      "recall": 0.468
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 12,
+     "bin_wall": 40,
+     "hand": 119,
+     "other": 0,
+     "phantom": 9
+    },
+    "fp_total": 180,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 3,
+     "blue": 126,
+     "red": 51
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 260,
+    "recall": 0.483,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 88,
+      "recall": 0.468
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 12,
+     "bin_wall": 40,
+     "hand": 119,
+     "other": 0,
+     "phantom": 13
+    },
+    "fp_total": 184,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 126,
+     "red": 51
+    }
+   },
+   "drop": -0.008
+  },
+  {
+   "arm": "gf/ws2",
+   "agnostic": {
+    "n": 538,
+    "matched": 264,
+    "recall": 0.491,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 88,
+      "recall": 0.468
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 12,
+     "bin_wall": 3,
+     "hand": 119,
+     "other": 0,
+     "phantom": 9
+    },
+    "fp_total": 143,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 3,
+     "blue": 125,
+     "red": 15
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 260,
+    "recall": 0.483,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 29,
+      "recall": 0.367
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 58,
+      "recall": 0.513
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 88,
+      "recall": 0.468
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 12,
+     "bin_wall": 3,
+     "hand": 119,
+     "other": 0,
+     "phantom": 13
+    },
+    "fp_total": 147,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 125,
+     "red": 15
+    }
+   },
+   "drop": -0.008
+  },
+  {
+   "arm": "gf/yf",
+   "agnostic": {
+    "n": 538,
+    "matched": 211,
+    "recall": 0.392,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 69,
+      "recall": 0.367
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 53,
+      "recall": 0.552
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 207,
+    "recall": 0.385,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 69,
+      "recall": 0.367
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 53,
+      "recall": 0.552
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "gf/yf2",
+   "agnostic": {
+    "n": 538,
+    "matched": 211,
+    "recall": 0.392,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 69,
+      "recall": 0.367
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 53,
+      "recall": 0.552
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 207,
+    "recall": 0.385,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 69,
+      "recall": 0.367
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 53,
+      "recall": 0.552
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "nb/base",
+   "agnostic": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "nb/e06",
+   "agnostic": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 123,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 191,
+    "recall": 0.355,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 38,
+      "recall": 0.613
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 27,
+      "recall": 0.342
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 116,
+     "other": 0,
+     "phantom": 11
+    },
+    "fp_total": 127,
+    "wrong_colour": 4,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 4
+    },
+    "fp_by_colour": {
+     "yellow": 6,
+     "blue": 116,
+     "red": 5
+    }
+   },
+   "drop": -0.007
+  },
+  {
+   "arm": "nb/m015",
+   "agnostic": {
+    "n": 538,
+    "matched": 201,
+    "recall": 0.374,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 45,
+      "recall": 0.726
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 31,
+      "recall": 0.392
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 60,
+      "recall": 0.319
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 46,
+      "recall": 0.479
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 132,
+     "other": 0,
+     "phantom": 26
+    },
+    "fp_total": 158,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 5,
+     "blue": 132,
+     "red": 21
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 199,
+    "recall": 0.37,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 43,
+      "recall": 0.694
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 31,
+      "recall": 0.392
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 60,
+      "recall": 0.319
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 46,
+      "recall": 0.479
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 132,
+     "other": 0,
+     "phantom": 28
+    },
+    "fp_total": 160,
+    "wrong_colour": 2,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 2
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 132,
+     "red": 21
+    }
+   },
+   "drop": -0.004
+  },
+  {
+   "arm": "nb/m03",
+   "agnostic": {
+    "n": 538,
+    "matched": 226,
+    "recall": 0.42,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 54,
+      "recall": 0.684
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 61,
+      "recall": 0.324
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 49,
+      "recall": 0.51
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 145,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 152,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 5,
+     "blue": 144,
+     "red": 3
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 223,
+    "recall": 0.414,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 40,
+      "recall": 0.645
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 54,
+      "recall": 0.684
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 61,
+      "recall": 0.324
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 145,
+     "other": 0,
+     "phantom": 10
+    },
+    "fp_total": 155,
+    "wrong_colour": 3,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 2,
+     "yellow-cylinder->red": 1
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 144,
+     "red": 4
+    }
+   },
+   "drop": -0.006
+  },
+  {
+   "arm": "nb/m045",
+   "agnostic": {
+    "n": 538,
+    "matched": 215,
+    "recall": 0.4,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 46,
+      "recall": 0.742
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 39,
+      "recall": 0.494
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 62,
+      "recall": 0.33
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 149,
+     "other": 0,
+     "phantom": 3
+    },
+    "fp_total": 152,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 2,
+     "blue": 148,
+     "red": 2
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 210,
+    "recall": 0.39,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 41,
+      "recall": 0.661
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 39,
+      "recall": 0.494
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 62,
+      "recall": 0.33
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 149,
+     "other": 0,
+     "phantom": 8
+    },
+    "fp_total": 157,
+    "wrong_colour": 5,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 5
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 148,
+     "red": 2
+    }
+   },
+   "drop": -0.01
+  },
+  {
+   "arm": "nb/m06",
+   "agnostic": {
+    "n": 538,
+    "matched": 201,
+    "recall": 0.374,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 47,
+      "recall": 0.758
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 144,
+     "other": 0,
+     "phantom": 2
+    },
+    "fp_total": 146,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 1,
+     "blue": 143,
+     "red": 2
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 195,
+    "recall": 0.362,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 41,
+      "recall": 0.661
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 144,
+     "other": 0,
+     "phantom": 8
+    },
+    "fp_total": 152,
+    "wrong_colour": 6,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 6
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 143,
+     "red": 2
+    }
+   },
+   "drop": -0.012
+  },
+  {
+   "arm": "nb/m10",
+   "agnostic": {
+    "n": 538,
+    "matched": 198,
+    "recall": 0.368,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 44,
+      "recall": 0.71
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 138,
+     "other": 0,
+     "phantom": 2
+    },
+    "fp_total": 140,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 1,
+     "blue": 137,
+     "red": 2
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 196,
+    "recall": 0.364,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 42,
+      "recall": 0.677
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 138,
+     "other": 0,
+     "phantom": 4
+    },
+    "fp_total": 142,
+    "wrong_colour": 2,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 2
+    },
+    "fp_by_colour": {
+     "yellow": 3,
+     "blue": 137,
+     "red": 2
+    }
+   },
+   "drop": -0.004
+  },
+  {
+   "arm": "nb/x03_03",
+   "agnostic": {
+    "n": 538,
+    "matched": 226,
+    "recall": 0.42,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 43,
+      "recall": 0.694
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 54,
+      "recall": 0.684
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 61,
+      "recall": 0.324
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 48,
+      "recall": 0.5
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 145,
+     "other": 0,
+     "phantom": 7
+    },
+    "fp_total": 152,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 5,
+     "blue": 144,
+     "red": 3
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 223,
+    "recall": 0.414,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 41,
+      "recall": 0.661
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 54,
+      "recall": 0.684
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 20,
+      "recall": 0.177
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 61,
+      "recall": 0.324
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 145,
+     "other": 0,
+     "phantom": 10
+    },
+    "fp_total": 155,
+    "wrong_colour": 3,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 2,
+     "yellow-cylinder->red": 1
+    },
+    "fp_by_colour": {
+     "yellow": 7,
+     "blue": 144,
+     "red": 4
+    }
+   },
+   "drop": -0.006
+  },
+  {
+   "arm": "nb/x06_06",
+   "agnostic": {
+    "n": 538,
+    "matched": 196,
+    "recall": 0.364,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 43,
+      "recall": 0.694
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 144,
+     "other": 0,
+     "phantom": 2
+    },
+    "fp_total": 146,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 1,
+     "blue": 143,
+     "red": 2
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 194,
+    "recall": 0.361,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 41,
+      "recall": 0.661
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 144,
+     "other": 0,
+     "phantom": 4
+    },
+    "fp_total": 148,
+    "wrong_colour": 2,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 2
+    },
+    "fp_by_colour": {
+     "yellow": 3,
+     "blue": 143,
+     "red": 2
+    }
+   },
+   "drop": -0.003
+  },
+  {
+   "arm": "nb/x06_10",
+   "agnostic": {
+    "n": 538,
+    "matched": 196,
+    "recall": 0.364,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 43,
+      "recall": 0.694
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 144,
+     "other": 0,
+     "phantom": 2
+    },
+    "fp_total": 146,
+    "wrong_colour": 0,
+    "wrong_colour_pairs": {},
+    "fp_by_colour": {
+     "yellow": 1,
+     "blue": 143,
+     "red": 2
+    }
+   },
+   "colour_aware": {
+    "n": 538,
+    "matched": 194,
+    "recall": 0.361,
+    "per_class": {
+     "orange-cube": {
+      "n": 62,
+      "matched": 41,
+      "recall": 0.661
+     },
+     "orange-prism": {
+      "n": 79,
+      "matched": 28,
+      "recall": 0.354
+     },
+     "purple-cube": {
+      "n": 113,
+      "matched": 19,
+      "recall": 0.168
+     },
+     "yellow-cube": {
+      "n": 188,
+      "matched": 59,
+      "recall": 0.314
+     },
+     "yellow-cylinder": {
+      "n": 96,
+      "matched": 47,
+      "recall": 0.49
+     }
+    },
+    "fp": {
+     "tape": 0,
+     "bin_wall": 0,
+     "hand": 144,
+     "other": 0,
+     "phantom": 4
+    },
+    "fp_total": 148,
+    "wrong_colour": 2,
+    "wrong_colour_pairs": {
+     "orange-cube->yellow": 2
+    },
+    "fp_by_colour": {
+     "yellow": 3,
+     "blue": 143,
+     "red": 2
+    }
+   },
+   "drop": -0.003
+  }
+ ]
+}
