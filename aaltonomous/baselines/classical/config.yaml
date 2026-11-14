@@ -112,6 +112,8 @@ perception:
   bin_pixel_margin: 0.004     # pixels whose 3D point is inside a bin footprint (+ margin) are dropped before grouping
   object_size: null           # null = scene.yaml objects.size (grasp width)
   principal_point: file      # FLAG (Oliver lane 3): file | center (sim renders cx,cy at the image centre)
+  sim_center_principal_point: false  # FLAG: use centred intrinsics only when profile=sim; real always keeps the file calibration
+  aim_z_frac: 0.25           # FLAG: no-depth blob ray aims at z_top - aim_z_frac*object_height
   inject_cam_error: null      # FLAG (TEST ONLY). [dpitch_deg, dyaw_deg, dx, dy, dz]: head T_pelvis_optical is rotated about
                               # its own position (pitch about pelvis y, + = nose down; then yaw about z) and translated (m,
                               # pelvis frame) before perception uses it. null = off
@@ -240,6 +242,16 @@ perception:
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
                               # 94/120 orange pieces merged with a neighbour) at distance-transform peaks
+  split_by_solidity: false    # FLAG: compact blobs stay single; non-solid/elongated blobs in the area window force a split
+  split_by_solidity_params: {solidity: 0.82, max_aspect: 2.0, area_px: [520, 15500], min_part_px: 520}
+  tape_value_cut: false       # FLAG: thin orange candidates need a sufficiently large high-S/high-V core
+  tape_value_cut_params: {min_s: 140, min_v: 140, min_core_frac: 0.20, min_aspect: 3.0, max_thickness_px: 18}
+  gate_below_bins: false      # FLAG: untrusted live bins use the observed bin/tape mass instead of nominal projected geometry
+  gate_below_bins_params: {h_max: 17, s_min: 77, v_min: 50, object_s_min: 140, object_v_min: 150,
+                           open_px: 5, min_component_px: 2000, min_mass_px: 18000, margin_px: 3, trusted_bin_conf: 0.5}
+  reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
+  still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
+  still_vote_params: {n_frames: 3, min_hits: 2, match_m: 0.02}
   # FLAG (Felix gate). perception.color_gate: post-filter at the end of detect(), default OFF. Rejects speckle below
   # area_frac * (fx * 0.045 / Z)^2 px (no Z: min_px_no_z); blobs over a bin or within edge_m of its edge (a rim blob
   # is kept only as a depth top face edge_h above the counter); top_k by n_px when > max_cands survive (degraded);
@@ -247,7 +259,8 @@ perception:
   # 1b: n_px > max_area_frac * expected (no Z: > max_px_no_z) = rim / tape / merged blob. 2b: positive workspace, pelvis
   # x in ws_x, |y| <= ws_abs_y, in front of the bin row near edge - ws_edge_m (OpenCode E1 audit: 426 -> 0 bin-zone FP).
   # Near-edge blobs without depth are kept; with depth kept only at object height edge_h (rim = 0.06 m is not).
-  color_gate: {enabled: false, fk_mask: false, fk_dilate_px: 0, live_bins: false, near_margin_m: 0.0, area_frac: 0.4, min_px_no_z: 1000,
+  color_gate: {enabled: false, fk_mask: false, fk_silhouette: false, fk_dilate_px: 0,
+               live_bins: false, near_margin_m: 0.0, area_frac: 0.4, min_px_no_z: 1000,
                max_area_frac: 3.0, max_px_no_z: 6000, ws_x: [0.12, 0.45], ws_abs_y: 0.40, ws_edge_m: 0.01,
                edge_m: 0.02, edge_h: [0.03, 0.055], max_cands: 6,
                sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}}   # sat_floor: median S (0-255) over the blob

@@ -75,6 +75,8 @@ FLAGS = {
     "perception.hue_guard.enabled": ("hue guard", False, "robust_v2 band 22-24 + per-frame: adjacent red|yellow pair closer than min_gap_deg -> abstain (color_conf 0.3, off the bins)"),
     "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),
     "perception.principal_point": ("Oliver lane 3", "file", "file | center: Isaac renders cx,cy at the image centre"),
+    "perception.sim_center_principal_point": ("gate fix", False, "use centred camera intrinsics only under the sim profile"),
+    "perception.aim_z_frac": ("gate fix", 0.25, "no-depth centroid ray aims this object-height fraction below z_top"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
     "perception.assoc_radius_m": ("finals grasp", 0.06, "same-colour detection-to-retry association radius across frames"),
     "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = tight confident per-bin vote; prior/disagree/missing confidence -> nominal-to-near-margin union"),
@@ -87,6 +89,13 @@ FLAGS = {
     "perception.topface_mode": ("recall P0", "top35", "top35 | whole_blob: whole-blob hue vote when the brightest-35% subset is too small"),
     "perception.partial_ok_near_hand": ("recall P0", False, "retain sub-floor blobs touching the FK arm/hand-mask boundary as tentative; policy must re-observe before picking"),
     "perception.relook_before_done": ("recall P0", False, "before nothing-left, retract to home, wait for fresh frames, and run one final relaxed detection"),
+    "perception.split_by_solidity": ("gate fix", False, "classify compact blobs as single objects and force-split merged geometry"),
+    "perception.tape_value_cut": ("gate fix", False, "reject thin orange candidates without a strong S/V core"),
+    "perception.gate_below_bins": ("gate fix", False, "when live bins are untrusted, gate candidates below observed bin mass in image space"),
+    "perception.reject_log": ("gate fix", False, "log and retain per-colour rejection-stage counts"),
+    "perception.still_vote": ("gate fix", False, "non-blocking N-frame vote over policy-declared still frames"),
+    "perception.color_gate.fk_silhouette": ("gate fix", False, "fill one projected polygon per FK arm/hand link before dilation"),
+    "perception.color_gate.sat_floor_params.blue": ("gate fix", 110, "blue/purple saturation floor variant"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
@@ -326,6 +335,34 @@ def check_flag_values(cfg):
         for key, maximum in hard.items():
             if float(caps[key]) > maximum:
                 raise ValueError(f"motion.output_caps.{key} = {caps[key]} exceeds finals cap {maximum}")
+    p = cfg.get("perception") or {}
+    for key in ("sim_center_principal_point", "split_by_solidity", "tape_value_cut", "gate_below_bins",
+                "reject_log", "still_vote"):
+        if not isinstance(p.get(key), bool):
+            raise ValueError(f"perception.{key}: want true or false")
+    aim = p.get("aim_z_frac", 0.25)
+    if isinstance(aim, bool) or not isinstance(aim, (int, float)) or not np.isfinite(aim) or not 0.0 <= aim <= 1.0:
+        raise ValueError(f"perception.aim_z_frac = {aim!r}: want a finite fraction in [0, 1]")
+    sv = p.get("still_vote_params") or {}
+    n, k = sv.get("n_frames", 3), sv.get("min_hits", 2)
+    if (not isinstance(n, int) or isinstance(n, bool) or not 3 <= n <= 5 or
+            not isinstance(k, int) or isinstance(k, bool) or not 1 <= k <= n):
+        raise ValueError("perception.still_vote_params needs integer 3 <= n_frames <= 5 and 1 <= min_hits <= n_frames")
+    match = sv.get("match_m", 0.02)
+    if isinstance(match, bool) or not isinstance(match, (int, float)) or not np.isfinite(match) or match <= 0:
+        raise ValueError("perception.still_vote_params.match_m must be finite and positive")
+    sp = p.get("split_by_solidity_params") or {}
+    area = sp.get("area_px", [520, 15500])
+    if not (isinstance(area, (list, tuple)) and len(area) == 2 and
+            all(isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in area) and area[0] <= area[1]):
+        raise ValueError("perception.split_by_solidity_params.area_px needs two increasing positive integers")
+    if not 0.0 <= float(sp.get("solidity", 0.82)) <= 1.0 or float(sp.get("max_aspect", 2.0)) < 1.0:
+        raise ValueError("invalid split_by_solidity solidity/aspect")
+    tp = p.get("tape_value_cut_params") or {}
+    if any(not 0.0 <= float(tp.get(key, default)) <= 255.0 for key, default in (("min_s", 140), ("min_v", 140))):
+        raise ValueError("tape_value_cut S/V thresholds must be in [0, 255]")
+    if not 0.0 <= float(tp.get("min_core_frac", 0.2)) <= 1.0 or float(tp.get("min_aspect", 3.0)) < 1.0:
+        raise ValueError("invalid tape_value_cut core/aspect")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
@@ -437,7 +474,7 @@ def _check_color_gate(cfg):
             return
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or v < lo:
             raise ValueError(f"perception.color_gate.{k} = {v!r}: want a finite number >= {lo}")
-    for k in ("area_frac", "min_px_no_z", "edge_m", "near_margin_m"):
+    for k in ("area_frac", "min_px_no_z", "edge_m", "near_margin_m", "fk_dilate_px"):
         num(k)
     dilate = g.get("fk_dilate_px")
     if isinstance(dilate, bool) or not isinstance(dilate, int) or dilate < 0:
@@ -454,6 +491,11 @@ def _check_color_gate(cfg):
             raise ValueError(f"perception.color_gate.{k} = {v!r}: want [lo, hi] finite, lo <= hi")
     if g.get("ws_x") is not None and g.get("ws_abs_y") is None:
         raise ValueError("perception.color_gate.ws_x needs ws_abs_y")
+    if not isinstance(g.get("fk_dilate_px"), int) or isinstance(g.get("fk_dilate_px"), bool):
+        raise ValueError("perception.color_gate.fk_dilate_px needs an integer")
+    for key, value in (g.get("sat_floor_params") or {}).items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 255.0:
+            raise ValueError(f"perception.color_gate.sat_floor_params.{key} must be in [0, 255]")
 
 
 EXPECTED_FLAGS = OVERLAY_DIR / "EXPECTED_FLAGS.json"  # written by tools/promote.sh; baked into the image with overlays/

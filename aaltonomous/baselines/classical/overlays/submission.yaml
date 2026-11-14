@@ -32,6 +32,8 @@ flags:
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
   perception.hue_guard.enabled: false           # tech lead  per-frame orange/yellow hue judge (hue_guard.py); OFF until its A/B
   perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
+  perception.sim_center_principal_point: false # centred intrinsics only for the sim profile
+  perception.aim_z_frac: 0.25                  # no-depth centroid-ray aim below the object top
   perception.online_pitch_cal: false            # Timi pitch per-episode optical-x fit from orange far rims
   perception.hand_calibration.enabled: false    # Oliver     head-camera 6-DOF pose from the arms (ICP vs FK)
   perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
@@ -57,6 +59,13 @@ flags:
   perception.depth_blob_recover: false          # P0 perception depth-supported recall recovery; OFF until real-frame A/B
   perception.split_blobs: true                 # real colour  split touching same-colour objects
   perception.assoc_radius_m: 0.06              # finals grasp same-colour retry association across frames
+  perception.color_gate.fk_silhouette: false    # filled per-link FK silhouette
+  perception.color_gate.sat_floor_params.blue: 110
+  perception.split_by_solidity: false          # compact-single test and forced split for merged geometry
+  perception.tape_value_cut: false             # S/V plus thin-geometry tape rejection
+  perception.gate_below_bins: false            # image-space bin-mass gate when live geometry is untrusted
+  perception.reject_log: false                 # per-colour rejection-stage diagnostics
+  perception.still_vote: false                 # non-blocking vote across still frames
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
   grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)
