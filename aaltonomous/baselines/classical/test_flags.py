@@ -27,9 +27,11 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(on, {"instruction.resolve", "policy.bin_lookup", "grasp.close_posture", "hand.closed_tight",
                               "grasp.point_in_palm", "motion.close_hold_s", "perception.classify_shape",
                               "perception.hsv_set", "perception.split_blobs", "policy.grasp_diag_log",
-                              "grasp.close_posture_by_shape", "grasp.posture_apex_gate"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
+                              "grasp.close_posture_by_shape", "grasp.posture_apex_gate",
+                              "policy.insert_guard"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
         sub["instruction"]["resolve"] = False
         sub["policy"]["bin_lookup"] = "colour"
+        sub["policy"]["insert_guard"] = stock["policy"]["insert_guard"]   # rung 3 only: abstain (0 instead of -1)
         for k in ("close_posture", "point_in_palm"):                       # pinch_v1 grasp (Modal 60/82 vs 52/82)
             sub["grasp"][k] = stock["grasp"][k]
         sub["hand"]["closed_tight"] = stock["hand"]["closed_tight"]
