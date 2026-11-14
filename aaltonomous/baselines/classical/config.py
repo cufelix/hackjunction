@@ -50,6 +50,7 @@ FLAGS = {
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
+    "brain.planner": ("brain", False, "whole-instruction closed-set primitive plan for resolver abstention/relations"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
     "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner and hold the last trusted target (before trust, return no action until one complete finite encoder frame); non-finite head_depth -> 0 (missing)"),
@@ -114,6 +115,8 @@ FLAGS = {
     "perception.novel_objects": ("novel R22", False, "depth connected components above the counter -> conservative open-vocabulary object candidates"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
+    "perception.prism_orientation": ("prism orient", False, "Detection.prism_orientation standing|lying from the footprint fill + top-band strip (+ height when it differs); lying -> shape triangle, ridge_yaw, prism_xy"),
+    "grasp.lying_prism": ("prism orient", False, "lying prism (needs perception.prism_orientation): jaw closes across the ridge (hand heading = ridge +- 90 deg), grasp at the triangle-section centroid height, configured close posture"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
@@ -505,6 +508,13 @@ def check_flag_values(cfg):
     if not (np.isfinite(vmax) and vmax > 0.0 and np.isfinite(held) and held >= 0.4
             and np.isfinite(timeout) and timeout > held):
         raise ValueError("grasp.held_calibration needs velocity > 0, hold >= 0.4 s, timeout > hold")
+    if not 0.0 < float(g.get("lying_yaw_tol_deg", 10.0)) <= 45.0:
+        raise ValueError("grasp.lying_yaw_tol_deg must be in (0, 45]")
+    pp = (cfg.get("perception") or {}).get("prism_orientation_params") or {}
+    if not 0.5 < float(pp.get("fill_min", 0.75)) < 1.0:
+        raise ValueError("perception.prism_orientation_params.fill_min must be in (0.5, 1)")
+    if pp.get("length_m") is not None and not 0.01 <= float(pp["length_m"]) <= 0.2:
+        raise ValueError("perception.prism_orientation_params.length_m must be null or 0.01-0.2 m")
     for key in ("generic_shape_min_conf", "generic_min_confidence"):
         if not 0.0 <= float(g.get(key, 0.5)) <= 1.0:
             raise ValueError(f"grasp.{key} must be in [0, 1]")
