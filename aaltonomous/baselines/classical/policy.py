@@ -275,6 +275,17 @@ class ClassicalPolicy:
             self.log(f"insert_guard failed ({e})")
             return None
 
+    def _log_fixed_conflict(self, info, used):
+        """Logging only: sort_fixed ignores the instruction sentence. Say so when the sentence names a different mapping.
+        NEVER raises and never changes `used` (the mapping the episode runs with)."""
+        try:
+            parsed = self._instruction_mapping(info) or {}
+            said = {k: v for k, v in parsed.items() if k != "default" and v}
+            if said and any(used.get(k) != v for k, v in said.items()):
+                self.log(f"[fixed_mapping] conflict: instruction says {said}, using venue {used}")
+        except Exception as e:
+            self.log(f"[fixed_mapping] conflict check failed ({e})")
+
     def _episode_mapping(self, info):
         """Return (mapping, insert_guard_mapping) for one reset without touching motion/perception state."""
         # Episode mapping precedence is explicit and task-scoped. A reset-supplied mapping is authoritative; otherwise
@@ -282,6 +293,7 @@ class ClassicalPolicy:
         given = info.get("mapping")
         if not given and info.get("task") == "sort_fixed":
             given = dict(self.fixed_mapping)
+            self._log_fixed_conflict(info, given)
         guarded = None if given else self._insert_guard_mapping(info)
         resolved = None if given or guarded else self._instruction_mapping(info)
         legacy = dict(FIXED_MAPPING) if not (self.cfg.get("instruction") or {}).get("resolve", False) else {"default": None}
