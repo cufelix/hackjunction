@@ -1,4 +1,4 @@
-# finals_r23_candidate: # r23 candidate: r22 + gate_below_bins; structured/hazard_guard to add after Codex; NOT release until sim A/B + 0 bin FPs
+# finals_r23_candidate: # r23 candidate: r22 + gate_below_bins + instruction.structured + instruction.hazard_guard (Timi decision); NOT release until sim A/B + 0 bin FPs
 name: finals_r23_candidate
 flags:
   hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
@@ -75,3 +75,5 @@ flags:
   policy.generation_workers: true               # H7: reset invalidates look workers immediately; stale generations never publish
   grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort
   perception.gate_below_bins: true   # r23 candidate
+  instruction.structured: true   # r23 candidate
+  instruction.hazard_guard: true   # r23 candidate

@@ -64,6 +64,7 @@ FLAGS = {
     "instruction.multilingual": ("multilingual", False, "closed-grammar FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK instructions -> cached English canonical form before resolve; unsupported foreign input stays unparsed (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "instruction.structured": ("langzip", False, "complete deterministic zip/colon/positional/conditional lists before the strict filter (needs instruction.resolve + strict)"),
+    "instruction.hazard_guard": ("bugsweep", False, "abstain on contradictory destinations, unsupported conditionals, scoped complements and misspelled control words (needs instruction.structured)"),
     "instruction.venue_colour_aliases": ("T10 coloralias", False, "venue colour words (purple/violet/lilac/lavender/magenta, orange/amber/tangerine, yellow/gold, FI/CS red+blue and inflections) named before normalize; amber = orange (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
     "policy.generation_workers": ("H7", False, "generation-tagged look workers compute on an episode snapshot; reset invalidates immediately and never waits for stale work"),

@@ -288,6 +288,7 @@ class ClassicalPolicy:
         try:                                        # the WHOLE body, not just the resolve call
             instruction_cfg = self.cfg.get("instruction") or {}
             strict = instruction_cfg.get("strict", False)
+            hazard_guard = bool(instruction_cfg.get("hazard_guard", False))
             if not instruction_cfg.get("resolve", False):
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
@@ -308,14 +309,14 @@ class ClassicalPolicy:
                 from .normalize import normalize
                 if strict and (self.cfg.get("instruction") or {}).get("structured", False):
                     from .normalize import structured_normalize
-                    text = structured_normalize(text)
+                    text = structured_normalize(text, hazard_guard=hazard_guard)
                 else:
                     text = normalize(text)
             if strict:                              # never guess: abstain (Felix strict)
                 from .normalize import strict_mapping
                 if (self.cfg.get("instruction") or {}).get("structured", False):
                     from .normalize import structured_final
-                    return structured_final(text)   # structured grammars, complement / scope / amber rules, then strict
+                    return structured_final(text, hazard_guard=hazard_guard)  # structured grammars then strict hazards
                 return strict_mapping(text, resolve(text, fallback={}))
             return resolve(text, fallback={}) or {"default": None}
         except Exception as e:                      # a parse bug must not cost the whole episode
@@ -3291,28 +3292,24 @@ class ClassicalPolicy:
 
     # ------------------------------------------------------------------ brain (policy.brain)
     def _resolver_mapping(self, info, guarded=None):
-        """Mapping opinions that may bind the brain: explicit reset mapping, the fixed task, or keys actually parsed
-        by the resolver. The classical fallback remains unchanged but is not presented as an opinion for open vocab."""
+        """The finalized planner mapping is the brain guard's sole parser opinion.
+
+        reset() has already applied aliases, multilingual canonicalization, normalization, structured parsing and
+        strict filtering to self.mapping. Re-running the raw resolver here would let the brain override those results.
+        """
         if self.brain is None:
             return {}, "disabled"
         try:
+            parsed = dict(self.mapping or {})
             if (info or {}).get("mapping"):
-                return dict(info["mapping"]), "explicit"
+                return parsed, "explicit"
             if guarded:
-                return dict(guarded), "insert_guard"
+                return parsed, "insert_guard"
             if (info or {}).get("task") == "sort_fixed":
-                return dict(self.mapping), "fixed"
-            if not (self.cfg.get("instruction") or {}).get("resolve", False):
-                return {}, "unresolved"
-            from .brain.planner import MAX_INSTRUCTION_CHARS
-            if len(str((info or {}).get("instruction") or "")) > MAX_INSTRUCTION_CHARS:
-                return {}, "unresolved"                     # bounded like _instruction_mapping
-            if (self.cfg.get("instruction") or {}).get("strict", False):   # brain authority == the strict mapping
-                strict = self._instruction_mapping(info)
-                return (dict(strict), "strict") if strict else ({}, "unresolved")
-            from .instruction import resolve
-            parsed = resolve(str(self._cap_text((info or {}).get("instruction") or "")), fallback={}) or {}
-            return dict(parsed), "resolver" if parsed else "unresolved"
+                return parsed, "fixed"
+            source = ("resolver" if any(value in ("left", "center", "right") for value in parsed.values())
+                      else "unresolved")
+            return parsed, source
         except Exception:
             return {}, "unresolved"
 
@@ -3326,7 +3323,7 @@ class ClassicalPolicy:
 
     @staticmethod
     def _resolver_abstains(mapping):
-        return not bool(mapping)
+        return not any(value in ("left", "center", "right") for value in (mapping or {}).values())
 
     def _brain_ids(self, dets):
         """Stable object ids across looks: a detection takes the id of the nearest same-colour registry entry

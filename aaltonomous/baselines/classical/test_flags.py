@@ -245,7 +245,8 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_order"] = expect["finals_r22"] | {"policy.score_order"}   # EV/s pick order A/B
         expect["finals_r22_done"] = expect["finals_r22"] | {
             "policy.done_confirm", "perception.look_timeout_s", "planner.per_target_guard"}   # done hardening A/B
-        expect["finals_r22_langzip"] = expect["finals_r22"] | {"instruction.structured"}   # langzip A/B
+        expect["finals_r22_langzip"] = expect["finals_r22"] | {
+            "instruction.structured", "instruction.hazard_guard"}   # langzip + conservative parser hazards A/B
         expect["finals_r22_counter"] = expect["finals_r22"] | {"calib.wide_counter_window", "planner.bin_wall_extra_m"}   # counter-z A/B
         expect["finals_r22_coloralias"] = expect["finals_r22"] | {"instruction.venue_colour_aliases"}   # T10 colour aliases A/B
         expect["finals_r22_lyingprism"] = expect["finals_r22"] | {"perception.prism_orientation", "grasp.lying_prism"}   # prism A/B
@@ -262,7 +263,7 @@ class TestFlags(unittest.TestCase):
                                                            "brain.image_max_side_px", "brain.find_n_predict"}
         expect["finals_r22_neutral"] = expect["finals_r22"] | {"perception.neutral_obstacles"}   # Oliver neutral A/B
         expect["finals_r22_bins"] = expect["finals_r22"] | {"perception.bins_from_image"}   # rim-mask A/B
-        expect["finals_r23_candidate"] = expect["finals_r22"] | {"perception.gate_below_bins"}   # r23 candidate: r22 + gate_below_bins
+        expect["finals_r23_candidate"] = expect["finals_r22"] | {"perception.gate_below_bins", "instruction.structured", "instruction.hazard_guard"}   # r23 candidate: r22 + gate_below_bins + structured + hazard_guard
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
