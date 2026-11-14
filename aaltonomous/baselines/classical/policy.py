@@ -38,7 +38,7 @@ from .kinematics import ArmKinematics
 from .perception import Perception
 from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
 from .safety_shell import reserve_pair, reserve_plan
-from .brain import BrainLayer, build_world
+from .brain import BrainLayer, PlanLayer, build_world, instruction_needs_plan
 from .brain.find import FindClient, extract_queries, match_found
 
 HZ = 30.0
@@ -92,6 +92,8 @@ class ClassicalPolicy:
         if self._shell:   # policy.safety_shell: all heavy work off the 30 Hz loop (look/plan thread), plans within the reserve
             threaded = True
             self._shell_init()
+        if (self.cfg.get("brain") or {}).get("enabled") and (self.cfg.get("brain") or {}).get("planner"):
+            threaded = True     # brain.planner: plan validation runs IK dry runs; keep them off the act thread
         self.threaded = threaded
         if threaded:  # pure-Python planning holds the GIL: hand it back to act() sooner (default 5 ms)
             sys.setswitchinterval(min(sys.getswitchinterval(), 0.001))
@@ -99,6 +101,8 @@ class ClassicalPolicy:
         self.log = log or (lambda *a: None)
         bc = self.cfg.get("brain") or {}
         self.brain = BrainLayer(bc, log=self.log) if bc.get("enabled", False) else None   # FLAG brain.enabled
+        self.plan_brain = (PlanLayer(bc, backend=self.brain.backend, log=self.log)
+                           if self.brain is not None and bc.get("planner", False) else None)   # FLAG brain.planner
         self.reset()
 
     # ------------------------------------------------------------------ API
@@ -165,6 +169,13 @@ class ClassicalPolicy:
         self._brain_reg, self._brain_n, self._last_pick = [], 0, None
         if self.brain is not None:
             self.brain.reset()
+        if self.plan_brain is not None:
+            self.plan_brain.reset()
+        self._planner_needed = (self.plan_brain is not None and
+                                instruction_needs_plan(self._instruction, self._brain_abstain))
+        self._planner_place_cache = {}
+        self._planner_pending = None
+        self._planner_execution = None
         self.time_limit = info.get("time_limit", self.time_limit)
         self._resolve_time_alias()
         self.state = "init"
@@ -547,6 +558,22 @@ class ClassicalPolicy:
             else:
                 res = self._look(obs)
             return self._after_look(res, t)
+        if self.state == "planner_wait":
+            # brain.planner: the whole-plan request/validation polls while HOLD chunks run at 30 Hz
+            dets, verify = self._planner_pending
+            if self.threaded:
+                if self._job is None:
+                    self._job = {"obs": obs, "result": None}
+                    threading.Thread(target=self._choose_job, args=(self._job, dets, verify), daemon=True).start()
+                if self._job["result"] is None:
+                    return self._hold()
+                res, self._job = self._job["result"], None
+            else:
+                res = self._choose(dets, obs, verify)
+            if res[0] == "planner_pending":
+                return self._hold()
+            self._planner_pending = None
+            return self._after_look(res, t)
         if self.state == "await":
             d, self._decision = self._decision, None
             if d == "go":
@@ -598,12 +625,14 @@ class ClassicalPolicy:
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
             dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs))
             self.last_detections = dets
+            self._planner_observe(dets, obs)
             return self._choose_retry(dets, obs, verify=False)
         dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
                                                    **self._detect_kw(), **self._fk_kw(obs))
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
+        self._planner_observe(dets, obs)
         corrections = self._review_bins(bin_dets)
 
         # A known wrong-bin object is the largest score swing, so repair it before
@@ -936,8 +965,24 @@ class ClassicalPolicy:
             return stop
         cands, extra = self._ordered_cands(dets, obs, verify)
         triage = bool(pol.get("time_triage", False))
-        forced = None   # (det, bin, variant) from the brain (brain.enabled)
-        if self.brain is not None:
+        forced = None   # (det, bin, variant, table_xy) from the brain or the whole-plan planner
+        planner_forced = False
+        if self._planner_needed:   # brain.planner (default off): a whole-instruction plan replaces the brain override
+            sel = self._planner_select(cands, dets, obs)
+            if sel is None and self.plan_brain.steps is None and self.plan_brain.req.status == "pending":
+                return ("planner_pending", dets, verify)
+            if sel is None and self.plan_brain.replans and self.plan_brain.steps is None:
+                return ("none", None, len(dets))        # failed replan: fail closed, do not improvise
+            if sel is not None:
+                kind, d0, b0, var, table_xy = sel
+                if kind == "look":
+                    return ("relook", None, len(dets))
+                if kind in ("done", "stop"):
+                    return ("none", None, len(dets))
+                if kind in ("pick", "place"):
+                    cands = [d0] + [d for d in cands if d is not d0]
+                    forced, planner_forced = (d0, b0, var, table_xy), True
+        elif self.brain is not None:
             sel = self._brain_select(cands, dets, obs)
             if sel is not None:
                 kind, d0, b0, var = sel
@@ -950,32 +995,57 @@ class ClassicalPolicy:
                     cands = [d for d in cands if d is not d0]
                 elif kind in ("pick", "retry"):
                     cands = [d0] + [d for d in cands if d is not d0]
-                    forced = (d0, b0, var)
+                    forced = (d0, b0, var, None)
         left = self.time_limit - t - self._time_reserve(corrective=False)
         n_long, shortest = 0, None
         cap_s, over_cap = None, []
         if self._dflag("object_time_cap"):   # D2: per-object cap (remaining - 15 s) / objects left, 15..35 s
             cap_s = dec.object_cap(self.time_limit - t, len(cands) - len(extra) or len(cands), self._dcfg())
+
+        def planner_fail(reason):
+            """The forced primitive cannot run: one async re-plan, or fail closed (never a classical guess)."""
+            self._planner_failed(dets, reason, obs)
+            return ("planner_pending", dets, verify) if self.plan_brain.req.status == "pending" \
+                else ("none", None, len(dets))
+
         for d in cands:
+            mine = forced is not None and d is forced[0]
+            fp = mine and planner_forced
             if triage:  # a plan that did not fit before cannot fit now (time only runs out; plans start from home)
                 rad = pol["same_object_radius"]
                 if any(np.linalg.norm(d.top[:2] - p) < rad and dur > left for p, dur in self.too_long):
+                    if fp:
+                        return planner_fail("no time left for this primitive")
                     n_long += 1
                     continue
             others = [o.top[:2] for o in dets if o is not d]
-            mine = forced is not None and d is forced[0]
             target_bin = forced[1] if mine else self._bin_of(d)
+            table_xy = forced[3] if mine else None
             pfn = self._variant_plan_fn(forced[2]) if mine else None
-            if target_bin is None:
+            if target_bin is None and table_xy is None:
                 continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
-            if not self._place_gate_allows(d, target_bin):
+            if table_xy is None and not self._place_gate_allows(d, target_bin):
+                if fp:
+                    return planner_fail("placement gate")
                 continue
-            if verify:  # #6: explicit target bin + a free, verified drop slot
+            if table_xy is not None:   # brain.planner place_at: dry-run was done when the plan was validated
+                ids_now = self._brain_ids(dets)
+                dmap_now = {ids_now[i]: obj for i, obj in enumerate(dets)}
+                oid_now = next((oid for oid, obj in dmap_now.items() if obj is d), None)
+                ok_place, why_place, _ = self._planner_place_at(dmap_now, dets, oid_now, table_xy)
+                p = self._planner_place_cache.pop(
+                    (id(d), round(float(table_xy[0]), 4), round(float(table_xy[1]), 4)), None)
+                if not ok_place or p is None:
+                    p = Plan(False, color=d.color, target_bin="counter",
+                             reason=why_place or "place_at dry-run failed")
+            elif verify:  # #6: explicit target bin + a free, verified drop slot
                 slot = self._next_drop_slot(target_bin)
                 if slot is None:
                     slot = next(iter(self._overflow_slots(target_bin)), None)
                 if slot is None:
                     self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
+                    if fp:
+                        return planner_fail("no free drop slot")
                     continue
                 p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
             elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
@@ -984,6 +1054,8 @@ class ClassicalPolicy:
                 slot = free[0] if free else next(iter(self._overflow_slots(target_bin)), None)
                 if slot is None:
                     self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
+                    if fp:
+                        return planner_fail("no free drop slot")
                     continue
                 p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
             elif mine:   # brain override: the classical planner still checks reach
@@ -992,24 +1064,39 @@ class ClassicalPolicy:
                 p = self._plan_pick(d, dict(obstacles=others))
             self.plans.append(p)
             if p.ok and not self._object_time_allows(d, p.duration):
+                if fp:
+                    return planner_fail("object time budget")
                 continue
             if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
                 self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")
+                if fp:
+                    return planner_fail("no time for the extra try")
                 continue
             if p.ok and cap_s is not None and p.duration > cap_s:
+                if fp:
+                    return planner_fail(f"plan {p.duration:.1f} s exceeds the object time cap")
                 over_cap.append(p)   # too slow for its share of the time: try the next object, this one is the fallback
                 self.log(f"[time_cap] {d.color} plan {p.duration:.1f} s > cap {cap_s:.1f} s: trying the next candidate")
                 continue
             if p.ok:
                 if triage and p.duration > left:  # feasible but too slow for the time left: try the next candidate
+                    if fp:
+                        return planner_fail(f"plan {p.duration:.1f} s exceeds the time left")
                     self.too_long.append((d.top[:2], p.duration))
                     n_long += 1
                     shortest = p if shortest is None or p.duration < shortest.duration else shortest
                     self.log(f"[classical] {d.color} takes {p.duration:.1f} s > {left:.1f} s left: trying the next candidate")
                     continue
+                if fp:   # the primitive is now executing: the next settled look confirms it (_planner_observe)
+                    call = self.plan_brain.next_call()
+                    self._planner_execution = {"call": call, "source_xy": np.asarray(d.top[:2], float).copy(),
+                                               "color": d.color,
+                                               "table_xy": None if table_xy is None else np.asarray(table_xy, float).copy()}
                 return ("plan", p, len(dets))
             self.failed.append(d.top[:2])
             self.log(f"[classical] skip {d}: {p.reason}")
+            if fp:
+                return planner_fail(p.reason)
         if over_cap:   # nothing within the cap: the quickest over-cap plan beats leaving points on the counter
             best = min(over_cap, key=lambda q: q.duration)
             if not triage or best.duration <= left:
@@ -1472,6 +1559,183 @@ class ClassicalPolicy:
         y = "n/a" if yaw is None else f"{np.degrees(yaw):.0f}"
         return f"({xy[0]:+.3f},{xy[1]:+.3f}) yaw={y} {posture}"
 
+    # ---------------------------------------------------------- whole-plan brain
+    def _choose_job(self, job, dets, verify):
+        _lower_thread_priority()
+        try:
+            job["result"] = self._choose(dets, job["obs"], verify)
+        except Exception as e:
+            job["result"] = ("error", repr(e))
+
+    def _planner_select(self, cands, dets, obs):
+        """Return one validated plan primitive, or None so classical behaviour continues unchanged."""
+        try:
+            if self.mapping.get("default") == "abstain" and len(self.mapping) == 1:
+                return None                 # policy.insert_guard: pick nothing, no plan (as _brain_select)
+            ids = self._brain_ids(dets)
+            dmap = {ids[i]: d for i, d in enumerate(dets)}
+            world = self._brain_world(dets, ids, None)
+            for o in world["objects"]:
+                d = dmap[o["id"]]
+                o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
+            world["table_region"] = self._planner_table_region()
+            world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            classical_has_work = any(self._lookup(d) is not None for d in cands)
+
+            if not self.plan_brain.requested:
+                self.plan_brain.request(world)        # first scene: async episode prefetch, never blocks act()
+            if self.cfg["brain"].get("debug_wait", False):
+                self.plan_brain.wait(float(self.cfg["brain"].get("plan_timeout_s", 2.0)))
+
+            def reach(oid, bin_name):
+                p = self.planner.plan(dmap[oid], self.arm_cmd, self.hand_cmd, bin_name=bin_name, relocate=False,
+                                      obstacles=[d.top[:2] for d in dets if d is not dmap[oid]])
+                return p.ok, p.reason
+
+            def place(oid, xy, virtual_xy=None):
+                return self._planner_place_at(dmap, dets, oid, xy, virtual_xy)
+
+            steps = self.plan_brain.take(
+                world, reach_fn=reach, place_fn=place,
+                find_enabled=bool(self.cfg["brain"].get("find", False)),
+                classical_has_work=classical_has_work,
+            )
+            if steps is None:
+                return None
+            while True:
+                call = self.plan_brain.next_call()
+                for skipped in self.plan_brain.skipped_ids:
+                    dskip = dmap.get(skipped)
+                    if dskip is not None and not any(np.linalg.norm(dskip.top[:2] - f) <
+                                                     self.cfg["policy"]["same_object_radius"] for f in self.failed):
+                        self.failed.append(np.asarray(dskip.top[:2], float).copy())
+                if call is None:
+                    return ("stop", None, None, None, None) if self.plan_brain.adopted else None
+                tool, a = call["tool"], call["args"]
+                if tool == "skip":
+                    d = dmap.get(a["obj_id"])
+                    if d is not None:
+                        self.failed.append(np.asarray(d.top[:2], float).copy())
+                    self.plan_brain.mark("ok", "left on table")
+                    continue
+                if tool == "find":
+                    try:
+                        found = [ids[i] for i in self._brain_find(a["description"], obs, dets)]
+                        self.log(f"[planner] find({a['description']!r}) -> {found}")
+                        self.plan_brain.mark("ok", f"found={found}")
+                    except Exception as e:
+                        self.plan_brain.mark("failed", repr(e))
+                        self.plan_brain.replan(world, call, repr(e))
+                        return None
+                    continue
+                if tool == "wait":
+                    self.plan_brain.mark("ok")
+                    return ("look", None, None, None, None)
+                if tool == "done":
+                    if not self.plan_brain.can_done(classical_has_work):
+                        self.plan_brain.mark("rejected", "no-early-done guard")
+                        continue
+                    self.plan_brain.mark("ok")
+                    return ("done", None, None, None, None)
+                d = dmap.get(a["obj_id"])
+                if d is None:                       # scene changed after validation: skip, never improvise
+                    self.plan_brain.mark("invalid", "object no longer in scene")
+                    continue
+                if tool == "pick_place":
+                    authority = self._lookup(d)     # a known target bin binds the planner (never overridden)
+                    if authority is not None and a["bin"] != authority:
+                        self.plan_brain.mark("invalid", f"bin-authority: {d.color} is {authority}, not {a['bin']}")
+                        continue
+                    return ("pick", d, a["bin"], None, None)
+                return ("place", d, None, None, np.asarray(a["table_xy"], float))
+        except Exception as e:
+            self.log(f"[planner] select failed ({e!r})")
+            return (("stop", None, None, None, None)
+                    if self.plan_brain is not None and self.plan_brain.adopted else None)
+
+    def _planner_table_region(self):
+        L = self.scene.cfg["layout"]
+        corners = self.scene.mat_to_pelvis(np.array([[x, y, 0.0] for x in L["region_x"] for y in L["region_y"]]))
+        lo, hi = corners[:, :2].min(0), corners[:, :2].max(0)
+        return {"x": [round(float(lo[0]), 4), round(float(hi[0]), 4)],
+                "y": [round(float(lo[1]), 4), round(float(hi[1]), 4)],
+                "required_margin": 0.02, "clearance": 0.06}
+
+    def _planner_place_at(self, dmap, dets, oid, xy, virtual_xy=None):
+        """Geometry gate plus the classical motion/IK/SafetyFilter dry run for place_at."""
+        xy = np.asarray(xy, float)
+        reg = self._planner_table_region()
+        lo = np.array([reg["x"][0], reg["y"][0]])
+        hi = np.array([reg["x"][1], reg["y"][1]])
+        margin = float(np.min(np.r_[xy - lo, hi - xy]))
+        if margin < 0.02:
+            return False, "outside reachable table region or within its 2 cm IK margin", margin
+        # Distance to each bin's outer footprint, not merely its centre.
+        outer = np.asarray(self.scene.cfg["bins"]["outer_size"], float) / 2
+        for name, centre in self.scene.cfg["bins"]["centers"].items():
+            c = np.asarray(centre, float)
+            corners = self.scene.mat_to_pelvis(np.array([[c[0] + sx * outer[0], c[1] + sy * outer[1], 0.0]
+                                                         for sx in (-1, 1) for sy in (-1, 1)]))[:, :2]
+            blo, bhi = corners.min(0), corners.max(0)
+            delta = np.maximum(np.maximum(blo - xy, 0.0), xy - bhi)
+            if np.linalg.norm(delta) < 0.06:
+                return False, f"less than 6 cm from {name} bin", margin
+        positions = virtual_xy or {k: v.top[:2] for k, v in dmap.items()}
+        for other_id, other_xy in positions.items():
+            if other_id != oid and len(other_xy) == 2 and np.linalg.norm(xy - np.asarray(other_xy, float)) < 0.06:
+                return False, f"less than 6 cm from object {other_id}", margin
+        d = dmap[oid]
+        obstacles = [o.top[:2] for o in dets if o is not d]
+        p = self.planner.plan_place_at(d, self.arm_cmd, self.hand_cmd, xy, obstacles=obstacles)
+        key = (id(d), round(float(xy[0]), 4), round(float(xy[1]), 4))
+        if p.ok:
+            self._planner_place_cache[key] = p
+        return p.ok, p.reason, margin
+
+    def _planner_track_move(self, color, source_xy, table_xy):
+        """Keep a plan object's id stable when place_at moves it farther than the normal 5 cm tracker gate."""
+        old = np.asarray(source_xy, float)
+        candidates = [(np.linalg.norm(old - pxy), row) for row in self._brain_reg
+                      for oid, col, pxy in [row] if col == color]
+        if candidates:
+            min(candidates, key=lambda x: x[0])[1][2] = np.asarray(table_xy, float).copy()
+
+    def _planner_failed(self, dets, reason, obs):
+        call = self.plan_brain.next_call()
+        self.plan_brain.mark("failed", reason)
+        try:
+            ids = self._brain_ids(dets)
+            world = self._brain_world(dets, ids, None)
+            for o in world["objects"]:
+                d = dets[ids.index(o["id"])]
+                o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
+            world["table_region"] = self._planner_table_region()
+            world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            self.plan_brain.replan(world, call, reason)   # one async retry, 0.5 s deadline
+        except Exception as e:
+            self.log(f"[planner] replan failed ({e!r})")
+
+    def _planner_observe(self, dets, obs):
+        """Confirm the prior primitive from the first settled post-motion look, then advance/replan."""
+        ex = self._planner_execution
+        if ex is None or self.plan_brain is None:
+            return
+        self._planner_execution = None
+        rad = 2 * self.cfg["policy"]["same_object_radius"]
+        source = ex["source_xy"]
+        at_source = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - source) < rad for d in dets)
+        target = ex["table_xy"]
+        if target is None:
+            ok = not at_source                    # bin placement: object left the counter source
+        else:
+            ok = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - target) < rad for d in dets)
+        if ok:
+            if target is not None:
+                self._planner_track_move(ex["color"], source, target)
+            self.plan_brain.mark("ok", "settled look confirmed")
+        else:
+            self._planner_failed(dets, "settled look did not confirm primitive", obs)
+
     # ------------------------------------------------------------------ brain (policy.brain)
     def _resolver_mapping(self, info, guarded=None):
         """Mapping opinions that may bind the brain: explicit reset mapping, the fixed task, or keys actually parsed
@@ -1798,6 +2062,10 @@ class ClassicalPolicy:
             self._note(t, "placement unresolved; take one more settled verification frame")
             self.state = "settle"
             return self._hold()
+        if kind == "planner_pending":
+            self._planner_pending = (res[1], bool(res[2]))
+            self.state = "planner_wait"
+            return self._hold()
         if kind == "uncorrectable":
             self._note(t, "known wrong-bin object has no safe corrective or cleanup plan; stopping")
             self.state = "done"
@@ -1846,7 +2114,7 @@ class ClassicalPolicy:
         self._track_attempt(plan.color, xy)
         self._record_object_time(plan.color, xy, plan.duration)
         self.n_started += 1
-        if self.brain is not None:
+        if self.brain is not None and not self._planner_needed:
             self._brain_prefetch(plan)
         if self._dflag("speed_tiers") and not plan.corrective:   # D3: the next look judges this pick
             self._pend_out = {"color": plan.color, "xy": np.asarray(xy, float).copy()}

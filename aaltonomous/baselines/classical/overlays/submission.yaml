@@ -15,6 +15,7 @@ flags:
   brain.url: http://127.0.0.1:8080/completion
   brain.find: false
   brain.enabled: false                          # brain    off: closed-set tool choice (stub = classical), not in the submission
+  brain.planner: false                          # planner  off: whole-instruction closed-set plan
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration

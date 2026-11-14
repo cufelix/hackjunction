@@ -159,7 +159,7 @@ class TestFlags(unittest.TestCase):
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
                                       "finals_real", "rc1", "ab_decision", "ab_place_gate",
-                                      "ab_object_time_budget_s", "ab_colour_kmeans", "ab_cgate", "ab_plane_cgate", "ab_cgate_fk", "ab_cgate_live", "ab_plane_cgate_live", "ab_plane_cgate_live_fk", "ab_binvote", "ab_plane_cgate_live_vote", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90", "ab_isolated_first", "cand_r18", "finals_r18", "ab_generic_fallback",
+                                      "ab_object_time_budget_s", "ab_colour_kmeans", "ab_cgate", "ab_plane_cgate", "ab_cgate_fk", "ab_cgate_live", "ab_plane_cgate_live", "ab_plane_cgate_live_fk", "ab_binvote", "ab_plane_cgate_live_vote", "ab_safety", "ab_hand_calib", "brain_llm", "ab_planner", "ab_vel80", "ab_vel85", "ab_vel90", "ab_isolated_first", "cand_r18", "finals_r18", "ab_generic_fallback",
                                       "ab_inj_p7", "ab_inj_p4", "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_plane_inj_p7",
                                       "ab_plane_b1_inj_p7", "ab_b1_inj_p7"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
@@ -197,6 +197,14 @@ class TestFlags(unittest.TestCase):
     def test_normalize_selfcheck(self):
         from . import normalize
         normalize._selfcheck()
+
+    def test_ab_planner_is_brain_llm_plus_the_planner_flag(self):
+        base = load_config(overlay="brain_llm")
+        planner = load_config(overlay="ab_planner")
+        self.assertFalse(base["brain"]["planner"])
+        base["brain"]["planner"] = True
+        base["overlay"] = "ab_planner"
+        self.assertEqual(planner, base)
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm

@@ -45,6 +45,7 @@ flags:
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
   brain.enabled: true                           # brain      closed-set tool choice, EV-gated, async
+  brain.planner: false                          # enabled by overlays/ab_planner.yaml
   brain.backend: llamacpp                       # brain      bounded async HTTP + GBNF
   brain.url: http://127.0.0.1:8080/completion
   brain.find: false
