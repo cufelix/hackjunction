@@ -1,3 +1,4 @@
+# HISTORICAL: measured 111/124 on the pre-r16-fix code; do not use as a baseline.
 # cand_r16_nopp: submission + ab_retry_vary_slots flags (retry_vary_grasp, max_attempts_vary 3, drop_slots; border_posture off); principal_point stays file
 # Submission flag overlay. submission.Dockerfile bakes this file into the image as
 # aaltonomous/baselines/classical/overlay.yaml; load_config() applies it after the `sim` profile.
@@ -26,7 +27,7 @@ flags:
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
   grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)
   policy.time_triage: false                     # Oliver #3  skip plans that do not fit, try the next object
-  policy.max_total_attempts: 18                 # safety cap: normal scene max is 5 objects * 3 varied tries = 15
+  policy.max_total_attempts: null                # safety cap: normal scene max is 5 objects * 3 varied tries = 15
   policy.max_attempts: 2                        # stock 2    tries per object
   policy.retry_pass: false                      # Oliver #3  once-per-episode retry pass (retry_extra_attempts 2)
   policy.time_margin_s: 0.0                     # Oliver #3  e.g. 1.0; 0 = off

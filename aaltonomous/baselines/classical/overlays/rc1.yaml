@@ -1,11 +1,4 @@
-# rc1 = cand_r16_nopp + instruction.normalize: true (Felix language lane). Was: cand_r16_nopp: submission + ab_retry_vary_slots flags (retry_vary_grasp, max_attempts_vary 3, drop_slots; border_posture off); principal_point stays file
-# Submission flag overlay. submission.Dockerfile bakes this file into the image as
-# aaltonomous/baselines/classical/overlay.yaml; load_config() applies it after the `sim` profile.
-# The organisers run `docker run -d --gpus all -p <port>:8000 <image>` with no env/args, so THIS FILE is the switch.
-#
-# Only keys listed in config.FLAGS are accepted (typo -> the docker build fails).
-# Flags ON here (each only after its GPU A/B): instruction.resolve (2026-11-14). Everything else = its OFF value.
-# Flip a flag ONLY after its A/B run (knowledge/humanoid/21-submission-pipeline.md), then rebuild. Check: python3 tools/flags.py --overlay submission
+# rc1 = cand_r17 + instruction.normalize. A/B overlay (AALTO_OVERLAY=rc1). NOT baked: the image bakes overlays/submission.yaml (tools/submission.Dockerfile:35). At RELEASE FREEZE submission.yaml must get exactly the flags of the chosen rcN; tools/release_gate.py checks it.
 name: rc1
 flags:
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,

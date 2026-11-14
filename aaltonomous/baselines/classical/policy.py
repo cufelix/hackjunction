@@ -327,12 +327,13 @@ class ClassicalPolicy:
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
         for d, source_bin, target_bin in corrections:
-            n = self._attempt_count(d.top[:2], d.color)
-            limit = self._attempt_limit(d.top[:2])
-            varied = self._max_attempts_vary()
-            if n >= (max(limit, varied) if varied is not None else limit):
-                self.log(f"[classical] correction attempt limit reached for {d.color} in {source_bin}")
-                continue
+            if self._vary_on():
+                n = self._attempt_count(d.top[:2], d.color)
+                limit = self._attempt_limit(d.top[:2])
+                varied = self._max_attempts_vary()
+                if n >= (max(limit, varied) if varied is not None else limit):
+                    self.log(f"[classical] correction attempt limit reached for {d.color} in {source_bin}")
+                    continue
             for slot in self._free_drop_slots(target_bin) or self._overflow_slots(target_bin):
                 p = self._plan_pick(d, dict(bin_name=target_bin, relocate=False,
                                             drop_slot=slot, source_bin=source_bin))
