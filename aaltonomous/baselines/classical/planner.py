@@ -42,6 +42,8 @@ def lookup_bin(cfg, mapping, color, shape=None):
 
 def lookup_detection_bin(cfg, mapping, det):
     """Target for a detection, resolving generic grasps without a shape guess."""
+    if getattr(det, "novel", False):
+        return getattr(det, "novel_target_bin", None)
     if getattr(det, "generic_required", False):
         if getattr(det, "generic_width", None) is None:
             return None
@@ -243,6 +245,12 @@ class Planner:
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
         self.drop_extra = {}   # bin.vote: bin name -> extra release height (m) when the bin position is low-confidence
         self.bin_conf = {}     # bin.vote: bin name -> confidence in bin_shift (1.0 agree, 0.5 prior only, 0.3 disagree)
+        self.generic_hand_opening = None
+        if cfg["grasp"].get("generic", False):
+            tips = self.kin.tips_in_palm("left", self.post["open"])
+            measured = float(np.linalg.norm(tips[:2].mean(0) - tips[2]))
+            self.generic_hand_opening = max(
+                0.0, measured - float(cfg["grasp"].get("generic_opening_margin_m", 0.012)))
 
     @property
     def counter_keepout_z(self):
@@ -595,7 +603,8 @@ class Planner:
         return (cand_xy, z_new, True) if ok else (base_xy, float(z), False)
 
     # ------------------------------------------------------------------ main
-    def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=None, source_bin=None):
+    def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=None, source_bin=None,
+             clearance_obstacles=()):
         """Plan for Detection `det` starting from the commanded arm_q/hand_q (14,). Tries the preferred arm (the
         target bin's side; for the centre bin the object's side), then the other one. If neither arm can do the
         whole pick -> bin (cross-body: the arm that reaches the object cannot reach the bin), plans a RELOCATION
@@ -613,7 +622,8 @@ class Planner:
         reasons, good = [], []
         for side in (side0, "right" if side0 == "left" else "left"):
             p = self._plan_side_hints(det, side, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float),
-                                      drop_slot=drop_slot, source_bin=source_bin)
+                                      drop_slot=drop_slot, source_bin=source_bin,
+                                      clearance_obstacles=clearance_obstacles)
             if p.ok:
                 if g.get("arm", "best") != "best":
                     return p
@@ -626,7 +636,7 @@ class Planner:
         last.reason = "; ".join(reasons)
         if relocate and g.get("relocate", {}).get("enabled", True):
             r = self.plan_relocation(det, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float), obstacles,
-                                     drop_slot=drop_slot)
+                                     drop_slot=drop_slot, clearance_obstacles=clearance_obstacles)
             if r.ok:
                 return r
             last.reason += f"; relocate: {r.reason}"
@@ -649,23 +659,29 @@ class Planner:
         keep.sort(key=lambda p: np.linalg.norm(p - b))
         return keep[: int(rc.get("max_spots", 6))]
 
-    def plan_relocation(self, det, bin_name, arm_q, hand_q, obstacles=(), drop_slot=None):
+    def plan_relocation(self, det, bin_name, arm_q, hand_q, obstacles=(), drop_slot=None,
+                        clearance_obstacles=()):
         """Cross-body fallback: pick `det` with an arm that reaches it and put it down at a counter spot from which
         some arm has a full plan to `bin_name` (checked from home). Returns a Plan with target_bin 'counter'."""
-        from dataclasses import replace
         last = Plan(False, color=det.color, reason="no relocation spot")
         H = self._object_height(det)
         for spot in self.relocation_spots(det, bin_name, obstacles):
-            d2 = replace(det, top=np.r_[spot, self.scene.counter_z + H])
+            if getattr(det, "novel", False):
+                d2 = copy.copy(det)   # preserve opt-in dynamic novel geometry fields
+                d2.top = np.r_[spot, self.scene.counter_z + H]
+            else:
+                from dataclasses import replace
+                d2 = replace(det, top=np.r_[spot, self.scene.counter_z + H])
             by = self.bin_xy(bin_name)[1]
             fin_side = "left" if (by if abs(by) > 0.1 else spot[1]) > 0 else "right"
             fin = self._plan_side_hints(d2, fin_side, bin_name, self.home.copy(), self.post["open"].copy(),
-                                        drop_slot=drop_slot)
+                                        drop_slot=drop_slot, clearance_obstacles=clearance_obstacles)
             if not fin.ok:
                 last.reason = f"no {fin_side} plan from spot ({spot[0]:+.2f},{spot[1]:+.2f}): {fin.reason}"
                 continue
             side = "right" if fin_side == "left" else "left"
-            p = self._plan_side_hints(det, side, bin_name, arm_q, hand_q, place_xy=spot)
+            p = self._plan_side_hints(det, side, bin_name, arm_q, hand_q, place_xy=spot,
+                                      clearance_obstacles=clearance_obstacles)
             if p.ok:
                 p.reason = f"relocate for the {fin_side} arm"
                 return p
@@ -861,17 +877,30 @@ class Planner:
         return None
 
     def _generic_on(self, det):
-        return (bool(self.cfg["grasp"].get("generic_fallback", False))
+        enabled = (bool(self.cfg["grasp"].get("generic", False)) if getattr(det, "novel", False)
+                   else bool(self.cfg["grasp"].get("generic_fallback", False)))
+        return (enabled
                 and getattr(det, "generic_required", False)
                 and getattr(det, "generic_width", None) is not None)
 
     def _object_height(self, det):
         """Measured height for accepted generic geometry; configured height otherwise."""
-        return float(det.top[2] - self.scene.counter_z) if self._generic_on(det) else self.height
+        if self._generic_on(det):
+            return float(getattr(det, "height", det.top[2] - self.scene.counter_z))
+        return self.height
 
     def _plan_side_generic(self, det, side, bin_name, arm_q, hand_q, **kw):
         """Align palm-x (the fingers) with the proposal's major axis."""
         g = self.cfg["grasp"]
+        if getattr(det, "novel", False):
+            score = float(getattr(det, "generic_confidence", 0.0) or 0.0)
+            if not getattr(det, "graspable", False) or score < float(g.get("generic_min_confidence", 0.5)):
+                return Plan(False, side=side, color=det.color, target_bin=bin_name,
+                            reason=f"novel graspability {score:.2f} below threshold")
+            if float(det.generic_width) > self.generic_hand_opening:
+                return Plan(False, side=side, color=det.color, target_bin=bin_name,
+                            reason=f"novel width {1000 * det.generic_width:.0f} mm exceeds URDF opening "
+                                   f"{1000 * self.generic_hand_opening:.0f} mm")
         yaw = getattr(det, "yaw", None)
         if yaw is None or not np.isfinite(yaw):
             return Plan(False, side=side, color=det.color, target_bin=bin_name,
@@ -885,7 +914,8 @@ class Planner:
         angles = [float(yaw), float(yaw) + np.pi]
         angle = min(angles, key=lambda a: abs((a - natural + np.pi) % (2 * np.pi) - np.pi))
         deviation = abs((angle - natural + np.pi) % (2 * np.pi) - np.pi)
-        if deviation > np.radians(float(g.get("generic_yaw_max_dev_deg", 45.0))):
+        max_dev = 90.0 if getattr(det, "novel", False) else float(g.get("generic_yaw_max_dev_deg", 45.0))
+        if deviation > np.radians(max_dev):
             return Plan(False, side=side, color=det.color, target_bin=bin_name,
                         reason=f"generic yaw {np.degrees(angle):.0f} deg outside natural range")
         try:
@@ -999,7 +1029,8 @@ class Planner:
                 return "closed_demo", np.asarray(g["point_in_palm_demo"], float), label, conf, path
         return g.get("close_posture", "closed"), None, label, conf, path
 
-    def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
+    def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None,
+                   clearance_obstacles=()):
         g = self.cfg["grasp"]
         vp = (self.vary or {}).get("posture")
         border = self._border_posture(det)
@@ -1007,7 +1038,8 @@ class Planner:
         if not (g.get("close_posture_by_shape", False) or g.get("cage_mode", False)) \
                 and vp is None and border is None and not generic:
             self._posture = None
-            return self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin)
+            return self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin,
+                                         clearance_obstacles)
         self._apex = None
         if not generic and (vp is not None or border is not None):   # policy.retry_vary_grasp / grasp.border_posture: forced posture
             name = vp if vp is not None else border
@@ -1021,7 +1053,8 @@ class Planner:
             self.kin.offset = {"left": pt, "right": pt * np.array([1.0, -1.0, 1.0])}
         self._posture = name
         try:
-            p = self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin)
+            p = self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin,
+                                      clearance_obstacles)
         finally:
             self.kin.offset, self._posture = saved, None
         p.posture = (name, label, conf, path) if self._apex is None else (name, label, conf, path, self._apex)
@@ -1036,7 +1069,8 @@ class Planner:
             return "closed_demo"
         return None
 
-    def _plan_side_inner(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
+    def _plan_side_inner(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None,
+                         clearance_obstacles=()):
         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
         sc, zc = self.scene, self.scene.counter_z
         plan = Plan(False, side=side, color=det.color, target_bin=bin_name if place_xy is None else "counter",
@@ -1083,7 +1117,12 @@ class Planner:
         else:
             plan.reason = "fingers hit the counter"
             return plan
-        if source_bin is None and z > zc + H - 0.008:
+        # Thin novel handles/markers need the soft Dex3 pads to straddle the
+        # top edge after the counter-clearance raise.  Permit the configured
+        # grasp point up to 6 mm above the measured top; the known/fallback
+        # path retains its original 8 mm-below-top guard.
+        top_margin = 0.006 if getattr(det, "novel", False) else -0.008
+        if source_bin is None and z > zc + H + top_margin:
             plan.reason = f"grasp point {100 * (z - zc):.1f} cm above counter: above the object top (point_in_palm?)"
             return plan
 
@@ -1240,6 +1279,21 @@ class Planner:
                 # the object itself sits between the fingers during descend/lift; only the counter matters here
                 plan.reason = f"hand {100 * c:.1f} cm above counter during {name} (need {100 * need:.1f})"
                 return plan
+        if self.cfg["policy"].get("novel_obstacles", False) and clearance_obstacles:
+            margin = float(g.get("generic_obstacle_margin_m", 0.025))
+            for k in range(0, len(plan.arm), 3):
+                pts = self.kin.hand_points(side, plan.arm[k], plan.hand[k])
+                for obstacle in clearance_obstacles:
+                    q = np.asarray(obstacle, float).reshape(-1)
+                    if len(q) < 2:
+                        continue
+                    radius = float(q[2]) if len(q) > 2 else 0.025
+                    top_z = float(q[3]) if len(q) > 3 else zc + self.height
+                    near = np.linalg.norm(pts[:, :2] - q[:2], axis=1) < radius + margin
+                    if np.any(near & (pts[:, 2] < top_z + margin)):
+                        name = next(n for n, s, e in phases if s <= k < e)
+                        plan.reason = f"novel obstacle clearance during {name}"
+                        return plan
         drop = np.zeros(len(plan.arm), bool)
         for name, s_, e in phases:
             drop[s_:e] |= name in ("open",)
