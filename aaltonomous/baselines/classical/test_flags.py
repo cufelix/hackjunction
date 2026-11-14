@@ -136,7 +136,8 @@ class TestFlags(unittest.TestCase):
         expect["finals_r19b"] = expect["finals_r19"] | {"policy.safety_shell"}   # P0 Hz
         expect["finals_r19c"] = (expect["finals_r19"] | {"policy.safety_shell"}) - {"perception.online_pitch_cal", "perception.color_gate.enabled",
                                                                               "perception.color_gate.live_bins", "perception.color_gate.fk_mask"}
-        expect["finals_r20"] = expect["finals_r19b"] | {"bin.vote.enabled", "bin.geometry_runtime", "grasp.held_detector"}
+        expect["finals_r20"] = expect["finals_r19b"] | {"bin.vote.enabled", "bin.geometry_runtime", "grasp.held_detector",
+                                                          "calib.plane.apply_height"}
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
