@@ -13,15 +13,20 @@ FINALS = ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20"
 SIM = ("submission", "cand_r17", "rc1")
 
 
-def mapping(overlay, instruction, task=None, reset_mapping=None):
+STOCK = "Put the red objects in the left bin, the yellow objects in the center bin and the blue objects in the right bin."
+MATCHES_VENUE = "Put the yellow objects in the left bin, the blue objects in the center bin and the red objects in the right bin."
+
+
+def mapping(overlay, instruction, task=None, reset_mapping=None, logs=None):
     pol = ClassicalPolicy.__new__(ClassicalPolicy)
     pol.cfg = load_config(overlay=overlay)
     fm = pol.cfg["policy"]["fixed_mapping"]
     pol.fixed_mapping = dict(fm) if fm else dict(FIXED_MAPPING)
-    pol.log = lambda *_: None
+    pol.log = logs.append if logs is not None else (lambda *_: None)
     pol._cap_text = ClassicalPolicy._cap_text.__get__(pol)
     pol._instruction_mapping = ClassicalPolicy._instruction_mapping.__get__(pol)
     pol._insert_guard_mapping = ClassicalPolicy._insert_guard_mapping.__get__(pol)
+    pol._log_fixed_conflict = ClassicalPolicy._log_fixed_conflict.__get__(pol)
     info = {"instruction": instruction, "task": task} if instruction is not False else {"task": task}
     if reset_mapping is not None:
         info["mapping"] = reset_mapping
@@ -83,6 +88,24 @@ class TestFixedMapping(unittest.TestCase):
         server.reset("yellow goes right", task="sort_language", seed=8)
         self.assertNotIn("mapping", server.pol.info)
         self.assertEqual(server.pol.info["task"], "sort_language")
+
+    def test_sort_fixed_stock_sentence_disagreeing_with_venue_logs_conflict(self):
+        logs = []
+        self.assertEqual(mapping("finals_r22", STOCK, task="sort_fixed", logs=logs), REAL)
+        conflict = [l for l in logs if l.startswith("[fixed_mapping] conflict")]
+        self.assertEqual(len(conflict), 1, logs)
+        self.assertIn("instruction says", conflict[0])
+        self.assertIn("using venue", conflict[0])
+
+    def test_sort_fixed_sentence_matching_venue_logs_no_conflict(self):
+        logs = []
+        self.assertEqual(mapping("finals_r22", MATCHES_VENUE, task="sort_fixed", logs=logs), REAL)
+        self.assertFalse([l for l in logs if "conflict" in l], logs)
+
+    def test_sort_fixed_submission_stock_sentence_uses_sim_mapping_without_conflict(self):
+        logs = []
+        self.assertEqual(mapping("submission", STOCK, task="sort_fixed", logs=logs), FIXED_MAPPING)
+        self.assertFalse([l for l in logs if "conflict" in l], logs)
 
     def test_bad_values_raise(self):
         bad = ({"red": "left", "yellow": "center"}, {"red": "left", "yellow": "left", "blue": "right"},
