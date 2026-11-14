@@ -9,6 +9,28 @@
 # --profile is given. Re-tune the sim values on the real robot before using them there (M8).
 profile: sim
 
+calib:
+  fk_xcheck: false            # FLAG (B2, log-only): RGB head-pose residual vs Dex3 hand FK (fk_xcheck.py)
+  fk_xcheck_config:
+    period_s: 0.5             # worker-thread cadence; act() never waits for the search
+    pitch_range_deg: 12.0
+    yaw_range_deg: 4.0
+    fine_step_deg: 0.25
+    max_v: 105                # OpenCV HSV-equivalent V/S thresholds for the dark, low-saturation Dex3 shell
+    max_s: 100
+    open_px: 3
+    min_area_px: 25
+    max_area_px: 14000
+    association_px: 170       # covers the full +/-12 deg pitch search at fx~605
+    score_truncate_px: 80
+    match_px: 8
+    min_points: 3
+    good_points: 6
+    min_coverage: 0.5
+    depth_range_m: [0.15, 2.0]
+    min_valid_depth_px: 20
+    depth_tolerance_m: 0.15   # optional rejection cue only; invalid/missing depth is ignored
+
 perception:
   camera: head
   # OpenCV HSV (H 0-180, S/V 0-255). Each colour = list of [lo, hi] ranges (red wraps around H=0).
