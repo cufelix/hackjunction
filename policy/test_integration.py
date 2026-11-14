@@ -121,18 +121,40 @@ class TestBehaviourMatches(unittest.TestCase):
                                      f"emitted key {key!r} is unreachable: {text[:60]}")
 
     def test_report_unmapped_types(self):
-        """Not a pass/fail -- a number to watch. If this ever covers a sentence that names a plain
-        colour or a default, something regressed, because those always reach all 9 types."""
+        """Mostly a number to watch, with two assertions that still have teeth.
+
+        The original premise here was "a sentence that names a plain colour reaches all 9 types".
+        That is false, and deliberately so: a sentence constrains only the colours it *names*.
+        Two families legitimately leave the rest unmapped, and in both the resolver is choosing
+        `counter` (0 points) over a guess it has no basis for (EV 3p-1, negative below p=1/3):
+
+          * negation-only -- "Don't put red in the left bin." says nothing about yellow or blue,
+            so `_NEG` sets `stays` and suppresses completion. Erkka confirmed on 2026-11-14 that
+            the finals carry no negation, so this family is a corpus artefact, not a scoring risk.
+          * many-to-one -- "Red goes in the left bin, and so do the blue ones." puts two colours
+            in one bin, which leaves *two* bins free, so the implicit-third-colour rule cannot
+            pick one and correctly declines to.
+
+        What must still hold, and is asserted below:
+          * a `default` (catch-all) key covers every type by construction -- if one is emitted and
+            a type is still unreachable, the catch-all is broken;
+          * a colour the mapping *names* must always be reachable. An unmapped type may only ever
+            belong to a colour the sentence never mentioned.
+        """
         worst = []
         for text, _ in itertools.chain(training_corpus(), ADVERSARIAL):
             m = resolve(text)
             missing = [t for t in TYPES if resolve_bin(m, *t) is None]
-            if missing:
-                plain = [k for k in m if not isinstance(k, tuple)]
-                self.assertEqual(plain, [], f"non-compound keys {plain} still left {len(missing)}"
-                                            f" types unmapped: {text[:60]}")
-                worst.append((len(missing), text[:60]))
-        print(f"  compound-only sentences leaving types unmapped: {len(worst)}"
+            if not missing:
+                continue
+            self.assertNotIn("default", m, f"a catch-all default still left {len(missing)} types"
+                                           f" unmapped: {text[:60]}")
+            named = {k for k in m if not isinstance(k, tuple) and k in COLORS}
+            leak = sorted({c for c, _s in missing} & named)
+            self.assertEqual(leak, [], f"named colour(s) {leak} unreachable, {len(missing)} types"
+                                       f" unmapped: {text[:60]}")
+            worst.append((len(missing), text[:60]))
+        print(f"  sentences leaving an unnamed colour unmapped: {len(worst)}"
               + (f" (max {max(w[0] for w in worst)}/9)" if worst else ""))
 
     def test_every_bin_named_is_a_real_bin(self):

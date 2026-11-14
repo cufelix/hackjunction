@@ -7,3 +7,12 @@ node_modules/
 /.warren.json.lock
 /.claude/settings.local.json
 /.serena/
+
+# Python bytecode. These embed the absolute source path of the machine that built them
+# (e.g. /home/<user>/projects/...), which must never reach a public repo.
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local MCP server config: holds API credentials, never commit.
+.mcp.json
