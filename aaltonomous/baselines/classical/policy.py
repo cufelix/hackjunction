@@ -154,6 +154,7 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+        self._warm = 0              # perception.depth_fusion / track: warm-up acts spent in this look
 
     def confirm(self):
         self._decision = "go"
@@ -188,6 +189,9 @@ class ClassicalPolicy:
                 self._note(t, f"head calibration {state}: xy=({off[0]:+.1f},{off[1]:+.1f}) mm, "
                               f"confidence={cal.confidence:.2f}, residual={cal.residual_m * 1000.0:.1f} mm, "
                               f"points={cal.n_points}, time={cal.elapsed_ms:.1f} ms ({cal.reason})")
+        if self.perception.temporal and self.state != "look":   # depth_fusion / track: still frames only, else forget
+            self.perception.reset_stream()
+            self._warm = 0
         if self._gdiag is not None:
             self._grasp_diag(obs)
         if self._stall is not None:
@@ -225,6 +229,13 @@ class ClassicalPolicy:
             self.state = "look"
             return self._pop()
         if self.state == "look":
+            if self.perception.temporal and self._job is None and not self.perception.ready():
+                # depth_fusion / track need a few still frames before the look; one frame per act() -> short holds
+                st = self.cfg["perception"].get("stream") or {}
+                if self._warm < int(st.get("max_acts", 6)):
+                    self._warm += 1
+                    self.perception.observe(obs["head_rgb"], obs["head_depth"], background=self.threaded)
+                    return self._hold(ticks=int(st.get("hold_ticks", 3)))
             cap = self.cfg["policy"].get("max_total_attempts")
             if cap is not None and self.n_started >= int(cap):   # knocked objects reappear as 'new': hard stop
                 self._note(t, f"attempt cap reached ({self.n_started} >= max_total_attempts {int(cap)}): done")
@@ -751,11 +762,11 @@ class ClassicalPolicy:
         self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()
         return {"arm_q_target": a.copy(), "hand_q_target": h.copy(), "done": False}
 
-    def _hold(self, done=False):
+    def _hold(self, done=False, ticks=None):
         """Hold the last target. While waiting (planning / operator) the hold is `motion.hold_ticks` ticks long, so a
         remote runner needs one request per hold chunk instead of one per tick: the command rate stays at 30 Hz
         even when the planner thread and other processes (sims) load the CPU."""
-        k = 1 if done else max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
+        k = 1 if done else max(1, int(ticks or self.cfg["motion"].get("hold_ticks", 1)))
         if done and not self._summary_logged and self.cfg["policy"].get("episode_summary_log", False):
             # passive end-of-episode summary (log only, once)
             self._summary_logged = True

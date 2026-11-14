@@ -20,6 +20,8 @@ flags:
   perception.shape_diag: false                  # Oliver     passive [shape_diag] log lines
   perception.hsv_set: robust                     # real colour  stock | robust (one HSV set for sim + real head cam)
   perception.split_blobs: true                 # real colour  split touching same-colour objects
+  perception.depth_fusion.enabled: false        # Oliver fusion  median depth over the last 3 still frames (blob ROIs)
+  perception.track.enabled: false               # Oliver fusion  cross-frame tracking, M-of-N confirm, smoothing
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
   grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)

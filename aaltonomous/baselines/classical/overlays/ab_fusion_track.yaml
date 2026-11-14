@@ -1,0 +1,7 @@
+# A/B overlay: temporal perception (median depth fusion over the last 3 still frames + cross-frame tracking with
+# 2-of-3 confirmation and smoothing). GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_fusion_track <image>.
+name: ab_fusion_track
+flags:
+  perception.depth_fusion.enabled: true
+  perception.track.enabled: true
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes

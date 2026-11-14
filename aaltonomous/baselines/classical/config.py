@@ -41,6 +41,8 @@ FLAGS = {
     "perception.shape_diag": ("Oliver #5/#7", False, "passive [shape_diag] log line per detection (no action change)"),
     "perception.hsv_set": ("real colour", "stock", "stock | robust: one HSV set for sim + the real head cam (hsv_robust)"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
+    "perception.depth_fusion.enabled": ("Oliver fusion", False, "median-fuse the last N still depth frames inside the colour blobs before picking"),
+    "perception.track.enabled": ("Oliver fusion", False, "associate detections across frames, smooth, confirm after M of N (kills 1-frame phantoms)"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),

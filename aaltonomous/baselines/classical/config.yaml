@@ -54,6 +54,22 @@ perception:
     min_inlier_ratio: 0.35
     min_axis_points: 35
     min_confidence: 0.30
+  depth_fusion:               # FLAG (Oliver fusion). Per-pixel median of the last `frames` still depth frames, ROI = colour blobs
+    enabled: false
+    frames: 3                 # incl. the current frame (one frame per act(), so each frame costs ~0.1 s of holding)
+    min_valid: 2              # a pixel needs >= this many valid samples within tol_mm of the median, else it becomes a hole
+    tol_mm: 8.0
+  track:                      # FLAG (Oliver fusion). Cross-frame association + smoothing + M-of-N confirmation
+    enabled: false
+    radius_m: 0.02            # same colour, nearest neighbour within this in pelvis xy
+    confirm_m: 2              # reported only after being seen in >= M of the last N frames
+    window_n: 3
+    alpha: 0.4                # EMA gain (running mean for the first 1/alpha frames)
+    drop_after: 2             # forget a track after this many consecutive misses
+    passthrough_cold: true    # < M frames seen since the last reset: cannot judge, pass detections through (never 'nothing left')
+  stream:                     # depth_fusion / track: act() holds this long per extra frame until perception.ready()
+    hold_ticks: 3             # 0.1 s per warm-up hold
+    max_acts: 6               # give up waiting after this many holds (then look anyway)
   object_height: null         # null = scene.yaml size * height_ratio
   classify_shape: false       # set Detection.shape from the metric top-face cloud (shape_id); no top face -> 2D blob, or None with no_blob_shape
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud

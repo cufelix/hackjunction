@@ -61,6 +61,7 @@ class TestFlags(unittest.TestCase):
                   "ab_slots": {"grasp.drop_slots"}, "ab_hold12_slots": {"motion.close_hold_s", "grasp.drop_slots"},
                   "ab_carry05": {"motion.carry_scale"}, "ab_calib": {"perception.self_calibration.enabled"},
                   "ab_yaff": {"perception.y_affine"},
+                  "ab_fusion_track": {"perception.depth_fusion.enabled", "perception.track.enabled"},
                   "ab_pinch_hybrid": {"grasp.close_posture", "hand.closed_tight", "grasp.point_in_palm",
                                       "motion.close_hold_s", "perception.classify_shape",
                                       "grasp.close_posture_by_shape"},

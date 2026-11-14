@@ -13,10 +13,12 @@ height instead (method "plane"). Blobs over the bins, off the mat, or at a wrong
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import threading
 import time
 
 import numpy as np
 
+from .fusion import DepthFuser, Tracker
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
 
@@ -36,6 +38,7 @@ class Detection:
     shape_conf: float = 0.0    # shape_id confidence (0..1) behind `shape`
     apex_gate: tuple | None = None  # grasp.posture_apex_gate only: (apex_conf, max vertex angle deg) of a "triangle" top
     shape_path: str | None = None  # shape_id path ("metric" | "blob" | "abstain_*" | "off"), only filled when grasp.close_posture_by_shape
+    track_id: int | None = None  # perception.track only: stable object id across frames
     shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
 
@@ -92,9 +95,63 @@ class Perception:
         self.hsv = self.cfg["hsv_robust"] if self.cfg.get("hsv_set", "stock") == "robust" else self.cfg["hsv"]
         self.split_blobs = bool(self.cfg.get("split_blobs", False))
         self.log = log if log is not None else print
+        # temporal perception (opt-in, default OFF = stock single-frame behaviour): see fusion.py
+        df, tr = self.cfg.get("depth_fusion") or {}, self.cfg.get("track") or {}
+        self.fuser = DepthFuser({**df, "range_mm": self.cfg["depth_range_mm"]}) if df.get("enabled") else None
+        self.tracker = Tracker(tr) if tr.get("enabled") else None
+        self._tick = 0
+        self._hull_cache = {}
+        self._worker_busy = False
+
+    @property
+    def temporal(self):
+        return self.fuser is not None or self.tracker is not None
+
+    def reset_stream(self):
+        """Forget buffered frames and tracks (episode reset, or the camera / arms moved)."""
+        if self.fuser is not None:
+            self.fuser.reset()
+        if self.tracker is not None:
+            self.tracker.reset()
+        self._tick = 0
+
+    def ready(self):
+        """True when enough still frames are buffered for the next detect() to fuse / confirm (the detect itself is
+        the last frame): fusion N-1 past depth frames, tracker M-1 past detections, no worker still running."""
+        if self._worker_busy:
+            return False
+        if self.fuser is not None and len(self.fuser.buf) < self.fuser.n - 1:
+            return False
+        if self.tracker is not None and self.tracker.frames < self.tracker.m - 1:
+            return False
+        return True
+
+    def observe(self, rgb, depth, background=False):
+        """Feed one still frame (policy.act while it waits for the look). Tracker: runs detect to build the M-of-N
+        history; background=True does that in a worker thread on a copy (skipped while the previous one runs) so
+        act() never waits for it. Fusion: buffers the depth (a ~0.1 ms copy)."""
+        self._tick += 1
+        if self.tracker is not None:
+            if not background:
+                self.detect(rgb, depth)   # updates the tracker (and uses the fused depth); the result is unused
+            elif not self._worker_busy:
+                self._worker_busy = True
+                threading.Thread(target=self._observe_job, args=(np.array(rgb), None if depth is None else np.array(depth)),
+                                 daemon=True).start()
+        if self.fuser is not None:
+            self.fuser.push(depth)
+
+    def _observe_job(self, rgb, depth):
+        try:
+            self.detect(rgb, depth)
+        except Exception as e:   # best effort: never kill anything
+            self.log(f"[observe] {e!r}")
+        finally:
+            self._worker_busy = False
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
+        self.reset_stream()
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
 
@@ -295,8 +352,19 @@ class Perception:
         import cv2
         c = self.cfg
         dets, rejected = [], []
+        masks = self.masks(rgb)
+        if self.fuser is not None and depth is not None:   # fused depth inside the colour blobs only
+            roi = np.zeros(depth.shape, bool)
+            for m in masks.values():
+                roi |= m > 0
+            if not include_bins:   # bins are cut by _keep_mask anyway: do not fuse their pixels
+                hull = self._hull_cache.get(depth.shape)
+                if hull is None:
+                    hull = self._hull_cache[depth.shape] = self._bin_hulls_mask(depth.shape) > 0
+                roi &= hull
+            depth = self.fuser.fuse(depth, roi)
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
-        for color, m in self.masks(rgb).items():
+        for color, m in masks.items():
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
             k = int(c["open_px"])
             if k > 0:
@@ -312,6 +380,8 @@ class Perception:
                         self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected)
                     continue
                 self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected)
+        if self.tracker is not None:
+            dets = self.tracker.update(dets)
         return (dets, rejected) if debug else dets
 
     def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected):
