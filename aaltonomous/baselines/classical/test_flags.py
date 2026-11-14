@@ -123,6 +123,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_drop_lateral_margin_m"] = nopp | {"grasp.drop_lateral_margin_m"}
         expect["ab_log_joint_offset"] = nopp | {"debug.log_joint_offset"}
         expect["ab_generic_fallback"] = nopp | {"grasp.generic_fallback"}   # rebased on cand_r17
+        expect["ab_fk_xcheck"] = nopp | {"calib.fk_xcheck"}   # rebased on cand_r17: log-only B2 arm
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
         expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
         inj = {"perception.inject_cam_error"}

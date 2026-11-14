@@ -35,6 +35,7 @@ from . import decision as dec
 from .bin_vote import vote_bins
 from .config import hand_postures, home_arm, load_config
 from .held import HeldDetector
+from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
 from .perception import Perception
 from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
@@ -98,6 +99,12 @@ class ClassicalPolicy:
                 self.hand_calib = None
                 (log or print)(f"hand calibration disabled: {type(e).__name__}: {e}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
+        # calib.fk_xcheck (FLAG, default OFF, log-only): RGB head-pose cross-check vs the Dex3 hand FK. Its own
+        # ArmKinematics: the worker thread must never touch the planner's pinocchio data.
+        self.fk_xcheck_enabled = bool((self.cfg.get("calib") or {}).get("fk_xcheck", False))
+        if self.fk_xcheck_enabled:
+            self._fk_xcheck_kin = ArmKinematics(self.cfg, self.spec)
+            self._fk_xcheck = FkHandXCheck(self.cfg["calib"]["fk_xcheck_config"], self.perception)
         self.perception.bin_shift_src = self.planner   # perception.color_gate.live_bins reads planner.bin_shift (bin.vote)
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
         self.require_confirm = require_confirm
@@ -254,6 +261,63 @@ class ClassicalPolicy:
         self._cap_logged = set()
         self._dec_warned = set()    # F7: decision helpers that already fell back to stock this episode
         self._prior_side = set()    # F1: side bins already attempted in PRIOR-ONLY
+        if self.fk_xcheck_enabled:
+            self._fk_xcheck_generation = getattr(self, "_fk_xcheck_generation", 0) + 1
+            self._fk_xcheck_thread = getattr(self, "_fk_xcheck_thread", None)
+            self._fk_xcheck_pending = None
+            self._fk_xcheck_last_t = -np.inf
+            self._fk_xcheck_last_log = None
+            self.fk_xcheck_result = None
+
+    # ------------------------------------------------------------------ calib.fk_xcheck (B2, log-only)
+    def _online_pitch_deg(self):
+        """Pitch the online pitch calibration already applies to the pose in use (None = not active)."""
+        pc = self.pitch_calibration
+        return None if pc is None or not pc.success else float(pc.pitch_deg)
+
+    def _poll_fk_xcheck(self, obs, t):
+        """Publish a finished estimate and launch a throttled worker; act() never waits for the search."""
+        thread = self._fk_xcheck_thread
+        if thread is not None and not thread.is_alive():
+            self._fk_xcheck_thread = None
+            result, self._fk_xcheck_pending = self._fk_xcheck_pending, None
+            if result is not None:
+                self.fk_xcheck_result = result
+                signature = (result.visible, round(result.pitch_deg, 1), round(result.yaw_deg, 1), result.reason)
+                if signature != self._fk_xcheck_last_log:
+                    agreement = (" standalone" if result.online_pitch_deg is None else
+                                 f" online={result.online_pitch_deg:+.2f}deg delta={result.disagreement_deg:.2f}deg")
+                    self.log(f"[fk_xcheck] visible={result.visible} residual pitch={result.pitch_deg:+.2f}deg "
+                             f"yaw={result.yaw_deg:+.2f}deg confidence={result.confidence:.2f} "
+                             f"points={result.n_points} error={result.error_px:.1f}px time={result.elapsed_ms:.1f}ms"
+                             f"{agreement} ({result.reason})")
+                    self._fk_xcheck_last_log = signature
+        if self._fk_xcheck_thread is not None:
+            return
+        period = float(self.cfg["calib"]["fk_xcheck_config"].get("period_s", 0.5))
+        rgb, depth = obs.get("head_rgb"), obs.get("head_depth")
+        arm_q, hand_q = obs.get("arm_q"), obs.get("hand_q")
+        if t - self._fk_xcheck_last_t < period or rgb is None or arm_q is None or hand_q is None:
+            return
+        self._fk_xcheck_last_t = t
+        rgb = np.asarray(rgb).copy()
+        depth = None if depth is None else np.asarray(depth).copy()
+        arm_q, hand_q = np.asarray(arm_q, float).copy(), np.asarray(hand_q, float).copy()
+        online_pitch, generation = self._online_pitch_deg(), self._fk_xcheck_generation
+
+        def work():
+            try:
+                points = np.vstack([self._fk_xcheck_kin.hand_points(side, arm_q, hand_q)
+                                    for side in ("left", "right")])
+                out = self._fk_xcheck.estimate(rgb, points, depth, online_pitch)
+            except Exception as exc:
+                out = FkXCheckResult(False, 0.0, 0.0, 0.0, 0, np.inf, 0.0,
+                                     f"worker error: {type(exc).__name__}: {exc}")
+            if generation == self._fk_xcheck_generation:
+                self._fk_xcheck_pending = out
+
+        self._fk_xcheck_thread = threading.Thread(target=work, name="fk-xcheck", daemon=True)
+        self._fk_xcheck_thread.start()
 
     def _start_pitch_worker(self, rgb, depth):
         """Run the camera-pitch fit ONCE per episode in a daemon thread, started on the first valid frame."""
@@ -368,6 +432,8 @@ class ClassicalPolicy:
         self._decision = "stop"
 
     def act(self, obs):
+        if self.fk_xcheck_enabled:   # before both paths: the safety shell's act() is the same entry point
+            self._poll_fk_xcheck(obs, float(obs.get("t", 0.0)))
         if not self._shell:
             return self._act(obs)
         return self._act_shell(obs)
