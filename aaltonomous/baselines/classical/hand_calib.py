@@ -224,7 +224,9 @@ class HandCalibrator:
         zr = (float(z[vis].min()), float(z[vis].max())) if vis.any() else (0.0, 0.0)
         return vis, occ, zr
 
-    def solve(self, cal, cam, depth, arm_q, hand_q=None):
+    def solve(self, cal, cam, depth, arm_q, hand_q=None, lock_tilt=False):
+        """lock_tilt: 4-DOF solve (yaw about the pelvis z axis + xyz); the start pose's pitch/roll (tilt of the camera
+        against the pelvis z axis) stay exactly as they are. Used when perception.online_pitch_cal owns pitch/roll."""
         t0 = time.perf_counter()
         p = self.p
         T0 = None
@@ -294,11 +296,16 @@ class HandCalibrator:
                     return out(False, True, "ICP lost all correspondences", n_model=n_model)
                 nk = Mn[idx] @ R                                          # model normals in the camera frame
                 J = np.hstack([np.cross(Q[m], nk), nk])
+                ax = R.T @ np.array([0.0, 0.0, 1.0])                      # pelvis z axis in the camera frame
+                if lock_tilt:
+                    J = np.hstack([(J[:, :3] @ ax)[:, None], J[:, 3:]])
                 a = np.abs(e)
                 wgt = np.where(a <= p["huber_m"], 1.0, p["huber_m"] / np.maximum(a, 1e-12))
                 H = J.T @ (J * wgt[:, None])
                 g = J.T @ (wgt * e)
-                xi = -np.linalg.solve(H + 1e-9 * np.eye(6), g)
+                xi = -np.linalg.solve(H + 1e-9 * np.eye(J.shape[1]), g)
+                if lock_tilt:
+                    xi = np.r_[xi[0] * ax, xi[1:]]
                 t = R @ xi[3:] + t
                 R = R @ _rodrigues(xi[:3])
                 done = thr <= p["thr_end_m"] and np.linalg.norm(xi) < 1e-5
@@ -327,6 +334,9 @@ class HandCalibrator:
             if n_in >= 6:
                 nk = Mn[idx] @ R
                 J = np.hstack([np.cross(Q[m], nk) / max(np.linalg.norm(Q[m], axis=1).mean(), 1e-6), nk])
+                if lock_tilt:        # observability over the solved DOFs only (yaw + xyz)
+                    ax = R.T @ np.array([0.0, 0.0, 1.0])
+                    J = np.hstack([(J[:, :3] @ ax)[:, None], J[:, 3:]])
                 min_eig = float(np.linalg.eigvalsh(J.T @ J / n_in)[0])
             else:
                 min_eig = 0.0
