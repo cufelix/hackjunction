@@ -1,0 +1,17 @@
+# A/B overlay: ab_pinch_hybrid (no y_affine) + grasp.posture_apex_gate. The demo posture additionally needs a real
+# prism top: apex_conf >= 0.5 AND max vertex angle of the min enclosing triangle <= 75 deg (apex_gate.py), else pinch v1.
+# Why: Modal hybrid 65/82 lost cubes at the left region edge (pelvis y > 0.15): top face cut to 15-28 % by an occluder,
+# classified "triangle" conf 0.89-1.0 -> demo posture -> dropped. Diag run: cut cubes 89.7/90.0 deg, apex_conf 0.00.
+# The [grasp_posture] line logs apex_gate=pass|fallback apex_conf=.. max_angle=..
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_pinch_hybrid_apex <image>.
+name: ab_pinch_hybrid_apex
+flags:
+  grasp.close_posture: closed_tight
+  hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]
+  grasp.point_in_palm: [0.0862, -0.0864, 0.0143]       # right = [0.0862, 0.0864, 0.0143]
+  motion.close_hold_s: 1.2
+  perception.classify_shape: true
+  grasp.close_posture_by_shape: true
+  grasp.posture_by_shape_min_conf: 0.5
+  grasp.posture_apex_gate: true
+  policy.grasp_diag_log: true                 # logs [grasp_posture] label/conf/path/posture + apex gate per pick
