@@ -33,7 +33,7 @@ from aaltonomous.scene.scene import Scene
 
 from . import decision as dec
 from .bin_vote import vote_bins
-from .config import hand_postures, home_arm, load_config
+from .config import hand_postures, home_arm, load_config, soft_detector_active, soft_hand_active, soft_overclose
 from .held import HeldDetector
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
@@ -75,6 +75,12 @@ class ClassicalPolicy:
         self.spec = JointSpec()
         self.post = hand_postures(self.cfg, self.spec)
         self.home = home_arm(self.cfg, self.spec)
+        self._soft_det = soft_detector_active(self.cfg)    # held.soft_detector on a soft hand (default OFF)
+        if self._soft_det:
+            h, g = self.cfg["held"], self.cfg["grasp"]
+            self.held_detector.configure_soft(
+                self.post["preshape"], h["soft_margin_rad"], h["soft_lift_margin_rad"], h["soft_prior_ratio"],
+                float(g["soft_lag_s"]) + float(g["soft_settle_s"]) + float(h["soft_read_after_s"]))
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
         # Mirror SafetyFilter's hand position clamp without constructing or
@@ -242,6 +248,8 @@ class ClassicalPolicy:
         self.slot_pending = None    # (bin, slot, grasp xy, colour) of the last standalone-slot placement
         self._gdiag = None          # policy.grasp_diag_log: the pick being watched
         self.held_detector.reset()
+        self._softcal = None        # held.soft_detector: the episode-start empty close being watched
+        self._softcal_done = False
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
@@ -666,6 +674,8 @@ class ClassicalPolicy:
             self._hand_calibrate(obs, t)
         if self._gdiag is not None:
             self._grasp_diag(obs)
+        if self._softcal is not None:
+            self._soft_baseline_step(obs)
         if self._stall is not None:
             self._lift_on_stall(obs)
         if self._exec is not None and self.queue_a is not None and len(self.queue_a):
@@ -707,6 +717,8 @@ class ClassicalPolicy:
             n = int(round(self.cfg["motion"]["settle_s"] * HZ))
             self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
             self.state = "look"
+            if self._soft_det and not self._softcal_done:
+                self._soft_baseline_start(t)   # one empty close per hand at home, queued: act() never blocks
             return self._pop()
         if self.state == "look" and not self._bv_done and (self.cfg.get("bin") or {}).get("vote", {}).get("enabled"):
             # bin.vote: first n_frames looks at home, before any pick; then freeze the median, never again
@@ -2202,11 +2214,15 @@ class ClassicalPolicy:
         diag_on = self.cfg["policy"].get("grasp_diag_log", False) or self.held_detector.mode == "finger_sum"
         if (diag_on or skill_side) and plan.side in ("left", "right"):
             ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
-            if "close" in ph and "lift" in ph:
-                check = self.held_detector.evaluation_tick(*ph["close"], HZ)
+            lift_key = "lift_check" if "lift_check" in ph else "lift"   # grasp.soft_squeeze: re-read after the first 2 cm
+            if "close" in ph and lift_key in ph:
+                check = self.held_detector.evaluation_tick(
+                    *ph["close"], HZ, hold_start=plan.close_hold[0] if plan.close_hold else None)
                 # skill_only: watched for skills.memory alone -> no empty-grasp abort, no [grasp_diag] line
                 self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": check,
-                               "lift_end": ph["lift"][1], "t": t, "samples": {}, "skill_only": not diag_on}
+                               "lift_end": ph[lift_key][1], "t": t, "samples": {}, "skill_only": not diag_on}
+                if lift_key == "lift_check" and self.held_detector.soft is not None:
+                    self._gdiag["lift_check"] = True
                 if bool((self.cfg.get("held") or {}).get("read_through_carry", False)) \
                         and self.held_detector.mode == "finger_sum" and "carry" in ph:
                     self._gdiag["carry"] = ph["carry"]
@@ -2239,7 +2255,61 @@ class ClassicalPolicy:
     def _enqueue(self, a, h):
         self.queue_a, self.queue_h = np.asarray(a, float), np.asarray(h, float)
 
-    def _held_abort_due(self, g, hq, hc):
+    def _thr(self, key):
+        m = self._soft_margin(key)
+        return self.held_detector.threshold_rad if m is None else m
+
+    def _soft_margin(self, key):
+        """Soft detector margin for a read: the close read uses soft.margin, the lift_check / carry reads the (smaller)
+        lift margin. None when the soft detector is off (held() then ignores it)."""
+        soft = self.held_detector.soft
+        if soft is None:
+            return None
+        return soft["margin"] if key == "close" else soft["lift_margin"]
+
+    def _soft_baseline_start(self, t):
+        """held.soft_detector: once per episode, at home with both hands open, close both hands on nothing with the
+        grasp command (over-closed, same ramp and hold as a pick), read how far the soft fingers lag, reopen. The
+        ratio error/travel is the empty-hand expectation the pick reads are compared against."""
+        self._softcal_done = True
+        g = self.cfg["grasp"]
+        base = self.post[g.get("close_posture", "closed")]
+        cls = soft_overclose(self.cfg, self.spec, base, self.post["preshape"]) if soft_hand_active(self.cfg) else base
+        hv, dt = float(self.cfg["motion"]["hand_max_vel"]), 1.0 / HZ
+        hold = max(float(self.cfg["motion"]["close_hold_s"]),
+                   float(g["soft_lag_s"]) + float(g["soft_settle_s"]) + float(self.cfg["held"]["soft_read_after_s"]))
+        up = ramp(self.hand_cmd, cls, hv, dt)
+        hold_n = int(round(hold / dt))
+        down = ramp(cls, self.post["open"], hv, dt)
+        h = np.vstack([up, np.repeat(np.asarray(cls, float)[None], hold_n, 0), down])
+        a = np.repeat(self.arm_cmd[None], len(h), 0)
+        if self.queue_a is not None and len(self.queue_a):
+            self.queue_a, self.queue_h = np.vstack([self.queue_a, a]), np.vstack([self.queue_h, h])
+        else:
+            self._enqueue(a, h)
+        base_n = len(self.queue_a) - len(a)
+        self._softcal = {"n": len(self.queue_a), "read": base_n + len(up) + hold_n, "t": t, "samples": []}
+        self._note(t, f"soft baseline: empty close of both hands ({len(h) / HZ:.1f} s)")
+
+    def _soft_baseline_step(self, obs):
+        c = self._softcal
+        q = obs.get("hand_q")
+        left = 0 if self.queue_a is None else len(self.queue_a)
+        done = c["n"] - left
+        if q is not None and c["read"] - 12 <= done <= c["read"]:   # the last ~0.4 s of the empty hold
+            c["samples"].append((self._held_command().copy(), np.asarray(q, float).copy()))
+        if done > c["read"] or left == 0:
+            self._softcal = None
+            ok = {}
+            for side in ("left", "right"):
+                good = [(cm, m) for cm, m in c["samples"] if np.all(np.isfinite(m)) and m.shape == (14,)]
+                ok[side] = self.held_detector.soft_calibrate(side, good)
+            ratios = {s_: self.held_detector.soft_ratio(s_) for s_ in ("left", "right")}
+            self.log(f"[soft_baseline] n={len(c['samples'])} ok={ok} empty-close error/travel "
+                     f"left={ {k: round(v, 3) for k, v in ratios['left'].items()} } "
+                     f"right={ {k: round(v, 3) for k, v in ratios['right'].items()} }")
+
+    def _held_abort_due(self, g, hq, hc, margin=None):
         """grasp.held_detector=finger_sum only: the close sample is clearly empty. Unsure (no bias reference, missing
         or non-finite joint data) is never empty, so the placement runs as before."""
         det = self.held_detector
@@ -2247,6 +2317,8 @@ class ClassicalPolicy:
             return False
         if not (np.all(np.isfinite(hq)) and np.all(np.isfinite(hc))):
             return False
+        if det.soft is not None:
+            return not det.held(g["plan"].side, hc, hq, margin)[0]
         return not det.held(g["plan"].side, hc, hq)[0]
 
     def _abort_empty_grasp(self, g, sample="close"):
@@ -2312,8 +2384,9 @@ class ClassicalPolicy:
                             and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
                         self._abort_empty_grasp(g)   # queue replaced; _act pops it on this same tick
                         return
-                    if key == "lift" and read_through and not g.get("skill_only") \
-                            and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
+                    if key == "lift" and (read_through or g.get("lift_check")) and not g.get("skill_only") \
+                            and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float),
+                                                     self._soft_margin("lift")):
                         self._abort_empty_grasp(g, "post-lift")
                         return
             if read_through:
@@ -2339,7 +2412,10 @@ class ClassicalPolicy:
                 parts.append(f"{key}=n/a")
                 continue
             tick, hq, hc = g["samples"][key]
-            held, scores = self.held_detector.held(plan.side, hc, hq)
+            if self.held_detector.soft is not None:
+                held, scores = self.held_detector.held(plan.side, hc, hq, self._soft_margin(key))
+            else:
+                held, scores = self.held_detector.held(plan.side, hc, hq)
             if key == "close":
                 close_held = held
             if self.held_detector.mode == "stall":
@@ -2349,7 +2425,7 @@ class ClassicalPolicy:
             else:
                 parts.append(f"{key}@{tick}: finger_sum={scores['finger_sum']:.3f} "
                              f"index_sum={scores['index']:.3f} middle_sum={scores['middle']:.3f} "
-                             f"threshold={self.held_detector.threshold_rad:.3f} sample_held={'yes' if held else 'no'} "
+                             f"threshold={self._thr(key):.3f} sample_held={'yes' if held else 'no'} "
                              f"stall_vs_closed="
                              f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
         if self.held_detector.mode == "finger_sum" and close_held is not None:
@@ -2357,9 +2433,10 @@ class ClassicalPolicy:
         if read_through:
             post = ([g["samples"]["lift"]] if "lift" in g["samples"] else []) + list(g["samples"].get("carry", []))
             if post:
-                held, scores = self.held_detector.held_max(plan.side, [(hc, hq) for _, hq, hc in post])
+                held, scores = self.held_detector.held_max(plan.side, [(hc, hq) for _, hq, hc in post],
+                                                           self._soft_margin("lift"))
                 parts.append(f"carry_max@n={len(post)}: finger_sum={scores['finger_sum']:.3f} "
-                             f"threshold={self.held_detector.threshold_rad:.3f} "
+                             f"threshold={self._thr('lift'):.3f} "
                              f"sample_held={'yes' if held else 'no'}")
         pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
         if pend is not None and pend["color"] == plan.color:

@@ -291,6 +291,14 @@ grasp:
                               # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
   cylinder_no_yaw_vary: false # FLAG (cyl yaw). Retry on a detected cylinder: no finger-yaw variants (it is rotationally
                               # symmetric); only the posture variant remains. Off = stock (+-retry_yaw_deg[cylinder]).
+  soft_hand: false            # FLAG (softgrip). Soft finger servos (real Dex3 kp 1.5 vs sim ~100); see SOFTGRIP.md
+  soft_overshoot: [0.0, 0.10, 0.10, 0.50, 1.00, 0.50, 1.00]   # FLAG value. soft_squeeze over-closure (rad), LEFT DDS order
+  soft_squeeze: false         # FLAG (softgrip). Soft hand: over-closed posture (hand.soft_overshoot), long hold, slow lift_check
+  soft_limit_margin_rad: 0.03 # over-closure stops this far inside the URDF limits (the safety filter's own margin is 0.02)
+  soft_lag_s: 0.38            # measured real Dex3 finger lag (0.30-0.38 s)
+  soft_settle_s: 0.4          # servo settling after the lag before the squeeze is trusted
+  soft_lift_check_m: 0.02     # first part of the lift (lift_check phase) is slow and re-reads the grip
+  soft_lift_check_scale: 0.35 # speed scale of lift_check (x motion.carry_scale)
   staggered_release: false    # FLAG. Open thumb + DDS slots 3/4 first, then slots 5/6 without blocking act()
   staggered_release_delay_s: 0.30  # delay before DDS slots 5/6 begin opening (overlapping ramps)
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
@@ -405,6 +413,12 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 
 held:
   read_through_carry: false   # FLAG. finger_sum: post-lift + carry max-of-N reads; empty post-lift aborts to retry
+  soft_detector: false        # FLAG (softgrip). finger_sum for SOFT fingers: held = stall further open than the empty-close
+                              # baseline by > soft_margin_rad (sum of a finger's two joints), re-read after the 2 cm lift
+  soft_margin_rad: 0.12       # close read: excess over the empty-close expectation that means "an object stops the fingers"
+  soft_lift_margin_rad: 0.08  # lift_check / carry read: the error must still be this far above the empty expectation
+  soft_read_after_s: 0.4      # close read >= this long after lag + settle (after the close ramp ends)
+  soft_prior_ratio: 0.15      # empty-close error / travel when the episode-start baseline did not run (fraction of travel)
 
 policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)

@@ -74,6 +74,10 @@ flags:
   policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
   grasp.held_detector: stall                   # real held  legacy diagnostic; ab_held_detector selects finger_sum
   held.read_through_carry: false               # finals grasp post-lift + carry grip reads
+  grasp.soft_hand: false                       # softgrip   soft finger servos (off = sim stiffness)
+  grasp.soft_overshoot: [0.0, 0.10, 0.10, 0.50, 1.00, 0.50, 1.00]   # softgrip over-closure, LEFT DDS order
+  grasp.soft_squeeze: false                    # softgrip   over-closed squeeze + lift_check
+  held.soft_detector: false                    # softgrip   soft-finger held detector
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.arm_vel_cap: null                      # Timi vel   rad/s arm speed cap (real robot margin); null = profile 0.97
   motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
