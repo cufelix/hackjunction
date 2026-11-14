@@ -27,6 +27,7 @@ from .shape_id import classify_top_face   # the ONE shape decision; swap this im
 from .shape_2d import decide_shape2d, shape2d_features
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
 from .hue_guard import AMBIGUOUS_CONF, Cand, classify_hue, judge, top_face_hsv
+from . import bare_table
 
 
 def colour_confidence(hsv, blob, ranges_by_class, color, min_area_px=120):
@@ -310,6 +311,14 @@ class Perception:
         self.hue_guard_red_min_s = float(hg.get("red_min_s", 110.0))
         self.topface_mode = self.cfg.get("topface_mode", "top35")
         self.topface_min_px = int(self.cfg.get("topface_min_px", 1024))
+        # bare / glossy table (all default OFF): glare_reject, reflection_reject, local_bg (bare_table.py)
+        self.glare_cfg = dict(self.cfg.get("glare_reject") or {})
+        self.glare_reject = bool(self.glare_cfg.get("enabled", False))
+        self.reflect_cfg = dict(self.cfg.get("reflection_reject") or {})
+        self.reflection_reject = bool(self.reflect_cfg.get("enabled", False))
+        self.local_bg_cfg = dict(self.cfg.get("local_bg") or {})
+        self.local_bg = bool(self.local_bg_cfg.get("enabled", False))
+        self.bare_stats = {"glare_px": 0, "reflection": 0, "local_bg": 0}   # last detect(): diagnostics only
         # Per-episode colour k-means always starts/falls back at the measured
         # robust ranges, regardless of the separately selectable stock set.
         self.colour_kmeans = bool(self.cfg.get("colour_kmeans", False))
@@ -1356,6 +1365,7 @@ class Perception:
         c = self.cfg
         dets, rejected = [], []
         self.color_gate_degraded = False
+        self.bare_stats = {"glare_px": 0, "reflection": 0, "local_bg": 0}
         self.update_counter_height(depth, calibration_frame)    # inert when its flags are off
         self._image_bin_gate_active = False
         self._below_bin_row = None
@@ -1390,7 +1400,8 @@ class Perception:
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
         need_hsv = (self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor or self.sat_floor_adaptive
-                    or self.depth_blob_recover or self.tape_value_cut or self.split_by_solidity or self.gate_below_bins)
+                    or self.depth_blob_recover or self.tape_value_cut or self.split_by_solidity or self.gate_below_bins
+                    or self.glare_reject or self.reflection_reject or self.local_bg)
         hsv = early_hsv if early_hsv is not None else (
             cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None)
         colour_records = [] if self.depth_blob_recover else None
@@ -1401,6 +1412,13 @@ class Perception:
             masks = self._adaptive_saturation_masks(hsv, keep)
         else:
             masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
+        if self.glare_reject:   # baretable
+            masks = self._glare_filter(masks, hsv, depth)
+        all_masks = None
+        if self.local_bg:       # baretable
+            all_masks = np.zeros(keep.shape, np.uint8)
+            for m_ in masks.values():
+                all_masks |= (m_ > 0).astype(np.uint8)
         if self.hue_guard:
             # H1: the red|yellow union is grouped and split before any colour is
             # assigned.  Each resulting part is then classified and guarded
@@ -1424,6 +1442,8 @@ class Perception:
             if k > 0:
                 m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
             n, lab, stats, cent = cv2.connectedComponentsWithStats(m, connectivity=8)
+            skip = (self._reflection_skip(lab, stats, c["min_area_px"], hsv, depth)
+                    if self.reflection_reject and n > 2 else ())
             for i in range(1, n):
                 area = int(stats[i, cv2.CC_STAT_AREA])
                 x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
@@ -1437,7 +1457,11 @@ class Perception:
                     if self.reject_log:
                         rejected.append((self._blob_placeholder(color, area, cent[i]), "min_area"))
                     continue
+                if i in skip:
+                    continue
                 blob = (lab == i).astype(np.uint8)
+                if all_masks is not None and self._local_bg_reject(blob, hsv, all_masks):   # baretable
+                    continue
                 parts = [(blob, area, cent[i])]
                 if self.split_by_solidity:
                     lo, hi = self.split_solidity_cfg.get("area_px", [520, 15500])
@@ -1651,6 +1675,77 @@ class Perception:
             voted.append(replace(rep, top=np.asarray(top, float), uv=uv,
                                  n_px=int(np.median([d.n_px for d in ds]))))
         return voted
+
+    def _counter_heights(self, ys, xs, depth, n=12):
+        """Median object-heights above the counter of up to n valid-depth pixels, None = no valid depth / any failure."""
+        if depth is None or np.ndim(depth) != 2 or not len(ys):
+            return None
+        try:
+            dlo, dhi = self.cfg["depth_range_mm"]
+            sel = np.linspace(0, len(ys) - 1, min(n * 4, len(ys))).astype(int)
+            d = np.asarray(depth)[ys[sel], xs[sel]].astype(float)
+            ok = (d >= dlo) & (d <= dhi)
+            if not ok.any():
+                return None
+            P = self._pixel_to_pelvis(xs[sel][ok][:n], ys[sel][ok][:n], d[ok][:n])
+            return float(np.median((P[:, 2] - self.scene.counter_z) / self.height))
+        except Exception:
+            return None
+
+    def _glare_filter(self, masks, hsv, depth):
+        """perception.glare_reject: remove small specular highlights on the counter plane (and their low-S halo) from the
+        colour masks. Fails open: any error returns the masks unchanged."""
+        g = self.glare_cfg
+        try:
+            hmax = float(g.get("plane_h_max", 0.5))
+
+            def on_plane(ys, xs):
+                h = self._counter_heights(ys, xs, depth)
+                return h is None or h < hmax
+            kill = bare_table.glare_kill_mask(hsv, int(g.get("v_min", 245)), int(g.get("s_max", 40)),
+                                              int(g.get("max_px", 900)), int(g.get("dilate_px", 6)),
+                                              int(g.get("halo_s_max", 65)), on_plane)
+        except Exception as exc:
+            self.log(f"[glare_reject] error {type(exc).__name__}: {exc}")
+            return masks
+        if kill is None:
+            return masks
+        self.bare_stats["glare_px"] = int(kill.sum())
+        keep = (kill == 0).astype(np.uint8) * 255
+        return {c: m & keep for c, m in masks.items()}
+
+    def _reflection_skip(self, lab, stats, min_area, hsv, depth):
+        """perception.reflection_reject: component ids (of one colour) that mirror a stronger blob above them."""
+        try:
+            ids = [i for i in range(1, len(stats)) if stats[i, cv2.CC_STAT_AREA] >= min_area]
+            if len(ids) < 2:
+                return ()
+            r = self.reflect_cfg
+            p = {"max_gap_px": float(r.get("max_gap_px", 40)), "dx_frac": float(r.get("dx_frac", 0.6)),
+                 "width_ratio": tuple(r.get("width_ratio", (0.5, 1.8))), "s_ratio": float(r.get("s_ratio", 0.9)),
+                 "min_iou": float(r.get("min_iou", 0.45)), "h_max": float(r.get("h_max", 0.5))}
+            blobs = []
+            for i in ids:
+                x, y, w, h = (int(stats[i, k]) for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
+                blobs.append((lab[y:y + h, x:x + w] == i, x, y))
+            bad = bare_table.reflection_indices(blobs, hsv, p, lambda ys, xs: self._counter_heights(ys, xs, depth))
+            self.bare_stats["reflection"] += len(bad)
+            return {ids[k] for k in bad}
+        except Exception as exc:
+            self.log(f"[reflection_reject] error {type(exc).__name__}: {exc}")
+            return ()
+
+    def _local_bg_reject(self, blob, hsv, all_masks):
+        """perception.local_bg: blob whose median H/S equals its surrounding ring (the table) is not an object."""
+        try:
+            l = self.local_bg_cfg
+            if bare_table.low_contrast_with_ring(hsv, blob, all_masks, int(l.get("ring_px", 10)),
+                                                 float(l.get("dh", 5)), float(l.get("ds", 25))):
+                self.bare_stats["local_bg"] += 1
+                return True
+        except Exception as exc:
+            self.log(f"[local_bg] error {type(exc).__name__}: {exc}")
+        return False
 
     def _hue_guard_items(self, masks, hsv):
         """perception.hue_guard layer 3: red and yellow pixels form one component per object, so an object whose side
