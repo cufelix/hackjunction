@@ -85,6 +85,7 @@ FLAGS = {
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
     "perception.color_gate.fk_dilate_px": ("New H2", 0, "FK arm/hand per-link silhouette dilation in pixels; 0 = stock sparse-mask tuning"),
     "perception.color_gate.near_margin_m": ("New H2/M1", 0.0, "low-confidence live-bin hedge towards the robot; finals uses bin.vote.max_shift_m"),
+    "perception.rim_z_from_depth": ("rim z", False, "measure each bin's rim height from head depth over its wall footprint (p90 of wall points, median of the first looks, clamped to nominal +-max_delta_m, nominal on bad depth); planner rim clearance, drop height, carry height and wall collision follow it"),
     "perception.color_gate.sat_floor": ("Felix gate", False, "reject blue (purple) blobs with median HSV S < sat_floor_params.blue and yellow < .yellow (shadow / sheen); red and orange unchanged"),
     "perception.sat_floor_adaptive": ("recall P0", False, "blue/purple S floor = max(abs_min, counter-background p90 + margin), retaining the configured hue band"),
     "perception.area_floor_geometric": ("recall P0", False, "area floor from projected prism top x min_frac and ceiling from projected cube top x max_factor"),

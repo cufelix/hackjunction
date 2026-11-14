@@ -363,9 +363,9 @@ class Planner:
         pm = self.scene.pelvis_to_mat(pts)
         b = self.scene.cfg["bins"]
         half = np.asarray(b["outer_size"], float) / 2 + margin
-        rim = self.scene.counter_z + float(b["wall_height"])
         out = np.inf
         for name, c in b["centers"].items():
+            rim = self.scene.rim_z(name)   # perception.rim_z_from_depth; nominal otherwise
             over = np.all(np.abs(pm[:, :2] - self._mat_centre(name, c)) <= half, axis=1)
             if over.any():
                 out = min(out, float((pts[over, 2] - rim).min()))
@@ -381,9 +381,8 @@ class Planner:
         pm = self.scene.pelvis_to_mat(pts)
         b = self.scene.cfg["bins"]
         half = np.asarray(b["outer_size"], float) / 2
-        rim = self.scene.counter_z + float(b["wall_height"])
-        below = pts[:, 2] < rim - 1e-3
         for name, ctr in b["centers"].items():
+            below = pts[:, 2] < self.scene.rim_z(name) - 1e-3
             over = np.all(np.abs(pm[:, :2] - self._mat_centre(name, ctr)) <= half, axis=1)
             if name == allowed_inside:
                 g = self.bin_geometry(name)   # the cavity moves with the bin
@@ -957,9 +956,9 @@ class Planner:
             plan.reason = f"grasp point {100 * (z - zc):.1f} cm above counter: above the object top (point_in_palm?)"
             return plan
 
-        wall = float(sc.cfg["bins"]["wall_height"])
+        wall = sc.rim_wall()   # nominal wall_height unless perception.rim_z_from_depth measured raised rims
         z_carry = zc + max(g["carry_height"], wall + H + 0.03)
-        z_drop = zc + wall + H / 2 + g["drop_above_rim"]
+        z_drop = zc + sc.rim_wall(bin_name) + H / 2 + g["drop_above_rim"]
         if self.drop_extra.get(bin_name):  # bin.vote low-confidence bin: release higher, never above the carry height
             z_drop = min(z_drop + self.drop_extra[bin_name], z_carry)
         if drop_slot is None:  # stock: one release point per bin (#6 off)

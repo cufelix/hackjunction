@@ -238,6 +238,9 @@ class Perception:
         self.refit_per_look = bool(calib_cfg.get("refit_per_look", False))
         self.counter_tracker = None       # installed by policy with the same fitter used by the primary phase
         self.camera_pose_selected = False
+        self.rz_on = bool(self.cfg.get("rim_z_from_depth", False))   # perception.rim_z_from_depth (FLAG, default OFF)
+        self.rz = dict(self.cfg.get("rim_z_params") or {})
+        self._rz_est, self._rz_tries = {}, 0
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
@@ -359,6 +362,9 @@ class Perception:
         self.camera_pose_selected = False
         if self.counter_tracker is not None:
             self.counter_tracker.reset()
+        if self.rz_on:
+            self.scene.rim_z_runtime = None
+            self._rz_est, self._rz_tries = {}, 0
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
         self.pitch_calibration = None
@@ -1027,6 +1033,68 @@ class Perception:
             return self._ah_committed
         return self.accept_counter_height_sample(self.measure_counter_height(depth))[1]
 
+    def _rim_z_looks(self, depth, p):
+        """{bin: (rim z, n wall points)} for one depth frame: p-th percentile of the valid points on each bin's wall ring
+        (outer footprint + margin minus the inner cavity - margin) whose z lies in the nominal rim +- max_delta window.
+        Bins with fewer than min_points such points are absent. Raises on garbage; the caller falls back."""
+        if depth is None or np.ndim(depth) != 2 or np.size(depth) == 0:
+            return {}
+        depth = np.nan_to_num(np.asarray(depth, float), nan=0.0, posinf=0.0, neginf=0.0)
+        dlo, dhi = self.cfg["depth_range_mm"]
+        stride = max(1, int(p.get("stride", 2)))
+        sub = depth[::stride, ::stride]
+        valid = (sub >= dlo) & (sub <= dhi)
+        if valid.mean() < float(self.cfg["min_valid_frac"]):
+            return {}
+        vv, uu = np.nonzero(valid)
+        P = self._pixel_to_pelvis(uu * stride, vv * stride, sub[vv, uu])
+        pm = self.scene.pelvis_to_mat(P)
+        m, delta = float(p.get("margin_m", 0.006)), float(p.get("max_delta_m", 0.04))
+        nominal = self.scene.counter_z + float(self.scene.cfg["bins"]["wall_height"])
+        zwin = (P[:, 2] >= nominal - delta - 0.01) & (P[:, 2] <= nominal + delta + 0.01)
+        out = {}
+        for name, g in self.bin_geometry().items():
+            xy = pm[:, :2]
+            # the frame must agree with the counter around the bin (else flat garbage / a mis-scaled depth passes the window)
+            band = (np.all((xy >= g["outer_lo"] - m - 0.03) & (xy <= g["outer_hi"] + m + 0.03), axis=1) &
+                    ~np.all((xy >= g["outer_lo"] - m) & (xy <= g["outer_hi"] + m), axis=1))
+            zb = P[band, 2]
+            if len(zb) < int(p.get("min_points", 40)) or \
+                    abs(float(np.median(zb)) - self.scene.counter_z) > float(p.get("counter_tol_m", 0.015)):
+                continue
+            outer = np.all((xy >= g["outer_lo"] - m) & (xy <= g["outer_hi"] + m), axis=1)
+            inner = np.all((xy >= g["inner_lo"][:2] + m) & (xy <= g["inner_hi"][:2] - m), axis=1)
+            z = P[outer & ~inner & zwin, 2]
+            if len(z) >= int(p.get("min_points", 40)) and np.isfinite(z).all():
+                out[name] = (float(np.percentile(z, float(p.get("percentile", 90)))), len(z))
+        return out
+
+    def update_rim_z(self, depth):
+        """perception.rim_z_from_depth: one look -> scene.rim_z_runtime[bin] = median of that bin's first N estimates,
+        clamped to nominal +- max_delta_m. Bins without a clean measurement stay nominal. Inert when the flag is off.
+        Cost ~ one strided deprojection (a few ms), runs in the same worker as detect() (never in act())."""
+        p = self.rz
+        n_looks = int(p.get("looks", 3))
+        if not self.rz_on or self._rz_tries >= 3 * n_looks or \
+                (self._rz_est and all(len(v) >= n_looks for v in self._rz_est.values())):
+            return
+        self._rz_tries += 1
+        try:
+            found = self._rim_z_looks(depth, p)
+        except Exception as exc:
+            self.log(f"[rim_z] fallback={type(exc).__name__}")
+            return
+        for name, (z, _) in found.items():
+            if len(self._rz_est.setdefault(name, [])) < n_looks:
+                self._rz_est[name].append(z)
+        nominal = self.scene.counter_z + float(self.scene.cfg["bins"]["wall_height"])
+        delta = float(p.get("max_delta_m", 0.04))
+        applied = {n: float(np.clip(np.median(v), nominal - delta, nominal + delta))
+                   for n, v in self._rz_est.items() if v}
+        self.scene.rim_z_runtime = applied or None   # new dict swapped atomically for the planner
+        self.log("[rim_z] " + (" ".join(f"{n}={z:.4f}(n={len(self._rz_est[n])})" for n, z in applied.items())
+                               or "none") + f" nominal={nominal:.4f}")
+
     def calibrate_bins(self, depth):
         """Estimate a single XY correction by aligning elevated depth points to the fixed bin walls.
 
@@ -1288,6 +1356,7 @@ class Perception:
         dets, rejected = [], []
         self.color_gate_degraded = False
         self.update_counter_height(depth, calibration_frame)    # inert when its flags are off
+        self.update_rim_z(depth)             # perception.rim_z_from_depth (inert when off)
         self._image_bin_gate_active = False
         self._below_bin_row = None
         early_hsv = None

@@ -50,6 +50,7 @@ flags:
   perception.color_gate.fk_dilate_px: 0         # New H2     per-link silhouette dilation (stock/off)
   perception.color_gate.live_bins: false        # Felix gate  per-bin confidence selects tight vote vs conservative union
   perception.color_gate.near_margin_m: 0.0      # New H2/M1  confidence-aware near hedge (stock/off)
+  perception.rim_z_from_depth: false            # rim z     per-bin rim height from head depth (planner clearance / drop / carry)
   perception.color_gate.sat_floor: false       # Felix gate  blue S<110 / yellow S<45 blobs rejected (shadow, sheen)
   perception.sat_floor_adaptive: false         # recall P0 adaptive counter-relative purple saturation floor
   perception.area_floor_geometric: false       # recall P0 projected prism/cube area bounds
