@@ -99,6 +99,7 @@ bin:
     max_shift_m: 0.10         # a result further than this from the prior is discarded (prior kept)
     n_frames: 5               # first frames of the episode (arms home, before any pick); the median is frozen
     low_conf_extra_m: 0.04    # extra release height when the votes do not agree / only the prior is known
+    tape_elong_aspect: 3.0    # tape blob with PCA std-dev aspect above this votes its inner end (nearer the robot)
     min_rim_points: 180
     min_tape_px: 60
     tape_hsv: [[3, 150, 70], [8, 255, 180]]

@@ -6,6 +6,8 @@ from __future__ import annotations
 import numpy as np
 
 TAPE_V_MAX_FRAC = 0.65   # tape only in the upper part of the image (the bins' far rims)
+TAPE_AMBIG_RATIO = 0.5   # two tape blobs on one bin, the 2nd at least half the size of the 1st -> ambiguous, no vote
+CONF_AGREE, CONF_PRIOR, CONF_DISAGREE = 1.0, 0.5, 0.3   # bin confidence: 2-of-3 / 3 agree, prior only, full disagreement
 
 
 def _agree_mean(pts, agree_m):
@@ -24,32 +26,31 @@ def _agree_mean(pts, agree_m):
 
 
 def combine(prior, rim, tape, v):
-    """-> (xy, n_agree, drop_extra) for one bin. Votes = prior (always) + rim/tape (None = missing)."""
+    """-> (xy, n_agree, drop_extra, conf) for one bin. Votes = prior (always) + rim/tape (None = missing).
+    Full disagreement keeps the prior (shift 0) and raises the release; the max_shift cap only guards agreed results."""
     prior = np.asarray(prior, float)
     votes = [prior] + [np.asarray(x, float) for x in (rim, tape) if x is not None and np.all(np.isfinite(x))]
     extra = float(v["low_conf_extra_m"])
     if len(votes) == 1:
-        return prior, 0, extra
+        return prior, 0, extra, CONF_PRIOR
     xy, n = _agree_mean(votes, float(v["agree_m"]))
-    if xy is not None:
-        extra_out = 0.0
-    else:
-        xy, n, extra_out = np.median(votes, axis=0), 0, extra
+    if xy is None:
+        return prior, 0, extra, CONF_DISAGREE
     if np.linalg.norm(xy - prior) > float(v["max_shift_m"]):
-        return prior, 0, extra
-    return xy, n, extra_out
+        return prior, 0, extra, CONF_PRIOR
+    return xy, n, 0.0, CONF_AGREE
 
 
 def resolve(priors, rims, tapes, v):
-    """priors/rims/tapes: {bin: xy|None}. -> (shift {bin: xy}, drop_extra {bin: m}, info {bin: (xy, n_agree)}).
+    """priors/rims/tapes: {bin: xy|None}. -> (shift {bin: xy}, drop_extra {bin: m}, info {bin: (xy, n_agree, conf)}).
     Left/right ordering in y must survive, else the prior for all bins."""
     res = {n: combine(p, rims.get(n), tapes.get(n), v) for n, p in priors.items()}
     order = sorted(priors, key=lambda n: priors[n][1])
     ys = [res[n][0][1] for n in order]
     if any(b <= a for a, b in zip(ys, ys[1:])):
-        res = {n: (np.asarray(p, float), 0, float(v["low_conf_extra_m"])) for n, p in priors.items()}
+        res = {n: (np.asarray(p, float), 0, float(v["low_conf_extra_m"]), CONF_PRIOR) for n, p in priors.items()}
     shift = {n: res[n][0] - np.asarray(priors[n], float) for n in priors}
-    return shift, {n: res[n][2] for n in priors}, {n: (res[n][0], res[n][1]) for n in priors}
+    return shift, {n: res[n][2] for n in priors}, {n: (res[n][0], res[n][1], res[n][3]) for n in priors}
 
 
 def _nearest_bin_points(P, centers, half, search):
@@ -113,10 +114,41 @@ def rim_votes(perception, depth, centers, v):
     return out
 
 
+def _blob_vote(Q, elong):
+    """Tape blob (pelvis xy points) -> vote xy|None. Round blob: its centroid (median). Elongated (PCA std-dev
+    aspect > elong): the inner end, i.e. the end nearer the robot (pelvis origin). Aspect not computable -> None."""
+    Q = np.asarray(Q, float)[:, :2]
+    Q = Q[np.all(np.isfinite(Q), axis=1)]
+    if len(Q) < 3:
+        return None
+    X = Q - Q.mean(axis=0)
+    w, V = np.linalg.eigh(X.T @ X / len(Q))            # ascending eigenvalues
+    if not np.all(np.isfinite(w)) or w[1] <= 1e-12:    # all points on one spot: no shape
+        return None
+    aspect = float(np.sqrt(w[1] / max(w[0], 1e-12)))
+    if aspect <= elong:
+        return np.median(Q, axis=0)
+    t = X @ V[:, 1]
+    ends = [Q[t <= np.quantile(t, 0.2)], Q[t >= np.quantile(t, 0.8)]]
+    inner = min(ends, key=lambda e: np.linalg.norm(np.median(e, axis=0)))
+    return np.median(inner, axis=0)
+
+
+def _bin_blob_vote(blobs, elong):
+    """Blobs (pelvis xy arrays) assigned to one bin -> vote|None. Two comparable blobs on one bin are ambiguous."""
+    blobs = sorted(blobs, key=len, reverse=True)
+    if not blobs:
+        return None
+    if len(blobs) > 1 and len(blobs[1]) >= TAPE_AMBIG_RATIO * len(blobs[0]):
+        return None
+    return _blob_vote(blobs[0], elong)
+
+
 def tape_votes(perception, rgb, depth, centers, v):
-    """{bin: xy|None}: centroid (pelvis xy) of orange-tape pixels near the bin's rim, lifted via depth, or via the
-    rim-height plane where depth is missing. # ponytail: the centroid stands for the bin centre (tape position on
-    the rim is not modelled); upgrade to a per-edge model once the real tape layout is known."""
+    """{bin: xy|None}: per orange-tape blob near the bin's rim (8-connected in the image), lifted via depth or via the
+    rim-height plane where depth is missing; the blob votes its centroid, or its inner end when elongated (see
+    _blob_vote). Ambiguous or missing -> None. # ponytail: no per-edge tape layout model; upgrade once the real
+    tape layout is known."""
     import cv2
     sc = perception.scene
     out = {n: None for n in centers}
@@ -129,6 +161,8 @@ def tape_votes(perception, rgb, depth, centers, v):
     vv, uu = np.nonzero(mask)
     if len(vv) < int(v["min_tape_px"]):
         return out
+    labels = cv2.connectedComponents(mask, connectivity=8)[1]
+    lab = labels[vv, uu]
     rim_z = sc.counter_z + float(sc.cfg["bins"]["wall_height"])
     d = np.zeros(len(vv))
     if depth is not None and np.ndim(depth) == 2:
@@ -149,13 +183,25 @@ def tape_votes(perception, rgb, depth, centers, v):
     else:
         ok2 = np.ones(len(vv), bool)
     near_rim = np.abs(pts[:, 2] - rim_z) <= 0.03          # blobs not near rim height are not tape
-    pts = pts[ok2 & near_rim]
+    keep = ok2 & near_rim
+    pts, lab = pts[keep], lab[keep]
     if len(pts) < int(v["min_tape_px"]):
         return out
     outer = np.asarray(sc.cfg["bins"]["outer_size"], float)[::-1] / 2
-    for n, Q in _nearest_bin_points(pts, centers, outer, float(v["search_m"])).items():
-        if len(Q) >= int(v["min_tape_px"]):
-            out[n] = np.median(Q, axis=0)
+    search = float(v["search_m"])
+    names = list(centers)
+    C = np.array([centers[n] for n in names], float)
+    per_bin = {n: [] for n in names}
+    for l in np.unique(lab):
+        B = pts[lab == l][:, :2]
+        if len(B) < int(v["min_tape_px"]):
+            continue
+        med = np.median(B, axis=0)
+        k = int(np.argmin(np.linalg.norm(C - med, axis=1)))
+        if np.all(np.abs(med - C[k]) <= outer + search):   # blob belongs to its nearest bin's window
+            per_bin[names[k]].append(B)
+    for n in names:
+        out[n] = _bin_blob_vote(per_bin[n], float(v["tape_elong_aspect"]))
     return out
 
 
@@ -165,7 +211,7 @@ def _med(frames, n):
 
 
 def vote_bins(perception, planner, frames, cfg, log=print):
-    """frames: [{"head_rgb", "head_depth"}]. -> (shift, drop_extra). Never raises (prior on any error)."""
+    """frames: [{"head_rgb", "head_depth"}]. -> (shift, drop_extra, conf). Never raises (prior on any error)."""
     v = cfg["bin"]["vote"]
     names = list(planner.scene.bin_names)
     priors = {n: np.asarray(planner.bin_xy(n), float) for n in names}
@@ -179,7 +225,8 @@ def vote_bins(perception, planner, frames, cfg, log=print):
         shift, extra, info = resolve(priors, rim, tape, v)
     except Exception as exc:  # optional feature: never terminate the control loop
         log(f"[bin.vote] failed ({type(exc).__name__}: {exc}); prior positions")
-        return {}, {n: float(v["low_conf_extra_m"]) for n in names}
+        return {}, {n: float(v["low_conf_extra_m"]) for n in names}, {n: CONF_PRIOR for n in names}
     log("[bin.vote] " + " ".join(f"{n}: shift=({1000 * shift[n][0]:+.0f},{1000 * shift[n][1]:+.0f})mm "
-                                  f"agree={info[n][1]} extra={1000 * extra[n]:.0f}mm" for n in names))
-    return shift, extra
+                                  f"agree={info[n][1]} conf={info[n][2]:.1f} extra={1000 * extra[n]:.0f}mm"
+                                  for n in names))
+    return shift, extra, {n: info[n][2] for n in names}

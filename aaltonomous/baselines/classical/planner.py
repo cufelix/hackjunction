@@ -130,6 +130,7 @@ class Planner:
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
         self.drop_extra = {}   # bin.vote: bin name -> extra release height (m) when the bin position is low-confidence
+        self.bin_conf = {}     # bin.vote: bin name -> confidence in bin_shift (1.0 agree, 0.5 prior only, 0.3 disagree)
 
     # ------------------------------------------------------------------ geometry helpers
     def _bin_xy0(self, name):
@@ -205,6 +206,11 @@ class Planner:
         lo, hi = mat / 2 - size / 2, mat / 2 + size / 2
         return np.all((pm[..., :2] >= lo) & (pm[..., :2] <= hi), axis=-1)
 
+    def _mat_centre(self, name, c):
+        """Bin centre in MAT coords, moved by bin.vote's shift (pelvis x = mat y, pelvis y = mat x) if the bin has one."""
+        c = np.asarray(c, float)
+        return c + np.asarray(self.bin_shift[name], float)[::-1] if name in self.bin_shift else c
+
     def bin_clearance(self, side, arm_q, hand_q, margin=0.01):
         """Lowest height (m) above the bin rims of the hand points over a bin's outer footprint (+margin), inf if none.
         Bins are static boxes in the sim and on the table: only the drop itself may go below a rim."""
@@ -214,8 +220,8 @@ class Planner:
         half = np.asarray(b["outer_size"], float) / 2 + margin
         rim = self.scene.counter_z + float(b["wall_height"])
         out = np.inf
-        for c in b["centers"].values():
-            over = np.all(np.abs(pm[:, :2] - np.asarray(c, float)) <= half, axis=1)
+        for name, c in b["centers"].items():
+            over = np.all(np.abs(pm[:, :2] - self._mat_centre(name, c)) <= half, axis=1)
             if over.any():
                 out = min(out, float((pts[over, 2] - rim).min()))
         return out
@@ -233,9 +239,12 @@ class Planner:
         rim = self.scene.counter_z + float(b["wall_height"])
         below = pts[:, 2] < rim - 1e-3
         for name, ctr in b["centers"].items():
-            over = np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1)
+            over = np.all(np.abs(pm[:, :2] - self._mat_centre(name, ctr)) <= half, axis=1)
             if name == allowed_inside:
                 lo, hi = self.scene.bin_inner_box(name)
+                if name in self.bin_shift:   # the cavity moves with the bin
+                    sm = np.r_[np.asarray(self.bin_shift[name], float)[::-1], 0.0]
+                    lo, hi = lo + sm, hi + sm
                 cavity = np.all((pm[:, :2] >= lo[:2]) & (pm[:, :2] <= hi[:2]), axis=1)
                 over &= ~cavity
             if np.any(over & below):

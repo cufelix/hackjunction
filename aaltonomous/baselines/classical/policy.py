@@ -146,7 +146,7 @@ class ClassicalPolicy:
         self._abort = None          # policy.retry_vary_grasp: the close being watched for held=no
         self._summary_logged = False
         self.perception.reset_calibration()
-        self.planner.bin_shift, self.planner.drop_extra = {}, {}   # bin.vote: nominal bins until voted
+        self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = {}, {}, {}   # bin.vote: nominal until voted
         self._bv_frames, self._bv_done = [], False
         self.calibration = None
         self._calibration_done = False
@@ -238,8 +238,8 @@ class ClassicalPolicy:
             if len(self._bv_frames) < int(v["n_frames"]):
                 return self._hold()
             self._bv_done = True
-            shift, extra = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg, log=lambda m: self._note(t, m))
-            self.planner.bin_shift, self.planner.drop_extra = shift, extra
+            shift, extra, conf = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg, log=lambda m: self._note(t, m))
+            self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = shift, extra, conf
             self._bv_frames = []
         if self.state == "look":
             cap = self.cfg["policy"].get("max_total_attempts")
