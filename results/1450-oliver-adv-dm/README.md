@@ -30,4 +30,5 @@ camera-pitch calibration, colour gate with a 3D bin footprint, hand-eye calibrat
 - `adv_profiles_side_by_side.png`: head camera, nominal | real_mild | real_hard, same seed.
 - `real_hard_head.png`: head camera in the real_hard profile.
 
-**Known gap:** one object still renders blue rather than the real purple. A fix is in progress before these images are used externally.
+**Note on colour:** the "purple" object looks blue in these images on purpose. Its colour is the measured mean of
+the real purple object in the real head camera (drop_2 frames): RGB (60, 93, 131).
