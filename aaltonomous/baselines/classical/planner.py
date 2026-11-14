@@ -27,6 +27,7 @@ from aaltonomous.scene.scene import resolve_bin
 
 from .bin_vote import bin_geometry
 from .kinematics import ArmKinematics
+from .config import soft_hand_active, soft_overclose
 
 
 def lookup_bin(cfg, mapping, color, shape=None):
@@ -935,6 +936,10 @@ class Planner:
                 return plan
         hand_pre = hand_q.copy(); hand_pre[sl] = post["preshape"][sl]
         hand_cls = hand_q.copy(); hand_cls[sl] = post[self._posture or g.get("close_posture", "closed")][sl]  # grasp.close_posture
+        soft = soft_hand_active(cfg)   # grasp.soft_squeeze on a soft hand: over-closed target, long hold, slow lift_check
+        if soft:
+            hand_cls[sl] = soft_overclose(cfg, self.spec, post[self._posture or g.get("close_posture", "closed")],
+                                          post["preshape"])[sl]
         hand_open = hand_q.copy(); hand_open[sl] = post["open"][sl]
         hand_rel = hand_q.copy(); hand_rel[sl] = post[g.get("release_posture", "preshape")][sl]
 
@@ -1074,9 +1079,17 @@ class Planner:
         close_hold_s = mo["close_hold_s"]
         if ls.get("enabled", False):  # hold up to timeout_s; the policy starts the lift early on a finger stall
             close_hold_s = max(close_hold_s, float(ls.get("timeout_s", 1.2)))
+        if soft:   # the servo lags ~0.38 s and is soft: hold until the squeeze has built and the read is trustworthy
+            close_hold_s = max(close_hold_s, float(g["soft_lag_s"]) + float(g["soft_settle_s"])
+                               + float(cfg["held"]["soft_read_after_s"]))
         hand("close", hand_cls, close_hold_s)
         cs = min(1.0, float(mo.get("carry_scale", 1.0)))  # motion.carry_scale <= 1: slower lift + carry only
-        move("lift", up, scale=cs)
+        if soft and len(up) > 1:   # lift_check: first soft_lift_check_m slowly; the policy re-reads the grip at its end
+            k = min(len(up) - 1, max(1, int(np.ceil(float(g["soft_lift_check_m"]) / float(mo["cart_step"])))))
+            move("lift_check", up[:k], scale=cs * float(g["soft_lift_check_scale"]))
+            move("lift", up[k:], scale=cs)
+        else:
+            move("lift", up, scale=cs)
         move("carry", carry + lower, scale=cs)
         rw = g.get("release_wait_s")  # grasp.release_wait_s: the retreat starts >= this long after the open command
         hand("open", hand_rel, mo["open_hold_s"] if rw is None else max(mo["open_hold_s"], float(rw)))  # widest posture: `open` alone left the cube wedged in the sim
@@ -1086,7 +1099,7 @@ class Planner:
 
         # clearance over the whole trajectory (grasp phases use the fingertip margin)
         grasp_ticks = np.zeros(len(plan.arm), bool)
-        near = ("descend", "close", "lift") + (("carry", "open", "retreat") if place_xy is not None else ())
+        near = ("descend", "close", "lift_check", "lift") + (("carry", "open", "retreat") if place_xy is not None else ())
         for name, s, e in phases:
             if name in near:
                 grasp_ticks[s:e] = True
@@ -1105,7 +1118,7 @@ class Planner:
         drop = np.zeros(len(plan.arm), bool)
         for name, s_, e in phases:
             drop[s_:e] |= name in ("open",)
-        source_phases = {"descend", "close", "lift"} if source_bin is not None else set()
+        source_phases = {"descend", "close", "lift_check", "lift"} if source_bin is not None else set()
         for k in range(0, len(plan.arm), 3):
             name = next(n for n, s_, e in phases if s_ <= k < e)
             if drop[k]:
