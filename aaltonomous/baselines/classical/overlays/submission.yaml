@@ -72,3 +72,4 @@ flags:
   policy.confidence_tiers: false                # D4         first-seconds calibration tiers
   bin.vote.enabled: false                       # bin vote  per-bin position from 3 votes (A/B: ab_binvote)
   decision.isolated_first: false                # isolated   touching candidates after the isolated ones (isolated_min_m 0.06)
+  perception.inject_cam_error: null             # TEST ONLY [dpitch_deg, dyaw_deg, dx, dy, dz]: perturb the head extrinsics

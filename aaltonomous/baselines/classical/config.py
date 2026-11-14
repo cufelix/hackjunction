@@ -58,6 +58,8 @@ FLAGS = {
     "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = the policy's current bin estimate (bin.vote shift / calibrate_bins); none -> nominal + near_margin_m towards the robot"),
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor by distance, bin footprint/rim rejects, top_k when > max_cands, shape None for non-depth triangles"),
+    "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
+                                                    "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
@@ -221,6 +223,10 @@ def check_flag_values(cfg):
         budget = float(budget)
         if not np.isfinite(budget) or budget <= 0.0:
             raise ValueError(f"policy.object_time_budget_s = {budget}: want null or a finite positive number of seconds")
+    ice = _get(cfg, "perception.inject_cam_error")
+    if ice is not None and not (isinstance(ice, (list, tuple)) and len(ice) == 5
+                                and all(isinstance(x, (int, float)) for x in ice)):
+        raise ValueError(f"perception.inject_cam_error = {ice!r}: want null or [dpitch_deg, dyaw_deg, dx, dy, dz]")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}
