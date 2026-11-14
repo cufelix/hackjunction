@@ -10,7 +10,7 @@ import numpy as np
 from . import decision as dec
 from .config import effective_flags, load_config
 from .perception import Detection
-from .planner import Plan
+from .planner import Plan, lookup_bin
 from .policy import ClassicalPolicy
 
 FLAGS4 = ("confidence_order", "object_time_cap", "speed_tiers", "confidence_tiers")
@@ -158,6 +158,8 @@ class FakePlanner:
     def __init__(self, real, durations):
         self.real, self.durations, self.calls, self.seen = real, durations, [], []
         self.mapping = real.mapping
+        self.cfg = real.cfg
+        self.shared_seen = []     # the REAL (shared) cfg's arm_max_vel as seen by each plan() call
 
     def bin_xy(self, name):
         return self.real.bin_xy(name)
@@ -166,14 +168,15 @@ class FakePlanner:
         return self.real.go_to(*a)
 
     def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True):
-        mo, g = self.real.cfg["motion"], self.real.cfg["grasp"]
+        mo, g = self.cfg["motion"], self.cfg["grasp"]
         self.calls.append(det.color)
+        self.shared_seen.append(self.real.cfg["motion"]["arm_max_vel"])
         self.seen.append((mo["arm_max_vel"], mo["arm_max_acc"], g.get("approach_extra_m", 0.0)))
         dur = self.durations[det.color]
         if dur is None:
             return Plan(False, color=det.color, reason="scripted failure")
         n = int(round(dur * 30))
-        return Plan(True, side="left", color=det.color, target_bin="left", arm=np.zeros((n, 14)), hand=np.zeros((n, 14)),
+        return Plan(True, side="left", color=det.color, target_bin=lookup_bin(self.cfg, self.mapping, det.color, getattr(det, "shape", None)), arm=np.zeros((n, 14)), hand=np.zeros((n, 14)),
                     waypoints={"grasp": det.top.copy(), "drop": det.top.copy()}, ik={"g": (True, 0.0, 0.0)},
                     safety_clips=0, phases=[("descend", 0, n // 4), ("carry", n // 4, n // 2), ("open", n // 2, n)])
 
@@ -413,8 +416,8 @@ class TestSpeedTiers(unittest.TestCase):
         self.assertNotIn("red", pol.planner.calls)
         pol = make(DUR, [side], ("speed_tiers",))
         pol.tiers.observe(False)
-        done = pol.act(obs(0.0))
-        self.assertTrue(done["done"])                       # only side-bin objects left: nothing, never a risky pick
+        pol.act(obs(0.0))
+        self.assertEqual(pol.planner.calls, ["red"])        # F1: no centre object left: the side bin is taken (no deadlock)
 
     def test_outcome_judged_by_the_object_still_being_there(self):
         a = det("red")
@@ -493,22 +496,31 @@ class TestConfidenceTiers(unittest.TestCase):
 
     def test_prior_only_one_centre_attempt_then_hold(self):
         lines = []
-        pol = make(DUR, [det("red", n_px=900), det("yellow")], ("confidence_tiers",), log=lines.append)
+        pol = make(DUR, [det("red", y=0.12, n_px=900), det("yellow")], ("confidence_tiers",), log=lines.append, **{"policy.max_attempts": 1})
         self._hold_through(pol, np.zeros((48, 64)))         # no depth at all: C = 0
         self.assertEqual(pol.tier, dec.PRIOR_ONLY)
         self.assertTrue(any(l.startswith("[tier] PRIOR-ONLY") for l in lines))
         self.assertEqual(pol.planner.calls, ["yellow"])     # the side-bin red is never planned
         pol.queue_a = pol.queue_h = None                    # the attempt is over (object still there)
         pol.state = "look"
-        a = pol.act(obs(30.0, np.zeros((48, 64))))
-        self.assertTrue(a["done"])                          # then hold
-        self.assertEqual(pol.planner.calls, ["yellow"])
+        pol.act(obs(30.0, np.zeros((48, 64))))
+        self.assertEqual(pol.planner.calls, ["yellow", "red"])   # F1: centre exhausted -> one attempt at the side bin
+        pol.queue_a = pol.queue_h = None
+        pol.state = "look"
+        a = pol.act(obs(40.0, np.zeros((48, 64))))
+        self.assertTrue(a["done"])                          # at most one attempt per side bin, then hold
+        self.assertEqual(pol.planner.calls, ["yellow", "red"])
 
-    def test_prior_only_with_side_bin_objects_only_picks_nothing(self):
-        pol = make(DUR, [det("red"), det("blue")], ("confidence_tiers",))
-        self._hold_through(pol, np.zeros((48, 64)))
-        self.assertEqual(pol.planner.calls, [])
-        self.assertEqual(pol.n_started, 0)
+    def test_prior_only_with_side_bin_objects_only_one_attempt_per_side_bin(self):
+        pol = make(DUR, [det("red", n_px=900), det("blue")], ("confidence_tiers",), **{"policy.order": "largest"})
+        z = np.zeros((48, 64))
+        self._hold_through(pol, z)
+        self.assertEqual(pol.planner.calls, ["red"])        # F1: no centre object -> side bins are allowed
+        for t in (30.0, 40.0, 50.0):
+            pol.queue_a = pol.queue_h = None
+            pol.state = "look"
+            pol.act(obs(t, z))
+        self.assertEqual(pol.planner.calls, ["red", "blue"])   # one attempt per side bin, never a third
 
     def test_inputs_pitch_cal_and_bin_agreement_are_used_when_present(self):
         pol = make(DUR, [det("yellow")], ("confidence_tiers",))
@@ -532,3 +544,105 @@ class TestConfidenceTiers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewFixes(unittest.TestCase):
+    def test_f1_failed_centre_pick_falls_back_to_the_side_bins(self):
+        yel = det("yellow", y=0.0, n_px=1200)
+        red, red2, blue = det("red", y=0.1, n_px=900), det("red", x=0.35, y=0.12, n_px=800), det("blue", y=-0.1, n_px=500)
+        pol = make(DUR, [yel, red, red2, blue], ("speed_tiers",), **{"policy.order": "largest", "policy.max_attempts": 1})
+        pol.act(obs(0.0))
+        self.assertEqual(pol.planner.calls, ["yellow"])     # the only centre object first
+        pol.queue_a = pol.queue_h = None
+        pol.state = "look"
+        pol.act(obs(10.0))                                  # yellow is still there: failed; centre exhausted (attempt limit)
+        self.assertTrue(pol.tiers.failed)
+        self.assertEqual(pol.planner.calls[1:], ["red"])    # side-bin objects are picked, not "none"
+        self.assertEqual(pol.planner.seen[1][0], pol.cfg["motion"]["arm_max_vel"] * 0.6)   # still at fail_scale
+        pol.queue_a = pol.queue_h = None
+        pol.state = "look"
+        pol.act(obs(20.0))
+        self.assertEqual(len(pol.planner.calls), 3)         # and the next one, no deadlock
+
+    def test_f1_centre_only_still_holds_while_a_centre_candidate_exists(self):
+        pol = make(DUR, [det("red", n_px=900), det("yellow")], ("speed_tiers",))
+        pol.tiers.observe(False)
+        self.assertEqual([d.color for d in pol._decision_filter(pol.perception.dets, obs(0))], ["yellow"])
+        self.assertTrue(pol.tiers.centre_only())
+        self.assertFalse(pol.tiers.centre_only(has_centre=False))
+
+    def test_f2_endgame_tick_does_not_double_count_lift_on_stall(self):
+        lines = []
+        pol = make({"red": 20.0, "blue": 20.0, "yellow": 20.0}, [det("red")], ("object_time_cap",), log=lines.append)
+        plan = pol.planner.plan(det("red"), pol.arm_cmd, pol.hand_cmd)      # 600 ticks: carry 150..300, open 300..600
+        pol._start(plan, 0.0)
+        pol.arm_cmd, pol.hand_cmd = np.full(14, 0.3), np.zeros(14)
+        cut = 40                                            # 250 ticks played (10 by _start) ...
+        pol.queue_a, pol.queue_h = pol.queue_a[240:], pol.queue_h[240:]
+        pol.queue_a, pol.queue_h = pol.queue_a[cut:], pol.queue_h[cut:]     # ... then lift_on_stall skips 40 hold ticks
+        pol._exec["cut"] += cut                             # (exactly what _lift_on_stall does)
+        pol._hand_xyz = lambda p: np.r_[pol.planner.bin_xy("left"), 0.2]
+        self.assertIsNotNone(pol._endgame(112.0))
+        self.assertTrue(any("plan phase=carry" in l for l in lines), lines)   # tick 290 = carry, not 330 = open
+
+    def test_f4_never_hardest_first_stays_inside_the_centre_group(self):
+        mk = lambda p, t, cf: dict(p=p, t=t, shape="cube", centre_first=cf)
+        c_hard, c_easy, side = mk(0.5, 5, True), mk(0.9, 40, True), mk(0.95, 5, False)
+        out = dec.rank([side, c_hard, c_easy])
+        self.assertEqual(out, [c_easy, c_hard, side])       # swap inside the centre group; the side object never leads
+        self.assertIs(dec.rank([side, c_hard])[0], c_hard)  # a lone centre object is not swapped with a side one
+
+    def test_f5_shared_cfg_is_never_mutated_while_planning(self):
+        pol = make(DUR, [det("red")], ("speed_tiers",))
+        base = (pol.cfg["motion"]["arm_max_vel"], pol.cfg["motion"]["arm_max_acc"], pol.cfg["grasp"].get("approach_extra_m"))
+        pol.act(obs(0.0))
+        self.assertEqual(pol.planner.shared_seen, [base[0]])   # the shared dict kept the stock value during the plan
+        self.assertEqual(pol.planner.seen[0][0], base[0] * 0.7)   # while the plan itself was made at the scaled speed
+        self.assertEqual(base[2], pol.cfg["grasp"].get("approach_extra_m"))
+        self.assertEqual(pol.cfg["motion"]["arm_max_vel"], base[0])
+
+    def test_f6_two_same_colour_objects_5cm_apart_clean_pick_is_not_failed(self):
+        a = det("red", x=0.30)
+        pol = make(DUR, [a], ("speed_tiers",))
+        pol._pend_out = {"color": "red", "xy": a.top[:2].copy()}
+        pol._observe_outcome([det("red", x=0.35)])          # the neighbour 5 cm away is another object
+        self.assertFalse(pol.tiers.failed)
+        self.assertEqual(pol.tiers.n_clean, 1)
+        pol._pend_out = {"color": "red", "xy": a.top[:2].copy()}
+        pol._observe_outcome([det("red", x=0.315)])         # 1.5 cm: the same object -> failure
+        self.assertTrue(pol.tiers.failed)
+
+    def test_f6_with_retry_tracks_the_survivor_must_belong_to_the_attempt_track(self):
+        a = det("red", x=0.30)
+        pol = make(DUR, [a], ("speed_tiers",))
+        pol.attempt_tracks = [{"color": "red", "xy": np.array([0.30, 0.0]), "count": 1}]
+        pol._pend_out = {"color": "red", "xy": a.top[:2].copy()}
+        pol._observe_outcome([det("red", x=0.31)])
+        self.assertTrue(pol.tiers.failed)
+        pol.attempt_tracks = [{"color": "blue", "xy": np.array([0.30, 0.0]), "count": 1}]   # no red track here
+        pol._pend_out = {"color": "red", "xy": a.top[:2].copy()}
+        pol._observe_outcome([det("red", x=0.31)])
+        self.assertFalse(pol.tiers.failed)
+
+    def test_f7_a_raising_decision_helper_falls_back_to_stock_and_warns_once(self):
+        lines = []
+        pol = make(DUR, [det("red", n_px=900), det("yellow")], FLAGS4, log=lines.append)
+        pol.tier = dec.CONFIDENT
+
+        def boom(*a, **k):
+            raise RuntimeError("kaput")
+        pol._conf_info = boom
+        for t in (0.0, 10.0):
+            pol.queue_a = pol.queue_h = None
+            pol.state = "look"
+            pol.act(obs(t))                                 # must not raise
+        warn = [l for l in lines if l.startswith("[decision] ")]
+        self.assertEqual(len(warn), 2, warn)                # one per helper (_decision_filter, _conf_rank), once per episode
+        self.assertTrue(all("stock behaviour" in l for l in warn))
+        self.assertTrue(pol.planner.calls)                  # stock order still plans something
+        pol2 = make(DUR, [det("red")], ("object_time_cap",), log=lines.append)
+        plan = pol2.planner.plan(det("red"), pol2.arm_cmd, pol2.hand_cmd)
+        pol2._start(plan, 0.0)
+        pol2._over_target_bin = boom
+        pol2._hand_xyz = lambda p: np.zeros(3)
+        pol2.act(obs(115.0))                                # T-8 with a raising endgame helper: no exception

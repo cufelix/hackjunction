@@ -93,10 +93,12 @@ def rank(items, d=None):
     cost = {"cube": 0, "cylinder": 1, "triangle": 2}
     out = sorted(items, key=lambda it: (not it.get("centre_first", False),      # DEGRADED: centre bin first
                                         -round(priority(it["p"], it["t"]), 9), cost.get(it["shape"], 1)))
-    if len(out) > 1:
-        lowest = min(it["p"] for it in out)
-        hardest = [it for it in out if it["p"] <= lowest + 1e-9]
-        if len(hardest) == 1 and out[0] is hardest[0] and lowest < max(it["p"] for it in out) - 1e-9:
+    # the swap stays inside the leading centre_first group: it never moves a side object ahead of a centre one
+    grp = [it for it in out if bool(it.get("centre_first", False)) == bool(out[0].get("centre_first", False))] if out else []
+    if len(grp) > 1:
+        lowest = min(it["p"] for it in grp)
+        hardest = [it for it in grp if it["p"] <= lowest + 1e-9]
+        if len(hardest) == 1 and out[0] is hardest[0] and lowest < max(it["p"] for it in grp) - 1e-9:
             out[0], out[1] = out[1], out[0]
     return out
 
@@ -160,8 +162,9 @@ class SpeedTiers:
     def clearance(self):
         return float(self.d["first_clearance_m"]) if self.n_done == 0 and not self.failed else 0.0
 
-    def centre_only(self):
-        return self.failed
+    def centre_only(self, has_centre=True):
+        """Centre-bin only after a failure, but only while a centre-bin candidate exists (else: no deadlock)."""
+        return self.failed and bool(has_centre)
 
     def observe(self, clean):
         self.n_done += 1
