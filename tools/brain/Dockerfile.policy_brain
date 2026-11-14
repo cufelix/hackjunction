@@ -30,6 +30,8 @@ RUN cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTU
 FROM ${POLICY_IMAGE} AS brain
 ARG BRAIN_ENABLED
 ARG BRAIN_OVERLAY=finals_r23_universal
+ARG PROFILE_MODE=auto   # auto | sim | real: baked as profile_auto.force (null | sim | none) via tools/set_profile_mode.py
+ENV PROFILE_MODE=${PROFILE_MODE}
 ENV BRAIN_ENABLED=${BRAIN_ENABLED}
 WORKDIR /app
 
@@ -46,6 +48,8 @@ COPY tools/brain/entrypoint.policy_brain.sh /opt/brain/entrypoint.sh
 # ---- overlay: the release image bakes submission.yaml as overlay.yaml. Replace it with the agent overlay, then set the
 # two brain keys from BRAIN_ENABLED (1 = on, anything else = off), and run the release checks against the result.
 COPY aaltonomous/baselines/classical/overlays/${BRAIN_OVERLAY}.yaml aaltonomous/baselines/classical/overlay.yaml
+COPY tools/set_profile_mode.py tools/set_profile_mode.py
+RUN python3 tools/set_profile_mode.py aaltonomous/baselines/classical/overlay.yaml "${PROFILE_MODE}"
 RUN python3 -c "import os, yaml; \
 p='aaltonomous/baselines/classical/overlay.yaml'; d=yaml.safe_load(open(p)); f=d['flags']; \
 f['brain.enabled']=os.environ['BRAIN_ENABLED']=='1'; f['brain.url']='http://127.0.0.1:8080/completion'; \
