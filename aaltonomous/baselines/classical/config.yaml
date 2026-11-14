@@ -16,6 +16,9 @@ calib:
   plane:
     apply_height: false       # FLAG (P0 table): runtime counter_z from the head-depth counter plane (perception.update_counter_height)
     looks: 3                  # median over the first N valid looks
+    max_spread_m: 0.015       # all N accepted heights must fit this peak-to-peak gate before one episode commit
+    max_mad_m: 0.006          # and this median-absolute-deviation gate (reject transient/mixed planes)
+    timeout_s: 3.0            # pre-motion hold phase: nominal fallback after this many seconds
     max_dz_m: 0.20            # clamp |z - nominal|
     max_tilt_deg: 8.0         # plane tilt above this -> nominal (tilt is only reported, never corrected)
     min_inliers: 500          # plane inliers needed

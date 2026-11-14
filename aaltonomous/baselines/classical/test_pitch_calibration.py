@@ -410,11 +410,13 @@ class TestFirstLookWaitsForPitchCal(unittest.TestCase):
 
     def test_holds_until_commit_then_releases_and_expires(self):
         pol = self._policy(TABLE_ON)
-        pol.threaded, pol.arm_cmd, pol._ep_t0 = True, np.zeros(14), 0.0
-        self.assertTrue(pol._await_pitch_cal(0.2))           # threaded: never blocks, just holds
-        self.assertFalse(pol._await_pitch_cal(1.0))          # max 1.0 s sim time from the episode start
+        pol.threaded, pol.arm_cmd = True, np.zeros(14)
+        pol._ep_t0, pol._calib_phase_t0 = 0.0, 5.0
+        self.assertTrue(pol._await_pitch_cal(5.2))           # threaded: never blocks, just holds
+        self.assertTrue(pol._await_pitch_cal(5.99))          # episode age is irrelevant (H3)
+        self.assertFalse(pol._await_pitch_cal(6.0))          # max 1.0 s from calibration-phase entry
         pol.pitch_calibration = object()
-        self.assertFalse(pol._await_pitch_cal(0.2))          # committed
+        self.assertFalse(pol._await_pitch_cal(5.2))          # committed
 
     def test_flag_off_never_waits(self):
         pol = self._policy({})

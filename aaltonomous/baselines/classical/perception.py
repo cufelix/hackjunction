@@ -12,7 +12,10 @@ height instead (method "plane"). Blobs over the bins, off the mat, or at a wrong
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+import threading
 import time
 
 import cv2
@@ -170,6 +173,22 @@ class PitchCalibration:
     T: object = field(default=None, repr=False, compare=False)  # corrected extrinsic when success
 
 
+@dataclass(frozen=True)
+class FrameTransform:
+    """One immutable camera transform used by every projection/deprojection of one RGB-D frame."""
+    T: np.ndarray = field(repr=False, compare=False)
+    version: int = 0
+
+
+@dataclass(frozen=True)
+class CounterHeightSample:
+    """Pure result of one counter-plane height fit; committing it is a separate main-thread operation."""
+    z: float
+    tilt_deg: float
+    n_inliers: int
+    reason: str | None
+
+
 class Perception:
     def __init__(self, cfg, scene, calibration, log=None):
         self.cfg = cfg["perception"]
@@ -208,6 +227,8 @@ class Perception:
         scene.counter_z_prior = (cfg.get("scene") or {}).get("counter_z_prior")   # None = nominal
         self.ah = (cfg.get("calib") or {}).get("plane") or {}   # calib.plane.apply_height (FLAG, default OFF)
         self._ah_est, self._ah_tries = [], 0
+        self._ah_done = not bool(self.ah.get("apply_height"))
+        self._ah_committed = None
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
@@ -218,6 +239,9 @@ class Perception:
         self.online_pitch_cal = self.cfg.get("online_pitch_cal", False)
         self.pitch_calibration = None
         self.pitch_T = None
+        self._transform_lock = threading.Lock()
+        self._transform_version = 0
+        self._frame_transform = ContextVar(f"perception_frame_{id(self)}", default=None)
         # opt-in shape / triangle pose (all default OFF = stock behaviour)
         grasp = cfg.get("grasp", {})
         self.generic_fallback = bool(grasp.get("generic_fallback", False))
@@ -281,19 +305,44 @@ class Perception:
         """Restore the configured fallback at the start of every episode."""
         self.scene.counter_z_runtime = None
         self._ah_est, self._ah_tries = [], 0
+        self._ah_done = not bool(self.ah.get("apply_height"))
+        self._ah_committed = None
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
         self.pitch_calibration = None
-        self.pitch_T = None
+        with self._transform_lock:
+            self.pitch_T = None
+            self.cal = self.cal_nominal   # B1: a hand-calibrated copy never outlives its episode
+            self._transform_version += 1
         if self.colour_kmeans:
             self.hsv = self._colour_kmeans_base
             self._colour_kmeans_done = False
             self._colour_kmeans_tries = 0
             self.colour_kmeans_info = None
-        self.cal = self.cal_nominal   # B1: a hand-calibrated copy never outlives its episode
 
-    def _T(self):
-        """Episode-corrected camera pose, or the untouched nominal calibration."""
+    def frame_transform(self):
+        """Snapshot the current camera pose/version for one complete RGB-D frame."""
+        with self._transform_lock:
+            T = np.array(self.pitch_T if self.pitch_T is not None else self.cal._T(self.cam), float, copy=True)
+            version = self._transform_version
+        T.setflags(write=False)
+        return FrameTransform(T, version)
+
+    @contextmanager
+    def use_frame_transform(self, frame=None):
+        """Make one immutable transform visible to all nested frame consumers in this thread."""
+        snap = self.frame_transform() if frame is None else frame
+        token = self._frame_transform.set(snap)
+        try:
+            yield snap
+        finally:
+            self._frame_transform.reset(token)
+
+    def _T(self, frame=None):
+        """Episode-corrected camera pose, or the immutable transform bound to the current frame."""
+        snap = frame if frame is not None else self._frame_transform.get()
+        if snap is not None:
+            return snap.T
         T = self.pitch_T
         return T if T is not None else self.cal._T(self.cam)
 
@@ -303,23 +352,29 @@ class Perception:
         T.setflags(write=False)
         return T
 
-    def _pixel_to_pelvis(self, u, v, depth_mm, transform_snapshot=None):
+    def _pixel_to_pelvis(self, u, v, depth_mm, frame=None, transform_snapshot=None):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.pixel_to_pelvis.
-        if transform_snapshot is not None:
+        if transform_snapshot is not None:   # fixvote H4 explicit per-frame pose
             T = np.asarray(transform_snapshot, float)
             p = self.cal.deproject(self.cam, u, v, depth_mm)
             return p @ T[:3, :3].T + T[:3, 3]
-        T = self.pitch_T  # read once: a worker thread may swap it in
-        if T is None:
+        snap = frame if frame is not None else self._frame_transform.get()
+        T = snap.T if snap is not None else self.pitch_T
+        if T is None and snap is None:
             return self.cal.pixel_to_pelvis(self.cam, u, v, depth_mm)
+        if T is None:
+            T = self.cal._T(self.cam)
         p = self.cal.deproject(self.cam, u, v, depth_mm)
         return p @ T[:3, :3].T + T[:3, 3]
 
-    def _project(self, p_pelvis):
+    def _project(self, p_pelvis, frame=None):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.project.
-        T = self.pitch_T
-        if T is None:
+        snap = frame if frame is not None else self._frame_transform.get()
+        T = snap.T if snap is not None else self.pitch_T
+        if T is None and snap is None:
             return self.cal.project(self.cam, p_pelvis)
+        if T is None:
+            T = self.cal._T(self.cam)
         p = (np.asarray(p_pelvis, float) - T[:3, 3]) @ T[:3, :3]
         K = self.cal.cams[self.cam].K
         z = p[..., 2]
@@ -352,9 +407,11 @@ class Perception:
         return PitchCalibration(False, True, 0.0, 0, np.inf, float(elapsed_ms), str(reason), mode=self._pitch_mode())
 
     def commit_pitch(self, out):
-        """Install a result: the extrinsic first, then the record (single attribute stores, atomic under the GIL)."""
-        self.pitch_T = None if not out.success else np.asarray(out.T, float).copy()
-        self.pitch_calibration = out
+        """Install one transform/version atomically; active frame snapshots remain immutable."""
+        with self._transform_lock:
+            self.pitch_T = None if not out.success else np.asarray(out.T, float).copy()
+            self.pitch_calibration = out
+            self._transform_version += 1
         return out
 
     def pitch_frame_valid(self, rgb, depth):
@@ -756,17 +813,19 @@ class Perception:
     def current_T(self):
         """T_pelvis_optical perception uses right now. perception.online_pitch_cal (timi/pitch-cal) keeps its corrected
         pose in self.pitch_T (None = nominal); hand calibration starts from whatever is current, so it chains AFTER it."""
-        T = getattr(self, "pitch_T", None)
-        return np.array(T if T is not None else self.cal._T(self.cam), float)
+        frame = self._frame_transform.get()
+        return np.array(frame.T if frame is not None else self.frame_transform().T, float)
 
     def set_camera_pose(self, T):
         """perception.hand_calibration: use T as this camera's T_pelvis_optical until the next reset, on a copy of the
         calibration (the shared object stays nominal). With online_pitch_cal merged, pitch_T (which wins in _T /
         _pixel_to_pelvis / _project) is set too, so every path sees the refined pose."""
         from .hand_calib import corrected_calibration
-        self.cal = corrected_calibration(self.cal, self.cam, T)
-        if hasattr(self, "pitch_T"):
-            self.pitch_T = np.array(T, float)
+        with self._transform_lock:
+            self.cal = corrected_calibration(self.cal, self.cam, T)
+            if hasattr(self, "pitch_T"):
+                self.pitch_T = np.array(T, float)
+            self._transform_version += 1
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""
@@ -838,27 +897,58 @@ class Perception:
             return z, tilt, n, f"tilt {tilt:.1f} deg"
         return z, tilt, n, None
 
-    def update_counter_height(self, depth):
-        """calib.plane.apply_height: one look -> scene.counter_z_runtime = median of the first N valid estimates, clamped.
-        Inert (no state touched) when the flag is off."""
+    def measure_counter_height(self, depth, frame=None):
+        """Pure counter-plane fit for a copied frame; safe to run in a background worker."""
         a = self.ah
-        n_looks = int(a.get("looks", 3))
-        if not a.get("apply_height") or len(self._ah_est) >= n_looks or self._ah_tries >= 3 * n_looks:
-            return
-        self._ah_tries += 1
-        nom = self.scene.nominal_counter_z
         try:
-            z, tilt, n, why = self._plane_height(depth, a)
+            if frame is None:
+                z, tilt, n, why = self._plane_height(depth, a)
+            else:
+                with self.use_frame_transform(frame):
+                    z, tilt, n, why = self._plane_height(depth, a)
         except Exception as exc:
             z, tilt, n, why = float("nan"), float("nan"), 0, f"{type(exc).__name__}"
-        if why is None and np.isfinite(z):
-            self._ah_est.append(z)
-        est = float(np.median(self._ah_est)) if self._ah_est else float("nan")
-        lim = float(a.get("max_dz_m", 0.20))
-        applied = float(np.clip(est, nom - lim, nom + lim)) if self._ah_est else nom
-        self.scene.counter_z_runtime = applied if self._ah_est else None
-        self.log(f"[apply_height] est={est:.4f} applied={applied:.4f} n={len(self._ah_est)} tilt_deg={tilt:.2f} "
-                 f"fallback={why or ('clamped' if applied != est else 'none')}")
+        return CounterHeightSample(float(z), float(tilt), int(n), why)
+
+    def accept_counter_height_sample(self, sample, commit_scene=True):
+        """Apply the N-sample spread/MAD gate and latch at most one runtime height per episode."""
+        a = self.ah
+        if not a.get("apply_height") or self._ah_done:
+            return self._ah_done, self._ah_committed
+        self._ah_tries += 1
+        n_looks = max(1, int(a.get("looks", 3)))
+        if sample.reason is None and np.isfinite(sample.z):
+            self._ah_est.append(float(sample.z))
+        window = np.asarray(self._ah_est[-n_looks:], float)
+        est = float(np.median(window)) if len(window) else float("nan")
+        spread = float(np.ptp(window)) if len(window) else float("inf")
+        mad = float(np.median(np.abs(window - est))) if len(window) else float("inf")
+        consistent = (len(window) == n_looks and spread <= float(a.get("max_spread_m", 0.015))
+                      and mad <= float(a.get("max_mad_m", 0.006)))
+        applied = None
+        fallback = sample.reason or "collecting"
+        if consistent:
+            nom, lim = self.scene.nominal_counter_z, float(a.get("max_dz_m", 0.20))
+            applied = float(np.clip(est, nom - lim, nom + lim))
+            self._ah_done, self._ah_committed = True, applied
+            if commit_scene:
+                self.scene.counter_z_runtime = applied
+            fallback = "clamped" if applied != est else "none"
+        elif len(window) == n_looks:
+            fallback = f"inconsistent(spread={spread:.4f},mad={mad:.4f})"
+        if not self._ah_done and self._ah_tries >= 3 * n_looks:
+            self._ah_done, self._ah_committed = True, None
+            fallback = "sample_gate_exhausted"
+        shown = self.scene.nominal_counter_z if applied is None else applied
+        self.log(f"[apply_height] est={est:.4f} applied={shown:.4f} n={len(window)}/{n_looks} "
+                 f"spread={spread:.4f} mad={mad:.4f} tilt_deg={sample.tilt_deg:.2f} fallback={fallback}")
+        return self._ah_done, self._ah_committed
+
+    def update_counter_height(self, depth):
+        """Synchronous compatibility helper; policy preflight uses measure/accept in a worker + main thread."""
+        if not self.ah.get("apply_height") or self._ah_done:
+            return self._ah_committed
+        return self.accept_counter_height_sample(self.measure_counter_height(depth))[1]
 
     def calibrate_bins(self, depth):
         """Estimate a single XY correction by aligning elevated depth points to the fixed bin walls.
@@ -1045,7 +1135,14 @@ class Perception:
         if self._colour_kmeans_tries >= 3:
             self._colour_kmeans_done = True  # give up after the 3rd attempt; robust ranges stay
 
-    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None):
+    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None, frame=None):
+        """Detect one frame under one immutable transform/version when online calibration is enabled."""
+        if not self.online_pitch_cal and frame is None:
+            return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q)
+        with self.use_frame_transform(frame):
+            return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q)
+
+    def _detect_frame(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None):
         """Detect coloured objects.
 
         ``include_bins`` keeps pixels over the known bin footprints long enough for

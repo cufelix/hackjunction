@@ -48,7 +48,7 @@ flags:
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
   perception.color_gate.enabled: true          # Felix gate   A/B arm: cand_r17 + the color_gate post-filter
-  perception.online_pitch_cal: table            # Timi pitch per-episode camera pitch from the counter plane
+  perception.online_pitch_cal: table            # H3: hold-only preflight; immutable transform/version per RGB-D frame
   perception.color_gate.live_bins: true        # Felix gate  per-bin confidence chooses tight vote vs conservative union
   perception.color_gate.fk_mask: true          # Felix gate  filled per-link FK arm/hand silhouette
   perception.color_gate.fk_dilate_px: 3        # New H2     render-tested RGB/FK fringe; nearby spawn-object recall
@@ -65,7 +65,7 @@ flags:
   bin.geometry_runtime: true                    # r20 R2  every bin consumer follows the voted shift
   grasp.release_wait_s: 0.5                     # lag R44  hold >= 0.5 s after the open command before the retreat
   grasp.release_confirm: true                   # lag R49  empty-hand check after the open; re-open once, else home + stop
-  grasp.held_detector: finger_sum               # r20     bias-corrected held; empty close aborted early
+  grasp.held_detector: finger_sum               # C4: empty close uses proved open -> vertical escape -> checked home
   grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort
-  calib.plane.apply_height: true                # r20 R9  runtime counter_z from the depth plane (real table +5..14 cm), clamp 0.20, nominal fallback
+  calib.plane.apply_height: true                # C5/H6: pre-motion N-sample gated height + shared planner keepout/staging
   perception.color_gate.sat_floor: true
