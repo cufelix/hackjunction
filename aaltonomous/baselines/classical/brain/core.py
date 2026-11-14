@@ -45,6 +45,9 @@ def build_world(dets, bins, instruction, task, resolver_mapping, resolver_bin_fn
                      "xy": [round(float(d.top[0]), 4), round(float(d.top[1]), 4)],
                      "reachable": safe(reach_fn, d, rb) if rb is not None else None,
                      "near_bin": safe(near_bin_fn, d), "resolver_bin": rb})
+        if getattr(d, "novel", False):       # brain.find_to_detection: a depth-blob object the colour detector never saw
+            objs[-1].update(novel=True, label=getattr(d, "label", None), footprint=list(getattr(d, "footprint", None) or ()),
+                            height=getattr(d, "height_m", None), graspable=not getattr(d, "ungraspable", False))
     return {"task": task, "instruction": instruction or "", "objects": objs, "frame": "pelvis",
             "last_pick": last_pick,
             "bins": [{"name": n, "xy": [round(float(xy[0]), 4), round(float(xy[1]), 4)], "source": s}
@@ -145,6 +148,10 @@ class PlannerBackend:
     def decide(self, request_json):  # pragma: no cover
         raise NotImplementedError
 
+    def plan(self, request_json):  # pragma: no cover
+        """Whole-instruction plan API used only by the opt-in brain.planner layer."""
+        raise NotImplementedError
+
 
 class StubPlanner(PlannerBackend):
     """No model: picks the classical planner's own choice, confidence 1.0 -> behaviour identical to the brain off."""
@@ -153,6 +160,9 @@ class StubPlanner(PlannerBackend):
         r = json.loads(request_json)
         return json.dumps({"choice": int(r["classical"]), "confidence": 1.0})
 
+    def plan(self, request_json):
+        return "[]"                 # no override: planner mode with the stub falls back to classical
+
 
 class LlamaCppHTTPBackend(PlannerBackend):
     """llama.cpp server /completion with a GBNF grammar (index enum + confidence), temperature 0, ~24 tokens.
@@ -160,11 +170,12 @@ class LlamaCppHTTPBackend(PlannerBackend):
     deadline and a size cap. Returns the generated text; validation happens in BrainLayer (validate_decision)."""
 
     def __init__(self, url="http://127.0.0.1:8080/completion", timeout_s=1.5, n_predict=32, chatml=True,
-                 max_response_bytes=MAX_RESPONSE_BYTES):
+                 max_response_bytes=MAX_RESPONSE_BYTES, plan_n_predict=512):
         self.base = url.rstrip("/")
         if self.base.endswith("/completion"):
             self.base = self.base[:-len("/completion")]
         self.timeout_s, self.n_predict, self.chatml = float(timeout_s), int(n_predict), bool(chatml)
+        self.plan_n_predict = int(plan_n_predict)
         self.max_response_bytes = int(max_response_bytes)
 
     @staticmethod
@@ -235,6 +246,22 @@ class LlamaCppHTTPBackend(PlannerBackend):
         with urllib.request.urlopen(r, timeout=self.timeout_s) as resp:
             return str(json.loads(self._read_bounded(resp, self.max_response_bytes, deadline))["content"]).strip()
 
+    def plan(self, request_json):
+        """Strict JSON whole-plan completion; semantic validation remains in brain.planner."""
+        from .planner import plan_gbnf, plan_prompt
+        req = json.loads(request_json)
+        timeout = min(self.timeout_s, float(req["timeout_s"])) if req.get("timeout_s") else self.timeout_s   # closed loop: per-call
+        deadline = time.monotonic() + timeout
+        prompt = plan_prompt(req)
+        if self.chatml:
+            prompt = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+        body = {"prompt": prompt, "grammar": plan_gbnf(), "temperature": 0,
+                "n_predict": int(req.get("n_predict") or self.plan_n_predict), "cache_prompt": True}
+        r = urllib.request.Request(self.base + "/completion", data=json.dumps(body).encode(),
+                                   headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(r, timeout=timeout) as resp:
+            return str(json.loads(self._read_bounded(resp, self.max_response_bytes, deadline))["content"]).strip()
+
 
 def make_backend(name, cfg=None, log=None):
     """brain.backend: stub | llamacpp. HTTP availability is checked only by asynchronous decisions, so policy
@@ -245,7 +272,8 @@ def make_backend(name, cfg=None, log=None):
     if name == "llamacpp":
         return LlamaCppHTTPBackend(cfg.get("url", "http://127.0.0.1:8080/completion"),
                                    cfg.get("request_timeout_s", 1.5), cfg.get("n_predict", 32),
-                                   cfg.get("chatml", True), cfg.get("max_response_bytes", MAX_RESPONSE_BYTES))
+                                   cfg.get("chatml", True), cfg.get("max_response_bytes", MAX_RESPONSE_BYTES),
+                                   cfg.get("plan_n_predict", 512))
     raise ValueError(f"unknown brain.backend {name!r} (stub | llamacpp)")
 
 
@@ -459,4 +487,3 @@ class BrainLayer:
         except Exception as e:
             self.log(f"[brain] take failed ({e!r}), classical decides")
             return None
-
