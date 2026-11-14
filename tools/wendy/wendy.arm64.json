@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wendy.dev/schemas/wendy.json",
+  "appId": "vaiski-policy",
+  "platform": "linux/arm64",
+  "version": "1.0.0",
+  "readiness": {
+    "tcpSocket": { "port": 8000 },
+    "timeoutSeconds": 120
+  },
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8000 }
+  ]
+}
