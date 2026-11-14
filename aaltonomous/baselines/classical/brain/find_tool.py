@@ -6,6 +6,10 @@ URL = "http://127.0.0.1:8080/v1/chat/completions"
 PROMPT = ('Locate every instance that matches: {d}. Output bbox_2d coordinates in JSON: '
           '[{{"bbox_2d":[x1,y1,x2,y2],"label":"..."}}]. If nothing matches, output [].')
 
+# Static prefix first (system turn, identical every call -> llama.cpp prompt cache), then the image, then the phrase.
+SYSTEM = ('You locate objects in images. For the description the user gives, output bbox_2d coordinates in JSON: '
+          '[{"bbox_2d":[x1,y1,x2,y2],"label":"..."}]. If nothing matches, output [].')
+
 def _png_size(b):
     if b[:8] == b"\x89PNG\r\n\x1a\n":
         return int.from_bytes(b[16:20], "big"), int.from_bytes(b[20:24], "big")
@@ -25,17 +29,23 @@ def _parse(txt):
         data = [data]
     return data if isinstance(data, list) else []
 
-def find(image, description, url=URL, timeout=60, return_meta=False):
-    """image: path or bytes (PNG/JPEG). Returns list of dicts, [] on any failure."""
+def find(image, description, url=URL, timeout=60, return_meta=False, n_predict=400, orig_size=None, layout="image_first"):
+    """image: path or bytes (PNG/JPEG). Returns list of dicts, [] on any failure.
+    n_predict: output token cap. orig_size=(w, h): the caller downscaled the image (brain.image_max_side_px) - the
+    boxes are normalised 0-1000, so they are scaled back to THESE pixel dimensions, not the sent ones.
+    layout: image_first (original) | static_first (system prefix, then image, then phrase; cacheable prefix)."""
     meta = {"latency": None, "raw": ""}
     try:
         b = open(image, "rb").read() if isinstance(image, str) else image
-        w, h = _png_size(b)
+        w, h = (int(orig_size[0]), int(orig_size[1])) if orig_size else _png_size(b)
         mime = "image/png" if b[:4] == b"\x89PNG" else "image/jpeg"
-        body = {"messages": [{"role": "user", "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(b).decode()}},
-                    {"type": "text", "text": PROMPT.format(d=description)}]}],
-                "temperature": 0, "max_tokens": 400}
+        img = {"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(b).decode()}}
+        if layout == "static_first":
+            msgs = [{"role": "system", "content": SYSTEM},
+                    {"role": "user", "content": [img, {"type": "text", "text": f"Description: {description}"}]}]
+        else:
+            msgs = [{"role": "user", "content": [img, {"type": "text", "text": PROMPT.format(d=description)}]}]
+        body = {"messages": msgs, "temperature": 0, "max_tokens": int(n_predict), "cache_prompt": True}
         t = time.time()
         r = json.load(urllib.request.urlopen(urllib.request.Request(
             url, json.dumps(body).encode(), {"Content-Type": "application/json"}), timeout=timeout))

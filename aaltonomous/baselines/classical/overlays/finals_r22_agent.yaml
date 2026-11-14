@@ -82,3 +82,5 @@ flags:
   brain.find: true                              # r22 agent  VLM grounding tool (Qwen3-VL boxes -> our detections)
   brain.find_to_detection: true                 # r22 agent  find() point without a detection -> novel Detection from the depth blob
   brain.closed_loop: true                       # r22 agent  async re-plan after each outcome, capped, retry/abandon in code
+  brain.image_max_side_px: 448                  # r22 speed   downscale the head RGB for find/decide (boxes scaled back to original px); BRAINSPEED.md
+  brain.find_n_predict: 128                     # r22 speed   find() output cap (64 clips multi-box answers, 400 was the old cap)
