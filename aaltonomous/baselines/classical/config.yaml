@@ -283,6 +283,21 @@ perception:
     shape_hint: true          # conservative footprint/flatness hint; never needed for colour-only instructions
     shape_flatness_m: 0.008
     shape_prism_aspect: 1.35
+  novel_objects: false        # FLAG (R22). Depth blobs 1--25 cm above the counter, outside bins/robot mask.
+  novel:                       # conservative fixed gates; only novel_objects is the feature switch
+    height_m: [0.01, 0.25]
+    min_area_px: 45
+    max_area_px: 30000
+    pixel_stride: 3             # 640x480 -> 214x160; keeps the optional path below the 8 ms frame budget
+    morph_px: 1               # applied after pixel_stride; depth/height gates already remove counter speckle
+    known_match_px: 45
+    known_size_m: [0.035, 0.070]
+    round_circularity: 0.82
+    round_aspect: 1.45
+    elongated_aspect: 2.2
+    handle_min_aspect: 1.5
+    handle_max_aspect: 2.5
+    handle_extension: 1.45
   split:
     object_size: null         # m, expected object edge for the size gate; null = scene objects.size (perception.object_size)
     area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;
@@ -333,6 +348,7 @@ grasp:
   # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
   # gates, not independently switchable features. The classifier is consulted even when classify_shape is off.
   generic_fallback: false
+  generic: false              # FLAG (R22). Novel-object top-down/handle grasp, width checked against URDF open tips.
   generic_shape_min_conf: 0.5    # below this, treat a known label as unreliable and use the generic proposal
   generic_min_confidence: 0.5    # proposal support/width/border gate
   generic_max_width: 0.060       # larger objects are not safe for the Dex3 top-down pinch
@@ -340,6 +356,8 @@ grasp:
   generic_yaw_hint_weight: 3.0   # align fingers with the proposal major axis before trying stock hints
   generic_yaw_tol_deg: 15.0
   generic_yaw_max_dev_deg: 45.0  # skip expensive/awkward yaw IK outside the arm's natural range
+  generic_opening_margin_m: 0.012 # subtract from the thumb-to-finger opening measured from our URDF/open posture
+  generic_obstacle_margin_m: 0.025
   # grasp.close_posture_by_shape (FLAG, default off): triangle posture ("demo", Oliver FK a44dd79) used only when the
   # shape is "triangle" AND shape_id path == "metric" AND shape confidence (shape_id._label conf * point-count
   # factor, 0..1) >= posture_by_shape_min_conf; every other pick uses grasp.close_posture + point_in_palm.
@@ -432,6 +450,7 @@ skills:
 
 instruction:
   resolve: false
+  novel_objects: false        # FLAG (R22). Match visible novel colour + noun synonyms; ambiguity/unknown => abstain.
   normalize: false            # FLAG (Felix). resolve(normalize(text)): fixes typos/synonyms; needs resolve
   multilingual: false         # FLAG. cached FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK -> English; needs resolve
   strict: false               # FLAG (Felix strict). never guess: abstain instead of FIXED / inferred keys; needs resolve
@@ -534,6 +553,7 @@ policy:
   place_gate_colour_min: 0.6  # HSV/blob confidence: purity, support, hue-boundary margin, brightness-aware tape penalty
   place_gate_bin_min: 0.5     # self-calibration's residual-derived confidence; nominal (uncalibrated) bins use 1.0
   object_time_budget_s: null  # FLAG (EV gate). Cumulative planned motion seconds per tracked object; null = off.
+  novel_obstacles: false      # FLAG (R22). Untargeted novel objects are hand-trajectory clearance obstacles.
                               # Suggested real overlay: 35 s (120 s / 3--5 objects leaves room for settling/overhead).
   max_total_attempts: null    # global per-episode cap on started picks, any object (null = off). Guards against
                               # an object knocked > same_object_radius that is re-detected as 'new' forever
