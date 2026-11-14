@@ -144,6 +144,8 @@ grasp:
   drop_slots: false           # FLAG (23-grasp-failure). Standalone drop slots (no verification): each successive object
                               # in a bin gets the next slot instead of the one fixed drop_xy (STEP 0: 6/30 stacked)
   drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
+  drop_height_extra_m: 0.0    # FLAG (finals safe). Raise bin release by this much; IK failure falls back to stock target
+  drop_lateral_margin_m: 0.0  # FLAG (finals safe). Move release this far toward bin centre; IK failure falls back
   drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
   border_posture: false       # FLAG (retry-vary). Label None from abstain_border (blob cut by the image border, near
                               # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
@@ -254,10 +256,10 @@ policy:
   retry_extra_attempts: 2
   episode_summary_log: false  # FLAG (#3, Oliver). One passive log line per episode end (attempts/failed/too_long/started)
   # Retry with a different grasp (r14 failure analysis: 5 misses repeated the identical posture/yaw/point).
-  retry_vary_grasp: false     # FLAG (retry-vary, Timi). After a pick that did not hold the object (held=no / unknown):
-                              # the next try at it changes the grasp (posture v1<->demo for triangle / label None, finger
-                              # heading +-retry_yaw_deg), never repeats a tried (point, heading, posture); held=no right
-                              # after the close -> skip the carry, lift + straight home (plan.abort, same speed limits)
+  retry_vary_grasp: false     # FLAG (retry-vary, Timi). If the object remains in the next camera frame, the next try
+                              # changes the grasp (posture v1<->demo for triangle / label None, finger heading
+                              # +-retry_yaw_deg) and never repeats a tried (point, heading, posture). Servo tracking
+                              # error is diagnostic only; it never aborts a carry or opens the hand above the source.
   max_attempts_vary: null     # FLAG (retry-vary). With retry_vary_grasp: tries per object up to this (e.g. 3); the extra
                               # tries come after every other candidate and only if the plan fits the time left (_has_time)
   retry_yaw_deg: {triangle: 60, cube: 90, cylinder: 90, none: 90, default: 90}   # heading change per label
@@ -265,6 +267,10 @@ policy:
   retry_same_yaw_deg: 20.0
   retry_assoc_radius: 0.06    # an earlier miss belongs to an object of the same colour within this (pushed objects)
   retry_max_variants: 3       # grasp variants planned per retry (each costs one plan() call)
+  first_object_speed_scale: null  # FLAG (finals safe). null = stock; e.g. 0.7 slows arm motion for first started pick only
+
+debug:
+  log_joint_offset: false     # FLAG (passive). First ~1 s steady holds: policy's last cmd minus measured joints
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.

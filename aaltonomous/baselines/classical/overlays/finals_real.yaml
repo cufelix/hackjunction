@@ -1,0 +1,49 @@
+# Real-robot finals overlay: cand_r16 policy/grasp settings, but retain the calibrated D435i intrinsics.
+# cand_r16 remains the sim overlay and keeps its Isaac-centred principal point.
+name: finals_real
+flags:
+  instruction.resolve: true
+  policy.insert_guard: true
+  policy.bin_lookup: resolve_bin
+  perception.self_calibration.enabled: false
+  perception.principal_point: file
+  perception.y_affine: null
+  perception.classify_shape: true
+  perception.triangle_pose: false
+  perception.near_bin_guard: false
+  perception.no_blob_shape: false
+  perception.shape_diag: false
+  perception.hsv_set: robust
+  perception.split_blobs: true
+  grasp.yaw_align: false
+  grasp.yaw_phi_deg: 105
+  grasp.yaw_tri_shift: true
+  policy.time_triage: false
+  policy.max_total_attempts: 18
+  policy.max_attempts: 2
+  policy.retry_pass: false
+  policy.time_margin_s: 0.0
+  policy.episode_summary_log: false
+  policy.retry_vary_grasp: true
+  policy.max_attempts_vary: 3
+  policy.first_object_speed_scale: null
+  grasp.border_posture: false
+  policy.verify_placement: false
+  policy.verify_yellow_unknown: false
+  policy.max_corrections_per_episode: null
+  grasp.drop_slots: true
+  grasp.drop_slot_overflow: counter
+  grasp.drop_height_extra_m: 0.0
+  grasp.drop_lateral_margin_m: 0.0
+  policy.grasp_diag_log: true
+  motion.carry_scale: 1.0
+  motion.close_hold_s: 1.2
+  motion.lift_on_stall.enabled: false
+  motion.lift_on_stall.timeout_s: 1.2
+  grasp.point_in_palm: [0.0862, -0.0864, 0.0143]
+  grasp.close_posture: closed_tight
+  grasp.close_posture_by_shape: true
+  grasp.posture_by_shape_min_conf: 0.5
+  grasp.posture_apex_gate: true
+  hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]
+  debug.log_joint_offset: false

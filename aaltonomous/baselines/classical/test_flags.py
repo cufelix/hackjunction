@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from .config import BAKED_OVERLAY, FLAGS, OVERLAY_DIR, STOCK, _get, effective_flags, load_config, load_overlay
 
 
@@ -81,8 +83,14 @@ class TestFlags(unittest.TestCase):
                                     "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
                                     "perception.hsv_set", "perception.split_blobs"}}
         r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary"}
+        expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary",
+                                            "policy.max_total_attempts"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
+        cand = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r16_nopp")) if is_on}
+        expect["ab_first_object_speed_scale"] = cand | {"policy.first_object_speed_scale"}
+        expect["ab_drop_height_extra_m"] = cand | {"grasp.drop_height_extra_m"}
+        expect["ab_drop_lateral_margin_m"] = cand | {"grasp.drop_lateral_margin_m"}
+        expect["ab_log_joint_offset"] = cand | {"debug.log_joint_offset"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -91,6 +99,58 @@ class TestFlags(unittest.TestCase):
             self.assertEqual(on, keys, name)
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
+
+    def test_finals_real_loads_as_cand_r16_with_calibrated_intrinsics(self):
+        from aaltonomous.interface.calibration import Calibration
+        from aaltonomous.scene.scene import Scene
+        from .perception import Perception
+
+        sim = load_config(overlay="cand_r16")
+        real = load_config(overlay="finals_real")
+        self.assertEqual((sim["perception"]["principal_point"], real["perception"]["principal_point"]),
+                         ("center", "file"))
+        self.assertEqual(real["policy"]["max_total_attempts"], 18)
+        sim["overlay"] = real["overlay"]
+        sim["perception"]["principal_point"] = "file"
+        self.assertEqual(real, sim)
+
+        calibration = Calibration.load()
+        perception = Perception(real, Scene.load(), calibration, log=None)
+        np.testing.assert_array_equal(perception.cal.cams[perception.cam].K,
+                                      calibration.cams[perception.cam].K)
+
+    def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
+        retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
+                 if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
+        self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp",
+                                      "finals_real", "ab_first_object_speed_scale", "ab_drop_height_extra_m",
+                                      "ab_drop_lateral_margin_m", "ab_log_joint_offset", "safe_profile"})
+        self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for cfg in retry.values()))
+
+    def test_safe_profile_is_cand_r16_nopp_plus_conservative_values(self):
+        cand = load_config(overlay="cand_r16_nopp")
+        safe = load_config(overlay="safe_profile")
+        cand["overlay"] = "safe_profile"
+        cand["policy"]["first_object_speed_scale"] = 0.7
+        cand["grasp"]["drop_height_extra_m"] = 0.04
+        cand["grasp"]["drop_lateral_margin_m"] = 0.02
+        self.assertEqual(safe, cand)
+        self.assertFalse(safe["perception"]["self_calibration"]["enabled"])
+        self.assertIsNone(safe["perception"]["y_affine"])
+        self.assertFalse(safe["debug"]["log_joint_offset"])
+
+    def test_conservative_ab_overlays_are_cand_r16_nopp_plus_one_flag(self):
+        changes = {
+            "ab_first_object_speed_scale": ("policy", "first_object_speed_scale", 0.7),
+            "ab_drop_height_extra_m": ("grasp", "drop_height_extra_m", 0.04),
+            "ab_drop_lateral_margin_m": ("grasp", "drop_lateral_margin_m", 0.02),
+            "ab_log_joint_offset": ("debug", "log_joint_offset", True),
+        }
+        for overlay, (section, key, value) in changes.items():
+            expected = load_config(overlay="cand_r16_nopp")
+            expected["overlay"] = overlay
+            expected[section][key] = value
+            self.assertEqual(load_config(overlay=overlay), expected, overlay)
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm
@@ -132,6 +192,12 @@ class TestFlags(unittest.TestCase):
                     load_config(overlay=str(p))
         self.assertEqual(load_config(overlay="ab_hold12")["motion"]["close_hold_s"], 1.2)
         self.assertEqual(load_config(overlay="none")["motion"]["close_hold_s"], 0.25)   # sim profile
+        for overrides in ({"policy.first_object_speed_scale": 0.0}, {"policy.first_object_speed_scale": 1.01},
+                          {"policy.first_object_speed_scale": float("nan")},
+                          {"grasp.drop_height_extra_m": -0.01}, {"grasp.drop_height_extra_m": float("inf")},
+                          {"grasp.drop_lateral_margin_m": -0.01}):
+            with self.assertRaises(ValueError, msg=overrides):
+                load_config(overrides=overrides)
 
     def test_placeholder_overlay_is_refused(self):
         with tempfile.TemporaryDirectory() as d:

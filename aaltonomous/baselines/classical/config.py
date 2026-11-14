@@ -52,15 +52,21 @@ FLAGS = {
     "policy.retry_pass": ("Oliver #3", False, "once per episode: max_attempts-skipped objects get retry_extra_attempts"),
     "policy.time_margin_s": ("Oliver #3", 0.0, "plans must end this long before the time limit"),
     "policy.episode_summary_log": ("Oliver #3", False, "one log line per episode end"),
-    "policy.retry_vary_grasp": ("retry-vary", False, "retry after held=no with another grasp (posture/heading), "
-                                                     "never an identical one; held=no -> abort the carry"),
+    "policy.retry_vary_grasp": ("retry-vary", False, "retry after the object remains in the next frame with another "
+                                                     "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
+    "policy.first_object_speed_scale": ("finals safe", None,
+                                          "null | (0,1]: slow every arm phase of only the first started pick"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
     "grasp.drop_slot_overflow": ("Felix #6 rev", "counter", "slots used up: counter (leave it) | stack (slot 0)"),
+    "grasp.drop_height_extra_m": ("finals safe", 0.0,
+                                    "extra bin-release height; adjusted target must pass IK or stock target is used"),
+    "grasp.drop_lateral_margin_m": ("finals safe", 0.0,
+                                      "move bin release laterally toward bin centre; IK failure uses stock target"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),
@@ -72,6 +78,8 @@ FLAGS = {
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
+    "debug.log_joint_offset": ("finals diag", False,
+                                 "log cmd-minus-measured during steady holds in the first second (no control change)"),
 }
 
 
@@ -171,6 +179,13 @@ def check_flag_values(cfg):
             continue
         if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
             raise ValueError(f"{k} = {v!r}: want {n} numbers")
+    first_scale = _get(cfg, "policy.first_object_speed_scale")
+    if first_scale is not None and not 0.0 < float(first_scale) <= 1.0:
+        raise ValueError("policy.first_object_speed_scale must be null or in (0, 1]")
+    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m"):
+        v = float(_get(cfg, k))
+        if not np.isfinite(v) or v < 0.0:
+            raise ValueError(f"{k} must be a finite non-negative distance")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}

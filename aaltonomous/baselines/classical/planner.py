@@ -55,8 +55,7 @@ class Plan:
     phases: list = field(default_factory=list)         # (name, start tick, end tick)
     posture: tuple | None = None                       # (posture, shape label, conf, path) with grasp.close_posture_by_shape
     close_hold: tuple | None = None                    # (first, end) tick of the closed-hand hold (lift_on_stall)
-    abort: tuple | None = None                         # policy.retry_vary_grasp: (lift start tick, arm, hand) = lift +
-                                                       # straight home, executed instead of the carry on held=no
+    abort: tuple | None = None                         # legacy field; early servo-error abort is intentionally disabled
     safety_clips: int | None = None
     grasp_key: tuple | None = None                     # policy.retry_vary_grasp: (grasp xy, finger heading, posture)
 
@@ -126,6 +125,7 @@ class Planner:
         self._apex = None      # grasp.posture_apex_gate: (pass, apex_conf, max angle) of the pick being planned
         self.vary = None       # policy.retry_vary_grasp: {"posture": name | None, "yaw": rad | None} for the next plan()
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
+        self.object_speed_scale = None  # transient policy.first_object_speed_scale for the first started pick
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
 
@@ -299,6 +299,27 @@ class Planner:
         plan.reason = f"{name}: no joint-space path above the bin rim"
         return None
 
+    def _adjusted_drop_target(self, side, bin_name, xy, z, seed):
+        """Return the conservative bin-drop target, or the byte-identical stock target when both flags are off.
+
+        The lateral margin moves only the robot-left/right coordinate toward the bin centre.  The candidate gets a
+        direct IK reachability check (which enforces the configured joint-limit margin); if it fails, planning carries
+        on with the original target.  The normal Cartesian-path and safety dry-runs still validate the selected target.
+        """
+        g = self.cfg["grasp"]
+        dz = float(g.get("drop_height_extra_m", 0.0))
+        margin = float(g.get("drop_lateral_margin_m", 0.0))
+        base_xy = np.asarray(xy, float)
+        if dz == 0.0 and margin == 0.0:
+            return base_xy, float(z), False
+        candidate_xy = base_xy.copy()
+        dy = float(self.bin_xy(bin_name)[1] - candidate_xy[1])
+        candidate_xy[1] += np.sign(dy) * min(abs(dy), margin)
+        candidate = np.r_[candidate_xy, float(z) + dz]
+        _, ok, _, _ = self.kin.solve(side, candidate, seed, top_down=True,
+                                     extra_seeds=[self.home[ArmKinematics.sl(side)]])
+        return (candidate_xy, float(candidate[2]), True) if ok else (base_xy, float(z), False)
+
     # ------------------------------------------------------------------ main
     def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=None, source_bin=None):
         """Plan for Detection `det` starting from the commanded arm_q/hand_q (14,). Tries the preferred arm (the
@@ -403,7 +424,9 @@ class Planner:
         (and as the fallback) _plan_side with each finger direction of grasp.finger_hints in turn (fingers forward
         can reach over the centre bin's wall when the object is close to it; then fingers inward/sideways)."""
         vy = (self.vary or {}).get("yaw")
-        if vy is not None and kw.get("place_xy") is None:   # policy.retry_vary_grasp: one fixed finger heading
+        # A corrective cleanup has place_xy but still needs a changed grasp after a miss. Ordinary relocations keep
+        # the legacy free-yaw planning because their destination search is already the fallback path.
+        if vy is not None and (kw.get("place_xy") is None or kw.get("source_bin") is not None):
             return self._plan_side_heading(det, side, bin_name, arm_q, hand_q, float(vy), **kw)
         if self._yaw_align_on(det) and kw.get("place_xy") is None:
             p = self._plan_side_yaw(det, side, bin_name, arm_q, hand_q, **kw)
@@ -616,8 +639,14 @@ class Planner:
         else:                  # #6: the assigned drop slot
             slots = self.drop_slots(bin_name)
             bxy = slots[min(int(drop_slot), len(slots) - 1)]
+        stock_bxy, stock_z_drop = np.asarray(bxy, float).copy(), float(z_drop)
+        drop_adjustment_on = False
+        adjusted = False
         if place_xy is not None:  # relocation: put it down on the counter (release just above the grasp height)
             bxy, z_drop = np.asarray(place_xy, float), z + 0.005
+        elif g.get("drop_height_extra_m", 0.0) or g.get("drop_lateral_margin_m", 0.0):
+            drop_adjustment_on = True
+            bxy, z_drop, adjusted = self._adjusted_drop_target(side, bin_name, bxy, z_drop, qg)
         P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry)], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],
              "above_bin": np.r_[bxy, z_carry], "drop": np.r_[bxy, z_drop], "retreat": np.r_[bxy, z_drop + g["retreat_up"]]}
 
@@ -629,15 +658,37 @@ class Planner:
         down = self._cartesian(side, P["pregrasp"], P["grasp"], q_pre, "descend", plan)
         up = down and self._cartesian(side, P["grasp"], P["lift"], down[-1], "lift", plan)
         hint_saved = (self.kin.hint, self.kin.w_hint)
-        if self._carry_hint is not None:   # retry heading variant: the wrist may turn back while carrying
-            self.kin.hint, self.kin.w_hint = self._carry_hint
-        try:
-            carry = up and (self._cartesian(side, P["lift"], P["above_bin"], up[-1], "carry", plan)
-                            or self._joint_carry(side, up[-1], P["lift"], P["above_bin"], z_drop, "carry", plan))
-            lower = carry and self._cartesian(side, P["above_bin"], P["drop"], carry[-1], "lower", plan)
-            retreat = lower and self._cartesian(side, P["drop"], P["retreat"], lower[-1], "retreat", plan)
-        finally:
-            self.kin.hint, self.kin.w_hint = hint_saved
+
+        def drop_leg(points):
+            if self._carry_hint is not None:   # retry heading variant: the wrist may turn back while carrying
+                self.kin.hint, self.kin.w_hint = self._carry_hint
+            try:
+                carry_ = up and (self._cartesian(side, points["lift"], points["above_bin"], up[-1], "carry", plan)
+                                 or self._joint_carry(side, up[-1], points["lift"], points["above_bin"],
+                                                      points["drop"][2], "carry", plan))
+                lower_ = carry_ and self._cartesian(side, points["above_bin"], points["drop"], carry_[-1],
+                                                    "lower", plan)
+                retreat_ = lower_ and self._cartesian(side, points["drop"], points["retreat"], lower_[-1],
+                                                       "retreat", plan)
+                return carry_, lower_, retreat_
+            finally:
+                self.kin.hint, self.kin.w_hint = hint_saved
+
+        carry, lower, retreat = drop_leg(P)
+        if not retreat and adjusted:
+            # Endpoint IK alone cannot prove a continuous lower/retreat path. Retry the complete stock drop leg so a
+            # conservative adjustment can never reject a pick which the flag-off planner could execute.
+            for key in ("carry", "carry_mid", "lower", "retreat"):
+                plan.ik.pop(key, None)
+                plan.waypoints.pop(key, None)
+            plan.reason = ""
+            P["above_bin"] = np.r_[stock_bxy, z_carry]
+            P["drop"] = np.r_[stock_bxy, stock_z_drop]
+            P["retreat"] = np.r_[stock_bxy, stock_z_drop + g["retreat_up"]]
+            adjusted = False
+            carry, lower, retreat = drop_leg(P)
+        if drop_adjustment_on:
+            plan.waypoints["drop_adjusted" if adjusted else "drop_fallback"] = P["drop"].copy()
         if not retreat:
             plan.reason = plan.reason or f"IK failed on {[k for k, v in plan.ik.items() if not v[0]]} ({side})"
             return plan
@@ -650,6 +701,8 @@ class Planner:
 
         def move(name, Qs, hand_to=None, scale=1.0):
             nonlocal cur_a, cur_h
+            if self.object_speed_scale is not None:
+                scale *= float(self.object_speed_scale)
             a = time_scale([cur_a] + list(Qs), vmax * scale, amax * scale, self.dt)
             h = np.repeat(cur_h[None], len(a), 0)
             if hand_to is not None:  # hand moves during the arm move (ends no later than the arm)
@@ -736,38 +789,7 @@ class Planner:
             plan.reason = f"{plan.safety_clips} safety clips in dry run"
             return plan
         plan.ok = True
-        if (cfg.get("policy") or {}).get("retry_vary_grasp", False) and place_xy is None and source_bin is None:
-            plan.abort = self._abort_branch(side, plan, arm_q, hand_q, home, hand_open)
         return plan
-
-    def _abort_branch(self, side, plan, arm_q, hand_q, home, hand_open):
-        """policy.retry_vary_grasp: the plan's own lift ticks, then a joint move straight home (hand opening on the way)
-        at the configured arm_max_vel / arm_max_acc / hand_max_vel. The policy switches to it when the hand closed on
-        nothing (held=no). Checked like the plan (counter + bin-rim clearance, safety dry run from the start); None if
-        any check fails (then the stock carry runs)."""
-        mo, g = self.cfg["motion"], self.cfg["grasp"]
-        ph = {name: (s, e) for name, s, e in plan.phases}
-        if "lift" not in ph:
-            return None
-        ls, le = ph["lift"]
-        q_top, h_top = plan.arm[le - 1], plan.hand[le - 1]
-        a = time_scale([q_top, home], mo["arm_max_vel"], mo["arm_max_acc"], self.dt)
-        hr = ramp(h_top, hand_open, mo["hand_max_vel"], self.dt)
-        if len(hr) > len(a):
-            a = np.vstack([a, np.repeat((a[-1] if len(a) else q_top)[None], len(hr) - len(a), 0)])
-        h = np.repeat(np.asarray(hand_open, float)[None], len(a), 0)
-        h[:len(hr)] = hr
-        arm = np.vstack([plan.arm[ls:le], a])
-        hand = np.vstack([plan.hand[ls:le], h])
-        nl = le - ls
-        for k in range(nl, len(arm), 3):
-            if self.clearance(side, arm[k], hand[k]) < mo["counter_clearance"] - 2e-3:
-                return None
-            if self.bin_clearance(side, arm[k], hand[k]) < 0.003:
-                return None
-        if self.dry_run_safety(arm_q, hand_q, np.vstack([plan.arm[:ls], arm]), np.vstack([plan.hand[:ls], hand])):
-            return None
-        return (ls, arm, hand)
 
     def dry_run_safety(self, arm_q, hand_q, arm, hand):
         f = SafetyFilter(self.spec, self.safety)
