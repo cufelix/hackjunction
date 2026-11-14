@@ -9,16 +9,18 @@
 #
 # Environment: PYTHON=<interpreter with numpy and pyyaml> (default: python3).
 #
-# A real run writes overlays/submission.yaml, RELEASE.md, RELEASE.flags.json and RELEASE.equivalence.txt.
+# A real run writes overlays/submission.yaml, overlays/EXPECTED_FLAGS.json (the server refuses to start if its
+# loaded flags differ from it), RELEASE.md, RELEASE.flags.json and RELEASE.equivalence.txt.
 # It commits nothing and prints the git add / git commit command for you to run.
-# It stops on the first failure. A real run that fails restores those four files to their pre-run state.
+# It stops on the first failure. A real run that fails restores those files to their pre-run state.
 set -euo pipefail
 
 PYTHON="${PYTHON:-python3}"
 OVL_DIR=aaltonomous/baselines/classical/overlays
 SUB_REL="$OVL_DIR/submission.yaml"
 # The only paths that may be modified in the tree. A previous run leaves them behind, so re-running is allowed.
-WRITE_SET=("$SUB_REL" RELEASE.md RELEASE.flags.json RELEASE.equivalence.txt)
+EXP_REL="$OVL_DIR/EXPECTED_FLAGS.json"
+WRITE_SET=("$SUB_REL" "$EXP_REL" RELEASE.md RELEASE.flags.json RELEASE.equivalence.txt)
 
 die()   { echo "promote: $*" >&2; exit 1; }
 "$PYTHON" -c "import numpy, yaml" 2>/dev/null || die "$PYTHON lacks numpy/pyyaml (release_gate needs them): run inside the policy image or set PYTHON=<venv python>"
@@ -120,11 +122,12 @@ mv "$ROOT/$SUB_REL.tmp" "$ROOT/$SUB_REL"
 echo "  wrote $SUB_REL"
 
 step "3/7 release gate: submission must carry exactly the flags of $OVERLAY"
-if ! GATE=$(cd "$ROOT" && "$PYTHON" tools/release_gate.py "$OVERLAY" 2>&1); then
+if ! GATE=$(cd "$ROOT" && "$PYTHON" tools/release_gate.py "$OVERLAY" --write-expected "$EXP_REL" 2>&1); then
   echo "$GATE"
   die "release gate FAILED: $SUB_REL does not match $OVERLAY, or $OVERLAY has a flag conflict (see above)"
 fi
 echo "$GATE"
+echo "  wrote $EXP_REL"
 
 step "4/7 flags.py --overlay submission --json"
 if ! (cd "$ROOT" && "$PYTHON" tools/flags.py --overlay submission --json) > "$SCRATCH/flags.json" 2> "$SCRATCH/flags.err"; then
@@ -190,6 +193,14 @@ w("## Hashes (sha256)")
 w("")
 w(f"- `{sub_rel}`: `{sha256(root / sub_rel)}`")
 w(f"- `{cfg_rel}`: `{sha256(root / cfg_rel)}`")
+exp_rel = "aaltonomous/baselines/classical/overlays/EXPECTED_FLAGS.json"
+w(f"- `{exp_rel}` (effective flags of `{overlay}`; server refuses to start on mismatch): `{sha256(root / exp_rel)}`")
+w("")
+w("## Expected flags (EXPECTED_FLAGS.json)")
+w("")
+w("```json")
+w((root / exp_rel).read_text().rstrip())
+w("```")
 w("")
 w("## Release gate")
 w("")
@@ -231,7 +242,7 @@ if [ "$DRY" = 1 ]; then
   echo "nothing in $REPO was changed"
 else
   echo "promoted $OVERLAY -> $SUB_REL (HEAD $SHA). NOT committed. Commit it yourself:"
-  files=("$SUB_REL" RELEASE.md RELEASE.flags.json)
+  files=("$SUB_REL" "$EXP_REL" RELEASE.md RELEASE.flags.json)
   [ "$NO_EQUIV" = 1 ] || files+=(RELEASE.equivalence.txt)
   echo "  git add ${files[*]}"
   echo "  git commit -m 'chore(release): promote $OVERLAY to submission'"

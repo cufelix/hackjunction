@@ -57,6 +57,18 @@ class ClassicalServerPolicy(Policy):
                 "hand_q_target": np.asarray(a["hand_q_target"], np.float64), "done": bool(a.get("done", False))}
 
 
+def verify_expected_flags(cfg):
+    """Refuse to serve when the loaded flags differ from overlays/EXPECTED_FLAGS.json (written by promote.sh).
+    No file = unchanged behaviour."""
+    from .config import check_expected_flags
+    diffs = check_expected_flags(cfg)
+    if diffs:
+        for d in diffs:
+            log.critical("FLAG MISMATCH vs EXPECTED_FLAGS.json: %s", d)
+        log.critical("effective config differs from the promoted overlay: refusing to start")
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     t0 = time.monotonic()
@@ -66,4 +78,5 @@ if __name__ == "__main__":
     on = [f"{k}={v!r}" for k, v, is_on, _, _ in effective_flags(pol.pol.cfg) if is_on]
     log.info("profile=%s overlay=%s flags on: %s", pol.pol.cfg.get("profile"), pol.pol.cfg.get("overlay", "none"),
              ", ".join(on) or "none (stock baseline)")
+    verify_expected_flags(pol.pol.cfg)
     serve(pol, port=int(os.environ.get("PORT", 8000)))

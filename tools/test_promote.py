@@ -122,7 +122,7 @@ def test_real_run_writes_then_rerun_is_allowed(repo, tmp_path):
     assert not (repo / "RELEASE.equivalence.txt").exists()
     status = git(repo, "status", "--porcelain", "--untracked-files=all").splitlines()
     assert status, "expected the release files to be modified"
-    assert {line[3:] for line in status} <= {SUB, "RELEASE.md", "RELEASE.flags.json"}
+    assert {line[3:] for line in status} <= {SUB, f"{OVL}/EXPECTED_FLAGS.json", "RELEASE.md", "RELEASE.flags.json"}
 
     # The files this script writes may already be dirty: a second run must not be refused.
     res2 = promote(repo, "--no-equiv", "rc1", tmp=tmp_path)
@@ -143,3 +143,43 @@ def test_failed_gate_restores_tree(repo, tmp_path):
     assert (repo / SUB).read_bytes() == before
     assert not (repo / "RELEASE.md").exists()
     assert git(repo, "status", "--porcelain", "--untracked-files=all") == ""
+
+
+def test_dry_run_finals_r21_dumps_expected_flags(repo, tmp_path):
+    import json
+    sys.path.insert(0, str(REPO))
+    from aaltonomous.baselines.classical.config import load_config
+    from aaltonomous.baselines.classical import config as C
+    res = promote(repo, "--dry-run", "--no-equiv", "finals_r21", tmp=tmp_path)
+    assert res.returncode == 0, res.stdout + res.stderr
+    out = dry_output_dir(res.stdout)
+    exp = out / "tree" / OVL / "EXPECTED_FLAGS.json"
+    dump = json.loads(exp.read_text())
+    assert dump["overlay"] == "finals_r21"
+    assert dump["flags"] == C.flags_dump(load_config(overlay="finals_r21"))
+    rel = (out / "RELEASE.md").read_text()
+    assert sha256(exp) in rel and "## Expected flags" in rel
+    assert not (repo / OVL / "EXPECTED_FLAGS.json").exists()   # dry run leaves the repo alone
+
+
+def test_startup_check_mismatch_refuses_and_absent_is_noop(tmp_path):
+    import json
+    sys.path.insert(0, str(REPO))
+    from aaltonomous.baselines.classical import config as C, policy_server as PS
+    cfg = C.load_config(overlay="finals_r21")
+    PS.verify_expected_flags(cfg)                       # no file in the repo tree: unchanged behaviour
+    good = tmp_path / "e.json"
+    good.write_text(json.dumps({"overlay": "finals_r21", "flags": C.flags_dump(cfg)}))
+    assert C.check_expected_flags(cfg, good) == []
+    bad = json.loads(good.read_text())
+    k = next(iter(bad["flags"]))
+    bad["flags"][k] = "tampered"
+    good.write_text(json.dumps(bad))
+    assert C.check_expected_flags(cfg, good)
+    orig = C.EXPECTED_FLAGS
+    try:
+        C.EXPECTED_FLAGS = good
+        with pytest.raises(SystemExit):
+            PS.verify_expected_flags(cfg)
+    finally:
+        C.EXPECTED_FLAGS = orig

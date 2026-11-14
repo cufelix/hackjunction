@@ -327,6 +327,27 @@ def _check_color_gate(cfg):
         raise ValueError("perception.color_gate.ws_x needs ws_abs_y")
 
 
+EXPECTED_FLAGS = OVERLAY_DIR / "EXPECTED_FLAGS.json"  # written by tools/promote.sh; baked into the image with overlays/
+
+
+def flags_dump(cfg):
+    """{flag: value} for every FLAGS key, JSON-normalised (tuples -> lists)."""
+    import json
+    return {k: json.loads(json.dumps(_get(cfg, k))) for k in FLAGS}
+
+
+def check_expected_flags(cfg, path=None):
+    """Diff lines (empty = ok) between cfg's flags and EXPECTED_FLAGS.json. No file = no check (returns [])."""
+    import json
+    path = Path(path or globals()["EXPECTED_FLAGS"])
+    if not path.exists():
+        return []
+    exp = json.loads(path.read_text())["flags"]
+    got = flags_dump(cfg)
+    return [f"{k}: expected={exp.get(k, '<missing>')!r} got={got.get(k, '<missing>')!r}"
+            for k in sorted(set(exp) | set(got)) if exp.get(k, "<missing>") != got.get(k, "<missing>")]
+
+
 def effective_flags(cfg):
     """[(key, value, on, owner, what)] for every FLAGS entry of a loaded config."""
     out, stock = [], None
