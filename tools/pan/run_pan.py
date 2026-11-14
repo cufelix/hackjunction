@@ -11,6 +11,7 @@ Verdict per episode:
   handle      pan lifted >= 3 cm and, at its highest point, the nearest palm sits on the handle (pan-frame x > 0.09 m)
   disc        lifted, nearest palm over the disc
   no_lift     never lifted >= 3 cm; `touched` says whether a palm came within 4 cm of the pan
+  lifted_no_palm  lifted but no palm within 4 cm at the top (knocked or flipped, not held)
 plus in_center_bin (final pan centre inside the centre bin footprint) and the full pan/palm trajectory (5 Hz).
 """
 from __future__ import annotations
@@ -90,9 +91,11 @@ class Poller(threading.Thread):
 
 
 def verdict(rows, sc_scene):
+    # rows before the reset placed the pan show it parked on the floor behind the robot (x ~ -0.60): drop them
+    rows = [r for r in rows if r["pos"][0] > 0.0]
     if not rows:
         return {"verdict": "no_data"}
-    z0 = rows[0]["pos"][2]
+    z0 = float(sc_scene.mat_to_pelvis(np.array([0.0, 0.0, PAN_Z_MAT]))[2])   # placed resting height, not a sample
     palms = [k for k in rows[0]["bodies"] if "palm" in k] or list(rows[0]["bodies"])
 
     def local(row, pt):
@@ -120,7 +123,8 @@ def verdict(rows, sc_scene):
     else:
         best = min(palms, key=lambda k: dist_to_pan(local(top, top["bodies"][k])))
         lp = local(top, top["bodies"][best])
-        out.update(verdict="handle" if lp[0] > ON_HANDLE_X else "disc", palm=best,
+        held = dist_to_pan(lp) < TOUCH_M   # lifted with no palm on it = knocked/flipped, not a grasp
+        out.update(verdict=("handle" if lp[0] > ON_HANDLE_X else "disc") if held else "lifted_no_palm", palm=best,
                    palm_in_pan_frame=[round(float(v), 4) for v in lp])
     fin = rows[-1]["pos"]
     cx, cy = sc_scene.cfg["bins"]["centers"]["center"] if "center" in sc_scene.cfg["bins"]["centers"] else (None, None)
