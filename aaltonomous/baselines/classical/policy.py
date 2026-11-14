@@ -239,6 +239,9 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+        self._joint_offset_t0 = None                      # debug.log_joint_offset: start of the first-second window
+        self._last_policy_arm_cmd = self._last_policy_hand_cmd = None
+        self._last_policy_cmd_steady = False
         # decision layer (policy.confidence_order / object_time_cap / speed_tiers / confidence_tiers); inert when off
         self.tiers = dec.SpeedTiers(self._dcfg())   # D3 state
         self.tier = None            # D4: CONFIDENT | DEGRADED | PRIOR-ONLY once the hold is done
@@ -469,6 +472,7 @@ class ClassicalPolicy:
                 self.held_detector.start(t)
             elif obs.get("hand_q") is not None:
                 self.held_detector.observe(t, self._held_command(), obs["hand_q"])
+        self._joint_offset_diag(obs, t)
         if (not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False)
                 and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
             self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
@@ -1442,6 +1446,17 @@ class ClassicalPolicy:
             out = ([{"posture": v1, "yaw": None}] if p0 == demo else []) + [{"posture": v1, "yaw": a} for a in yaws]
         return out[: int(pol.get("retry_max_variants", 3))]
 
+    def _first_object_planner(self, pl):
+        """policy.first_object_speed_scale: every plan made before the first pick starts (so the first started pick)
+        gets its arm phases x scale. A shallow copy carries the scale, so the shared planner is never mutated while a
+        background look plans. Flag off, or a pick already started: the planner passed in, unchanged."""
+        scale = self.cfg["policy"].get("first_object_speed_scale")
+        if scale is None or self.n_started != 0:
+            return pl
+        pl = copy.copy(pl)
+        pl.object_speed_scale = float(scale)
+        return pl
+
     def _plan_pick(self, d, kw, plan_fn=None):
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
@@ -1451,6 +1466,7 @@ class ClassicalPolicy:
             if relocate is not None and plan_fn is None:
                 args["relocate"] = relocate
             with self._decision_motion() as pl:   # D3/D4 speed scale + first-object clearance (stock planner when off)
+                pl = self._first_object_planner(pl)
                 if plan_fn is None:
                     return pl.plan(d, self.arm_cmd, self.hand_cmd, **args)
                 if pl is not self.planner:
@@ -1960,6 +1976,36 @@ class ClassicalPolicy:
         a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
         self._enqueue(a, h)
 
+    def _joint_offset_diag(self, obs, t):
+        """debug.log_joint_offset (passive): cmd-minus-measured over the first second of steady holds, from the policy's
+        own previous action only. A trajectory chunk is not steady state, so it is skipped; a hold is compared on the
+        next act() call, after the runner has applied it. Never changes a command."""
+        if not (self.cfg.get("debug") or {}).get("log_joint_offset", False):
+            return
+        if not self._last_policy_cmd_steady:
+            return
+        if self._joint_offset_t0 is None:  # the startup home trajectory must not consume the window
+            self._joint_offset_t0 = t
+        if t - self._joint_offset_t0 > 1.05:
+            return
+        aq, hq = obs.get("arm_q"), obs.get("hand_q")
+        if aq is None or hq is None or self._last_policy_arm_cmd is None or self._last_policy_hand_cmd is None:
+            return
+        da = self._last_policy_arm_cmd - np.asarray(aq, float)
+        dh = self._last_policy_hand_cmd - np.asarray(hq, float)
+        self.log(f"[joint_offset] t={t:.2f} cmd-minus-measured arm={np.round(da, 4).tolist()} "
+                 f"hand={np.round(dh, 4).tolist()}")
+
+    def _remember_policy_action(self, a, h, done, steady=False):
+        """Build the action dict; keep its last command for debug.log_joint_offset only (flag off: nothing retained)."""
+        out = {"arm_q_target": np.asarray(a, float).copy(), "hand_q_target": np.asarray(h, float).copy(),
+               "done": bool(done)}
+        if (self.cfg.get("debug") or {}).get("log_joint_offset", False):
+            self._last_policy_arm_cmd = out["arm_q_target"][-1].copy()
+            self._last_policy_hand_cmd = out["hand_q_target"][-1].copy()
+            self._last_policy_cmd_steady = bool(steady)
+        return out
+
     def _grasp_diag(self, obs):
         """policy.grasp_diag_log (passive, never changes a command): once per pick, measured hand_q vs commanded
         hand_cmd vs the `closed` posture at the detector's close-check tick and at the end of the lift."""
@@ -2050,7 +2096,7 @@ class ClassicalPolicy:
             return self._hold()
         self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()
         self._popped = (a, h) if self._shell else None
-        return {"arm_q_target": a.copy(), "hand_q_target": h.copy(), "done": False}
+        return self._remember_policy_action(a, h, False)
 
     def _hold(self, done=False):
         """Hold the last target. While waiting (planning / operator) the hold is `motion.hold_ticks` ticks long, so a
@@ -2063,8 +2109,8 @@ class ClassicalPolicy:
             self.log(f"[classical] episode end: attempts={len(self.attempts)} failed={len(self.failed)} "
                      f"too_long={len(getattr(self, 'too_long', []))} started={self.n_started} "
                      f"retry_pass_used={int(self.retry_pass_used)}")
-        return {"arm_q_target": np.repeat(self.arm_cmd[None], k, 0), "hand_q_target": np.repeat(self.hand_cmd[None], k, 0),
-                "done": bool(done)}
+        return self._remember_policy_action(np.repeat(self.arm_cmd[None], k, 0),
+                                            np.repeat(self.hand_cmd[None], k, 0), done, steady=True)
 
     def _note(self, t, msg):
         self.events.append((round(t, 2), msg))

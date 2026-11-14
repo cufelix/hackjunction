@@ -235,6 +235,8 @@ grasp:
   drop_slots: false           # FLAG (23-grasp-failure). Standalone drop slots (no verification): each successive object
                               # in a bin gets the next slot instead of the one fixed drop_xy (STEP 0: 6/30 stacked)
   drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
+  drop_height_extra_m: 0.0    # FLAG (finals safe). Raise the bin release by this (capped at the carry height); IK failure -> stock target
+  drop_lateral_margin_m: 0.0  # FLAG (finals safe). Move the release this far toward the bin centre (y only); IK failure -> stock target
   drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
   border_posture: false       # FLAG (retry-vary). Label None from abstain_border (blob cut by the image border, near
                               # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
@@ -390,6 +392,7 @@ policy:
   retry_same_yaw_deg: 20.0
   retry_assoc_radius: 0.06    # an earlier miss belongs to an object of the same colour within this (pushed objects)
   retry_max_variants: 3       # grasp variants planned per retry (each costs one plan() call)
+  first_object_speed_scale: null  # FLAG (finals safe). null | (0,1]: arm speed x this for every plan made before the first pick starts
   # Decision layer D1-D4 (decision.py, numbers in `decision:` below). All default off = stock behaviour.
   confidence_order: false     # FLAG (D1/D2). Order by 2*p/est_time (p = p_colour*p_bin*p_grasp), never the hardest first
   object_time_cap: false      # FLAG (D2). Per-object cap, T-20 s no new object, T-8 s release over the bin / retract
@@ -428,6 +431,9 @@ decision:
   depth_hi: 0.6
   isolated_first: false       # FLAG (decision.isolated_first). Candidates within isolated_min_m of another detection (touching) go after the isolated ones
   isolated_min_m: 0.06        # xy distance (m) to the nearest OTHER detection below which a candidate counts as touching
+
+debug:
+  log_joint_offset: false     # FLAG (passive). First ~1 s of steady holds: the policy's last command minus the measured joints
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.
