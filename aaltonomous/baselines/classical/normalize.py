@@ -1254,6 +1254,181 @@ def strict_mapping(text: str, mapping: dict) -> dict:
         return {"default": None}
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# instruction.structured, second pass (langfix2). Everything below runs ONLY behind `instruction.structured`
+# (policy.py calls structured_normalize / structured_final instead of normalize / structured_mapping), so with the flag
+# off nothing in this block is reachable and the older path is byte-identical. It reuses the tables above (name_colours,
+# name_foreign, normalize) and only adds forms they lack. Every rule maps a phrase to a closed-vocabulary word or turns an
+# ambiguity into an abstain (None); none returns a bin the sentence does not state.
+#   amber    -> ambiguous (yellow or orange): becomes an unknown token, and the objects it could name are abstained.
+#   can      -> cylinder after a colour word when "can" cannot be the modal verb ("for orange can,", "orange can in the...").
+#   right in / right at the + position -> "right" is an intensifier, not a bin ("right in the middle" = middle).
+#   Czech    -> extra direction / colour inflections (doleva, vpravo, uprostred; cerveny, modry...) and "a" = "and".
+#   typos    -> a colour or "cubs" is repaired only when a shape word follows / a colour word precedes it.
+#   rest     -> "for the remaining shapes, red and blue left..." maps only the complement of what was named before.
+#   blocks   -> "yellow blocks X, the rest Y": cube-only vs colour-wide is ambiguous, only the cube cell is mapped.
+# ---------------------------------------------------------------------------------------------------------------------
+_S_COLOURS = r"(?:red|orange|yellow|purple|violet|blue|lilac|gold(?:en)?)"
+_S_AMBER = re.compile(r"\bamber\b", re.I)
+_S_AMBER_TOKEN = "xamber"          # not a colour word (normalize matches amber at a word start only); no fuzzy target starts with x
+_S_CAN = re.compile(
+    rf"\b({_S_COLOURS})(\s+)(can)\b(?=\s*(?:[.,;:!?]|$)|\s+(?:in|into|onto|inside|to|at|goes|belongs|is|are)\b)", re.I)
+_S_INTENSIFIER = re.compile(
+    r"(?<![A-Za-z])((?:the\s+)?)right(\s+)((?:in|at|on|by)\s+the\s+(?:very\s+|far\s+)?(?:left|right|center|centre|middle)\b)",
+    re.I)
+_S_CZ_REPL = tuple((re.compile(p, re.I), w) for p, w in (
+    (r"\b(?:dolev|nalev|zlev)\w*|\bvlevo\b|\blev(?:[ýáéí]|ou|ého|ém|ému|ým)\w*", "left"),
+    (r"\b(?:doprav|naprav|zprav)\w*|\bvpravo\b|\bprav(?:[ýáéí]|ou|ého|ém|ému|ým)\w*", "right"),
+    (r"\b(?:do|u|na|v)?prost[řr]ed\w*|\bst[řr]edn\w*|\bst[řr]ed\w*", "middle"),
+    (r"\b[čc]erven\w*", "red"),
+    (r"\bmodr\w*", "blue"),
+))
+_S_CZ_DETECT = re.compile(r"\b(?:[žz]lut|fialov|oran[žz]ov|[čc]erven|modr|dolev|doprav|nalev|naprav|vlevo|vpravo|"
+                          r"prost[řr]ed|st[řr]ed|kostk|v[áa]lc|hranol|krabic|ko[šs]\b)", re.I)
+_S_CZ_AND = re.compile(r"(?<![A-Za-zÀ-ɏ])a(?![A-Za-zÀ-ɏ])")
+_S_COLOUR_TARGETS = ("yellow", "purple", "violet", "orange", "golden")
+_S_WORDS = re.compile(r"[A-Za-z]+")
+
+
+def _s_colour_typo(word: str) -> str | None:
+    """Unique colour a misspelt word stands for, else None. Same first letter; 1 edit, or 2 edits with the same last
+    letter; 5+ letters ("blue" and "red" are too short to repair safely)."""
+    w = word.lower()
+    if len(w) < 5 or w in VOCAB or w in _ins._KNOWN:
+        return None
+    hits = {t for t in _S_COLOUR_TARGETS if t[0] == w[0] and abs(len(t) - len(w)) <= 2
+            and ((d := _dist(w, t)) <= 1 or (d == 2 and t[-1] == w[-1]))}
+    return hits.pop() if len(hits) == 1 else None
+
+
+def _s_typos(sentence: str) -> str:
+    """After normalize(): repair a colour typo that sits directly before a shape word, and "cubs" after a colour."""
+    ws = list(_S_WORDS.finditer(sentence))
+    out, last = [], 0
+    for i, m in enumerate(ws):
+        w, new = m.group(0), None
+        nxt = ws[i + 1] if i + 1 < len(ws) else None
+        if nxt and sentence[m.end():nxt.start()].isspace() and nxt.group(0).lower() in _ins._SHAPE_WORDS:
+            c = _s_colour_typo(w) if w.lower() in PROTECTED or w.lower() not in _ins._KNOWN else None
+            new = c
+        prev = ws[i - 1] if i else None
+        if (w.lower() == "cubs" and prev and sentence[prev.end():m.start()].isspace()
+                and (prev.group(0).lower() in _ins._COLOR_WORDS or prev.group(0).lower() in VOCAB and VOCAB[prev.group(0).lower()] in _ins.COLORS
+                     or ((_s_colour_typo(prev.group(0)) or "") in _S_COLOUR_TARGETS))):
+            new = "cubes"
+        if new:
+            out.append(sentence[last:m.start()] + (new.capitalize() if w[0].isupper() else new))
+            last = m.end()
+    return "".join(out) + sentence[last:]
+
+
+def structured_normalize(text: str) -> str:
+    """normalize() plus the structured-pass rewrites above. Never raises; on an error falls back to normalize()."""
+    if text is None:
+        return ""
+    try:
+        s = str(text)
+        s = _S_AMBER.sub(_S_AMBER_TOKEN, s)
+        s = _S_INTENSIFIER.sub(lambda m: m.group(0) if m.group(1) else m.group(3), s)
+        s = _S_CAN.sub(lambda m: m.group(1) + m.group(2) + ("Cylinder" if m.group(3)[0].isupper() else "cylinder"), s)
+        if _S_CZ_DETECT.search(s):
+            for rx, w in _S_CZ_REPL:
+                s = rx.sub(lambda m, w=w: w.capitalize() if m.group(0)[0].isupper() else w, s)
+            s = _S_CZ_AND.sub("and", s)
+        return _s_typos(normalize(s))
+    except Exception:
+        return normalize(text)
+
+
+_S_ALL_OBJECTS = tuple((c, sh) for c in _ins.COLORS for sh in _ins.SHAPES)
+_S_REST = re.compile(
+    r"\b(?:for\s+)?(?:the\s+|all\s+(?:the\s+)?)?(?:(?:remaining|other|leftover)\s+(?:shapes?|objects?|items?|pieces?|"
+    r"colou?rs?|ones|things)|rest(?:\s+of\s+(?:the\s+)?(?:shapes?|objects?|items?|pieces?))?|everything\s+else|"
+    r"anything\s+else|others)\b\s*[,:]?", re.I)
+
+
+def _s_core(text: str):
+    parsed = structured_mapping(text)
+    return parsed if parsed is not None else strict_mapping(text, _ins.resolve(text, fallback={}))
+
+
+def _s_lookup(mapping: dict, colour: str, shape: str):
+    """resolve_bin without "default": (present, bin)."""
+    for k in ((colour, shape), colour, shape):
+        if k in mapping:
+            return True, mapping[k]
+    return False, None
+
+
+def _s_complement(text: str):
+    """"<named part>. For the remaining shapes, <rules>": rules apply only to the objects the first part did not name.
+    None if the sentence has no such split or either half is not understood (the unchanged path then decides)."""
+    ms = list(_S_REST.finditer(text))
+    if len(ms) != 1:
+        return None
+    m = ms[0]
+    first, second = text[:m.start()], text[m.end():]
+    k1, k2 = _strict_keys(first), _strict_keys(second)
+    if not (k1[0] or k1[1]) or not (k2[0] or k2[1]) or not _bins_in(first) or not _bins_in(second):
+        return None                         # a plain "the rest go left" is the catch-all path, not this one
+    m1, m2 = _s_core(first.rstrip(" ,;:.-")), _s_core(second.lstrip(" ,;:.-"))
+    m1 = {k: v for k, v in m1.items() if k != "default"}
+    m2 = {k: v for k, v in m2.items() if k != "default"}
+    if not any(v for v in m1.values()) or not any(v for v in m2.values()):
+        return None                         # a half is not understood: leave the sentence to the unchanged path
+    out = dict(m1)
+    for c, sh in _S_ALL_OBJECTS:
+        if _s_lookup(m1, c, sh)[0]:
+            continue                        # already named by the first part
+        out[(c, sh)] = _s_lookup(m2, c, sh)[1]
+    out["default"] = None
+    return out
+
+
+_S_COLOUR_BLOCKS = re.compile(rf"\b({_S_COLOURS})\s+blocks\b", re.I)
+
+
+def _s_block_scope(text: str, mapping: dict) -> dict:
+    """"yellow blocks center, the rest left": whether "blocks" means cubes or every yellow solid is unstated. Map only the
+    cube cell (the reading both agree on) and abstain on the other shapes of that colour; the catch-all stays."""
+    if "default" not in mapping or mapping["default"] is None:
+        return mapping
+    out = dict(mapping)
+    for m in _S_COLOUR_BLOCKS.finditer(text):
+        word = m.group(1).lower()
+        colour = _ins._COLOR_WORDS.get(word) or VOCAB.get(word)
+        if colour in _ins.COLORS and out.get(colour) and (colour, "cube") not in out:
+            out[(colour, "cube")] = out[colour]
+            out[colour] = None
+    if out.get("cube") is None and not any(_ins._SHAPE_WORDS.get(t) == "cube" for t in _ins._tokens(text.lower())):
+        out.pop("cube", None)               # strict put it there only because of the word "blocks"
+    return out
+
+
+def _s_amber(text: str, mapping: dict) -> dict:
+    """amber is yellow or orange: abstain every object it could name. Colours the text names explicitly keep their bin."""
+    explicit = _strict_keys(text)[0]
+    out = dict(mapping)
+    for c in ("yellow", "red"):
+        if c not in explicit:
+            out[c] = None
+    out["default"] = None
+    return out
+
+
+def structured_final(text: str) -> dict:
+    """The instruction.structured mapping for already structured_normalize()d text. Never raises."""
+    try:
+        out = _s_complement(text)
+        if out is None:
+            out = _s_block_scope(text, _s_core(text))
+        if _S_AMBER_TOKEN in text.lower():
+            out = _s_amber(text, out)
+        return out
+    except Exception:
+        return {"default": None}
+
+
 def _selfcheck() -> None:
     cases = {"lfet": "left", "rgiht": "right", "rigth": "right", "rght": "right", "cente": "center",
              "cntr": "center", "midlle": "middle", "centur": "center", "yelo": "yellow", "ylw": "yellow",
