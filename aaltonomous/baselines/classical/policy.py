@@ -68,6 +68,12 @@ class ClassicalPolicy:
                 from .hand_calib import HandCalibrator
                 self.hand_calib = HandCalibrator(hcfg)
                 _ = self.hand_calib.surface
+                pc = self.cfg["perception"]
+                others = [k for k, on in (("xy_offset", any(pc.get("xy_offset") or [])), ("y_affine", pc.get("y_affine")),
+                                         ("self_calibration", (pc.get("self_calibration") or {}).get("enabled")))
+                          if on]
+                if others:     # all correct the same head-camera error: stacking them double-corrects
+                    (log or print)(f"WARNING hand_calibration is ON together with {others}: double-correction risk")
             except Exception as e:
                 self.hand_calib = None
                 (log or print)(f"hand calibration disabled: {type(e).__name__}: {e}")
@@ -164,7 +170,7 @@ class ClassicalPolicy:
         self._hc_tries = 0
         self._hc_prev_q = None
         self._hc_job = None
-        self._hc_gen = getattr(self, "_hc_gen", 0) + 1     # a solve still running from the last episode is dropped
+        self._hc_still = 0
         self.last_bin_detections = []
         self.used_drop_slots = {name: set() for name in self.scene.bin_names}
         self.reserved_drop_slots = {name: set() for name in self.scene.bin_names}
@@ -187,27 +193,33 @@ class ClassicalPolicy:
                 self._hand_calib_apply(job["res"], t)
             elif time.perf_counter() - job["t0"] > float(self.hand_calib.p.get("job_timeout_s", 1.5)):
                 self._hc_job = None
-                self._hc_gen += 1                              # the late result is discarded
                 self._hc_done = True
                 self._note(t, f"hand calibration fallback: solve timed out (> {self.hand_calib.p.get('job_timeout_s', 1.5)} s)")
             return
         try:
             p = self.hand_calib.p
             q = np.array(obs["arm_q"], float)
-            prev, self._hc_prev_q = self._hc_prev_q, q
-            if prev is None or np.abs(q - prev).max() > p["still_rad"] or obs.get("head_depth") is None:
+            hq = None if obs.get("hand_q") is None else np.array(obs["hand_q"], float)
+            cur = q if hq is None else np.r_[q, hq]
+            prev, self._hc_prev_q = self._hc_prev_q, cur
+            if prev is None or prev.shape != cur.shape or np.abs(cur - prev).max() > p["still_rad"]:
+                self._hc_still = 0
+            else:
+                self._hc_still += 1
+            # still_ticks consecutive still ticks (arms AND hands): the depth lags the encoders by 50-100 ms
+            if self._hc_still < int(p.get("still_ticks", 5)) or obs.get("head_depth") is None:
                 return
             self._hc_tries += 1
             from .hand_calib import corrected_calibration
             start = corrected_calibration(self.perception.cal, self.perception.cam, self.perception.current_T())
             depth = np.array(obs["head_depth"])
-            hq = None if obs.get("hand_q") is None else np.array(obs["hand_q"], float)
         except Exception as e:
             self._hc_done = True
             self._note(t, f"hand calibration fallback: {type(e).__name__}: {e}")
             return
         job = {"done": threading.Event(), "res": None, "t0": time.perf_counter()}
         self._hc_job = job
+        self._hc_still = 0
         cam, solver = self.perception.cam, self.hand_calib
 
         def work():

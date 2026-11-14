@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import struct
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +57,7 @@ DEFAULTS = dict(
     huber_m=0.003,
     depth_range_mm=[150, 1500],
     max_tries=10,             # policy: give up after this many still frames without a valid result
+    still_ticks=5,            # policy: consecutive still ticks (arms + hands) before a solve starts
     job_timeout_s=1.5,        # policy: abandon a worker solve older than this
     still_rad=0.01,           # policy: max arm joint change between two frames to count as still
 )
@@ -114,6 +116,7 @@ class ArmSurface:
     def __init__(self, asset=ASSET, urdf=DEFAULT_URDF, spec: JointSpec | None = None, links=None):
         import pinocchio as pin
         self.pin = pin
+        self._lock = threading.Lock()   # posed() mutates self.q / pinocchio data: solves on worker threads must not interleave
         spec = spec or JointSpec()
         if isinstance(asset, dict):
             z, self.spacing = asset, float(asset.get("spacing", 0.003))
@@ -136,15 +139,16 @@ class ArmSurface:
 
     def posed(self, arm_q, hand_q=None):
         """-> points (N, 3), normals (N, 3) in the pelvis frame."""
-        self.q[self.arm_iq] = np.asarray(arm_q, float)
-        if hand_q is not None:
-            self.q[self.hand_iq] = np.asarray(hand_q, float)
-        self.pin.framesForwardKinematics(self.model, self.data, self.q)
-        P, N = [], []
-        for f, p, n in zip(self.frames, self.pts, self.nrm):
-            M = self.data.oMf[f]
-            P.append(p @ M.rotation.T + M.translation)
-            N.append(n @ M.rotation.T)
+        with self._lock:
+            self.q[self.arm_iq] = np.asarray(arm_q, float)
+            if hand_q is not None:
+                self.q[self.hand_iq] = np.asarray(hand_q, float)
+            self.pin.framesForwardKinematics(self.model, self.data, self.q)
+            P, N = [], []
+            for f, p, n in zip(self.frames, self.pts, self.nrm):
+                M = self.data.oMf[f]
+                P.append(p @ M.rotation.T + M.translation)
+                N.append(n @ M.rotation.T)
         return np.concatenate(P), np.concatenate(N)
 
 
