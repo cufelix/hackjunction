@@ -138,7 +138,8 @@ class TestFlags(unittest.TestCase):
 
 
 def _planner(**over):
-    pol = ClassicalPolicy(config=load_config(overlay="finals_r21", overrides=over), log=None)
+    pol = ClassicalPolicy(config=load_config(overlay="finals_r21", overrides={"scene.counter_z_prior": None, **over}), log=None)   # integ-all: fixture detections sit at the nominal counter, not the 0.15 prior
+    pol.mapping = pol.planner.mapping = dict(pol.fixed_mapping)   # integ-all: fixlang resolves the mapping only at reset()
     return pol, pol.planner
 
 
