@@ -233,6 +233,8 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_coloralias"] = expect["finals_r22"] | {"instruction.venue_colour_aliases"}   # T10 colour aliases A/B
         expect["finals_r22_lyingprism"] = expect["finals_r22"] | {"perception.prism_orientation", "grasp.lying_prism"}   # prism A/B
         expect["finals_r22_lyingarm"] = expect["finals_r22_lyingprism"] | {"grasp.lying_prism_arm_by_reach"}   # T6 arm by reach A/B
+        expect["finals_r22_softgrip"] = expect["finals_r22"] | {"grasp.soft_hand", "grasp.soft_squeeze",
+                                                                 "held.soft_detector"}   # softgrip A/B: r22 + its 3 flags
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -246,7 +248,7 @@ class TestFlags(unittest.TestCase):
                   "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk",
                   "finals_r22_novel", "finals_r22_verify", "finals_r22_cage", "finals_r22_order", "finals_r22_done",
                   "finals_r22_langzip", "finals_r22_counter", "finals_r22_bare", "finals_r22_coloralias",
-                  "finals_r22_lyingprism"):
+                  "finals_r22_lyingprism", "finals_r22_lyingarm", "finals_r22_softgrip"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_cage", "finals_r22_novel", "finals_r22_verify", "finals_r22_counter", "finals_r22_coloralias",
                   "finals_r22_order", "finals_r22_done", "finals_r22_softgrip", "finals_r22_langzip", "finals_r22_bare", "finals_r22_lyingprism",
@@ -254,8 +256,6 @@ class TestFlags(unittest.TestCase):
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
-        expect["finals_r22_softgrip"] = expect["finals_r22"] | {"grasp.soft_hand", "grasp.soft_squeeze",
-                                                                 "held.soft_detector"}   # softgrip A/B: r22 + its 3 flags
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
