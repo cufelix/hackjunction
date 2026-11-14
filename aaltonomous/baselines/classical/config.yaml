@@ -191,6 +191,25 @@ perception:
                max_area_frac: 3.0, max_px_no_z: 6000, ws_x: [0.12, 0.45], ws_abs_y: 0.40, ws_edge_m: 0.01,
                edge_m: 0.02, edge_h: [0.03, 0.055], max_cands: 6,
                sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}}   # sat_floor: median S (0-255) over the blob
+  depth_blob_recover: false   # FLAG (P0 perception): known-colour depth blobs missed by HSV; unknown colours abstain
+  depth_blob_recover_params:
+    stride: 6                 # 480x640 -> 80x107 height map; one bounded pass per perception update
+    min_height_m: 0.012       # tape/counter below 1.2 cm is never foreground
+    max_height_m: 0.15        # hands/bin clutter above the object band are never foreground
+    min_blob_cells: 12        # cells after stride-6 downsample (~432 full-resolution px)
+    max_blob_cells: 600       # reject large occluders / merged workspace structures
+    plane_z_window: 0.08      # existing counter-plane fitter candidate window around known counter z
+    plane_inlier_m: 0.008
+    min_plane_points: 250
+    sat_floor: 20             # relaxed only for this depth-supported path (HSV S, 0..255)
+    min_colour_px: 24
+    min_colour_conf: 0.45     # best known class must clear this score ...
+    min_colour_margin: 0.15   # ... and beat the runner-up; otherwise abstain
+    match_iou: 0.10           # depth blob already explained by a colour detection -> no duplicate
+    match_centroid_px: 20
+    shape_hint: true          # conservative footprint/flatness hint; never needed for colour-only instructions
+    shape_flatness_m: 0.008
+    shape_prism_aspect: 1.35
   split:
     object_size: null         # m, expected object edge for the size gate; null = scene objects.size (perception.object_size)
     area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;
