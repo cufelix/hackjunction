@@ -257,12 +257,12 @@ read -r B_OK B_P50 B_P95 B_MAX B_SRC <<<"$(printf '%s' "$BRAIN_JSON" | python3 -
 import json, sys
 d = json.loads(sys.stdin.read() or "{}")
 print(d.get("ok", 0), d.get("p50_ms", "na"), d.get("p95_ms", "na"), d.get("max_ms", "na"), d.get("source", "na"))')"
-echo "BRAIN prompts=$B_SRC ok=$B_OK/$N p50_ms=$B_P50 p95_ms=$B_P95 max_ms=$B_MAX budget_p95_ms=$P95_BUDGET_MS"
+echo "BRAIN prompts=$B_SRC ok=$B_OK/$N_PROMPTS p50_ms=$B_P50 p95_ms=$B_P95 max_ms=$B_MAX budget_p95_ms=$P95_BUDGET_MS"
 printf '%s\n' "$BRAIN_OUT" | sed -n 's/^BRAIN_JSON .*"errors": \(.*\)}$/  errors: \1/p' | tail -1
-if [ "$B_OK" = "$N" ] && python3 -c "import sys; sys.exit(0 if float('$B_P95') <= $P95_BUDGET_MS else 1)" 2>/dev/null; then
-  pass "(e) brain: $N/$N valid decisions, p95 ${B_P95} ms <= ${P95_BUDGET_MS} ms"
+if [ "$B_OK" = "$N_PROMPTS" ] && python3 -c "import sys; sys.exit(0 if float('$B_P95') <= $P95_BUDGET_MS else 1)" 2>/dev/null; then
+  pass "(e) brain: $N_PROMPTS/$N_PROMPTS valid decisions, p95 ${B_P95} ms <= ${P95_BUDGET_MS} ms"
 else
-  fail "(e) brain: ok=$B_OK/$N p95=$B_P95 ms (budget ${P95_BUDGET_MS} ms)"
+  fail "(e) brain: ok=$B_OK/$N_PROMPTS p95=$B_P95 ms (budget ${P95_BUDGET_MS} ms)"
 fi
 
 # (f) versions and checksums (printed; a missing GGUF or binary fails)
