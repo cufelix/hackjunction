@@ -163,7 +163,7 @@ def run(a):
         print(f"head frames -> {d}/")
     try:
         obs = env.reset()  # real: prints the layout card and waits for Enter
-        pol.reset({"instruction": obs["instruction"]})
+        pol.reset({"instruction": obs["instruction"], "seed": a.seed})   # seed: reproducible skill sampling
         keys = queue.Queue()
         if confirm:
             threading.Thread(target=stdin_reader, args=(keys,), daemon=True).start()

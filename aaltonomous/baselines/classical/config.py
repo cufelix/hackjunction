@@ -37,6 +37,8 @@ FLAGS = {
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
     "calib.plane.apply_height": ("P0 table", False, "runtime counter_z from the head-depth counter-plane fit (median of the first calib.plane.looks looks, clamped to +-max_dz_m, nominal on bad depth / tilt > max_tilt_deg); every consumer reads scene.counter_z"),
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
+    "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
+    "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
     "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner, hold the last emitted action (zero hold before any); non-finite head_depth -> 0 (missing)"),
