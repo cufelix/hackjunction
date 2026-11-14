@@ -372,6 +372,56 @@ class TestTableAgainstMockRender(unittest.TestCase):
                 self.assertAlmostEqual(result.pitch_deg, deg, delta=0.5)
 
 
+class TestInjectedErrorEndToEnd(unittest.TestCase):
+    """Mock world has ground truth: inject a head pitch error, detect with / without the table fit, compare xy to GT."""
+
+    def _errors(self, dp, mode):
+        objs = [dict(color=c, shape="cube", yaw=0.0, size=SC.size, height=SC.object_height(),
+                     pos=np.array([x, y, SC.counter_z + SC.object_height() / 2]))
+                for c, (x, y) in zip(("red", "yellow", "blue"), ((0.25, 0.10), (0.30, -0.12), (0.35, 0.0)))]
+        rgb, depth = Renderer(SC, CAL).render(objs, rng=np.random.default_rng(1), depth_noise_mm=1.0, hole_frac=0.02)
+        cfg = load_config(overrides={"perception.inject_cam_error": [dp, 0, 0, 0, 0], "perception.online_pitch_cal": mode})
+        p = Perception(cfg, SC, CAL, log=lambda *_: None)
+        res = p.calibrate_pitch(rgb, depth) if mode else None
+        gt = {o["color"]: o["pos"] for o in objs}
+        errs = [np.linalg.norm(d.top[:2] - gt[d.color][:2]) for d in p.detect(rgb, depth) if d.color in gt]
+        return res, errs
+
+    def test_table_fit_removes_the_injected_error_both_signs(self):
+        for dp in (-7.5, 0.0, 7.5):
+            with self.subTest(dp=dp):
+                res, errs = self._errors(dp, "table")
+                self.assertTrue(res.success, res)
+                self.assertEqual(len(errs), 3)
+                self.assertAlmostEqual(res.pitch_deg, dp, delta=1.0)     # same sign as the injected error
+                self.assertLess(max(errs), 0.015)
+                if dp:
+                    self.assertGreater(max(self._errors(dp, False)[1] or [1.0]), 0.03)   # and it was a real error
+
+
+class TestFirstLookWaitsForPitchCal(unittest.TestCase):
+    def _policy(self, overrides):
+        cfg = load_config(overrides=overrides)
+        env = make_mock_env(seed=2, cfg=cfg)
+        pol = ClassicalPolicy(config=cfg, log=lambda *a: None, safety=env.filter.cfg)
+        obs = env.reset()
+        pol.reset({"instruction": obs["instruction"]})
+        return pol
+
+    def test_holds_until_commit_then_releases_and_expires(self):
+        pol = self._policy(TABLE_ON)
+        pol.threaded, pol.arm_cmd, pol._ep_t0 = True, np.zeros(14), 0.0
+        self.assertTrue(pol._await_pitch_cal(0.2))           # threaded: never blocks, just holds
+        self.assertFalse(pol._await_pitch_cal(1.0))          # max 1.0 s sim time from the episode start
+        pol.pitch_calibration = object()
+        self.assertFalse(pol._await_pitch_cal(0.2))          # committed
+
+    def test_flag_off_never_waits(self):
+        pol = self._policy({})
+        pol._ep_t0 = 0.0
+        self.assertFalse(pol._await_pitch_cal(0.0))
+
+
 class TestPitchCalReleaseGate(unittest.TestCase):
     def test_conflicts(self):
         self.assertEqual(pitch_cal_conflicts(load_config(overlay="none")), [])

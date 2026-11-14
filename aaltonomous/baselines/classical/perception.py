@@ -618,14 +618,20 @@ class Perception:
         pad = max(0, int(c.get("object_mask_pad_px", 5)))
         if pad:
             coloured = cv2.dilate(coloured, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8))
-        coloured |= self._bin_footprint_mask(rgb, (height, width), c, pad)
-        candidate = valid_depth & roi & (coloured == 0)
-
         stride = max(1, int(c.get("pixel_stride", 3)))
-        vv, uu = np.nonzero(candidate[::stride, ::stride])
-        vv, uu = vv * stride, uu * stride
-        n_points = len(uu)
         min_inliers = int(c.get("min_inliers", 800))
+
+        def sample(mask):
+            v_, u_ = np.nonzero((valid_depth & roi & (mask == 0))[::stride, ::stride])
+            return v_ * stride, u_ * stride
+
+        vv, uu = sample(coloured | self._bin_footprint_mask(rgb, (height, width), c, pad))
+        if len(uu) < min_inliers:
+            # The footprint hulls are projected through the BELIEVED pose swept only +-4 deg; a larger error (-7.5 deg in the
+            # field) slides them over the whole counter ROI. Fall back to the orange/colour mask alone: RANSAC rejects any
+            # bin leakage and the inlier-ratio / RMS gates still apply.
+            vv, uu = sample(coloured)
+        n_points = len(uu)
         if n_points < min_inliers:
             return result(False, True, 0.0, 0.0, np.nan, n_points, 0, np.inf, "too few table points")
         # Evenly retain a fixed-size, image-wide sample. This bounds every RANSAC iteration independently of image
