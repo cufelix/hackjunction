@@ -34,6 +34,8 @@ perception:
   object_size: null           # null = scene.yaml objects.size (grasp width)
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
   object_height: null         # null = scene.yaml size * height_ratio
+  classify_shape: false       # set Detection.shape from the 2D blob (prism_pose.classify_blob); single-shape scenes: that shape
+  triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
 
 grasp:
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
@@ -49,6 +51,18 @@ grasp:
     - [1.0, -1.0, 0.0]
     - [0.0, -1.0, 0.0]
   finger_hint_weight: 0.3
+  # Triangle prisms: finger direction from the detected apex yaw (needs Detection.shape == "triangle" + apex_yaw).
+  # Tried before finger_hints; a plan only counts if the achieved finger heading is within yaw_tol_deg, else the
+  # stock hints run. Finger heading = apex + yaw_phi_deg (left; right mirrors the sign) + k * 120 deg. TUNE (sweep phi)
+  yaw_align: false
+  yaw_phi_deg: 105            # sim grasp_test (left arm, n=6 per phi): 105 4/6, 90 ~3/6, 60 and 0 worst
+  yaw_hint_weight: 3.0        # IK weight of that finger direction (stock 0.3 is a weak preference)
+  yaw_tol_deg: 12.0
+  yaw_ref_deg: 25.0           # natural finger direction: forward, this far inward
+  yaw_max_dev_deg: 75.0       # candidates further from it are not tried
+  yaw_max_hints: 2
+  yaw_min_conf: 0.5
+  yaw_tri_shift: true         # move the grasp point to the midpoint of the object's extent along the finger direction
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
