@@ -1,7 +1,7 @@
 # ab_frozen_rgb = finals_r23 (which now has policy.frozen_rgb_guard ON, off in sim via sim_overrides). Was: finals_r23: finals_r22 + profile_auto (sim/real from first frames) + gate_below_bins + instruction.structured + hazard_guard; sim_overrides restores rc1 values in sim only
 name: ab_frozen_rgb
 flags:
-  policy.frozen_rgb_guard: true                 # frozen head RGB guard (real robot; crc32 vs previous look + arm travel > 0.05 rad); sim_overrides turns it off
+  policy.frozen_rgb_guard: true                 # frozen head RGB guard (real robot; crc32 vs previous look after a pick/reset); sim_overrides turns it off
   hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)

@@ -129,8 +129,7 @@ class TestFlags(unittest.TestCase):
         # The frozen submission is unchanged; only the newly registered, default-off overrides may be absent.
         sub_keys = set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"])
         self.assertEqual(set(FLAGS) - sub_keys, {"policy.chunk_ticks", "policy.hold_ticks",
-                                                    "policy.frozen_rgb_guard", "policy.frozen_rgb_max_consecutive",
-                                                    "policy.frozen_rgb_min_arm_travel_rad"})
+                                                    "policy.frozen_rgb_guard", "policy.frozen_rgb_max_consecutive"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):
