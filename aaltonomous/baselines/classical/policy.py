@@ -32,7 +32,9 @@ from aaltonomous.scene.scene import Scene, resolve_bin
 from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Plan, Planner, lookup_bin
+from .planner import Planner, lookup_bin
+from .brain import BrainLayer, build_world
+from .brain.find import FindClient, extract_queries, match_found
 
 HZ = 30.0
 _HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence names a hole AND the lid
@@ -66,6 +68,8 @@ class ClassicalPolicy:
             sys.setswitchinterval(min(sys.getswitchinterval(), 0.001))
         self.time_limit = time_limit
         self.log = log or (lambda *a: None)
+        bc = self.cfg.get("brain") or {}
+        self.brain = BrainLayer(bc, log=self.log) if bc.get("enabled", False) else None   # FLAG brain.enabled
         self.reset()
 
     # ------------------------------------------------------------------ API
@@ -113,9 +117,22 @@ class ClassicalPolicy:
         if isinstance(info, str):
             info = {"instruction": info}
         info = info or {}
-        self.mapping = (info.get("mapping") or self._insert_guard_mapping(info) or self._instruction_mapping(info)
-                        or dict(FIXED_MAPPING))
+        given = info.get("mapping")
+        guarded = None if given else self._insert_guard_mapping(info)
+        resolved = None if given or guarded else self._instruction_mapping(info)
+        self.mapping = given or guarded or resolved or dict(FIXED_MAPPING)
         self.planner.mapping = self.mapping
+        self._task, self._instruction = info.get("task"), info.get("instruction")
+        self._brain_looks = 0
+        self._brain_finds = 0
+        self._brain_find_fn = getattr(self, "_brain_find_fn", None)
+        self._brain_queries = (extract_queries(self._instruction)
+                               if self.brain is not None and (self.cfg.get("brain") or {}).get("find", False) else [])
+        self._brain_mapping, self._brain_mapping_source = self._resolver_mapping(info, guarded)
+        self._brain_abstain = self._resolver_abstains(self._brain_mapping)
+        self._brain_reg, self._brain_n, self._last_pick = [], 0, None
+        if self.brain is not None:
+            self.brain.reset()
         self.time_limit = info.get("time_limit", self.time_limit)
         self.state = "init"
         self.queue_a = self.queue_h = None
@@ -141,8 +158,6 @@ class ClassicalPolicy:
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
-        self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
-        self._abort = None          # policy.retry_vary_grasp: the close being watched for held=no
         self._summary_logged = False
         self.perception.reset_calibration()
         self.calibration = None
@@ -194,8 +209,6 @@ class ClassicalPolicy:
             self._grasp_diag(obs)
         if self._stall is not None:
             self._lift_on_stall(obs)
-        if self._abort is not None:
-            self._abort_watch(obs)
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":
@@ -412,18 +425,31 @@ class ClassicalPolicy:
                 return extra
         return self.cfg["policy"]["max_attempts"]
 
-    def _choose(self, dets, obs, verify):
-        """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
-        cands, extra = [], []
-        mav = self._max_attempts_vary()
+    def _plan_variant(self, variant, *a, **kw):
+        """planner.plan, with the brain's retry grasp variant applied to the config for this one call only.
+        same / None = unchanged; closed_tight = that posture; demo = the by-shape demo posture (triangles)."""
+        g = self.cfg["grasp"]
+        saved = {k: g.get(k) for k in ("close_posture", "close_posture_by_shape")}
+        try:
+            if variant == "closed_tight":
+                g["close_posture"] = "closed_tight"
+            elif variant == "demo":
+                g["close_posture_by_shape"] = True
+            return self.planner.plan(*a, **kw)
+        finally:
+            for k, v in saved.items():
+                g[k] = v
+
+    def _ordered_cands(self, dets, verify):
+        """Counter candidates in the order _choose tries them (attempt / failed filter + sort). Pure: also used to
+        predict the next decision state for the brain prefetch."""
+        cands = []
         for d in dets:
             xy = d.top[:2]
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
                 continue
             n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < self.cfg["policy"]["same_object_radius"])
             if n >= self._attempt_limit(xy):
-                if mav is not None and n < mav:
-                    extra.append(d)   # policy.max_attempts_vary: one more varied try, after every other candidate
                 continue
             cands.append(d)
         if self.cfg["policy"]["order"] == "nearest_bin":
@@ -450,12 +476,31 @@ class ClassicalPolicy:
             cands.sort(key=lambda d: retry_prefix(d) + (base(d),))
         else:
             cands.sort(key=base)
-        if extra:
-            extra.sort(key=base)
-            cands += extra
+        return cands
+
+    def _choose(self, dets, obs, verify):
+        """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
+        cands = self._ordered_cands(dets, verify)
+        pol = self.cfg["policy"]
+        triage = bool(pol.get("time_triage", False))
         t = float(obs.get("t", 0.0))
         left = self.time_limit - t - self._time_reserve(corrective=False)
         n_long, shortest = 0, None
+        forced = None   # (det, bin, variant) from the brain
+        if self.brain is not None:
+            sel = self._brain_select(cands, dets, obs)
+            if sel is not None:
+                kind, d0, b0, var = sel
+                if kind == "look":
+                    return ("relook", None, len(dets))
+                if kind == "done":
+                    return ("none", None, len(dets))
+                if kind == "skip":
+                    self.failed.append(d0.top[:2])          # the brain gave this object up: no more tries
+                    cands = [d for d in cands if d is not d0]
+                elif kind in ("pick", "retry"):
+                    cands = [d0] + [d for d in cands if d is not d0]
+                    forced = (d0, b0, var)
         for d in cands:
             if triage:  # a plan that did not fit before cannot fit now (time only runs out; plans start from home)
                 rad = pol["same_object_radius"]
@@ -463,7 +508,8 @@ class ClassicalPolicy:
                     n_long += 1
                     continue
             others = [o.top[:2] for o in dets if o is not d]
-            target_bin = self._bin_of(d)
+            target_bin = forced[1] if forced is not None and d is forced[0] else self._bin_of(d)
+            var = forced[2] if forced is not None and d is forced[0] else None
             if target_bin is None:
                 continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
             if verify:  # #6: explicit target bin + a free, verified drop slot
@@ -473,7 +519,8 @@ class ClassicalPolicy:
                 if slot is None:
                     self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
                     continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot))
+                p = self._plan_variant(var, d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
+                                      drop_slot=slot)
             elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
                 free = [i for i in range(len(self.planner.drop_slots(target_bin)))
                         if i not in self.slot_used[target_bin]]
@@ -481,13 +528,13 @@ class ClassicalPolicy:
                 if slot is None:
                     self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
                     continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot))
+                p = self._plan_variant(var, d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
+                                      drop_slot=slot)
+            elif forced is not None and d is forced[0]:   # brain override: the classical planner still checks reach
+                p = self._plan_variant(var, d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others)
             else:
-                p = self._plan_pick(d, dict(obstacles=others))
+                p = self._plan_variant(var, d, self.arm_cmd, self.hand_cmd, obstacles=others)
             self.plans.append(p)
-            if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
-                self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")
-                continue
             if p.ok:
                 if triage and p.duration > left:  # feasible but too slow for the time left: try the next candidate
                     self.too_long.append((d.top[:2], p.duration))
@@ -505,156 +552,214 @@ class ClassicalPolicy:
             return ("notime", shortest, len(dets))
         return ("none", None, len(dets))
 
-    # ------------------------------------------------------------------ policy.retry_vary_grasp
-    def _vary_on(self):
-        return bool(self.cfg["policy"].get("retry_vary_grasp", False))
-
-    def _max_attempts_vary(self):
-        """policy.max_attempts_vary (needs retry_vary_grasp): attempt limit for extra, varied tries; None = off."""
-        mav = self.cfg["policy"].get("max_attempts_vary")
-        return int(mav) if (mav is not None and self._vary_on()) else None
-
-    def _posture_of(self, plan):
-        return plan.posture[0] if plan.posture else self.cfg["grasp"].get("close_posture", "closed")
-
-    def _hist_for(self, d):
-        """Earlier picks of this object that did not hold it (held no / unknown): same colour, within
-        retry_assoc_radius of the earlier grasp point (a missed object is often pushed a few cm)."""
-        r = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
-        xy = np.asarray(d.top[:2], float)
-        return [h for h in self.vary_hist if h["held"] is not True and h["color"] == d.color
-                and np.linalg.norm(xy - h["xy"]) < r]
-
-    def _same_grasp(self, key, h):
-        pol = self.cfg["policy"]
-        xy, yaw, posture = key
-        if posture != h["posture"] or np.linalg.norm(np.asarray(xy) - h["xy"]) >= float(pol.get("retry_same_xy_m", 0.01)):
-            return False
-        if yaw is None or h["yaw"] is None:
-            return True
-        dy = abs((yaw - h["yaw"] + np.pi) % (2 * np.pi) - np.pi)
-        return dy < np.radians(float(pol.get("retry_same_yaw_deg", 20.0)))
-
-    def _grasp_key(self, plan):
-        fh = getattr(self.planner, "finger_heading", None)
-        yaw = fh(plan) if fh is not None else None
-        return (np.asarray(plan.waypoints["grasp"][:2], float).copy(), yaw, self._posture_of(plan))
-
-    def _variants(self, d, hist):
-        """Grasp changes to try, best first: {"posture": name | None, "yaw": rad | None} (None = the stock choice).
-        Posture v1 <-> demo for a triangle / label None (demo = triangles 18/25 vs pinch_v1 3/9, but cubes 7/25 with
-        demo: a demo grasp on a non-triangle goes back to the configured posture first); the finger heading
-        +-retry_yaw_deg[label] from the last try (the miss direction relative to the pinch changes)."""
-        pol, g = self.cfg["policy"], self.cfg["grasp"]
-        prev = hist[-1]
-        label = getattr(d, "shape", None)
-        demo, v1 = "closed_demo", g.get("close_posture", "closed")
-        p0 = prev["posture"]
-        alt = v1 if p0 == demo else demo
-        degs = pol.get("retry_yaw_deg") or {}
-        dy = np.radians(float(degs.get(label if label is not None else "none", degs.get("default", 90.0))))
-        yaws = []
-        if prev["yaw"] is not None:
-            ref = np.radians(-25.0 if prev["side"] == "left" else 25.0)   # natural finger heading of that arm
-            ys = [prev["yaw"] + dy, prev["yaw"] - dy]
-            ys.sort(key=lambda a: abs((a - ref + np.pi) % (2 * np.pi) - np.pi))
-            yaws = [(a + np.pi) % (2 * np.pi) - np.pi for a in ys]
-        if label == "triangle":
-            out = ([{"posture": demo, "yaw": a} for a in yaws] + [{"posture": v1, "yaw": None}] if p0 == demo else
-                   [{"posture": demo, "yaw": None}] + [{"posture": demo, "yaw": a} for a in yaws])
-        elif label is None:
-            out = ([{"posture": alt, "yaw": None}] + [{"posture": p0, "yaw": a} for a in yaws]
-                   + [{"posture": alt, "yaw": a} for a in yaws])
-        else:   # cube / cylinder: never the demo posture (cubes 7/25 with it)
-            out = ([{"posture": v1, "yaw": None}] if p0 == demo else []) + [{"posture": v1, "yaw": a} for a in yaws]
-        return out[: int(pol.get("retry_max_variants", 3))]
-
-    def _plan_pick(self, d, kw):
-        """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
-        variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
-        differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""
-        if not self._vary_on():
-            return self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
-        hist = self._hist_for(d)
-        if not hist:
-            p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
-            if p.ok:
-                p.grasp_key = self._grasp_key(p)
-            return p
-        for v in self._variants(d, hist):
-            self.planner.vary = v
-            try:
-                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, relocate=False, **kw)
-            finally:
-                self.planner.vary = None
-            if not p.ok:
-                self.log(f"[retry_vary] {d.color} variant {self._vary_txt(v)} (before {self._key_txt((hist[-1]['xy'], hist[-1]['yaw'], hist[-1]['posture']))}) infeasible: {p.reason}")
-                continue
-            key = self._grasp_key(p)
-            if any(self._same_grasp(key, h) for h in hist):
-                self.log(f"[retry_vary] {d.color} variant {self._vary_txt(v)} repeats a tried grasp")
-                continue
-            p.grasp_key = key
-            self.log(f"[retry_vary] {d.color} label={getattr(d, 'shape', None)} try {len(hist) + 1}: "
-                     f"{self._vary_txt(v)} -> {self._key_txt(key)} (before: "
-                     + ", ".join(self._key_txt((h["xy"], h["yaw"], h["posture"])) for h in hist) + ")")
-            return p
-        p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
-        if p.ok:
-            p.grasp_key = self._grasp_key(p)
-            if any(self._same_grasp(p.grasp_key, h) for h in hist):
-                return Plan(False, color=d.color, reason="retry_vary: every grasp repeats a tried (point, yaw, posture)")
-        return p
+    # ------------------------------------------------------------------ brain (policy.brain)
+    def _resolver_mapping(self, info, guarded=None):
+        """Mapping opinions that may bind the brain: explicit reset mapping, the fixed task, or keys actually parsed
+        by the resolver. The classical fallback remains unchanged but is not presented as an opinion for open vocab."""
+        if self.brain is None:
+            return {}, "disabled"
+        try:
+            if (info or {}).get("mapping"):
+                return dict(info["mapping"]), "explicit"
+            if guarded:
+                return dict(guarded), "insert_guard"
+            if (info or {}).get("task") == "sort_fixed":
+                return dict(self.mapping), "fixed"
+            if not (self.cfg.get("instruction") or {}).get("resolve", False):
+                return {}, "unresolved"
+            from .instruction import resolve
+            parsed = resolve(str((info or {}).get("instruction") or ""), fallback={}) or {}
+            return dict(parsed), "resolver" if parsed else "unresolved"
+        except Exception:
+            return {}, "unresolved"
 
     @staticmethod
-    def _vary_txt(v):
-        yaw = "stock" if v["yaw"] is None else f"{np.degrees(v['yaw']):.0f}"
-        return f"posture={v['posture']} yaw={yaw}"
+    def _resolver_abstains(mapping):
+        return not bool(mapping)
 
-    @staticmethod
-    def _key_txt(k):
-        xy, yaw, posture = k
-        y = "n/a" if yaw is None else f"{np.degrees(yaw):.0f}"
-        return f"({xy[0]:+.3f},{xy[1]:+.3f}) yaw={y} {posture}"
+    def _brain_ids(self, dets):
+        """Stable object ids across looks: a detection takes the id of the nearest same-colour registry entry
+        (<= 5 cm, one-to-one), else a new one. The registry is per episode."""
+        used, out = set(), []
+        for d in dets:
+            xy = np.asarray(d.top[:2], float)
+            best, bd = None, 0.05
+            for j, (oid, col, pxy) in enumerate(self._brain_reg):
+                if j not in used and col == d.color and np.linalg.norm(xy - pxy) <= bd:
+                    best, bd = j, np.linalg.norm(xy - pxy)
+            if best is None:
+                self._brain_reg.append([f"o{self._brain_n}", d.color, xy])
+                self._brain_n += 1
+                best = len(self._brain_reg) - 1
+            else:
+                self._brain_reg[best][2] = xy
+            used.add(best)
+            out.append(self._brain_reg[best][0])
+        return out
 
-    def _abort_watch(self, obs):
-        """policy.retry_vary_grasp: at the end of the close hold, held = the active hand still lags its command by
-        >= 0.010 rad (the [grasp_diag] criterion). held=no -> the rest of the plan (carry to the bin, release) is
-        replaced by its abort branch: finish the lift, straight home. Only removes motion, never adds speed."""
-        w = self._abort
-        left = 0 if self.queue_a is None else len(self.queue_a)
-        if w["n"] - left < w["close_end"]:
-            return
-        self._abort = None
-        q = obs.get("hand_q")
-        if q is None:
-            return
-        sl = ArmKinematics.sl(w["plan"].side)
-        held = bool(np.abs(np.asarray(self.hand_cmd, float)[sl] - np.asarray(q, float)[sl]).max() >= 0.010)
-        w["hist"]["held"] = held
-        if held or w["plan"].abort is None or left == 0:
-            return
-        ls, arm, hand = w["plan"].abort
-        k = (w["n"] - ls) - left            # lift ticks already sent (also after a lift_on_stall cut of the hold)
-        nl = w["lift_len"]
-        if not 0 <= k < nl:
-            return
-        new_a, new_h = arm[k:], hand[k:]
-        t = float(obs.get("t", 0.0))
-        g = self._gdiag
-        if g is not None and g["plan"] is w["plan"]:
-            g["n"] = (g["n"] - left) + len(new_a)
-        self.queue_a, self.queue_h = new_a, new_h
-        plan = w["plan"]
-        if self.slot_pending is not None and self.slot_pending[1] == plan.drop_slot:
-            self.slot_used[self.slot_pending[0]].discard(plan.drop_slot)
-            self.slot_pending = None
-        vp = self.verification_pending
-        if vp is not None and vp["target_bin"] == plan.target_bin and vp["drop_slot"] == plan.drop_slot:
-            self.reserved_drop_slots[plan.target_bin].discard(plan.drop_slot)
-            self.verification_pending = None
-        self._note(t, f"held=no after the close: abort {plan.color} carry, back home "
-                      f"({len(new_a) / HZ:.1f} s instead of {left / HZ:.1f} s)")
+    def _brain_world(self, dets, ids, lp):
+        bc = self.cfg["brain"]
+        calibrated = self.calibration is not None and self.calibration.success
+        bins = [(n, self.planner.bin_xy(n), "calibrated" if calibrated else "scene") for n in self.scene.bin_names]
+        reach = (lambda d, b: self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=b, relocate=False).ok) \
+            if bc.get("world_reach", False) else None
+        opinions = self._brain_mapping
+        known_bin = lambda d: lookup_bin(self.cfg, opinions, d.color, getattr(d, "shape", None))
+        w = build_world(dets, bins, self._instruction, self._task, opinions, known_bin, reach,
+                           lambda d: self.perception._near_bin(d.top), ids,
+                           {"id": lp["oid"], "color": lp["color"]} if lp else None)
+        if self._find_on():
+            w["queries"] = list(self._brain_queries)
+        return w
+
+    def _find_on(self):
+        """brain.find (default off): the model may call find(query); at most brain.max_finds per episode."""
+        bc = self.cfg.get("brain") or {}
+        return bool(bc.get("find", False)) and bool(self._brain_queries) \
+            and self._brain_finds < int(bc.get("max_finds", 2))
+
+    def _brain_find(self, query, obs, dets):
+        """Run the find tool for one phrase: image points -> ids of OUR detections (nearest uv)."""
+        if self._brain_find_fn is None:
+            bc = self.cfg["brain"]
+            self._brain_find_fn = FindClient(bc.get("find_path", "/data/brain/find/find_tool.py"), bc.get("find_url"),
+                                             float(bc.get("find_timeout_s", 1.5)))
+        pts = self._brain_find_fn(obs["head_rgb"], query)
+        return [d_i for d_i in match_found(pts, dets)]
+
+    def _brain_points(self, lp, dets, cands, ids):
+        """The decision points of the next cycle, with the classical call for each: [(point, state, classical, resolver_abstains)].
+        lp = the pick just executed ({"xy","color","oid"}) or None. Shared by the real decision and the prefetch."""
+        bc = self.cfg["brain"]
+        idof = {id(d): ids[i] for i, d in enumerate(dets)}
+        can_look = self._brain_looks < int(bc.get("max_looks", 2))
+        first = next(((d, self._lookup(d)) for d in cands if self._lookup(d) is not None), None)
+        if lp is not None and lp.get("oid") is not None:
+            rad = 2 * self.cfg["policy"]["same_object_radius"]
+            again = next((d for d in cands if d.color == lp["color"]
+                          and np.linalg.norm(np.asarray(d.top[:2]) - lp["xy"]) < rad), None)
+            if again is not None and first is not None and first[0] is again:   # re-detected where we picked: failed
+                return [("after_fail", {"obj_id": idof[id(again)], "can_look": can_look, "allow_done": False},
+                         {"tool": "retry", "args": {"obj_id": idof[id(again)], "variant": "same"}}, False)]
+            pts = [("after_place", {"obj_id": lp["oid"], "can_look": can_look, "allow_done": False},
+                    {"tool": "verify", "args": {"obj_id": lp["oid"]}} if self._verify_on()
+                    else {"tool": "look", "args": {}}, False)]
+        else:
+            pts = []
+        classical = ({"tool": "pick_place", "args": {"obj_id": idof[id(first[0])], "bin": first[1]}}
+                     if first else {"tool": "done", "args": {}})
+        st = {"candidates": [idof[id(d)] for d in cands], "can_look": can_look, "allow_done": first is None}
+        if self._find_on():
+            st["queries"] = list(self._brain_queries)
+        pts.append(("after_look", st, classical,
+                    self._brain_abstain))
+        return pts
+
+    def _brain_prefetch(self, plan):
+        """At pick start: ask for the decisions of the NEXT cycle now (while the arm moves). Two predicted
+        outcomes: placed (object gone) and failed (object still there). Used only if the state hash matches."""
+        try:
+            if self.brain is None or plan.corrective:
+                return
+            xy = np.asarray(plan.waypoints["grasp"][:2], float)
+            lp = self._brain_pick(xy, plan.color)
+            self._last_pick = lp                # always: the next look asks after_place / after_fail about it
+            dets = list(self.last_detections)
+            if not self.cfg["brain"].get("prefetch", True) or lp["oid"] is None or not dets:
+                return
+            rad = 2 * self.cfg["policy"]["same_object_radius"]
+            ver = self._verify_on()
+            for gone in (True, False):          # placed / failed
+                ds = [d for d in dets if not (gone and d.color == plan.color
+                                              and np.linalg.norm(np.asarray(d.top[:2]) - xy) < rad)]
+                ids = self._brain_ids(ds)
+                cands = self._ordered_cands(ds, ver)
+                world = self._brain_world(ds, ids, lp)
+                for point, state, cl, ab in self._brain_points(lp, ds, cands, ids):
+                    self.brain.prefetch(point, world, state, cl, None, ab)
+        except Exception as e:
+            self.log(f"[brain] prefetch failed ({e!r})")
+
+    def _brain_pick(self, xy, color):
+        best, bd = None, 0.1
+        for oid, col, pxy in self._brain_reg:
+            if col == color and np.linalg.norm(np.asarray(xy) - pxy) <= bd:
+                best, bd = oid, np.linalg.norm(np.asarray(xy) - pxy)
+        return {"xy": np.asarray(xy, float).copy(), "color": color, "oid": best}
+
+    def _brain_select(self, cands, dets, obs=None):
+        """Brain decision points at a look (after_place / after_fail / after_look), each answered by the backend
+        (index + confidence), validated and EV-gated. -> (kind, det, bin, variant) with kind pick | retry | skip |
+        look | done, or None (= the classical planner decides). Never raises, never waits: the answer comes
+        asynchronously (often prefetched); until then / on timeout / invalid / low confidence: None."""
+        try:
+            if self.mapping.get("default") == "abstain" and len(self.mapping) == 1:
+                return None                     # insert_guard: pick nothing, no brain override
+            bc = self.cfg["brain"]
+            ids = self._brain_ids(dets)
+            dmap = {ids[i]: d for i, d in enumerate(dets)}
+            lp, self._last_pick = self._last_pick, None
+            world = self._brain_world(dets, ids, lp)
+            image = self._brain_image(obs) if bc.get("image", False) else None
+
+            def reach_check(oid, b):
+                p = self.planner.plan(dmap[oid], self.arm_cmd, self.hand_cmd, bin_name=b, relocate=False)
+                return p.ok, p.reason
+
+            for point, state, classical, ab in self._brain_points(lp, dets, cands, ids):
+                self.brain.request(point, world, state, classical, image, ab)
+                if bc.get("debug_wait", False):
+                    self.brain.wait(float(bc.get("timeout_s", 2.0)))
+                call = self.brain.take(reach_check)
+                if call is not None and call["tool"] == "find":      # information only: ground the phrase, ask again
+                    self._brain_finds += 1
+                    q = call["args"]["query"]
+                    found = [ids[i] for i in self._brain_find(q, obs, dets)]
+                    self.log(f"[brain] find({q!r}) -> {found}")
+                    w2 = {**world, "found": {q: found}, "queries": []}
+                    self.brain.request(point, w2, {**state, "queries": []}, classical, image, ab)
+                    if bc.get("debug_wait", False):
+                        self.brain.wait(float(bc.get("timeout_s", 2.0)))
+                    call = self.brain.take(reach_check)
+                if call is None or call == classical:
+                    if point == "after_fail":
+                        return None
+                    continue
+                tool, a = call["tool"], call["args"]
+                if point == "after_place":
+                    if tool == "verify":                         # classical (verify off) just looks; verify = one more settled look
+                        self._brain_looks += 1
+                        return ("look", None, None, None)
+                    if tool == "done":
+                        return ("done", None, None, None)
+                    continue
+                if tool == "pick_place" and a["obj_id"] in dmap:
+                    return ("pick", dmap[a["obj_id"]], a["bin"], None)
+                if tool == "retry" and a["obj_id"] in dmap and self._lookup(dmap[a["obj_id"]]) is not None:
+                    return ("retry", dmap[a["obj_id"]], self._lookup(dmap[a["obj_id"]]), a["variant"])
+                if tool == "skip" and a["obj_id"] in dmap:
+                    return ("skip", dmap[a["obj_id"]], None, None)
+                if tool == "look":
+                    self._brain_looks += 1
+                    return ("look", None, None, None)
+                if tool == "done":
+                    return ("done", None, None, None)
+            return None
+        except Exception as e:
+            self.log(f"[brain] select failed ({e!r}), classical decides")
+            return None
+
+    def _brain_image(self, obs):
+        try:
+            import base64
+            import cv2
+            ok, buf = cv2.imencode(".jpg", cv2.cvtColor(np.asarray(obs["head_rgb"]), cv2.COLOR_RGB2BGR))
+            return base64.b64encode(buf.tobytes()).decode() if ok else None
+        except Exception:
+            return None
+
+    def _lookup(self, d):
+        return lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
 
     def _priority(self, d):
         """Triage tie-break tuple (lower = first): shape cost (cube < cylinder < triangle; `shape` attribute of the
@@ -799,6 +904,8 @@ class ClassicalPolicy:
         xy = plan.waypoints["grasp"][:2]
         self.attempts.append((xy, 1))
         self.n_started += 1
+        if self.brain is not None:
+            self._brain_prefetch(plan)
         if plan.corrective:
             self.n_corrections += 1
         if plan.posture is not None and self.cfg["policy"].get("grasp_diag_log", False):
@@ -822,16 +929,6 @@ class ClassicalPolicy:
             if "close" in ph and "lift" in ph:
                 self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1],
                                "lift_end": ph["lift"][1], "t": t, "samples": {}}
-        if self._vary_on() and plan.side in ("left", "right"):
-            key = plan.grasp_key or (np.asarray(xy, float).copy(), None, self._posture_of(plan))
-            h = {"color": plan.color, "xy": np.asarray(key[0], float), "yaw": key[1], "posture": key[2],
-                 "side": plan.side, "held": None}
-            self.vary_hist.append(h)
-            ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
-            self._abort = None
-            if "close" in ph and "lift" in ph:
-                self._abort = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1], "hist": h,
-                               "lift_len": ph["lift"][1] - ph["lift"][0]}
         self._enqueue(plan.arm, plan.hand)
         if self._slots_on() and plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
             self.slot_used[plan.target_bin].add(plan.drop_slot)

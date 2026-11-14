@@ -32,7 +32,6 @@ perception:
   min_valid_frac: 0.2         # below this fraction of valid depth pixels the frame counts as 'no depth'
   bin_pixel_margin: 0.004     # pixels whose 3D point is inside a bin footprint (+ margin) are dropped before grouping
   object_size: null           # null = scene.yaml objects.size (grasp width)
-  principal_point: file      # FLAG (Oliver lane 3): file | center (sim renders cx,cy at the image centre)
   y_affine: null              # FLAG (23-grasp-failure §11b/§13). [a, b]: perceived - true y = a*y + b -> y -= a*y + b
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
   self_calibration:
@@ -145,8 +144,6 @@ grasp:
                               # in a bin gets the next slot instead of the one fixed drop_xy (STEP 0: 6/30 stacked)
   drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
   drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
-  border_posture: false       # FLAG (retry-vary). Label None from abstain_border (blob cut by the image border, near
-                              # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   close_posture: closed       # FLAG (pinch fix): hand posture for the grasp, closed | closed_tight (hand.closed_tight)
@@ -177,6 +174,30 @@ ik:
 # sorts by the fixed colour->bin mapping.
 instruction:
   resolve: false
+
+# AI brain (brain/): closed-set tool choice over the classical planner. Off = byte-identical to before.
+brain:
+  enabled: false              # FLAG. true: at each look the backend picks one of the allowed tool calls (index + conf)
+  backend: stub               # stub (= the classical choice) | llamacpp (HTTP /completion + GBNF; errors -> classical)
+  url: http://127.0.0.1:8080/completion   # llamacpp server; never contacted synchronously at policy startup
+  request_timeout_s: 1.5      # absolute llamacpp HTTP deadline
+  max_response_bytes: 65536   # cap before JSON parsing
+  n_predict: 32               # {"choice": 12, "confidence": 0.999} is ~25 Qwen tokens
+  chatml: true                # llamacpp: wrap the prompt in ChatML (Qwen instruct models)
+  image: false                # llamacpp: send the head RGB as base64 JPEG (needs cv2 + a multimodal model)
+  find: false                 # FLAG. the model may call find(query) (VLM grounding, /data/brain/find/find_tool.py)
+  max_finds: 2                # find calls per episode
+  find_path: /data/brain/find/find_tool.py
+  find_url: null              # null = find_tool's default (127.0.0.1:8080 chat completions)
+  find_timeout_s: 1.5
+  prefetch: true              # ask for the next decision while the current pick runs; state hash must match
+  threshold: 0.8              # a decision needs conf >= this ...
+  override_conf: 0.95         # ... and, when it differs from the classical choice, conf >= this
+  timeout_s: 2.0              # later than this the decision is dropped, the classical planner decides
+  max_steps: 32               # brain decisions per episode
+  max_looks: 2                # brain look() choices per episode (a relook costs time)
+  world_reach: false          # fill objects[].reachable with a planner/IK dry run (slow: one plan per object)
+  debug_wait: false           # TOOLS ONLY (equivalence_check): block until the decision arrived
 
 motion:
   arm_max_vel: 0.5            # rad/s per joint (safety filter allows 1.0)
@@ -253,18 +274,6 @@ policy:
   retry_pass: false           # FLAG (#3, Oliver 40fb22a)
   retry_extra_attempts: 2
   episode_summary_log: false  # FLAG (#3, Oliver). One passive log line per episode end (attempts/failed/too_long/started)
-  # Retry with a different grasp (r14 failure analysis: 5 misses repeated the identical posture/yaw/point).
-  retry_vary_grasp: false     # FLAG (retry-vary, Timi). After a pick that did not hold the object (held=no / unknown):
-                              # the next try at it changes the grasp (posture v1<->demo for triangle / label None, finger
-                              # heading +-retry_yaw_deg), never repeats a tried (point, heading, posture); held=no right
-                              # after the close -> skip the carry, lift + straight home (plan.abort, same speed limits)
-  max_attempts_vary: null     # FLAG (retry-vary). With retry_vary_grasp: tries per object up to this (e.g. 3); the extra
-                              # tries come after every other candidate and only if the plan fits the time left (_has_time)
-  retry_yaw_deg: {triangle: 60, cube: 90, cylinder: 90, none: 90, default: 90}   # heading change per label
-  retry_same_xy_m: 0.01       # two grasps closer than this, same posture and heading within retry_same_yaw_deg = identical
-  retry_same_yaw_deg: 20.0
-  retry_assoc_radius: 0.06    # an earlier miss belongs to an object of the same colour within this (pushed objects)
-  retry_max_variants: 3       # grasp variants planned per retry (each costs one plan() call)
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.
