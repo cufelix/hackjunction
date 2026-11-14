@@ -234,6 +234,34 @@ def name_foreign(sentence: str) -> str:
     return sentence
 
 
+# instruction.venue_colour_aliases (flag, default off): the finals venue's object colours in the words a person uses for them,
+# in the supported languages (English, Finnish, Czech), inflections included. Output is a canonical English colour word
+# that the resolver already reads: purple/violet/lilac/lavender/magenta -> purple (blue class), orange/amber/tangerine ->
+# orange (red class; amber is orange here, the resolver alone reads it as yellow), gold -> yellow, Finnish/Czech red and
+# blue -> red and blue. Finnish/Czech bin words are NOT here: normalize (FI/CS bin table) owns them. Czech endings are
+# matched with and without diacritics; Finnish words are matched on explicit endings ("sinister" is not "sininen").
+_CS_END = r"(?:á|a|é|e|ý|y|í|i|ou|ého|eho|ému|emu|ém|em|ých|ych|ými|ymi)"
+_FI_BLUE_END = r"(?:nen|s(?:en|t[aä]|et|i[aä]|ess[aä]|ell[aä]|iin|ten|in|ille|illa))"
+_VENUE_COLOURS = tuple((re.compile(p, re.I), w) for p, w in (
+    (r"\b(?:purple|violet|lilac|lavender|lavendar|magenta|liila|purppur|syreeni|laventel|mauve|amethyst)\w*", "purple"),
+    (r"\bfialov" + _CS_END + r"\b|\blevandulov" + _CS_END + r"\b", "purple"),
+    (r"\b(?:orange|tangerine|amber)\w*|\bmandariin\w*|\bmeripihk\w*|\bjantarov" + _CS_END + r"?\b", "orange"),
+    (r"\boranssi\w*", "orange"),
+    (r"\boran[žz]ov" + _CS_END + r"\b", "orange"),
+    (r"\bmandarinkov" + _CS_END + r"\b", "orange"),
+    (r"\b(?:yellow|gold|golden|keltai\w*|kultai\w*)\w*|\b[žz]lut" + _CS_END + r"\b|\bzlat" + _CS_END + r"\b", "yellow"),
+    (r"\b[čc]erven" + _CS_END + r"\b|\bpunai\w*", "red"),
+    (r"\bmodr" + _CS_END + r"\b|\bsini" + _FI_BLUE_END + r"\b", "blue"),
+))
+
+
+def venue_colour_aliases(sentence: str) -> str:
+    """Name the venue colours (incl. Finnish/Czech and inflected forms) with canonical English words; see _VENUE_COLOURS."""
+    for rx, word in _VENUE_COLOURS:
+        sentence = rx.sub(lambda m, w=word: w.capitalize() if m.group(0)[0].isupper() else w, sentence)
+    return sentence
+
+
 # Ambiguous scene nouns are shapes only inside an actionable object placement. In particular, relational descriptions
 # ("the red roof is above the left bin", "the red rod points to the left bin") must remain unknown so strict mode cannot
 # manufacture a sortable compound key from them.

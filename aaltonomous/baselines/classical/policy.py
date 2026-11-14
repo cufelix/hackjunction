@@ -241,6 +241,9 @@ class ClassicalPolicy:
             if not str(text).strip():               # fixed mapping is reserved for an identified sort_fixed task
                 return {"default": None}
             from .instruction import resolve
+            if (self.cfg.get("instruction") or {}).get("venue_colour_aliases", False):   # T10: venue colour words
+                from .normalize import venue_colour_aliases
+                text = venue_colour_aliases(text)
             if (self.cfg.get("instruction") or {}).get("multilingual", False):   # FI/CZ + 10 languages (Timi)
                 from .normalize import canonicalize_multilingual
                 text = canonicalize_multilingual(text)
