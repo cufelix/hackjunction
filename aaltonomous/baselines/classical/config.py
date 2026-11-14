@@ -52,8 +52,8 @@ FLAGS = {
     "policy.retry_pass": ("Oliver #3", False, "once per episode: max_attempts-skipped objects get retry_extra_attempts"),
     "policy.time_margin_s": ("Oliver #3", 0.0, "plans must end this long before the time limit"),
     "policy.episode_summary_log": ("Oliver #3", False, "one log line per episode end"),
-    "policy.retry_vary_grasp": ("retry-vary", False, "retry after held=no with another grasp (posture/heading), "
-                                                     "never an identical one; held=no -> abort the carry"),
+    "policy.retry_vary_grasp": ("retry-vary", False, "retry after the object remains in the next frame with another "
+                                                     "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
@@ -72,6 +72,10 @@ FLAGS = {
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
+    "policy.confidence_order": ("D1/D2", False, "order by 2*p/est_time (p_colour*p_bin*p_grasp), never the hardest first"),
+    "policy.object_time_cap": ("D2", False, "per-object cap (remaining-15)/left 15..35 s, T-20 s no new object, T-8 s release/retract"),
+    "policy.speed_tiers": ("D3", False, "1st object 0.7 + 1.5 cm clearance, clean 0.85/0.9, failure 0.6 + centre bin only"),
+    "policy.confidence_tiers": ("D4", False, "hold 3-5 s, calibration C -> CONFIDENT / DEGRADED / PRIOR-ONLY"),
 }
 
 

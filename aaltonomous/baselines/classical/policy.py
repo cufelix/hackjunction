@@ -16,6 +16,8 @@ each object; the runner calls confirm() / skip() / stop() while `pol.waiting` is
 """
 from __future__ import annotations
 
+import contextlib
+import copy
 import os
 import re
 import sys
@@ -29,10 +31,11 @@ from aaltonomous.interface.tasks import FIXED_MAPPING
 from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene, resolve_bin
 
+from . import decision as dec
 from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Plan, Planner, lookup_bin
+from .planner import Plan, Planner, lookup_bin, ramp
 
 HZ = 30.0
 _HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence names a hole AND the lid
@@ -121,6 +124,7 @@ class ClassicalPolicy:
         self.queue_a = self.queue_h = None
         self.arm_cmd = self.hand_cmd = None
         self.attempts = []          # (position, count) of objects we tried to pick
+        self.attempt_tracks = []    # retry-vary: {color, latest xy, cumulative count} stable pushed-object tracks
         self.failed = []            # positions whose plans failed
         self.pending = None         # Plan waiting for the operator
         self.pending_text = ""      # what the operator is asked to confirm
@@ -142,7 +146,6 @@ class ClassicalPolicy:
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
-        self._abort = None          # policy.retry_vary_grasp: the close being watched for held=no
         self._summary_logged = False
         self.perception.reset_calibration()
         self.calibration = None
@@ -156,6 +159,18 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+        # decision layer (policy.confidence_order / object_time_cap / speed_tiers / confidence_tiers); inert when off
+        self.tiers = dec.SpeedTiers(self._dcfg())   # D3 state
+        self.tier = None            # D4: CONFIDENT | DEGRADED | PRIOR-ONLY once the hold is done
+        self.C = None               # D4: calibration confidence
+        self._calib = None          # D4: the running hold {"t0", "frames", "depth", "job"}
+        self._stab = []             # recent frames [(colour, xy)] for the temporal-stability term
+        self._stab_last = None
+        self._pend_out = None       # D3: the pick whose outcome the next look judges
+        self._exec = None           # D2 T-8 s: the plan being executed {"plan", "n", "cut", "t8"}
+        self._cap_logged = set()
+        self._dec_warned = set()    # F7: decision helpers that already fell back to stock this episode
+        self._prior_side = set()    # F1: side bins already attempted in PRIOR-ONLY
 
     def confirm(self):
         self._decision = "go"
@@ -194,8 +209,14 @@ class ClassicalPolicy:
             self._grasp_diag(obs)
         if self._stall is not None:
             self._lift_on_stall(obs)
-        if self._abort is not None:
-            self._abort_watch(obs)
+        if self._exec is not None and self.queue_a is not None and len(self.queue_a):
+            try:
+                r = self._endgame(t)      # policy.object_time_cap: T-8 s release over the bin / retract (inert when off)
+            except Exception as e:
+                self._dec_fail("_endgame", e)
+                r = None
+            if r is not None:
+                return r
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":
@@ -229,6 +250,14 @@ class ClassicalPolicy:
             self.state = "look"
             return self._pop()
         if self.state == "look":
+            if self._dflag("confidence_tiers") and self.tier is None:
+                try:
+                    r = self._calib_step(obs, t)   # first seconds: hold still, measure C, pick the tier
+                except Exception as e:
+                    self._dec_fail("_calib_step", e)
+                    self.tier, r = dec.CONFIDENT, None
+                if r is not None:
+                    return r
             cap = self.cfg["policy"].get("max_total_attempts")
             if cap is not None and self.n_started >= int(cap):   # knocked objects reappear as 'new': hard stop
                 self._note(t, f"attempt cap reached ({self.n_started} >= max_total_attempts {int(cap)}): done")
@@ -326,15 +355,23 @@ class ClassicalPolicy:
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
         for d, source_bin, target_bin in corrections:
+            n = self._attempt_count(d.top[:2], d.color)
+            limit = self._attempt_limit(d.top[:2])
+            varied = self._max_attempts_vary()
+            if n >= (max(limit, varied) if varied is not None else limit):
+                self.log(f"[classical] correction attempt limit reached for {d.color} in {source_bin}")
+                continue
             for slot in self._free_drop_slots(target_bin) or self._overflow_slots(target_bin):
-                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, relocate=False,
-                                      drop_slot=slot, source_bin=source_bin)
+                p = self._plan_pick(d, dict(bin_name=target_bin, relocate=False,
+                                            drop_slot=slot, source_bin=source_bin))
                 self.plans.append(p)
                 if p.ok:
                     return ("plan", p, len(dets))
                 self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
-            p = self.planner.plan_to_counter(d, self.arm_cmd, self.hand_cmd, source_bin,
-                                             obstacles=[o.top[:2] for o in dets])
+            def cleanup(det, arm, hand, planner=None, **_):
+                return (planner or self.planner).plan_to_counter(det, arm, hand, source_bin,
+                                                    obstacles=[o.top[:2] for o in dets])
+            p = self._plan_pick(d, {}, plan_fn=cleanup)
             self.plans.append(p)
             if p.ok:
                 return ("plan", p, len(dets))
@@ -357,13 +394,17 @@ class ClassicalPolicy:
             # Retry pass (once per episode): objects excluded only by max_attempts get retry_extra_attempts more
             # tries. `failed` (IK failure / operator skip) stays excluded. The time check is the normal one on the
             # real plan duration: triage skips misfits, without triage _after_look refuses a plan that does not fit.
-            rad = pol["same_object_radius"]
-            excl = [d.top[:2] for d in dets if self._attempt_excluded(d.top[:2])]
+            rad = self._attempt_radius()
+            excluded = [(d.color, d.top[:2]) for d in dets if self._attempt_excluded(d.top[:2], d.color)]
+            excl = [xy for _, xy in excluded]
             if excl:
                 self.retry_pass_used = True
                 extra = int(pol.get("retry_extra_attempts", 2))
                 self.attempts = [(p, c) for p, c in self.attempts
                                  if not any(np.linalg.norm(xy - p) < rad for xy in excl)]
+                self.attempt_tracks = [tr for tr in self.attempt_tracks
+                                       if not any(tr["color"] == color and np.linalg.norm(xy - tr["xy"]) < rad
+                                                  for color, xy in excluded)]
                 self.retry_allow += [(xy, extra) for xy in excl]
                 self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
                 res = self._choose(dets, obs, verify)
@@ -396,17 +437,42 @@ class ClassicalPolicy:
         if any(d.color == color and np.linalg.norm(d.top[:2] - xy) < rad for d in dets):
             self.slot_used[bin_name].discard(slot)
 
-    def _attempt_excluded(self, xy):
+    def _attempt_excluded(self, xy, color=None):
         """True when the object at xy is skipped for its attempt count only (not in `failed`)."""
-        rad = self.cfg["policy"]["same_object_radius"]
+        rad = self._attempt_radius()
         if any(np.linalg.norm(xy - f) < rad for f in self.failed):
             return False
-        n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < rad)
-        return n >= self._attempt_limit(xy)
+        return self._attempt_count(xy, color) >= self._attempt_limit(xy)
+
+    def _attempt_radius(self):
+        """Association radius for executed attempts. Retry-vary uses its wider pushed-object track."""
+        pol = self.cfg["policy"]
+        return float(pol.get("retry_assoc_radius", 0.06) if self._vary_on() else pol["same_object_radius"])
+
+    def _attempt_count(self, xy, color=None):
+        rad = self._attempt_radius()
+        if self._vary_on():
+            tracks = [tr for tr in self.attempt_tracks if color is None or tr["color"] == color]
+            near = [tr for tr in tracks if np.linalg.norm(xy - tr["xy"]) < rad]
+            return 0 if not near else min(near, key=lambda tr: np.linalg.norm(xy - tr["xy"]))["count"]
+        return sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < rad)
+
+    def _track_attempt(self, color, xy):
+        """Advance the nearest same-colour retry track, preserving count through successive <radius pushes."""
+        if not self._vary_on():
+            return
+        xy = np.asarray(xy, float).copy()
+        same = [tr for tr in self.attempt_tracks if tr["color"] == color]
+        near = [tr for tr in same if np.linalg.norm(xy - tr["xy"]) < self._attempt_radius()]
+        if near:
+            tr = min(near, key=lambda item: np.linalg.norm(xy - item["xy"]))
+            tr["xy"], tr["count"] = xy, tr["count"] + 1
+        else:
+            self.attempt_tracks.append({"color": color, "xy": xy, "count": 1})
 
     def _attempt_limit(self, xy):
         """max_attempts, or the retry pass's extra attempts for an object it re-admitted."""
-        rad = self.cfg["policy"]["same_object_radius"]
+        rad = self._attempt_radius()
         for p, extra in self.retry_allow:
             if np.linalg.norm(xy - p) < rad:
                 return extra
@@ -416,11 +482,19 @@ class ClassicalPolicy:
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
         cands, extra = [], []
         mav = self._max_attempts_vary()
+        t = float(obs.get("t", 0.0))
+        try:
+            stop = self._decision_stop(dets, t)
+        except Exception as e:
+            self._dec_fail("_decision_stop", e)
+            stop = None
+        if stop is not None:
+            return stop
         for d in dets:
             xy = d.top[:2]
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
                 continue
-            n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < self.cfg["policy"]["same_object_radius"])
+            n = self._attempt_count(xy, d.color)
             if n >= self._attempt_limit(xy):
                 if mav is not None and n < mav:
                     extra.append(d)   # policy.max_attempts_vary: one more varied try, after every other candidate
@@ -443,19 +517,34 @@ class ClassicalPolicy:
 
         pol = self.cfg["policy"]
         triage = bool(pol.get("time_triage", False))
-        if triage and pol.get("triage_order", "duration") == "priority":
+        if self._decision_on():
+            try:
+                cands, extra = self._decision_filter(cands, obs), self._decision_filter(extra, obs)
+            except Exception as e:
+                self._dec_fail("_decision_filter", e)
+        if self._dflag("confidence_order"):
+            try:
+                cands = self._conf_rank(cands, dets, obs, retry_prefix)
+            except Exception as e:
+                self._dec_fail("_conf_rank", e)
+                cands.sort(key=base)
+        elif triage and pol.get("triage_order", "duration") == "priority":
             eps = float(pol.get("triage_tie_m", 0.02))   # candidates with ~equal cheap estimate: cheaper shape first
             cands.sort(key=lambda d: retry_prefix(d) + (round(base(d) / eps), self._priority(d)))
         elif verify:
             cands.sort(key=lambda d: retry_prefix(d) + (base(d),))
         else:
             cands.sort(key=base)
+        if self.tier == dec.DEGRADED and not self._dflag("confidence_order"):   # D4: prefer the centre bin (stable)
+            cands.sort(key=lambda d: not self._is_centre(d))
         if extra:
             extra.sort(key=base)
             cands += extra
-        t = float(obs.get("t", 0.0))
         left = self.time_limit - t - self._time_reserve(corrective=False)
         n_long, shortest = 0, None
+        cap_s, over_cap = None, []
+        if self._dflag("object_time_cap"):   # D2: per-object cap (remaining - 15 s) / objects left, 15..35 s
+            cap_s = dec.object_cap(self.time_limit - t, len(cands) - len(extra) or len(cands), self._dcfg())
         for d in cands:
             if triage:  # a plan that did not fit before cannot fit now (time only runs out; plans start from home)
                 rad = pol["same_object_radius"]
@@ -488,6 +577,10 @@ class ClassicalPolicy:
             if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
                 self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")
                 continue
+            if p.ok and cap_s is not None and p.duration > cap_s:
+                over_cap.append(p)   # too slow for its share of the time: try the next object, this one is the fallback
+                self.log(f"[time_cap] {d.color} plan {p.duration:.1f} s > cap {cap_s:.1f} s: trying the next candidate")
+                continue
             if p.ok:
                 if triage and p.duration > left:  # feasible but too slow for the time left: try the next candidate
                     self.too_long.append((d.top[:2], p.duration))
@@ -498,12 +591,317 @@ class ClassicalPolicy:
                 return ("plan", p, len(dets))
             self.failed.append(d.top[:2])
             self.log(f"[classical] skip {d}: {p.reason}")
+        if over_cap:   # nothing within the cap: the quickest over-cap plan beats leaving points on the counter
+            best = min(over_cap, key=lambda q: q.duration)
+            if not triage or best.duration <= left:
+                self.log(f"[time_cap] no candidate within {cap_s:.1f} s: taking the quickest ({best.duration:.1f} s)")
+                return ("plan", best, len(dets))
         if verify and self.verify_relooks_remaining > 0:
             self.verify_relooks_remaining -= 1
             return ("relook", None, len(dets))
         if n_long:
             return ("notime", shortest, len(dets))
         return ("none", None, len(dets))
+
+    # ------------------------------------------------------------------ decision layer D1-D4 (decision.py)
+    def _dflag(self, name):
+        return bool(self.cfg["policy"].get(name, False))
+
+    def _dec_fail(self, name, exc):
+        """F7: a decision helper raised: the caller falls back to stock behaviour; one warning per episode and helper."""
+        if name not in self._dec_warned:
+            self._dec_warned.add(name)
+            self.log(f"[decision] {name} failed ({exc!r}), stock behaviour")
+
+    def _decision_on(self):
+        return any(self._dflag(f) for f in ("confidence_order", "object_time_cap", "speed_tiers", "confidence_tiers"))
+
+    def _dcfg(self):
+        d = dict(dec.DEFAULTS)
+        d.update(self.cfg.get("decision") or {})
+        return d
+
+    def _centre_name(self):
+        names = list(self.scene.bin_names)
+        return min(names, key=lambda n: abs(float(self.planner.bin_xy(n)[1])))
+
+    def _is_centre(self, d):
+        b = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
+        return b is not None and b == self._centre_name()
+
+    def _push_frame(self, dets):
+        """Temporal-stability history: one frame per look / hold frame (never twice for the same detection list)."""
+        if self._stab_last is dets:
+            return
+        self._stab_last = dets
+        self._stab.append([(d.color, np.asarray(d.top[:2], float).copy()) for d in dets])
+        del self._stab[:-int(self._dcfg()["stab_frames"])]
+
+    def _stability(self, d):
+        """Fraction of the recent frames that saw this object (same colour within same_object_radius); None < 2 frames."""
+        if len(self._stab) < 2:
+            return None
+        rad = float(self.cfg["policy"]["same_object_radius"])
+        xy = np.asarray(d.top[:2], float)
+        seen = sum(any(c == d.color and np.linalg.norm(xy - p) < rad for c, p in fr) for fr in self._stab)
+        return seen / len(self._stab)
+
+    def _hue_margin(self, d, obs):
+        """Hue margin (deg) of the detection's blob centre from its colour's HSV range edge; None if unknown."""
+        try:
+            rgb = obs.get("head_rgb")
+            ranges = (getattr(self.perception, "hsv", None) or {}).get(d.color)
+            u, v = d.uv
+            if rgb is None or not ranges or (u == 0.0 and v == 0.0):
+                return None
+            import cv2
+            h, w = rgb.shape[:2]
+            u0, v0 = int(round(u)), int(round(v))
+            win = np.ascontiguousarray(rgb[max(v0 - 3, 0):min(v0 + 4, h), max(u0 - 3, 0):min(u0 + 4, w)])
+            if not win.size:
+                return None
+            hue = float(np.median(cv2.cvtColor(win, cv2.COLOR_RGB2HSV)[..., 0]))
+            return dec.hue_margin_deg(ranges, hue)
+        except Exception:
+            return None
+
+    def _conf_info(self, d, obs):
+        """D1: p_colour, p_bin, p_grasp, p = product, gate = p_colour * p_bin, est time, target bin / centre flag."""
+        dc = self._dcfg()
+        b = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
+        if b is None:
+            return {"p": 0.0, "gate": 0.0, "t": 99.0, "bin": None, "centre": False, "pc": 0.0, "pb": 0.0, "pg": 0.0}
+        bxy = np.asarray(self.planner.bin_xy(b), float)
+        centre = b == self._centre_name()
+        pc = dec.p_colour(d.n_px, self._hue_margin(d, obs), self._stability(d), dc)
+        pb = dec.p_bin(centre, self.C, dc)
+        cov = (d.n_depth / d.n_px) if d.n_px else 0.0
+        pg = dec.p_grasp(getattr(d, "shape", None), d.top[:2], float(bxy[1]), cov, dc)
+        return {"p": pc * pb * pg, "gate": pc * pb, "t": dec.est_time(d.top[:2], bxy, dc), "bin": b, "centre": centre,
+                "pc": pc, "pb": pb, "pg": pg}
+
+    def _conf_rank(self, cands, dets, obs, retry_prefix):
+        """policy.confidence_order: 2*p/est_time, shape ties cube < cylinder < prism, never the hardest first. Called on
+        every look, so the order is re-ranked after each placement (fresh detections, fresh stability)."""
+        self._push_frame(dets)
+        items = []
+        for d in cands:
+            i = self._conf_info(d, obs)
+            items.append({"d": d, "i": i, "p": i["p"], "t": i["t"], "shape": getattr(d, "shape", None),
+                          "centre_first": self.tier == dec.DEGRADED and i["centre"]})
+        out = dec.rank(items, self._dcfg())
+        out = sorted(out, key=lambda it: retry_prefix(it["d"]))   # #6 retry prefix first (stable; () when #6 is off)
+        if out:
+            self.log("[confidence_order] " + " > ".join(
+                f"{it['d'].color}/{it['shape']} p={it['p']:.2f} (c={it['i']['pc']:.2f} b={it['i']['pb']:.2f} "
+                f"g={it['i']['pg']:.2f}) t={it['t']:.0f}s" for it in out))
+        return [it["d"] for it in out]
+
+    def _observe_outcome(self, dets):
+        """D3: judge the last pick at the next look: the object (same colour, within retry_assoc_radius of the grasp
+        point) is still on the counter = failure, gone = clean success."""
+        po, self._pend_out = self._pend_out, None
+        if po is None:
+            return
+        rad = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
+        near = [d for d in dets if d.color == po["color"] and np.linalg.norm(np.asarray(d.top[:2]) - po["xy"]) <= 0.03]
+        if near and self.attempt_tracks:   # retry-vary on: the survivor must belong to this attempt's track
+            same = [tr for tr in self.attempt_tracks if tr["color"] == po["color"]
+                    and np.linalg.norm(tr["xy"] - po["xy"]) < rad]
+            tr = min(same, key=lambda t_: np.linalg.norm(t_["xy"] - po["xy"])) if same else None
+            near = [d for d in near if tr is not None and np.linalg.norm(np.asarray(d.top[:2]) - tr["xy"]) <= 0.03]
+        still = bool(near)
+        self.tiers.observe(clean=not still)
+        self.log(f"[speed_tier] {po['color']} {'still on the counter: failure' if still else 'gone: clean'} -> "
+                 f"scale {self.tiers.scale():.2f}{' centre bin only' if self.tiers.centre_only() else ''}")
+
+    def _decision_stop(self, dets, t):
+        """Reasons not to start any new pick right now (("none", ...) result) or None."""
+        if self._dflag("speed_tiers"):
+            self._observe_outcome(dets)
+        if self._dflag("object_time_cap") and dec.no_new_object(t, self.time_limit, self._dcfg()):
+            if "t20" not in self._cap_logged:
+                self._cap_logged.add("t20")
+                self.log(f"[time_cap] t={t:.1f}: inside the last {self._dcfg()['no_new_s']:.0f} s, no new object")
+            return ("none", None, len(dets))
+        return None
+
+    def _decision_filter(self, cands, obs):
+        """Tier restrictions on the candidates: DEGRADED p_colour*p_bin >= 0.85; PRIOR-ONLY or a failed pick (speed tiers):
+        centre-bin objects only. Unmapped objects are left to the stock skip."""
+        dc = self._dcfg()
+        prior = self._dflag("confidence_tiers") and self.tier == dec.PRIOR_ONLY
+        centre_only = prior or (self._dflag("speed_tiers") and self.tiers.centre_only())
+        degraded = self._dflag("confidence_tiers") and self.tier == dec.DEGRADED
+        if not (centre_only or degraded):
+            return cands
+        infos = [self._conf_info(d, obs) for d in cands]
+        # F1: the centre-only rule holds only while a centre-bin candidate exists (else every candidate passes: no deadlock)
+        has_centre = any(i["bin"] is not None and i["centre"] for i in infos)
+        centre_only = centre_only and has_centre
+        out = []
+        for d, i in zip(cands, infos):
+            if i["bin"] is None:
+                out.append(d)
+            elif centre_only and not i["centre"]:
+                continue
+            elif prior and not has_centre and not i["centre"] and i["bin"] in self._prior_side:
+                continue   # PRIOR-ONLY side fallback: at most one attempt per side bin
+            elif degraded and i["gate"] < float(dc["degraded_min_p"]):
+                self.log(f"[tier] DEGRADED: skip {d.color} (p={i['gate']:.2f} < {dc['degraded_min_p']})")
+                continue
+            else:
+                out.append(d)
+        return out
+
+    def _speed_scale(self):
+        """Arm speed scale for the next plan: speed tiers (0.7 / 0.85-0.9 / 0.6), DEGRADED and PRIOR-ONLY 0.6. Never > 1."""
+        s = 1.0
+        if self._dflag("speed_tiers"):
+            s = self.tiers.scale()
+        if self._dflag("confidence_tiers") and self.tier in (dec.DEGRADED, dec.PRIOR_ONLY):
+            s = min(s, float(self._dcfg()["degraded_scale"]))
+        return min(s, 1.0)
+
+    @contextlib.contextmanager
+    def _decision_motion(self):
+        """Yields the planner to plan with: with a speed scale / first-object clearance, a shallow copy whose cfg has
+        its own motion / grasp dicts (arm_max_vel / arm_max_acc x scale, grasp.approach_extra_m + clearance), so the
+        shared cfg is never mutated while a background plan runs. The stock planner when nothing changes."""
+        try:
+            s = self._speed_scale()
+            extra = self.tiers.clearance() if self._dflag("speed_tiers") else 0.0
+            if s >= 1.0 and not extra:
+                pl = self.planner
+            else:
+                pl = copy.copy(self.planner)
+                cfg = dict(self.planner.cfg)
+                mo, g = dict(cfg["motion"]), dict(cfg["grasp"])
+                mo["arm_max_vel"], mo["arm_max_acc"] = mo["arm_max_vel"] * s, mo["arm_max_acc"] * s
+                g["approach_extra_m"] = g.get("approach_extra_m", 0.0) + extra
+                cfg["motion"], cfg["grasp"] = mo, g
+                pl.cfg = cfg
+        except Exception as e:
+            self._dec_fail("_decision_motion", e)
+            pl = self.planner
+        yield pl
+
+    # ---- D4: first seconds
+    def _pitch_cal_value(self):
+        try:
+            pc = getattr(self.perception, "pitch_cal", None)
+            if pc is None:
+                return None
+            return float(getattr(pc, "confidence", pc))
+        except Exception:
+            return None
+
+    def _bin_agree(self):
+        """Depth bin-wall agreement with the prior (perception.self_calibration); None when that is not enabled."""
+        sc = self.cfg["perception"].get("self_calibration") or {}
+        if not sc.get("enabled", False):
+            return None
+        cal = self.calibration
+        if cal is None:
+            return 0.0
+        if cal.success:
+            off = float(np.linalg.norm(cal.xy_offset)) / max(float(sc.get("max_offset_m", 0.03)), 1e-6)
+            return float(cal.confidence) * (1.0 - 0.5 * min(1.0, off))
+        return 0.5 * float(cal.confidence)
+
+    def _calib_frame(self, obs, c):
+        try:
+            depth = obs.get("head_depth")
+            if depth is not None and np.ndim(depth) == 2:
+                lo, hi = self.cfg["perception"]["depth_range_mm"]
+                c["depth"].append(float(((depth >= lo) & (depth <= hi)).mean()))
+            dets = self.perception.detect(obs.get("head_rgb"), depth)
+            self.last_detections = dets
+            self._push_frame(dets)
+        except Exception as e:   # the hold must never kill the control loop
+            self.log(f"[tier] hold frame failed ({e!r})")
+
+    def _calib_step(self, obs, t):
+        """policy.confidence_tiers: hold still `hold_s` seconds, take `hold_frames` detect frames, then C and the tier.
+        Returns a hold action while measuring, None once the tier is set (the normal look follows)."""
+        d = self._dcfg()
+        c = self._calib
+        if c is None:
+            c = self._calib = {"t0": t, "n": 0, "depth": [], "job": None}
+        n_total, hold_s = max(1, int(d["hold_frames"])), float(d["hold_s"])
+        el = t - c["t0"]
+        if c["n"] < n_total and el >= c["n"] * hold_s / n_total:
+            if self.threaded:
+                j = c["job"]
+                if j is None:
+                    j = c["job"] = {"done": False}
+
+                    def run(job=j, o=obs):
+                        _lower_thread_priority()
+                        self._calib_frame(o, c)
+                        job["done"] = True
+                    threading.Thread(target=run, daemon=True).start()
+                if not j["done"]:
+                    return self._hold()
+                c["job"] = None
+            else:
+                self._calib_frame(obs, c)
+            c["n"] += 1
+        if el < hold_s:
+            return self._hold()
+        frac = float(np.mean(c["depth"])) if c["depth"] else None
+        pitch, agree = self._pitch_cal_value(), self._bin_agree()
+        self.C = dec.calib_confidence(pitch, agree, frac, d)
+        self.tier = dec.tier_of(self.C, d)
+        fmt = lambda x: "n/a" if x is None else f"{x:.2f}"
+        msg = (f"[tier] {self.tier} C={fmt(self.C)} pitch={fmt(pitch)} bin={fmt(agree)} depth={fmt(frac)} "
+               f"frames={c['n']} hold={el:.1f}s")
+        self.events.append((round(t, 2), msg))
+        self.log(msg)
+        return None
+
+    # ---- D2: T-8 s
+    def _hand_xyz(self, plan):
+        return self.kin.grasp_pose(plan.side, self.arm_cmd)[0]
+
+    def _over_target_bin(self, plan):
+        if plan.target_bin not in self.scene.bin_names:
+            return False
+        half = np.asarray(self.scene.cfg["bins"]["outer_size"], float) / 2 - 0.02
+        return bool(np.all(np.abs(np.asarray(self._hand_xyz(plan), float)[:2] - self.planner.bin_xy(plan.target_bin)) <= half))
+
+    def _endgame(self, t):
+        """policy.object_time_cap, T-8 s with a plan running: carrying over the target bin -> open the hand where it is,
+        then home; anywhere else before the release -> abandon the plan and go home (hand opens on the way).
+        Once per plan; returns the first action of the replacement motion, or None (nothing to change)."""
+        ex = self._exec
+        if ex["t8"] or not self._dflag("object_time_cap") or not dec.endgame(t, self.time_limit, self._dcfg()):
+            return None
+        ex["t8"] = True
+        plan = ex["plan"]
+        tick = ex["n"] - len(self.queue_a)   # lift_on_stall slices queue_a, so cuts are already in
+        phase = dec.phase_at(plan.phases, tick)
+        over = phase == "carry" and self._over_target_bin(plan)
+        what = dec.endgame_action(phase, over)
+        self.log(f"[time_cap] t={t:.1f} T-{self._dcfg()['release_s']:.0f}: plan phase={phase} over_bin={over} -> {what}")
+        if what is None:
+            return None
+        sl = ArmKinematics.sl(plan.side)
+        home = self.arm_cmd.copy()
+        home[sl] = self.home[sl]
+        if what == "release":
+            rel = self.hand_cmd.copy()
+            rel[sl] = self.post[self.cfg["grasp"].get("release_posture", "preshape")][sl]
+            h1 = ramp(self.hand_cmd, rel, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
+            h1 = np.vstack([h1, np.repeat(rel[None], int(round(float(self.cfg["motion"]["open_hold_s"]) * HZ)), 0)])
+            a1 = np.repeat(self.arm_cmd[None], len(h1), 0)
+            a2, h2 = self.planner.go_to(self.arm_cmd, rel, home, self.post["open"])
+            a, h = np.vstack([a1, a2]), np.vstack([h1, h2])
+        else:
+            a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
+        self._stall = self._gdiag = None
+        self._enqueue(a, h)
+        return self._pop()
 
     # ------------------------------------------------------------------ policy.retry_vary_grasp
     def _vary_on(self):
@@ -569,22 +967,33 @@ class ClassicalPolicy:
             out = ([{"posture": v1, "yaw": None}] if p0 == demo else []) + [{"posture": v1, "yaw": a} for a in yaws]
         return out[: int(pol.get("retry_max_variants", 3))]
 
-    def _plan_pick(self, d, kw):
+    def _plan_pick(self, d, kw, plan_fn=None):
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
         differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""
+        def plan(relocate=None):
+            args = dict(kw)
+            if relocate is not None and plan_fn is None:
+                args["relocate"] = relocate
+            with self._decision_motion() as pl:   # D3/D4 speed scale + first-object clearance (stock planner when off)
+                if plan_fn is None:
+                    return pl.plan(d, self.arm_cmd, self.hand_cmd, **args)
+                if pl is not self.planner:
+                    args["planner"] = pl
+                return plan_fn(d, self.arm_cmd, self.hand_cmd, **args)
+
         if not self._vary_on():
-            return self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
+            return plan()
         hist = self._hist_for(d)
         if not hist:
-            p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
+            p = plan()
             if p.ok:
                 p.grasp_key = self._grasp_key(p)
             return p
         for v in self._variants(d, hist):
             self.planner.vary = v
             try:
-                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, relocate=False, **kw)
+                p = plan(relocate=False)
             finally:
                 self.planner.vary = None
             if not p.ok:
@@ -599,7 +1008,7 @@ class ClassicalPolicy:
                      f"{self._vary_txt(v)} -> {self._key_txt(key)} (before: "
                      + ", ".join(self._key_txt((h["xy"], h["yaw"], h["posture"])) for h in hist) + ")")
             return p
-        p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
+        p = plan()
         if p.ok:
             p.grasp_key = self._grasp_key(p)
             if any(self._same_grasp(p.grasp_key, h) for h in hist):
@@ -616,45 +1025,6 @@ class ClassicalPolicy:
         xy, yaw, posture = k
         y = "n/a" if yaw is None else f"{np.degrees(yaw):.0f}"
         return f"({xy[0]:+.3f},{xy[1]:+.3f}) yaw={y} {posture}"
-
-    def _abort_watch(self, obs):
-        """policy.retry_vary_grasp: at the end of the close hold, held = the active hand still lags its command by
-        >= 0.010 rad (the [grasp_diag] criterion). held=no -> the rest of the plan (carry to the bin, release) is
-        replaced by its abort branch: finish the lift, straight home. Only removes motion, never adds speed."""
-        w = self._abort
-        left = 0 if self.queue_a is None else len(self.queue_a)
-        if w["n"] - left < w["close_end"]:
-            return
-        self._abort = None
-        q = obs.get("hand_q")
-        if q is None:
-            return
-        sl = ArmKinematics.sl(w["plan"].side)
-        held = bool(np.abs(np.asarray(self.hand_cmd, float)[sl] - np.asarray(q, float)[sl]).max() >= 0.010)
-        w["hist"]["held"] = held
-        if held or w["plan"].abort is None or left == 0:
-            return
-        ls, arm, hand = w["plan"].abort
-        k = (w["n"] - ls) - left            # lift ticks already sent (also after a lift_on_stall cut of the hold)
-        nl = w["lift_len"]
-        if not 0 <= k < nl:
-            return
-        new_a, new_h = arm[k:], hand[k:]
-        t = float(obs.get("t", 0.0))
-        g = self._gdiag
-        if g is not None and g["plan"] is w["plan"]:
-            g["n"] = (g["n"] - left) + len(new_a)
-        self.queue_a, self.queue_h = new_a, new_h
-        plan = w["plan"]
-        if self.slot_pending is not None and self.slot_pending[1] == plan.drop_slot:
-            self.slot_used[self.slot_pending[0]].discard(plan.drop_slot)
-            self.slot_pending = None
-        vp = self.verification_pending
-        if vp is not None and vp["target_bin"] == plan.target_bin and vp["drop_slot"] == plan.drop_slot:
-            self.reserved_drop_slots[plan.target_bin].discard(plan.drop_slot)
-            self.verification_pending = None
-        self._note(t, f"held=no after the close: abort {plan.color} carry, back home "
-                      f"({len(new_a) / HZ:.1f} s instead of {left / HZ:.1f} s)")
 
     def _priority(self, d):
         """Triage tie-break tuple (lower = first): shape cost (cube < cylinder < triangle; `shape` attribute of the
@@ -798,7 +1168,18 @@ class ClassicalPolicy:
     def _start(self, plan, t):
         xy = plan.waypoints["grasp"][:2]
         self.attempts.append((xy, 1))
+        self._track_attempt(plan.color, xy)
         self.n_started += 1
+        if self._dflag("speed_tiers") and not plan.corrective:   # D3: the next look judges this pick
+            self._pend_out = {"color": plan.color, "xy": np.asarray(xy, float).copy()}
+            self.log(f"[speed_tier] t={t:.1f} {plan.color}: scale {self._speed_scale():.2f} approach +"
+                     f"{100 * self.tiers.clearance():.1f} cm (clean={self.tiers.n_clean})")
+        if self._dflag("confidence_tiers") and self.tier == dec.PRIOR_ONLY and plan.target_bin in self.scene.bin_names \
+                and plan.target_bin != self._centre_name():
+            self._prior_side.add(plan.target_bin)
+            self.log(f"[tier] PRIOR-ONLY: side-bin attempt {plan.target_bin} ({plan.color}), max 1 per side bin")
+        if self._dflag("object_time_cap") and plan.phases and plan.side in ("left", "right"):
+            self._exec = {"plan": plan, "n": len(plan.arm), "cut": 0, "t8": False}
         if plan.corrective:
             self.n_corrections += 1
         if plan.posture is not None and self.cfg["policy"].get("grasp_diag_log", False):
@@ -827,11 +1208,6 @@ class ClassicalPolicy:
             h = {"color": plan.color, "xy": np.asarray(key[0], float), "yaw": key[1], "posture": key[2],
                  "side": plan.side, "held": None}
             self.vary_hist.append(h)
-            ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
-            self._abort = None
-            if "close" in ph and "lift" in ph:
-                self._abort = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1], "hist": h,
-                               "lift_len": ph["lift"][1] - ph["lift"][0]}
         self._enqueue(plan.arm, plan.hand)
         if self._slots_on() and plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
             self.slot_used[plan.target_bin].add(plan.drop_slot)
@@ -908,6 +1284,8 @@ class ClassicalPolicy:
         if done - hs >= g["min"] and g["still"] >= g["need"]:
             cut = he - done
             self.queue_a, self.queue_h = self.queue_a[cut:], self.queue_h[cut:]
+            if self._exec is not None:
+                self._exec["cut"] += cut
             self.log(f"[lift_on_stall] t={g['t']:.1f} lift after {(done - hs) / HZ:.2f} s of hold (stall), "
                      f"skipped {cut / HZ:.2f} s")
             self._stall = None
