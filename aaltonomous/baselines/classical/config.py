@@ -98,6 +98,8 @@ FLAGS = {
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
+    "grasp.drop_slot_grid": ("bin capacity", False,
+                              "two reach-biased rows of object-separated slots (six slots with the stock count)"),
     "grasp.drop_slot_overflow": ("Felix #6 rev", "counter", "slots used up: counter (leave it) | stack (slot 0)"),
     "grasp.drop_height_extra_m": ("finals safe", 0.0,
                                     "extra bin-release height (capped at the carry height); IK failure uses the stock target"),
@@ -268,6 +270,8 @@ def check_flag_values(cfg):
         raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")
     if not isinstance(_get(cfg, "safety.nan_guard"), bool):
         raise ValueError("safety.nan_guard: want true or false")
+    if not isinstance(_get(cfg, "grasp.drop_slot_grid"), bool):
+        raise ValueError("grasp.drop_slot_grid: want true or false")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:

@@ -143,10 +143,10 @@ class TestFlags(unittest.TestCase):
         expect["finals_r19"] = expect["finals_r18"] | {"perception.hue_guard.enabled", "instruction.max_chars", "safety.nan_guard",
                                                         "instruction.strict"}   # r18 + hue + fuzz + strict
         expect["finals_r19b"] = expect["finals_r19"] | {"policy.safety_shell", "perception.color_gate.sat_floor"}   # P0 Hz
-        expect["finals_r19c"] = (expect["finals_r19"] | {"policy.safety_shell"}) - {"perception.online_pitch_cal", "perception.color_gate.enabled",
+        expect["finals_r19c"] = (expect["finals_r19"] | {"policy.safety_shell", "grasp.drop_slot_grid"}) - {"perception.online_pitch_cal", "perception.color_gate.enabled",
                                                                               "perception.color_gate.live_bins", "perception.color_gate.fk_mask"}
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.geometry_runtime", "grasp.held_detector",
-                                                          "calib.plane.apply_height"}
+                                                          "calib.plane.apply_height", "grasp.drop_slot_grid"}
         expect["finals_r21"] = expect["finals_r20"]   # R29: same flags, rc6 code
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
@@ -335,6 +335,7 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(load_config(overlay="none")["motion"]["close_hold_s"], 0.25)   # sim profile
         for overrides in ({"policy.first_object_speed_scale": 0.0}, {"policy.first_object_speed_scale": 1.01},
                           {"policy.first_object_speed_scale": float("nan")},
+                          {"grasp.drop_slot_grid": 1},
                           {"grasp.drop_height_extra_m": -0.01}, {"grasp.drop_height_extra_m": float("inf")},
                           {"grasp.drop_lateral_margin_m": -0.01},
                           {"policy.first_object_speed_scale": 0.7, "policy.safety_shell": True,
