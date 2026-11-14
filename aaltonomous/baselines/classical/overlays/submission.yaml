@@ -159,7 +159,8 @@ flags:
   grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
   perception.novel_objects: false               # R22 novel depth candidates (off in shipped submission)
   perception.novel.max_area_px: 30000
-  perception.novel.handle_rim_margin_m: 0.06
+  perception.novel.handle_rim_margin_m: 0.04
+  perception.novel.fp_filter: true
   grasp.generic: false                          # R22 novel geometry grasp (off in shipped submission)
   instruction.novel_objects: false              # R22 novel instruction grounding (off in shipped submission)
   policy.novel_obstacles: false                 # R22 novel collision keep-outs (off in shipped submission)

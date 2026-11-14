@@ -135,7 +135,8 @@ FLAGS = {
     "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
     "perception.novel_objects": ("novel R22", False, "depth connected components above the counter -> conservative open-vocabulary object candidates"),
     "perception.novel.max_area_px": ("novel R22", 30000, "upper connected-component area (full-res px) for novel blobs; a 20 cm pan is 35-41k px"),
-    "perception.novel.handle_rim_margin_m": ("novel R22", 0.06, "handle grasp centre at least this far (m) beyond the body rim (max body projection, handle band excluded)"),
+    "perception.novel.handle_rim_margin_m": ("novel R22", 0.04, "handle grasp centre at least this far (m) beyond the body rim (max body projection, handle band excluded)"),
+    "perception.novel.fp_filter": ("novel R22", True, "drop false novel blobs (FK robot silhouette, bin band, image border, flat/thin, same-colour near a known det)"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "perception.prism_orientation": ("prism orient", False, "Detection.prism_orientation standing|lying from the footprint fill + top-band strip (+ height when it differs); lying -> shape triangle, ridge_yaw, prism_xy"),
