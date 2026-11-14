@@ -111,10 +111,14 @@ class ClassicalServerPolicy(Policy):
                 "hand_q_target": np.asarray(a["hand_q_target"], np.float64), "done": bool(a.get("done", False))}
 
     def _decide_profile(self, frames):
-        profile, info = detect_profile(frames)
+        cue = bool(self.probe_cfg["profile_auto"].get("require_rgb_cue", False))
+        profile, info = detect_profile(frames, require_rgb_cue=cue) if cue else detect_profile(frames)
         log.info("[profile] auto=%s votes=%d/%d (depth_holes=%.4f, plane_std_mm=%.2f, palette=%s, frames=%d, "
-                 "rgb_noise=%s)", profile, info["votes"], info["frames"], info["depth_holes"], info["plane_std_mm"],
-                 info["palette"], info["frames"], info.get("rgb_noise"))
+                 "rgb_noise=%s, rgb_cue=%s)", profile, info["votes"], info["frames"], info["depth_holes"], info["plane_std_mm"],
+                 info["palette"], info["frames"], info.get("rgb_noise"), info.get("rgb_cue", False))
+        if info.get("disagree"):
+            log.warning("[profile] depth says sim but rgb disagrees in %d/%d frames (require_rgb_cue): deciding %s",
+                        info["disagree"], info["frames"], profile)
         extra = None
         if profile == "sim":
             extra = dict(self.probe_cfg["profile_auto"]["sim_overrides"] or {})

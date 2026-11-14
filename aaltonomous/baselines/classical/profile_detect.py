@@ -30,6 +30,8 @@ PALETTE_SIM_FRAC = 0.8       # sim-hued share of (sim+real-hued) px to call the 
 PALETTE_REAL_FRAC = 0.2      # ... and "real" at or below this share
 SIM_HUE = ((0, 8), (170, 179), (100, 116))    # red (wraps at 0), blue
 REAL_HUE = ((117, 130),)                      # purple / violet. Orange (9-21) is NOT a real vote: sim bins are H ~12 too
+RGB_SIM_MAX = 0.4            # require_rgb_cue: sim rgb_noise measured 0.273-0.297 over 16 official episodes (80 frames); real sensors are expected well above
+RGB_MIN_STD = 5.0            # grey std (levels) below which a frame is black/flat/frozen-blank: no evidence either way -> not sim
 INF = float("inf")
 
 
@@ -115,20 +117,44 @@ def _frame(obs):
     if rgb is not None and np.ndim(rgb) == 3 and (depth is None or np.ndim(depth) != 2 or np.shape(rgb)[:2] == np.shape(depth)):
         out["palette"], out["sim_px"], out["real_px"] = _palette(
             rgb, depth if depth is not None and np.ndim(depth) == 2 else None, coef, norm)
+    out["rgb_sim"] = _rgb_sim(rgb)
     out["sim"] = out["depth_sim"]   # palette is log-only (see module docstring)
     return out
 
 
-def detect_profile(frames):
+def _rgb_sim(rgb):
+    """Second, independent sim cue (only used with require_rgb_cue): valid quiet RGB. Anything malformed, missing,
+    non-finite, black or flat is False (no evidence for sim)."""
+    try:
+        if rgb is None or np.ndim(rgb) != 3 or np.shape(rgb)[2] < 3 or min(np.shape(rgb)[:2]) < 8:
+            return False
+        a = np.asarray(rgb)[..., :3]
+        if a.dtype.kind == "f" and not np.isfinite(a).all():
+            return False
+        import cv2
+        g = cv2.cvtColor(np.ascontiguousarray(np.clip(a, 0, 255).astype(np.uint8)), cv2.COLOR_RGB2GRAY)
+        if float(g.std()) < RGB_MIN_STD:
+            return False
+        return rgb_noise(a) <= RGB_SIM_MAX
+    except Exception:
+        return False
+
+
+def detect_profile(frames, require_rgb_cue=False):
     """frames: list of obs dicts (head_rgb, head_depth). Returns (profile in {"sim", "none"}, info dict)."""
     per = [_frame(o) for o in frames]
     if not per:
         return "none", {"frames": 0, "votes": 0, "depth_holes": 1.0, "plane_std_mm": INF, "palette": "inconclusive",
-                        "rgb_noise": [], "per_frame": []}
+                        "rgb_noise": [], "per_frame": [], "rgb_cue": bool(require_rgb_cue), "disagree": 0}
     labels = [p["palette"] for p in per]
     palette = "real" if "real" in labels else ("sim" if all(x == "sim" for x in labels) else "inconclusive")
+    if require_rgb_cue:   # depth says sim only counts when rgb agrees; disagreement defaults to real (see log)
+        for p in per:
+            p["depth_rgb_disagree"] = bool(p["sim"] and not p["rgb_sim"])
+            p["sim"] = bool(p["sim"] and p["rgb_sim"])
     votes = sum(p["sim"] for p in per)
     info = {"frames": len(per), "votes": votes, "depth_holes": max(p["holes"] for p in per),
             "plane_std_mm": max(p["plane_std_mm"] for p in per), "palette": palette,
-            "rgb_noise": [p["rgb_noise"] for p in per], "per_frame": per}   # rgb_noise: log-only, no vote
+            "rgb_noise": [p["rgb_noise"] for p in per], "per_frame": per,
+            "rgb_cue": bool(require_rgb_cue), "disagree": sum(p.get("depth_rgb_disagree", False) for p in per)}   # rgb_noise: log-only, no vote
     return ("sim" if votes * 2 > len(per) else "none"), info   # majority (> N/2); empty list -> none
