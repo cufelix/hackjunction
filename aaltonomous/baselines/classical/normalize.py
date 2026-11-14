@@ -39,9 +39,13 @@ SYNONYMS: dict[str, str] = {
     # cylinder
     "cans": "cylinders", "tin": "cylinder", "tins": "cylinders", "drum": "cylinder", "drums": "cylinders",
     "barrel": "cylinder", "barrels": "cylinders", "canister": "cylinder", "canisters": "cylinders",
-    "pillar": "cylinder", "pillars": "cylinders",
+    "pillar": "cylinder", "pillars": "cylinders", "column": "cylinder", "columns": "cylinders",
+    "rolls": "cylinders",
     # triangle (triangular prism)
     "pyramid": "triangle", "pyramids": "triangles", "tetrahedron": "triangle", "tetrahedra": "triangles",
+    "prismatic": "triangle",
+    # cube (cuboid is the resolver's word for the same solid)
+    "hexahedron": "cube", "hexahedra": "cubes", "hexahedrons": "cubes", "cuboids": "cubes",
     # containers -> bin(s)
     "receptacle": "bin", "receptacles": "bins", "bucket": "bin", "buckets": "bins",
     "basket": "bin", "baskets": "bins", "pail": "bin", "pails": "bins", "vessel": "bin", "vessels": "bins",
@@ -145,13 +149,33 @@ _ORD_RE = re.compile(
 _SIDE = ("left", "middle", "right")
 
 
-def _ord_sub(m: re.Match[str]) -> str:
-    i, side = _ORD[m.group(1).lower()], (m.group(2) or m.group(3)).lower()
+def _bin_for(word: str, side: str) -> str:
+    i = _ORD[word.lower()]
     return f"{_SIDE[i] if side == 'left' else _SIDE[2 - i]} bin"
 
 
+def _ord_sub(m: re.Match[str]) -> str:
+    return _bin_for(m.group(1), (m.group(2) or m.group(3)).lower())
+
+
+# A bare ordinal ("..., yellow cylinders in the second, and blue triangles in the first"): after a place word and
+# followed by a clause end. "the first red object" is not a bin and is left alone.
+_BARE_ORD = re.compile(
+    r"(\b(?:the|in|into|to|onto|inside|on)\s+)(first|1st|second|2nd|third|3rd|last)\b"
+    rf"(?:\s+(?:one|{_B}))?(?=\s*(?:[,;.:!?)]|\band\b|\bor\b|\bwhile\b|\bbut\b|$))", re.I)
+
+
 def rewrite_ordinal_bins(sentence: str) -> str:
-    return _ORD_RE.sub(_ord_sub, sentence)
+    """Anchored ordinal bins -> position words. Bare ordinals in the same sentence take the same anchor direction.
+    Anchors pointing both ways: from the left the sentence is left to the resolver; from the right only the anchored
+    ones are rewritten."""
+    sides = [(m.group(2) or m.group(3)).lower() for m in _ORD_RE.finditer(sentence)]
+    if not sides:
+        return sentence
+    out = _ORD_RE.sub(_ord_sub, sentence)
+    if len(set(sides)) > 1:
+        return sentence if sides[0] == "left" else out
+    return _BARE_ORD.sub(lambda m: m.group(1) + _bin_for(m.group(2), sides[0]), out)
 
 
 # Colour names for the real finals objects (purple / yellow / orange) the resolver does not know, incl. Finnish and
@@ -170,13 +194,43 @@ def name_colours(sentence: str) -> str:
     return sentence
 
 
+_REGARDLESS = re.compile(r"\bwhatever\s+their\s+colou?r\b|\bregardless\s+of\s+(?:their\s+)?colou?r\b"
+                         r"|\bno\s+matter\s+(?:the|their)\s+colou?r\b", re.I)
+# Finnish / Czech words the resolver cannot read. A word already in a table (VOCAB, SYNONYMS, PROTECTED) is never
+# rewritten, so an English word cannot change here.
+_FOREIGN = tuple((re.compile(p, re.I), w) for p, w in (
+    (r"\bkuutio\w*|\bkostk\w*", "cube"),
+    (r"\bsylinter\w*|\bv[áa]lc\w*|\bv[áa]lec\b", "cylinder"),
+    (r"\bkolmi\w*|\bprism\w*|\bhranol\w*", "triangle"),
+    (r"\bvasemma\w*|\bvasen\w*|\bvlev\w*", "left"),
+    (r"\boikea\w*|\bvprav\w*", "right"),
+    (r"\bkeski\w*|\bkeske\w*|\bdoprost\w*|\buprost\w*|\bst[řr]ed\w*", "middle"),
+    (r"\blaatikk\w*|\blokero\w*|\bkrabic\w*|\bp[řr]ihr[áa]d\w*|\bkoš\w*|\bkos\b", "bin"),
+))
+
+
+def name_foreign(sentence: str) -> str:
+    def sub(word: str):
+        def f(m: re.Match[str]) -> str:
+            tok = m.group(0)
+            if tok.lower() in VOCAB or tok.lower() in PROTECTED or tok.lower() in SYNONYMS:
+                return tok
+            return word.capitalize() if tok[0].isupper() else word
+        return f
+    for rx, word in _FOREIGN:
+        sentence = rx.sub(sub(word), sentence)
+    return sentence
+
+
 _LIFT_LR = re.compile(r"\(\s*lift\s+to\s+(right|left)\s*\)", re.I)   # "first bin (lift to right)": a left/right typo
 
 
 def normalize(sentence: str) -> str:
     """Map colour names and near-miss tokens onto the resolver's vocabulary, then drop colour-named-bin clauses."""
     sentence = _LIFT_LR.sub(lambda m: f"(left to {m.group(1)})", sentence)
-    return drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, name_colours(sentence))))
+    sentence = _REGARDLESS.sub(lambda m: "Regardless of colour" if m.group(0)[0].isupper() else "regardless of colour", sentence)
+    sentence = name_foreign(name_colours(sentence))
+    return drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, sentence)))
 
 
 # Strict mode (instruction.strict): the mapping never guesses. instruction.py is FROZEN, so this filters its output.
