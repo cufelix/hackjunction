@@ -62,6 +62,14 @@ class TestFlags(unittest.TestCase):
                   "ab_hold06": {"motion.close_hold_s"}, "ab_hold12": {"motion.close_hold_s"},
                   "ab_slots": {"grasp.drop_slots"}, "ab_hold12_slots": {"motion.close_hold_s", "grasp.drop_slots"},
                   "ab_carry05": {"motion.carry_scale"}, "ab_calib": {"perception.self_calibration.enabled"},
+                  "ab_pitch_cal": {"perception.online_pitch_cal"},
+                  "ab_pitch_cal_table": {"instruction.resolve", "policy.insert_guard", "policy.bin_lookup",
+                                           "perception.online_pitch_cal", "perception.classify_shape",
+                                           "perception.hsv_set", "perception.split_blobs",
+                                           "policy.max_total_attempts", "grasp.drop_slots",
+                                           "grasp.close_posture", "hand.closed_tight", "grasp.point_in_palm",
+                                           "motion.close_hold_s", "grasp.close_posture_by_shape",
+                                           "grasp.posture_apex_gate"},
                   "ab_yaff": {"perception.y_affine"},
                   "ab_pinch_hybrid": {"grasp.close_posture", "hand.closed_tight", "grasp.point_in_palm",
                                       "motion.close_hold_s", "perception.classify_shape",
@@ -97,6 +105,7 @@ class TestFlags(unittest.TestCase):
             self.assertEqual(on, keys, name)
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
+        self.assertEqual(load_config(overlay="ab_pitch_cal_table")["perception"]["online_pitch_cal"], "table")
 
     def test_finals_real_loads_as_cand_r16_with_calibrated_intrinsics(self):
         from aaltonomous.interface.calibration import Calibration
@@ -192,7 +201,8 @@ class TestFlags(unittest.TestCase):
                            "motion.lift_on_stall.timeout_s")])
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
-            for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile"):
+            for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",
+                        "perception.online_pitch_cal: bins"):
                 p.write_text("flags:\n  " + bad + "\n")
                 with self.assertRaises(ValueError, msg=bad):
                     load_config(overlay=str(p))

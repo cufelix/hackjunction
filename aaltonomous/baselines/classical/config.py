@@ -23,7 +23,8 @@ STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config
 LIMITS = {"motion.carry_scale": (0.0, 1.0)}
 CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight"),
            "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust"),
-           "perception.principal_point": ("file", "center")}
+           "perception.principal_point": ("file", "center"),
+           "perception.online_pitch_cal": (False, True, "table")}
 VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
 
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
@@ -36,6 +37,8 @@ FLAGS = {
     "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
     "perception.self_calibration.enabled": ("Timi calib", False,
                                             "per-episode head-camera xy offset from the bin walls (depth)"),
+    "perception.online_pitch_cal": ("Timi pitch", False,
+                                    "per-episode camera pitch: true=orange bin rims | table=counter plane"),
     "perception.classify_shape": ("Oliver #5/#7", False, "Detection.shape from the top face (shape_id)"),
     "perception.triangle_pose": ("Oliver #5", False, "triangles: apex yaw + robust xy centre"),
     "perception.near_bin_guard": ("Oliver #7", False, "classify_shape abstains next to a bin (cut top face)"),
