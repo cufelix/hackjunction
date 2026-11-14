@@ -4,3 +4,5 @@ from .core import (BrainLayer, PlannerBackend, StubPlanner, AsyncRequest, LlamaC
                    world_to_json, build_world)
 from .registry import (BINS, TOOLS, MACROS, POINTS, VARIANTS, allowed_calls, decision_json_schema, decision_gbnf,
                        expand_macro)
+from .planner import (PLAN_TOOLS, PlanLayer, explicit_plan_satisfied, instruction_needs_plan, parse_plan,
+                      plan_gbnf, plan_json_schema, plan_prompt, validate_plan)
