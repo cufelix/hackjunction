@@ -117,10 +117,53 @@ the instruction is the constant `INSERT_INSTRUCTION` with mapping `{}` (✅ `tas
 
 ### 2.1 🔴 The per-tick cap is the gate people miss, and it is stricter than the rate
 
-A chunk can be returned fast enough and still clip on **every seam**, because the last action of
-one chunk and the first of the next may differ by more than 0.033 rad. **Chunk seams must be
-blended, and we need our own rate limiter in front of anything that produces targets** — including
-the classical planner.
+> ⚠️ **Retracted, 14 Nov 01:30.** This section used to say *"a chunk can be returned fast enough
+> and still clip on every seam… chunk seams must be blended, and we need our own rate limiter in
+> front of anything that produces targets."* **That is wrong for this architecture, and building
+> that limiter would have been wasted work.** Read end to end:
+>
+> - `_pop()` (`policy.py:243`) slices **one pre-planned trajectory** into chunks of
+>   `motion.chunk`, so a chunk seam is two consecutive samples of the same array — not a
+>   discontinuity at all.
+> - `time_scale` (`planner.py:58`) says in its own docstring *"no joint ever moves faster than
+>   vmax"*, samples at `T/n` with `n = ceil(T/dt)` so the spacing is **≤ dt**, and **excludes
+>   `Qs[0]`**.
+> - across trajectories, `_pop` sets `arm_cmd = a[-1]` and the next `go_to(arm_from=self.arm_cmd,
+>   …)` starts from exactly that value, so the first sample of the new trajectory is one dt of
+>   travel away.
+> - `_hold()` re-sends the last target — zero delta.
+>
+> So **the emitted command stream is velocity-continuous by construction.** No blending needed, no
+> limiter needed.
+
+**The real exposure is not seams. It is the speed knob, and it is a trap.**
+
+The safety filter clips when a command moves more than `arm_max_vel * dt` **from the last command**
+(`safety.py:16`, `:231`). Two different `arm_max_vel` values are in play, and the margin between
+them depends entirely on the profile:
+
+| profile | planner `motion.arm_max_vel` | filter `arm_max_vel` | margin |
+|---|---|---|---|
+| base (robot) | 0.5 | 1.0 | **2×** |
+| `sim` | **0.97** | 1.0 | 🔴 **3.1 %** |
+
+Both numbers are verbatim from `config.yaml` — `:81` carries the comment *"safety filter allows
+1.0"*, and `:126` in the `sim` profile repeats it at 0.97. ✅ And §3.4.1 establishes that **a
+submitted container defaults to the `sim` profile**.
+
+> 🔴 **So the obvious response to a slow step-0 number — raise `motion.arm_max_vel` to buy time —
+> crosses 1.0 with 3.1 % of headroom and makes the filter clip on *every move*. With
+> `--gate-max-clips` defaulting to **0**, that fails the entire run, and it fails it for a reason
+> that looks nothing like "the arm is too fast".** §3.4 says time is the binding constraint, so
+> this is precisely the knob someone will reach for. **Do not raise it above 1.0, and treat
+> anything above ~0.95 as already unsafe.** Buy time from the trajectory (fewer waypoints, shorter
+> approach, `max_joint_step`), never from `arm_max_vel`.
+
+✅ `arm_max_lead` and `hand_max_lead` default to **`None` = off** (`safety.py:51-52`), so the
+lead-cap clip source does not fire unless someone enables it. Hand speed has 20 % of margin on the
+`sim` profile (2.5 against 3.0), which is tight but not in the same class.
+
+We still need our own guard in front of anything that produces targets **outside** the planner —
 
 ✅ **The gate, exactly, read from `evaluate.py`:**
 
@@ -1388,6 +1431,7 @@ listed here, not inline, so the body reads as fact and this reads as history.
 | 13 | *"The baseline scores zero on the language episodes."* | ✅ Wrong as a deterministic claim. It always applies FIXED, so it scores **+2a − b**: +2N if the true mapping happens to match (1/6), 0 on a single swap (3/6), −N on a derangement (2/6). **Expectation zero, realised value −N to +2N** — so a lucky step-0 draw can look like a working policy | §1.1 |
 | 14 | *"Zero clips is the gate; 30 ends the episode."* | ✅ There is no 30-abort budget. 30 is `safety.py:74 max_clipped_steps` and **exceeding it aborts**. Also found: an **undocumented wall-clock `policy_hz_rt >= 27`** check at `evaluate.py:137-139`, in neither the rules nor the flags | §2.1 |
 | 15 | *"Five objects at ~19 s each is ~97 s of 120 s."* | ✅ Overstated. Recomputed from `ta + S/vmax`: **≈31 s fast profile, ≈61 s on base gains, ≈76 s with latency.** Still tight, not as tight as claimed. Also found: a submitted container defaults to the **fast** `sim` profile | §3.4.1 |
+| 17 | *"Chunk seams must be blended, and we need our own rate limiter in front of anything that produces targets."* | ✅ **Wrong, and it would have been wasted work.** `_pop` slices one pre-planned trajectory, `time_scale` guarantees ≤ vmax and excludes `Qs[0]`, every `go_to` starts from the last emitted target, and a hold is a zero delta. The stream is **velocity-continuous by construction**. The real exposure is the **3.1 % margin between the `sim` profile's `arm_max_vel 0.97` and the filter's 1.0** | §2.1 |
 | 16 | *"The real robot grants no settle time."* | ⚠️ **UNVERIFIED and was stated as fact.** Not in any code we have read — `evaluate.py` is the sim path only. An inference from rules line 25, not a measurement. Plan for no grace; do not quote it as fact | §3.4.4 |
 | 11 | *"The organisers ship a model of real camera noise harsher than the DR — depth σ 3 mm, 20 % holes on the object."* | ✅ Those are **test-fixture values**. `capture.py:133` `MockSource` is *"Synthetic static scene for offline tests"* and `test_drop1.py:22` injects them so `stats.py` can be checked against them. Caught by Oliver's session. What survives: `train.yaml` has **no object-hole parameter** and `stats.py` **measures one**, so the structural gap is real and the magnitude is unknown | §3.6.5 |
 
