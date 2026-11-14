@@ -155,6 +155,8 @@ FLAGS = {
     "policy.retry_vary_grasp": ("retry-vary", False, "retry after the object remains in the next frame with another "
                                                      "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
+    "policy.retry_repeat_ok": ("lang-r23", False, "retry_vary: when every other grasp variant is infeasible or identical, repeat the tried grasp (while tries < max_attempts_vary) instead of giving the object up for good"),
+    "policy.late_regrant": ("lang-r23", False, "nothing pickable but a tried / given-up object is still on the counter with >= late_regrant_min_s left: clear its attempts, failed entry and grasp history for a fresh run of tries (late_regrants_max per episode)"),
     "policy.retry_jitter_m": ("finals grasp", 0.0, "retry grasp-point jitter magnitude; 0 disables the deterministic +/-xy pattern"),
     "policy.retry_cross_relocate": ("grasp-r23", False, "retry after a left-arm miss at y<retry_cross_relocate_y: right arm relocates the object "
                                                          "to the left arm's side (needs retry_vary_grasp)"),

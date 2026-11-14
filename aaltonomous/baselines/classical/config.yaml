@@ -735,6 +735,11 @@ policy:
                               # error is diagnostic only; it never aborts a carry or opens the hand above the source.
   max_attempts_vary: null     # FLAG (retry-vary). With retry_vary_grasp: tries per object up to this (e.g. 3); the extra
                               # tries come after every other candidate and only if the plan fits the time left (_has_time)
+  retry_repeat_ok: false      # FLAG (lang-r23). retry_vary: no other feasible grasp -> repeat the tried one (tries < max_attempts_vary)
+  late_regrant: false         # FLAG (lang-r23). Nothing pickable but a tried / given-up object is still on the counter and time
+                              # is left: fresh attempts + grasp history for it (not for objects never attempted)
+  late_regrants_max: 2        # late_regrant: regrants per episode
+  late_regrant_min_s: 25.0    # late_regrant: only with at least this long left (one pick + place cycle + margin)
   retry_yaw_deg: {triangle: 60, cube: 90, cylinder: 90, none: 90, default: 90}   # heading change per label
   retry_same_xy_m: 0.01       # two grasps closer than this, same posture and heading within retry_same_yaw_deg = identical
   retry_same_yaw_deg: 20.0
