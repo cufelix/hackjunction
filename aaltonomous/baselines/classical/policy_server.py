@@ -112,9 +112,9 @@ class ClassicalServerPolicy(Policy):
 
     def _decide_profile(self, frames):
         profile, info = detect_profile(frames)
-        log.info("[profile] auto=%s votes=%d/%d (depth_holes=%.4f, plane_std_mm=%.2f, palette=%s, frames=%d)", profile,
-                 info["votes"], info["frames"], info["depth_holes"], info["plane_std_mm"], info["palette"],
-                 info["frames"])
+        log.info("[profile] auto=%s votes=%d/%d (depth_holes=%.4f, plane_std_mm=%.2f, palette=%s, frames=%d, "
+                 "rgb_noise=%s)", profile, info["votes"], info["frames"], info["depth_holes"], info["plane_std_mm"],
+                 info["palette"], info["frames"], info.get("rgb_noise"))
         extra = None
         if profile == "sim":
             extra = dict(self.probe_cfg["profile_auto"]["sim_overrides"] or {})

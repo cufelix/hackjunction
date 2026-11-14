@@ -91,10 +91,21 @@ def _in(h, bands):
     return np.any([(h >= lo) & (h <= hi) for lo, hi in bands], axis=0)
 
 
+def rgb_noise(rgb):
+    """Whole-frame grey noise: median |grey - gaussian_blur(grey)| (px). Median so object edges do not count.
+    Log-only metric for now; the sim/real noise-floor threshold is still to be set from drop_2 data."""
+    import cv2
+    g = cv2.cvtColor(np.ascontiguousarray(np.asarray(rgb, np.uint8)), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    return float(np.median(np.abs(g - cv2.GaussianBlur(g, (5, 5), 0))))
+
+
 def _frame(obs):
     rgb = obs.get("head_rgb")
     depth = obs.get("head_depth")
-    out = {"holes": 1.0, "plane_std_mm": INF, "depth_sim": False, "palette": "inconclusive", "sim_px": 0, "real_px": 0}
+    out = {"holes": 1.0, "plane_std_mm": INF, "depth_sim": False, "palette": "inconclusive", "sim_px": 0, "real_px": 0,
+           "rgb_noise": None}
+    if rgb is not None and np.ndim(rgb) == 3:
+        out["rgb_noise"] = round(rgb_noise(rgb), 3)
     coef = norm = None
     if depth is not None and np.ndim(depth) == 2:
         depth = np.asarray(depth, float)
@@ -113,10 +124,11 @@ def detect_profile(frames):
     per = [_frame(o) for o in frames]
     if not per:
         return "none", {"frames": 0, "votes": 0, "depth_holes": 1.0, "plane_std_mm": INF, "palette": "inconclusive",
-                        "per_frame": []}
+                        "rgb_noise": [], "per_frame": []}
     labels = [p["palette"] for p in per]
     palette = "real" if "real" in labels else ("sim" if all(x == "sim" for x in labels) else "inconclusive")
     votes = sum(p["sim"] for p in per)
     info = {"frames": len(per), "votes": votes, "depth_holes": max(p["holes"] for p in per),
-            "plane_std_mm": max(p["plane_std_mm"] for p in per), "palette": palette, "per_frame": per}
-    return ("sim" if votes == len(per) else "none"), info   # unanimity: any non-sim frame -> none
+            "plane_std_mm": max(p["plane_std_mm"] for p in per), "palette": palette,
+            "rgb_noise": [p["rgb_noise"] for p in per], "per_frame": per}   # rgb_noise: log-only, no vote
+    return ("sim" if votes == len(per) > 0 else "none"), info   # empty list -> none   # unanimity: any non-sim frame -> none

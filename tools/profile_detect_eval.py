@@ -53,14 +53,18 @@ def main():
     if not files:
         sys.exit("no frames found")
     frames = [_load(f) for f in files]
-    results = []
+    results, noise = [], []
     for i in range(0, len(frames) - a.window + 1, a.window):
         prof, info = detect_profile(frames[i:i + a.window])
         results.append(prof)
+        noise += [v for v in info["rgb_noise"] if v is not None]
         for f, p in zip(files[i:i + a.window], info["per_frame"]):
             print(f"{os.path.basename(f)} holes={p['holes']:.4f} plane_std_mm={p['plane_std_mm']:.2f} "
-                  f"palette={p['palette']} vote={'sim' if p['sim'] else 'none'}")
+                  f"palette={p['palette']} rgb_noise={p['rgb_noise']} vote={'sim' if p['sim'] else 'none'}")
         print(f"window {i // a.window}: auto={prof} votes={info['votes']}/{info['frames']}")
+    if noise:
+        print(f"rgb_noise over run: min={min(noise):.3f} median={float(np.median(noise)):.3f} max={max(noise):.3f} "
+              f"frames={len(noise)}")
     n = len(results)
     if n:
         print(f"share sim={sum(r == 'sim' for r in results) / n:.2f} none={sum(r == 'none' for r in results) / n:.2f} "

@@ -8,7 +8,7 @@ import numpy as np
 from . import policy_server
 from .config import load_config
 from .policy_server import ClassicalServerPolicy
-from .profile_detect import detect_profile
+from .profile_detect import detect_profile, rgb_noise
 
 H, W = 480, 640
 # scene.yaml colours: red (200,30,30), blue (30,70,200) = hue ~113 (sim band), yellow (235,200,20).
@@ -106,6 +106,16 @@ class TestDetectProfile(unittest.TestCase):
 
     def test_no_frames_is_none(self):
         self.assertEqual(detect_profile([])[0], "none")
+
+    def test_rgb_noise_separates_flat_from_noisy_and_does_not_vote(self):
+        flat = np.full((H, W, 3), 60, np.uint8)
+        noisy = np.clip(flat + np.random.default_rng(0).normal(0, 3, (H, W, 3)), 0, 255).astype(np.uint8)
+        self.assertLess(rgb_noise(flat), 0.5)
+        self.assertGreater(rgb_noise(noisy), 1.0)
+        # log-only: a noisy RGB with a clean sim depth still votes sim
+        profile, info = detect_profile([{"head_rgb": noisy, "head_depth": _plane_mm()} for _ in range(5)])
+        self.assertEqual(profile, "sim")
+        self.assertGreater(info["rgb_noise"][0], 1.0)
 
 
 class FakePolicy:
