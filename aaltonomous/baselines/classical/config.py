@@ -33,6 +33,8 @@ VECTORS = {"grasp.point_in_palm": 3, "grasp.cage_point_in_palm": 3, "grasp.cage_
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
 FLAGS = {
+    "profile_auto.auto_detect": ("profile auto", False, "no AALTO_PROFILE/arg: pick sim | none (real) from the first frames (profile_detect.py); sim only if every frame passes depth + palette"),
+    "profile_auto.auto_frames": ("profile auto", 5, "frames inspected before the profile is chosen (zero-row holds meanwhile), >= 1; sim needs > half of them"),
     "brain.backend": ("brain", "stub", "stub (= classical choice) | llamacpp (bounded async HTTP + GBNF)"),
     "brain.url": ("brain", "http://127.0.0.1:8080/completion", "llama.cpp server for brain.backend=llamacpp"),
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),

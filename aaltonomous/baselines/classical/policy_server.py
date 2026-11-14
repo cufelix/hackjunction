@@ -24,6 +24,7 @@ import numpy as np
 from aaltonomous.deploy.policy_server import Policy, serve
 
 from .policy import ClassicalPolicy
+from .profile_detect import detect_profile
 
 log = logging.getLogger("aaltonomous.baseline")
 
@@ -34,17 +35,36 @@ class ClassicalServerPolicy(Policy):
     def __init__(self, time_limit=None, arm_vel=None, profile=None, overlay=None, **kw):
         tl = float(time_limit or os.environ.get("AALTO_TIME_LIMIT", 120.0))
         # This server is the real-robot entry point. Simulation remains available only by an explicit argument/env.
+        explicit = profile is not None or bool(os.environ.get("AALTO_PROFILE"))
         effective_profile = profile if profile is not None else os.environ.get("AALTO_PROFILE", "none")
         effective_profile = effective_profile or "none"
         ov = {}
         av = arm_vel or os.environ.get("AALTO_ARM_VEL")
         if av:
             ov["motion.arm_max_vel"] = float(av)
+        self._build_args = (tl, ov, overlay, kw)
+        self._auto_buf, self._pending_reset, self.probe_cfg = None, None, None
+        if not explicit:
+            from .config import load_config
+            probe = load_config(profile="none", overlay=overlay)   # flags only: no profile applied yet
+            if probe["profile_auto"]["auto_detect"]:
+                self.probe_cfg = probe
+                self._auto_frames = max(1, int(probe["profile_auto"]["auto_frames"]))
+                self._auto_buf = []
+                self.pol = None
+                self.action_horizon = int(probe["motion"]["chunk"])
+                log.info("[profile] auto-detect pending: profile chosen from the first %d frames", self._auto_frames)
+                return
+        self._build(effective_profile, refuse_finals_sim=True)
+
+    def _build(self, profile, refuse_finals_sim):
+        tl, ov, overlay, kw = self._build_args
         self.pol = ClassicalPolicy(threaded=True, require_confirm=False, time_limit=tl, overrides=ov,
-                                   profile=effective_profile, overlay=overlay, log=lambda m: log.info(m), **kw)
+                                   profile=profile, overlay=overlay, log=lambda m: log.info(m), **kw)
         cfg = self.pol.cfg
         selected_overlay = str(cfg.get("overlay", "none"))
-        if cfg.get("profile") == "sim" and (selected_overlay == "submission" or selected_overlay.startswith("finals")):
+        if refuse_finals_sim and cfg.get("profile") == "sim" and (
+                selected_overlay == "submission" or selected_overlay.startswith("finals")):
             raise RuntimeError(f"refusing finals overlay {selected_overlay!r} under profile 'sim'; use profile='none'")
         self.config_snapshot = copy.deepcopy(cfg)
         self.action_horizon = int(self.pol.cfg["motion"]["chunk"])
@@ -55,6 +75,12 @@ class ClassicalServerPolicy(Policy):
                  "n/a" if mo.get("hand_max_acc") is None else f"{float(mo['hand_max_acc']):.3f}")
 
     def reset(self, instruction, task=None, seed=None):
+        if self._auto_buf is not None and self.pol is None:
+            self._pending_reset = (instruction, task, seed)   # replayed once the profile is chosen
+            return
+        self._reset_now(instruction, task, seed)
+
+    def _reset_now(self, instruction, task=None, seed=None):
         if not self.pol.cfg["policy"].get("generation_workers", False):
             # Legacy flag-off path: wait before resetting shared planner state.
             job, t0 = self.pol._job, time.monotonic()
@@ -71,9 +97,25 @@ class ClassicalServerPolicy(Policy):
         log.info("reset task=%s seed=%s instruction=%r", task, seed, instruction)
 
     def act(self, obs):
+        if self._auto_buf is not None and self.pol is None:
+            self._auto_buf.append(obs)
+            if len(self._auto_buf) < self._auto_frames:
+                return {"arm_q_target": np.zeros((0, 14)), "hand_q_target": np.zeros((0, 14)), "done": False}
+            self._decide_profile(self._auto_buf)
+            self._auto_buf = None
         a = self.pol.act(obs)
         return {"arm_q_target": np.asarray(a["arm_q_target"], np.float64),
                 "hand_q_target": np.asarray(a["hand_q_target"], np.float64), "done": bool(a.get("done", False))}
+
+    def _decide_profile(self, frames):
+        profile, info = detect_profile(frames)
+        log.info("[profile] auto=%s votes=%d/%d (depth_holes=%.4f, plane_std_mm=%.2f, palette=%s, frames=%d)", profile,
+                 info["votes"], info["frames"], info["depth_holes"], info["plane_std_mm"], info["palette"],
+                 info["frames"])
+        self._build(profile, refuse_finals_sim=False)   # sim from auto-detect may run finals overlays
+        if self._pending_reset is not None:
+            self._reset_now(*self._pending_reset)
+            self._pending_reset = None
 
 
 def verify_expected_flags(cfg):
@@ -91,11 +133,12 @@ def verify_expected_flags(cfg):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     t0 = time.monotonic()
-    pol = ClassicalServerPolicy(profile=os.environ.get("AALTO_PROFILE", "none"))
+    pol = ClassicalServerPolicy(profile=os.environ.get("AALTO_PROFILE") or None)
     log.info("classical baseline loaded in %.1f s", time.monotonic() - t0)
+    cfg = pol.pol.cfg if pol.pol is not None else pol.probe_cfg   # auto-detect: flags are profile-independent
     from .config import effective_flags  # integration: which opt-in features this image runs (container log)
-    on = [f"{k}={v!r}" for k, v, is_on, _, _ in effective_flags(pol.pol.cfg) if is_on]
-    log.info("profile=%s overlay=%s flags on: %s", pol.pol.cfg.get("profile"), pol.pol.cfg.get("overlay", "none"),
+    on = [f"{k}={v!r}" for k, v, is_on, _, _ in effective_flags(cfg) if is_on]
+    log.info("profile=%s overlay=%s flags on: %s", cfg.get("profile"), cfg.get("overlay", "none"),
              ", ".join(on) or "none (stock baseline)")
-    verify_expected_flags(pol.pol.cfg)
+    verify_expected_flags(cfg)
     serve(pol, port=int(os.environ.get("PORT", 8000)))

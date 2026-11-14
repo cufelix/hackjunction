@@ -7,6 +7,8 @@
 # Flip a flag ONLY after its A/B run (knowledge/humanoid/21-submission-pipeline.md), then rebuild. Check: python3 tools/flags.py --overlay submission
 name: submission
 flags:
+  profile_auto.auto_detect: false
+  profile_auto.auto_frames: 5
   calib.hand_icp_primary: false
   calib.counter_after_hand: false
   calib.refit_per_look: false
