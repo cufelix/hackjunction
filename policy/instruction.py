@@ -1,28 +1,41 @@
-"""Instruction -> bin mapping, for the sort_language episodes that carry 25 of the 30 final points.
+"""Instruction -> bin mapping, for the sort_language episodes that carry ~5/6 of the final points.
 
 Why this file exists
 --------------------
 The handed-out classical baseline never reads the instruction at all
-(``baselines/classical/policy.py``: ``self.mapping = info.get("mapping") or dict(FIXED_MAPPING)``,
+(``baselines/classical/policy.py:73``: ``self.mapping = info.get("mapping") or dict(FIXED_MAPPING)``,
 and the reset info a submitted policy receives carries only ``{"instruction": ...}``).  The
 organisers' own oracle "parser" (``sim/oracle.py::parse_instruction``) is a dict lookup over the
 288 training sentences and returns ``None`` on anything else, after which the oracle falls back to
-the privileged mapping that a Docker submission does not get.  So neither reference solution can
-score a held-out phrasing, and the finals weight those at 1.5x.
+``privileged_mapping()`` -- the true mapping read out of the simulator, which
+``RULES_AND_SCORING.md:89`` forbids a submission from using.  So neither reference solution can
+score a held-out phrasing.
 
 What the scorer accepts
 -----------------------
 ``scene.py::resolve_bin(mapping, color, shape)`` tries, most specific first:
-``(color, shape)``, ``color``, ``shape``, ``"default"``.  So a mapping may key on colour, on
-shape, on both, and may carry a catch-all.  All four are produced here.
+``(color, shape)``, ``color``, ``shape``, ``"default"``.  All four are produced here.  Note it is a
+plain dict lookup, so the mapping is a **function, not a bijection**: two colours may share a bin.
+
+The model: clauses, not distance
+--------------------------------
+An earlier version paired every key with its nearest bin token and solved one global bijection.
+An adversarial review broke that four ways, all silently: two colours sharing one bin got
+reassigned, a trailing recap ("...and the red ones first") reshuffled everything because the metric
+took the minimum over all mentions of a key, incidental colour words stole the keys from a
+shape-keyed sentence, and "everything ... except X" lost its catch-all.
+
+English binds a key to its bin **inside a clause**, so this version splits on clause boundaries
+first and resolves each clause on its own.  One bin in a clause claims every key in that clause,
+which is what makes many-to-one work.  Distance is only used to pair inside a clause that names
+several bins.
 
 Why it never abstains
 ---------------------
 sort_language scores +2 for the right bin, -1 for the wrong one, 0 for leaving the object on the
-counter.  A uniformly random bijection is worth (1/3)(+2) + (2/3)(-1) = 0 per object, exactly what
-abstaining is worth, so a guess is never worse in expectation than refusing -- and a parse that is
-merely *probably* right is strictly better.  ``resolve`` therefore always returns a usable mapping
-and falls back to FIXED_MAPPING rather than to None.
+counter (``scene.yaml:80``).  A uniformly random bijection is worth (1/3)(+2) + (2/3)(-1) = 0 per
+object, exactly what abstaining is worth, so a guess is never worse in expectation -- and a parse
+that is merely probably right is strictly better.  ``resolve`` always returns a usable mapping.
 
 Pure stdlib on purpose: it runs in the policy container, in a unit test, and on a laptop with no
 simulator.
@@ -40,48 +53,54 @@ FIXED_MAPPING = {"red": "left", "yellow": "center", "blue": "right"}
 # Bin words. "centre" is the British spelling and the single most likely held-out trap; the rest are
 # the ordinary ways a person names one of three positions in a row.
 _BIN_WORDS = {
-    "left": "left", "leftmost": "left", "leftmost-": "left", "lefthand": "left", "port": "left",
+    "left": "left", "leftmost": "left", "lefthand": "left", "port": "left",
     "right": "right", "rightmost": "right", "righthand": "right", "starboard": "right",
     "center": "center", "centre": "center", "central": "center", "centermost": "center",
-    "middle": "center", "mid": "center", "middlemost": "center", "between": "center",
-    "inbetween": "center",
+    "centremost": "center", "middle": "center", "mid": "center", "middlemost": "center",
+    "between": "center", "inbetween": "center",
 }
-# Consulted ONLY when the sentence names fewer than two positional bins, so that an ordinal used for
+# Colour words, including the adjective forms a paraphrase may use.
+_COLOR_WORDS = {
+    "red": "red", "reds": "red", "reddish": "red", "crimson": "red", "scarlet": "red",
+    "yellow": "yellow", "yellows": "yellow", "yellowish": "yellow", "gold": "yellow",
+    "golden": "yellow", "amber": "yellow",
+    "blue": "blue", "blues": "blue", "bluish": "blue", "azure": "blue", "navy": "blue",
+}
+# Shape words.
+#
+# NB: "box"/"boxes" and "block"/"blocks" are deliberately absent. This challenge calls the three
+# bins boxes ("three identical orange boxes"), and "blocks" is the natural generic noun for all
+# three solids ("put all yellow blocks in the left bin"). Reading either as the cube shape turns
+# every colour-keyed sentence into a compound-keyed one. Both cost real points before they were
+# caught -- "box" by a hand-written probe, "blocks" by a held-out corpus.
+_SHAPE_WORDS = {
+    "cube": "cube", "cubes": "cube", "cubic": "cube",
+    "square": "cube", "squares": "cube", "cuboid": "cube",
+    "cylinder": "cylinder", "cylinders": "cylinder", "cylindrical": "cylinder",
+    "circle": "cylinder", "circles": "cylinder", "circular": "cylinder", "round": "cylinder",
+    "disc": "cylinder", "disk": "cylinder", "tube": "cylinder", "tubes": "cylinder",
+    "triangle": "triangle", "triangles": "triangle", "triangular": "triangle",
+    "prism": "triangle", "prisms": "triangle", "wedge": "triangle", "wedges": "triangle",
+}
+# Consulted ONLY when the sentence names fewer than two positional bins, so an ordinal used for
 # something else ("the first red object") cannot hijack a sentence that already says left/right.
 _ORDINAL_BINS = {
     "first": "left", "1": "left", "a": "left",
     "second": "center", "2": "center", "b": "center",
     "third": "right", "3": "right", "c": "right",
 }
-# Colour words, including the adjective forms a paraphrase may use.
-_COLOR_WORDS = {
-    "red": "red", "reds": "red", "reddish": "red", "crimson": "red", "scarlet": "red",
-    "yellow": "yellow", "yellows": "yellow", "yellowish": "yellow", "gold": "yellow", "golden": "yellow",
-    "amber": "yellow",
-    "blue": "blue", "blues": "blue", "bluish": "blue", "azure": "blue", "navy": "blue",
-}
-# Shape words. The brief's own names plus the adjective and plural forms.
-_SHAPE_WORDS = {
-    # NB: "box"/"boxes" are deliberately NOT here. The challenge calls the three bins boxes
-    # ("three identical orange boxes"), so reading them as the cube shape injects phantom shape
-    # mentions into every sentence that names a bin that way, which silently wrecks the pairing.
-    "cube": "cube", "cubes": "cube", "cubic": "cube",
-    "square": "cube", "squares": "cube", "cuboid": "cube",
-    # NB: "block"/"blocks" are deliberately NOT here either. Like "box", they are the natural
-    # GENERIC noun for all three solids ("put all yellow blocks in the left bin"), so reading them
-    # as the cube shape turns every colour-keyed sentence into a compound-keyed one.
-    "cylinder": "cylinder", "cylinders": "cylinder", "cylindrical": "cylinder",
-    "circle": "cylinder", "circles": "cylinder", "circular": "cylinder", "round": "cylinder",
-    "disc": "cylinder", "disk": "cylinder", "tube": "cylinder", "tubes": "cylinder",
-    "triangle": "triangle", "triangles": "triangle", "triangular": "triangle", "prism": "triangle",
-    "prisms": "triangle", "wedge": "triangle", "wedges": "triangle", "tri": "triangle",
-}
-# "everything else" -> the "default" key resolve_bin() falls back to.
-# A bin noun after the phrase flips its meaning, so every pattern forbids one: "the red ones go in
-# the remaining BIN" names the one unused bin (handled by the bijection completion below), whereas
-# "the rest go in the left bin" is a catch-all over the unnamed colours. Opposite meanings, one word
-# apart. Oliver's corpus category 12 is exactly this, and all 18 of its sentences were misread
-# before this guard.
+_BIN_NOUNS = {"bin", "bins", "box", "boxes", "one", "ones", "slot", "slots",
+              "container", "containers", "crate", "crates", "tray", "trays"}
+
+# "the remaining bin" / "the other box" / "the last one" names a bin by ELIMINATION: whichever bin
+# the sentence has not already used. It is a bin reference, so it gets a placeholder here and is
+# resolved against the leftovers. Reading it as the "everything else" catch-all is the opposite
+# meaning, one word apart, and cost an entire corpus category before it was caught.
+_ELIM = "__elim__"
+_ELIM_WORDS = {"remaining", "other", "last", "final", "leftover", "unused", "spare"}
+
+# A catch-all over the colours the sentence does not name -> resolve_bin's "default" key. Each
+# pattern refuses a following bin noun, which is what separates it from an elimination phrase.
 _NOT_A_BIN = r"(?!\s*(?:bin|box|one|ones|container|crate|tray|slot)\b)"
 _DEFAULT_PATTERNS = tuple(p + _NOT_A_BIN for p in (
     r"\beverything\s+else\b", r"\banything\s+else\b", r"\ball\s+(?:the\s+)?others?\b",
@@ -89,16 +108,16 @@ _DEFAULT_PATTERNS = tuple(p + _NOT_A_BIN for p in (
     r"\ball\s+other\b", r"\bevery(?:thing)?\s+other\b", r"\bwhatever(?:'s|\s+is)?\s+left\b",
     r"\bthe\s+others\b",
 ))
-_TOKEN_RE = re.compile(r"[a-z]+|\d+")
+# A clause that says "everything"/"all of them" and names a bin, with no key of its own, is also a
+# catch-all: "Everything goes in the center bin, except red, which goes right."
+_BLANKET = re.compile(r"\b(?:everything|anything|every\s+object|all\s+(?:the\s+)?(?:objects|items|"
+                      r"pieces|shapes|of\s+them))\b")
 
-# "the remaining bin" / "the other box" / "the last one" names a bin by ELIMINATION: whichever bin
-# the sentence has not already used. It is a real bin reference, so it gets a placeholder bin value
-# here and is resolved against the leftovers in resolve(). Treating it as a catch-all over the
-# unnamed colours instead is the opposite meaning and costs every sentence of this shape.
-_ELIM = "__elim__"
-_ELIM_WORDS = {"remaining", "other", "last", "final", "leftover", "unused", "spare"}
-_BIN_NOUNS = {"bin", "bins", "box", "boxes", "one", "ones", "slot", "slots",
-              "container", "containers", "crate", "crates", "tray", "trays"}
+# Clause boundaries. Punctuation, plus the words that introduce an exception or an aside: those
+# carry a key that belongs to a DIFFERENT bin than the clause before them.
+_SEG_RE = re.compile(r"[,;:.!?\n]+|\b(?:and|then|also|plus|except|excluding|but|regardless|"
+                     r"whereas|while|apart\s+from|other\s+than|rather\s+than)\b")
+_TOKEN_RE = re.compile(r"[a-z]+|\d+")
 
 
 def _tokens(text):
@@ -106,14 +125,20 @@ def _tokens(text):
     return _TOKEN_RE.findall(text.lower().replace("-", "").replace("_", ""))
 
 
-def _mentions(toks):
-    """(index, kind, value) for every colour, shape and bin word, in order.
+def _ordinals_ok(toks):
+    """True when the sentence enumerates bins by ordinal or letter ("the first bin, the second...").
 
-    Bins are read in two tiers. Positional words (left / centre / right and their synonyms) are
-    always trusted. Ordinals and numbers ("the first bin", "bin 2", "bin C") are consulted only if
-    the sentence names fewer than two positional bins, and then only next to the word "bin" or
-    "box", so that "the first red object" cannot be mistaken for the left bin.
+    Requires at least two distinct ones and at least one sitting next to the noun, so a lone
+    ordinal ("the first red object") can never be read as a bin.
     """
+    found = [i for i, t in enumerate(toks) if t in _ORDINAL_BINS]
+    if len({_ORDINAL_BINS[toks[i]] for i in found}) < 2:
+        return False
+    return any(toks[j] in _BIN_NOUNS for i in found for j in (i - 1, i + 1) if 0 <= j < len(toks))
+
+
+def _mentions(toks, allow_ordinals):
+    """(index, kind, value) for every colour, shape and bin word in one clause, in order."""
     out = []
     for i, t in enumerate(toks):
         if t in _BIN_WORDS:
@@ -122,67 +147,50 @@ def _mentions(toks):
             out.append((i, "color", _COLOR_WORDS[t]))
         if t in _SHAPE_WORDS:
             out.append((i, "shape", _SHAPE_WORDS[t]))
-
-    for i, t in enumerate(toks):
         if t in _ELIM_WORDS and i + 1 < len(toks) and toks[i + 1] in _BIN_NOUNS:
             out.append((i, "bin", _ELIM))
-    out.sort()
 
-    if len({v for _, k, v in out if k == "bin"}) < 2:
-        container = _BIN_NOUNS
-        found = [(i, _ORDINAL_BINS[t]) for i, t in enumerate(toks) if t in _ORDINAL_BINS]
-        anchored = any(
-            toks[j] in container
-            for i, _ in found for j in (i - 1, i + 1) if 0 <= j < len(toks)
-        )
-        # An enumeration names at least two of them and anchors at least one to the noun; one
-        # ordinal on its own is ordinary English, not a bin name.
-        if anchored and len({v for _, v in found}) >= 2:
-            out.extend((i, "bin", v) for i, v in found)
-            out.sort()
+    if allow_ordinals:
+        out.extend((i, "bin", _ORDINAL_BINS[t]) for i, t in enumerate(toks) if t in _ORDINAL_BINS)
+    out.sort()
     return out
 
 
 def _keys_from(mentions, compound_window=2):
-    """Decide what the sentence keys on, and return [(key, token_index), ...].
+    """Decide what this clause keys on: [(key, token_index), ...].
 
-    A colour and a shape within `compound_window` tokens of each other ("red cubes") is one
-    compound key. A sentence that names >=2 distinct colours keys on colour; otherwise, if it names
-    >=2 distinct shapes, it keys on shape. That ordering matters because the organisers said the
-    finals lead with colour, and because "the red objects" must not be read as a shape mention.
+    A colour and a shape within `compound_window` tokens ("red cubes") can be one compound key. A
+    clause naming any colour keys on colour, otherwise on shape -- that order matters because the
+    organisers said the finals lead with colour, and because "the red objects" must not be read as
+    a shape mention.
     """
     colors = [(i, v) for i, k, v in mentions if k == "color"]
     shapes = [(i, v) for i, k, v in mentions if k == "shape"]
 
-    compounds = []
-    used_c, used_s = set(), set()
+    compounds, used_c, used_s = [], set(), set()
     for ci, cv in colors:
-        near = [(abs(ci - si), si, sv) for si, sv in shapes if abs(ci - si) <= compound_window]
-        if near:
-            _, si, sv = min(near)
+        near = sorted((abs(ci - si), si, sv) for si, sv in shapes if abs(ci - si) <= compound_window)
+        for _, si, sv in near:
             if si not in used_s:
                 compounds.append(((cv, sv), ci))
                 used_c.add(ci)
                 used_s.add(si)
-    # Every colour mention paired with a shape, and at least two pairs -> the sentence is compound.
-    if len(compounds) >= 2 and len(used_c) == len(colors):
-        return compounds
-
-    if len({v for _, v in colors}) >= 2:
-        return [(v, i) for i, v in colors]
-    if len({v for _, v in shapes}) >= 2:
-        return [(v, i) for i, v in shapes]
-    # One key only (e.g. "put the red ones in the left bin, everything else in the right bin").
-    return [(v, i) for i, v in colors] or [(v, i) for i, v in shapes]
+                break
+    if compounds and len(used_c) == len(colors) and len(colors) >= 1:
+        return compounds, "compound"
+    if colors:
+        return [(v, i) for i, v in colors], "color"
+    if shapes:
+        return [(v, i) for i, v in shapes], "shape"
+    return [], None
 
 
 def _assign(keys, bins_):
-    """Min total token-distance bijection between distinct keys and distinct bins.
+    """Min total token-distance pairing between the distinct keys and distinct bins of one clause.
 
-    English puts a colour and its bin in the same clause, so nearest-neighbour pairing reads every
-    one of the 8 training templates and does not care about their word order -- template 5 names the
-    bin first, template 2 names the colour first, and both come out the same. Solved exactly: with
-    at most 3 bins the permutation count is 6.
+    Solved exactly: with at most 3 bins the permutation count is 6. Ties break towards mention
+    order, because English lists a key and its bin in the same order ("blue and red go in the left
+    and center bins respectively").
     """
     key_order, bin_order = [], []
     for k, _ in keys:
@@ -201,25 +209,73 @@ def _assign(keys, bins_):
     first_bin = {b: min(i for bb, i in bins_ if bb == b) for b in bin_order}
 
     def inversions(ks, bs):
-        """How many assigned pairs are listed out of order relative to each other."""
-        n_ = len(ks)
-        return sum(
-            1
-            for a in range(n_)
-            for b in range(a + 1, n_)
-            if (first_key[ks[a]] - first_key[ks[b]]) * (first_bin[bs[a]] - first_bin[bs[b]]) < 0
-        )
+        return sum(1 for a in range(len(ks)) for b in range(a + 1, len(ks))
+                   if (first_key[ks[a]] - first_key[ks[b]]) * (first_bin[bs[a]] - first_bin[bs[b]]) < 0)
 
     n = min(len(key_order), len(bin_order))
     best, best_cost = None, None
-
-    # Assign the n closest-fitting keys; a sentence may name more keys than bins or the reverse.
     for ks in itertools.permutations(key_order, n):
         for bs in itertools.permutations(bin_order, n):
             cost = (sum(dist(k, b) for k, b in zip(ks, bs)), inversions(ks, bs))
             if best_cost is None or cost < best_cost:
                 best, best_cost = dict(zip(ks, bs)), cost
     return best or {}
+
+
+def _clauses(low, ord_ok):
+    """Split into clauses, but only where BOTH sides carry a key->bin binding.
+
+    Splitting on every comma destroys an enumeration: "the red, yellow and blue objects in the
+    left, center and right bins, respectively" has a comma inside each list, and each piece on its
+    own is meaningless. So the pieces are re-joined until a piece can stand as a binding AND
+    everything after it can too. A clause is a binding when it names a bin and either a key or a
+    blanket word ("everything").
+    """
+    pieces = [p for p in _SEG_RE.split(low) if p and p.strip()]
+
+    def counts(text_):
+        ms = _mentions(_tokens(text_), ord_ok)
+        bins_ = {v for _, k, v in ms if k == "bin"}
+        keys = {k for k, _ in _keys_from(ms)[0]}
+        return keys, bins_
+
+    def binding(text_):
+        keys, bins_ = counts(text_)
+        return bool(bins_) and (bool(keys) or bool(_BLANKET.search(text_)))
+
+    out, buf = [], []
+    for n, piece in enumerate(pieces):
+        buf.append(piece)
+        here, rest = " ".join(buf), " ".join(pieces[n + 1:])
+        if not (binding(here) and rest):
+            continue
+        k_rest, b_rest = counts(rest)
+        # A clause closes when the rest binds too -- or when the rest names keys but NO bin
+        # ("...triangles go center, | regardless of color: red, yellow or blue"): that fragment
+        # has to stand alone, or its keys inherit this clause's bin.
+        if not (binding(rest) or k_rest):
+            continue
+        # A clause holding more keys than bins is ambiguous: it is either many-to-one ("red and
+        # yellow go in the left bin") or a list cut short ("the red, yellow and blue objects in
+        # the left, | center and right bins"). Counting decides it: if what remains has MORE bins
+        # than keys, those spare bins belong to the keys sitting here, so keep reading.
+        k_here, b_here = counts(here)
+        if len(k_here) > len(b_here) and len(b_rest) > len(k_rest):
+            continue
+        out.append(here)
+        buf = []
+    if buf:
+        tail = " ".join(buf)
+        k_tail, _ = counts(tail)
+        # A keyless fragment ("respectively") belongs to the clause before it. A fragment that
+        # names keys but no bin must stay separate, or its keys would inherit that clause's bin:
+        # "...triangles go center, regardless of color: red, yellow or blue" must not put red in
+        # the center. Left alone it becomes a deferred key and the kind filter drops it.
+        if out and not k_tail:
+            out[-1] += " " + tail
+        else:
+            out.append(tail)
+    return out or [low]
 
 
 def resolve(text, fallback=None):
@@ -232,30 +288,56 @@ def resolve(text, fallback=None):
     >>> resolve("The centre bin is for red, the left bin for blue, the right bin for yellow.") == {
     ...     "red": "center", "blue": "left", "yellow": "right"}
     True
+    >>> resolve("Red and yellow go in the left bin, blue goes in the right bin.") == {
+    ...     "red": "left", "yellow": "left", "blue": "right"}
+    True
     """
     if not text or not str(text).strip():
         return dict(FIXED_MAPPING if fallback is None else fallback)
-    raw = str(text)
-    toks = _tokens(raw)
-    mentions = _mentions(toks)
-    bins_ = [(v, i) for i, k, v in mentions if k == "bin"]
-    keys = _keys_from(mentions)
-    mapping = _assign(keys, bins_) if keys and bins_ else {}
+    low = str(text).lower()
 
-    # "everything else" -> the catch-all key, pointed at the bin nearest that phrase.
-    low = raw.lower()
-    for pat in _DEFAULT_PATTERNS:
-        m = re.search(pat, low)
-        if not m:
+    # Both of these are decided over the WHOLE sentence, because a clause sees too little.
+    all_toks = _tokens(low)
+    whole = _mentions(all_toks, allow_ordinals=False)
+    positional = len({v for _, k, v in whole if k == "bin" and v != _ELIM})
+    allow_ord = positional < 2 and _ordinals_ok(all_toks)
+    if allow_ord:
+        whole = _mentions(all_toks, allow_ordinals=True)
+
+    mapping, deferred, kinds = {}, [], []
+    for seg in _clauses(low, allow_ord):
+        toks = _tokens(seg)
+        ms = _mentions(toks, allow_ord)
+        bins_ = [(v, i) for i, k, v in ms if k == "bin"]
+        keys, kind = _keys_from(ms)
+        if kind:
+            kinds.append(kind)
+
+        if not bins_:
+            deferred.extend(k for k, _ in keys)
             continue
-        at = len(_TOKEN_RE.findall(low[: m.start()]))
-        claimed = set(mapping.values())
-        free = [(abs(i - at), b) for b, i in bins_ if b not in claimed] or [(abs(i - at), b) for b, i in bins_]
-        if free:
-            mapping["default"] = min(free)[1]
-        break
+        if not keys:
+            # A clause naming a bin and "everything", with no key of its own, is the catch-all.
+            if _BLANKET.search(seg):
+                mapping.setdefault("default", bins_[0][0])
+            continue
+        if len({b for b, _ in bins_}) == 1:
+            # One bin in the clause claims every key in it. This is what makes a many-to-one
+            # mapping possible ("red and yellow go in the left bin"), which resolve_bin allows.
+            for k, _ in keys:
+                mapping.setdefault(k, bins_[0][0])
+        else:
+            for k, v in _assign(keys, bins_).items():
+                mapping.setdefault(k, v)
 
-    # Resolve "the remaining bin" to whichever bin the sentence did not name.
+    # A shape that appears in EVERY compound key is a filler noun, not a discriminator:
+    # "the red cubes go left, the blue cubes go right" keys on colour. Keeping the tuple would
+    # leave every non-cube object unmapped.
+    comp = [k for k in mapping if isinstance(k, tuple)]
+    if comp and len({k[1] for k in comp}) == 1 and len(comp) >= 2:
+        mapping = {(k[0] if isinstance(k, tuple) else k): v for k, v in mapping.items()}
+
+    # "the remaining bin" -> whichever bin the sentence did not name.
     if _ELIM in mapping.values():
         free = [b for b in BINS if b not in set(mapping.values())]
         if len(free) == 1:
@@ -263,14 +345,31 @@ def resolve(text, fallback=None):
         else:  # ambiguous: drop the key rather than send an object to a guessed bin
             mapping = {k: v for k, v in mapping.items() if v != _ELIM}
 
-    # Complete the bijection rather than drop a key. Every episode seen so far maps all three
-    # colours onto all three bins, and a key with no bin leaves the policy nowhere to put that
-    # object (worth 0), whereas a guess from the leftovers is worth (1/3)(+2)+(2/3)(-1) = 0 at worst
-    # and +2 when right.
+    # An explicit catch-all phrase, pointed at the bin nearest it.
+    if "default" not in mapping:
+        for pat in _DEFAULT_PATTERNS:
+            m = re.search(pat, low)
+            if not m:
+                continue
+            at = len(_TOKEN_RE.findall(low[: m.start()]))
+            all_bins = [(v, i) for i, k, v in whole if k == "bin" and v != _ELIM]
+            claimed = set(mapping.values())
+            free = ([(abs(i - at), b) for b, i in all_bins if b not in claimed]
+                    or [(abs(i - at), b) for b, i in all_bins])
+            if free:
+                mapping["default"] = min(free)[1]
+            break
+
+    # A key named in a clause with no bin gets a leftover bin rather than nothing: an unmapped
+    # colour leaves the policy nowhere to put that object (worth 0), where a guess from the
+    # leftovers is worth 0 at worst and +2 when right. Only when its kind matches the keys that
+    # DID get a bin, so an incidental "red, yellow or blue" cannot displace shape keys.
     if mapping and "default" not in mapping:
-        missing = [k for k, _ in keys if k not in mapping]
+        want = kinds[0] if kinds else None
+        pool = COLORS if want == "color" else SHAPES if want == "shape" else ()
         seen = set()
-        missing = [k for k in missing if not (k in seen or seen.add(k))]
+        missing = [k for k in deferred
+                   if k in pool and k not in mapping and not (k in seen or seen.add(k))]
         free = [b for b in BINS if b not in set(mapping.values())]
         for k, b in zip(missing, free):
             mapping[k] = b
