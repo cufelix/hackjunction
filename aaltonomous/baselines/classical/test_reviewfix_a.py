@@ -102,7 +102,7 @@ class TestRimZCommitsWithLook(unittest.TestCase):
             _look=lambda obs: "ok",
             scene=SimpleNamespace(counter_z_runtime=0.15, rim_z_runtime={"wall": 0.20}),
             perception=SimpleNamespace(_rz_est={"wall": [0.20]}, _rz_tries=1))
-        fake = SimpleNamespace(_look_generation=0, log=NOOP,
+        fake = SimpleNamespace(_look_generation=0, log=NOOP, _target_cooldowns=[],
                                _LOOK_COMMIT_FIELDS=ClassicalPolicy._LOOK_COMMIT_FIELDS,
                                _LOOK_PERCEPTION_FIELDS=ClassicalPolicy._LOOK_PERCEPTION_FIELDS,
                                scene=SimpleNamespace(counter_z_runtime=None, rim_z_runtime=None),

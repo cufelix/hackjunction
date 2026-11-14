@@ -55,8 +55,10 @@ class TestRecallSyntheticFrames(unittest.TestCase):
     def test_all_recall_flags_off_match_config_without_recall_keys(self):
         self.assertEqual([f.name for f in fields(Detection)],
                          ["color", "top", "n_px", "n_depth", "method", "yaw", "uv", "shape", "apex_yaw",
-                          "apex_conf", "shape_conf", "apex_gate", "shape_path", "generic_required",
-                          "generic_width", "generic_confidence", "shape_diag", "color_conf", "hsv_med", "sat_med", "hue_mixed"])
+                          "apex_conf", "vertex_yaw", "shape_conf", "apex_gate", "shape_path", "generic_required",
+                          "generic_width", "generic_confidence", "shape_diag", "color_conf", "hsv_med", "sat_med", "hue_mixed",
+                          "novel", "label", "footprint", "height_m", "ungraspable", "prism_orientation", "ridge_yaw",
+                          "prism_xy", "prism_conf"])
         cfg = load_config(overlay="finals_r21")
         old = load_config(overlay="finals_r21")
         for key in ("sat_floor_adaptive", "sat_floor_adaptive_params", "area_floor_geometric",

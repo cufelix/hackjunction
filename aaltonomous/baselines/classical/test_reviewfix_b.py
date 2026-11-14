@@ -30,7 +30,8 @@ class TestCooldownCommit(unittest.TestCase):
         worker._cool_target(d, 10.0, "test")
         result = types.SimpleNamespace(
             state=tuple((n, getattr(worker, n)) for n in pol._LOOK_COMMIT_FIELDS if hasattr(worker, n)),
-            perception_state=(), counter_z_runtime=worker.scene.counter_z_runtime, logs=())
+            perception_state=(), counter_z_runtime=worker.scene.counter_z_runtime, logs=(),
+            rim_z_runtime=getattr(worker.scene, "rim_z_runtime", None))
         pol._latest_t = 12.0                              # the live clock moved on while the worker ran
         pol._commit_look_result(result)
         self.assertTrue(pol._target_guarded(d, 12.0))
