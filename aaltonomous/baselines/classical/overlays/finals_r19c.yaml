@@ -1,6 +1,7 @@
 # finals_r19c: finals_r19b with online_pitch_cal + color_gate OFF (P0 fallback while the pitch sign / gate are checked; closest to cand_r17)
 name: finals_r19c
 flags:
+  hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)

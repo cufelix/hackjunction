@@ -117,6 +117,7 @@ FLAGS = {
     "bin.geometry_runtime": ("bin geo", False, "every bin consumer (perception masks/hulls/near_bin/in_bin/gate, planner drop/slots/collision) follows bin_geometry(): nominal + the voted shift"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
+    "hand.mirror_index_middle": ("R42a", False, "real right Dex3 DDS slots 3,4 = MIDDLE, 5,6 = INDEX (not INTERFACE order): every emitted hand target gets index == middle per hand, so the order is irrelevant"),
     "debug.log_joint_offset": ("finals diag", False,
                                  "log cmd-minus-measured during steady holds in the first second (no control change)"),
     "policy.confidence_order": ("D1/D2", False, "order by 2*p/est_time (p_colour*p_bin*p_grasp), never the hardest first"),
@@ -132,6 +133,24 @@ def mirror_left_to_right(left7):
     signs flipped (joint_spec.yaml: the hands are mirrored, the same motion has opposite signs)."""
     l = np.asarray(left7, float)
     return -np.array([l[0], l[1], l[2], l[5], l[6], l[3], l[4]])
+
+
+OPEN_POSTURES = ("open", "preshape", "release")
+
+
+def equalize_index_middle(v14, closed):
+    """hand.mirror_index_middle (R42a): both hands have the index pair (joints 3,4) and the middle pair (5,6) in
+    slots 3,4 / 5,6 of their 7-block, in an order that differs between sim docs and the real robot. Give both pairs
+    the same value, joint by joint, so the order cannot matter: the larger |q| (more closed) for grasp postures
+    (never under-grip), the smaller |q| (more open) for open/release and for emission-time repairs (never crush /
+    never keep fingers curled over the object)."""
+    v = np.array(v14, float)
+    pick = np.maximum if closed else np.minimum
+    for o in (0, 7):
+        a, b = v[o + 3:o + 5].copy(), v[o + 5:o + 7].copy()
+        m = np.where(pick(np.abs(a), np.abs(b)) == np.abs(a), a, b)
+        v[o + 3:o + 5] = v[o + 5:o + 7] = m
+    return v
 
 
 def _set(cfg, k, v):  # "motion.arm_max_vel": 0.3
@@ -349,10 +368,13 @@ def hand_postures(cfg, spec: JointSpec | None = None):
         raise ValueError(f"hand postures missing: {missing}")
     right = h.get("right") or {}
     out = {}
-    for name in [k for k in h if k != "right"]:  # open, preshape, closed (required) + any extra (e.g. release)
+    mirror = bool(h.get("mirror_index_middle", False))
+    for name in [k for k in h if k not in ("right", "mirror_index_middle")]:  # open, preshape, closed (required) + extras
         left = np.asarray(h[name], float)
         r = np.asarray(right[name], float) if name in right else mirror_left_to_right(left)
         v = np.r_[left, r]
+        if mirror:
+            v = equalize_index_middle(v, closed=name not in OPEN_POSTURES)
         bad = [spec.hand_names[i] for i in np.flatnonzero((v < spec.hand_lower - 1e-9) | (v > spec.hand_upper + 1e-9))]
         if bad:
             raise ValueError(f"hand posture {name!r} outside joint_spec limits: {bad}")

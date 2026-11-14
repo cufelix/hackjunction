@@ -157,6 +157,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
+        for n in [k for k in expect if k.startswith("finals_")]:
+            expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -180,6 +182,8 @@ class TestFlags(unittest.TestCase):
         sim["overlay"] = real["overlay"]
         sim["perception"]["principal_point"] = "file"
         sim["policy"]["fixed_mapping"] = real["policy"]["fixed_mapping"]   # organisers P0
+        self.assertTrue(real["hand"]["mirror_index_middle"])
+        sim["hand"]["mirror_index_middle"] = True                          # R42a
         self.assertEqual(real, sim)
 
         calibration = Calibration.load()

@@ -81,6 +81,7 @@ flags:
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
+  hand.mirror_index_middle: false                # R42a       index == middle in every emitted hand target (real DDS slot order differs)
   debug.log_joint_offset: false                 # passive    first-second steady cmd-vs-measured diagnostic
   policy.confidence_order: false                # D1/D2      order by 2*p/est_time, never the hardest first
   policy.object_time_cap: false                 # D2         per-object cap, T-20 s / T-8 s rules
