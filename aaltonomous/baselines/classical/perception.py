@@ -20,6 +20,7 @@ import numpy as np
 
 from .bin_vote import bin_geometry
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
+from .shape_2d import decide_shape2d, shape2d_features
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
 from .hue_guard import AMBIGUOUS_CONF, Cand, classify_hue, judge, top_face_hsv
 
@@ -235,6 +236,9 @@ class Perception:
         self.shape_diag = bool(self.cfg.get("shape_diag", False))
         # no-blob shape (Oliver f857054): no metric top face -> abstain instead of the 2D-blob ratio (default OFF)
         self.no_blob_shape = bool(self.cfg.get("no_blob_shape", False))
+        # r17 shape_2d_v2 (default OFF): yellow 2D cube/cylinder from the blob top edge where the shape would be None / blob
+        self.shape_2d_v2 = bool(self.cfg.get("shape_2d_v2", False))
+        self.shape_2d_params = dict(self.cfg.get("shape_2d_v2_params") or {})
         # real colour (hf_perception 2026-11-14): one HSV set for sim + the real head cam; split touching objects
         hs = self.cfg.get("hsv_set", "stock")
         self.hsv = self.cfg["hsv_robust_v2"] if hs == "robust_v2" else self.cfg["hsv_robust"] if hs == "robust" else self.cfg["hsv"]
@@ -1097,6 +1101,11 @@ class Perception:
                     self._apply_generic_fallback(det, conf, blob, depth)
                 if self.shape_diag:
                     det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
+        if det is not None and self.shape_2d_v2:
+            if color == "yellow":
+                self._apply_shape2d(det, blob)
+            elif color == "orange":
+                self._log_orange_candidate(blob)
         if det is not None and hsv is not None and self.hue_guard:
             det.hsv_med = top_face_hsv(hsv[blob > 0])   # layer 3: colour from the top face, not the whole blob
         if det is not None and hsv is not None and self.place_gate:
@@ -1301,7 +1310,7 @@ class Perception:
             self._last_path = "abstain_near_bin"
             return None, 0.0, "abstain_near_bin"
         shape = None if blob is None else blob.shape
-        if self.want_path:
+        if self.want_path or self.shape_2d_v2:
             label, conf, info = classify_top_face_diag(top_xy, blob, shape, use_blob=not self.no_blob_shape)
             self._last_path = info.get("path")
         else:
@@ -1375,6 +1384,47 @@ class Perception:
             nb = bool(near_bin) if (self.classify_shape and self.near_bin_guard) else _safe_near_bin(self, top)
             det.shape_diag = self._diag(det, "depth", top[:, :2], blob, conf, path, nb)
         return det
+
+    def _apply_shape2d(self, det, blob):
+        """perception.shape_2d_v2, yellow only. A confident metric shape is kept (disagreement logged). Where the shape is
+        None from too few top-face points, or came from the 2D-blob ratio, the top-edge rule decides (None = abstain).
+        Off / near-bin / border-clipped / classify_shape off: untouched."""
+        path = self._last_path if det.shape_path is None else det.shape_path
+        p = self.shape_2d_params
+        try:
+            f = shape2d_features(blob, p.get("approx_eps_frac", 0.02))
+            new = decide_shape2d(f, p.get("quad_rms_max", 1.77), p.get("n_vert_min", 8), p.get("cube_n_vert_max", 6))
+        except Exception as e:   # never break detection
+            self.log(f"[shape2d] color={det.color} error {type(e).__name__}: {e}")
+            return
+
+        def g(x):
+            return "None" if x is None else f"{x:.3f}"
+        if path == "metric":
+            note = f" metric={det.shape} DISAGREE" if new is not None and new != det.shape else f" metric={det.shape}"
+            self.log(f"[shape2d] color={det.color} quad_rms={g(f['quad_rms'])} n_vert={f['n_vert']} "
+                     f"axis_ratio={g(f['axis_ratio'])} -> {new}{note} (kept)")
+            return
+        if path not in ("blob", "abstain_few_points"):
+            self.log(f"[shape2d] color={det.color} quad_rms={g(f['quad_rms'])} n_vert={f['n_vert']} "
+                     f"axis_ratio={g(f['axis_ratio'])} -> {new} (path={path}, kept {det.shape})")
+            return
+        old = det.shape
+        det.shape = new
+        det.shape_conf = 0.0 if new is None else 0.6   # ponytail: fixed conf; real conf needs the measured margin
+        self.log(f"[shape2d] color={det.color} quad_rms={g(f['quad_rms'])} n_vert={f['n_vert']} "
+                 f"axis_ratio={g(f['axis_ratio'])} -> {new} (was {old}, path={path})")
+
+    def _log_orange_candidate(self, blob):
+        """Log only (prism vs cube candidate: topQ = top-edge quad_rms, hu2 = Hu moment 2). Never sets a shape."""
+        try:
+            import cv2
+            f = shape2d_features(blob, self.shape_2d_params.get("approx_eps_frac", 0.02))
+            hu2 = float(cv2.HuMoments(cv2.moments((np.asarray(blob) > 0).astype(np.uint8), True))[1][0])
+            q = f["quad_rms"]
+            self.log(f"[shape2d] color=orange candidate topQ={'None' if q is None else f'{q:.3f}'} hu2={hu2:.5f} -> unchanged")
+        except Exception as e:
+            self.log(f"[shape2d] color=orange error {type(e).__name__}: {e}")
 
     def _apply_generic_fallback(self, det, shape_conf, blob, depth):
         """Attach an accepted generic proposal, or mark the detection so policy abstains.

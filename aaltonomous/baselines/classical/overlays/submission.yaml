@@ -30,6 +30,7 @@ flags:
   perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)
   perception.no_blob_shape: false               # Oliver     no top face -> no shape (never the 2D blob)
   perception.shape_diag: false                  # Oliver     passive [shape_diag] log lines
+  perception.shape_2d_v2: false                  # r17        yellow 2D cube/cylinder (top-edge quad_rms + n_vert); unproven
   perception.hsv_set: robust                     # real colour  stock | robust (one HSV set for sim + real head cam)
   perception.colour_kmeans: false               # EV gate    per-episode object-pixel HSV k=3 hue re-centering
   perception.color_gate.enabled: false          # Felix gate   post-filter: area floor+ceiling, workspace, bin footprint/rim
