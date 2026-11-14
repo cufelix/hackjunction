@@ -25,11 +25,19 @@ _COMPLEX = re.compile(
 )
 _ONLY = re.compile(r"\bonly\s+(?:(?:sort|move|place|pick)\s+)?(one|two|three|\d+)\b", re.I)
 _NUM = {"one": 1, "two": 2, "three": 3}
+_RELATION = re.compile(r"\b(?:swap|next to|beside|adjacent to)\b", re.I)   # the only reasons place_at may be planned
+_LEAVE = re.compile(r"\b(?:leave|don't move|do not move|don't touch|do not touch)\b", re.I)
+# Longer instruction text is not planned, and the policy's resolver hooks skip it (reset() runs under a 1.0 s watchdog;
+# the resolver and the trigger regexes are super-linear on repeated text).
+MAX_INSTRUCTION_CHARS = 2000
 
 
 def instruction_needs_plan(instruction, resolver_abstains=False):
     """True for whole-instruction abstention or relations/order/counts a bin map cannot express."""
-    return bool(resolver_abstains or _COMPLEX.search(str(instruction or "")))
+    text = str(instruction or "")
+    if len(text) > MAX_INSTRUCTION_CHARS:
+        return True
+    return bool(resolver_abstains or _COMPLEX.search(text))
 
 
 def plan_json_schema():
@@ -136,6 +144,23 @@ def _result(ok, reason="", margin=None):
     return bool(ok), reason, margin
 
 
+def _protected_ids(instruction, objects):
+    """Objects the instruction says to leave alone ("leave the red ones", "do not move the cube")."""
+    low = str(instruction or "").lower()
+    if not _LEAVE.search(low):
+        return set()
+    return {oid for oid, o in objects.items()
+            if any(str(o.get(k, "")).lower() in low and str(o.get(k, ""))
+                   for k in ("colour", "color", "shape"))}
+
+
+def _only_limit(instruction):
+    m = _ONLY.search(str(instruction or ""))
+    if not m:
+        return None
+    return _NUM.get(m.group(1).lower(), int(m.group(1)) if m.group(1).isdigit() else None)
+
+
 def explicit_plan_satisfied(instruction, successful_steps, world_or_count):
     """Conservative plan/state proof used by the no-early-done guard.
 
@@ -219,9 +244,7 @@ def explicit_plan_satisfied(instruction, successful_steps, world_or_count):
             return bool(moves) and moves[0]["args"].get("obj_id") in mentioned
         return any(s.get("tool") == "wait" for s in successful_steps)
     if re.search(r"\b(?:leave|don't move|do not move|don't touch|do not touch)\b", low):
-        protected = {oid for oid, o in objects.items()
-                     if any(str(o.get(k, "")).lower() in low and str(o.get(k, ""))
-                            for k in ("colour", "color", "shape"))}
+        protected = _protected_ids(low, objects)
         if protected and protected.intersection(moved_ids):
             return False
         return len(set(moved_ids)) >= max(0, n_objects - 1)
@@ -238,6 +261,8 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
     if len(plan) > int(max_steps):
         return [], [f"plan has {len(plan)} steps; limit is {max_steps}"]
     objects = {o.get("id"): o for o in (world or {}).get("objects", []) if isinstance(o, dict)}
+    instruction = str((world or {}).get("instruction") or "")
+    protected, limit = _protected_ids(instruction, objects), _only_limit(instruction)
     out, errors, valid_prefix = [], [], []
     virtual_xy = {oid: list(o.get("xy", [])) for oid, o in objects.items()}
     for i, step in enumerate(plan):
@@ -253,10 +278,13 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
             err.append("args must be an object")
             args = {}
         spec = {"pick_place": {"obj_id", "bin"}, "place_at": {"obj_id", "table_xy"},
-                "find": {"description"}, "skip": {"obj_id"}, "wait": set(), "done": set()}.get(tool)
+                "find": {"description"}, "skip": {"obj_id"}, "wait": set(), "done": set()}.get(
+                    tool if isinstance(tool, str) else None)
         if spec is not None and set(args) != spec:
             err.append(f"args must be exactly {sorted(spec)}")
         oid = args.get("obj_id")
+        if not isinstance(oid, str):           # unhashable / non-string ids: never a dict key
+            oid = None
         if tool in ("pick_place", "place_at", "skip") and oid not in objects:
             err.append(f"obj_id {oid!r} not in scene")
         if tool == "pick_place" and oid in objects:
@@ -270,6 +298,13 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
                 ok, why, _ = _result(reach_fn(oid, bin_name))
                 if not ok:
                     err.append(f"unreachable pick_place: {why}")
+        if tool in ("pick_place", "place_at") and oid in protected:
+            err.append(f"{oid} is protected by the instruction (leave / do not move)")
+        if tool in ("pick_place", "place_at") and limit is not None and \
+                sum(s["tool"] in ("pick_place", "place_at") for s in valid_prefix) >= limit:
+            err.append(f"the instruction allows only {limit} moves")
+        if tool == "place_at" and oid in objects and not _RELATION.search(instruction):
+            err.append("place_at needs a relation (swap / next to / beside / adjacent to) in the instruction")
         if tool == "place_at" and oid in objects:
             xy = args.get("table_xy")
             good_xy = (isinstance(xy, (list, tuple)) and len(xy) == 2 and
