@@ -146,8 +146,18 @@ def check_flag_values(cfg):
             raise ValueError(f"{k} = {_get(cfg, k)!r}, want one of {ok}")
     for k, n in VECTORS.items():
         v = _get(cfg, k)
+        if k == "grasp.point_in_palm" and v == "auto":
+            continue
         if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
             raise ValueError(f"{k} = {v!r}: want {n} numbers")
+    # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
+    # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
+    h = cfg.get("hand") or {}
+    right = h.get("right") or {}
+    for name in ("preshape", "closed", "closed_tight"):
+        if name in h and name not in right and abs(float(h[name][0])) > 1e-12:
+            raise ValueError(f"hand.{name} thumb0={h[name][0]}: thumb0≠0 requires fixing mirror_left_to_right "
+                             f"(keep thumb0 sign)")
 
 
 def effective_flags(cfg):

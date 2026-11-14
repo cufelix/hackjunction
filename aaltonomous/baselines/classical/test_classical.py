@@ -636,6 +636,24 @@ class TestRound3Flags(unittest.TestCase):
             np.testing.assert_allclose(p.hand[e - 1][sl], post[posture][sl], atol=1e-9)
             self.assertEqual(p.safety_clips, 0)
 
+    def test_pinch_overlays_dry_run_zero_clips(self):
+        """ab_pinch_v1 / ab_pinch_demo (Oliver FK a44dd79): planner safety dry-run + SafetyFilter in mock episodes."""
+        for name in ("ab_pinch_v1", "ab_pinch_demo"):
+            cfg = load_config(overlay=name)
+            for seed in (0, 1, 2):
+                env = make_mock_env(seed=seed, cfg=cfg)
+                pol = ClassicalPolicy(config=cfg, log=None, safety=env.filter.cfg)
+                obs = env.reset()
+                pol.reset({"instruction": obs["instruction"]})
+                while True:
+                    obs, info = env.step(pol.act(obs))
+                    if info["episode_over"]:
+                        break
+                self.assertEqual(info["safety_summary"]["clipped_steps"], 0, (name, seed, info["safety_summary"]))
+                ok = [p for p in pol.plans if p.ok]
+                self.assertTrue(ok, (name, seed))
+                self.assertTrue(all(p.safety_clips == 0 for p in ok), (name, seed))
+
 
 if __name__ == "__main__":
     unittest.main()

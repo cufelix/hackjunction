@@ -54,6 +54,30 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
 
+    def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
+        from .config import hand_postures, home_arm
+        from .kinematics import ArmKinematics
+        for f in sorted(OVERLAY_DIR.glob("*.yaml")):
+            cfg = load_config(overlay=str(f))
+            hand_postures(cfg)                            # raises outside joint_spec (URDF) limits
+            home_arm(cfg)
+        for name, pip in (("ab_pinch_v1", [0.0862, -0.0864, 0.0143]), ("ab_pinch_demo", [0.1094, -0.0694, 0.0142])):
+            cfg = load_config(overlay=name)
+            self.assertEqual(cfg["grasp"]["close_posture"], "closed_tight")
+            kin = ArmKinematics(cfg)
+            self.assertEqual(list(kin.offset["left"]), pip)
+            self.assertEqual(list(kin.offset["right"]), [pip[0], -pip[1], pip[2]])   # right = [x, +y, z]
+
+    def test_thumb0_nonzero_fails_until_the_mirror_is_fixed(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "t0.yaml"
+            p.write_text("flags:\n  grasp.close_posture: closed_tight\n"
+                         "  hand.closed_tight: [-0.67, 0.92, 0.15, -0.28, -0.02, -0.19, -0.05]\n")
+            with self.assertRaisesRegex(ValueError, "thumb0≠0 requires fixing mirror_left_to_right"):
+                load_config(overlay=str(p))
+        with self.assertRaisesRegex(ValueError, "keep thumb0 sign"):
+            load_config(overrides={"hand.preshape": [0.3, -0.5, 1.5, -0.4, -0.4, -0.4, -0.4]})
+
     def test_hard_limits(self):
         """Overlays can never make anything faster than the stock sim profile."""
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
@@ -68,8 +92,11 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(load_config(overlay="none")["motion"]["close_hold_s"], 0.25)   # sim profile
 
     def test_placeholder_overlay_is_refused(self):
-        with self.assertRaises(ValueError):
-            load_config(overlay="ab_pinch_v1")          # values TBD (Oliver FK / Felix): must not run by accident
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "tbd.yaml"
+            p.write_text("placeholder: true\nflags:\n  grasp.close_posture: closed_tight\n")
+            with self.assertRaises(ValueError):
+                load_config(overlay=str(p))                # values TBD: must not run by accident
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "pinch.yaml"
             p.write_text("flags:\n  grasp.close_posture: closed_tight\n  grasp.point_in_palm: [0.099, -0.084, 0.0]\n"

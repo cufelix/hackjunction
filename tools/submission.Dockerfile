@@ -37,6 +37,9 @@ COPY tools/flags.py tools/
 # Build-time checks (fail the build, not the run): config + overlay + URDF + calibration load; print the flag set.
 RUN python3 -c "from aaltonomous.baselines.classical.policy_server import ClassicalServerPolicy; ClassicalServerPolicy()" \
  && python3 tools/flags.py \
+ && python3 -c "from pathlib import Path; from aaltonomous.baselines.classical.config import OVERLAY_DIR, load_config, \
+hand_postures, home_arm; [(hand_postures(load_config(overlay=str(f))), home_arm(load_config(overlay=str(f))), \
+print('overlay ok (postures in URDF limits):', f.name)) for f in sorted(OVERLAY_DIR.glob('*.yaml'))]" \
  && python3 -c "import sys; from aaltonomous.baselines.classical.config import BAKED_OVERLAY, resolve_overlay; \
 sys.exit(0 if resolve_overlay() == BAKED_OVERLAY else 'baked overlay not picked up')"
 
