@@ -1,0 +1,667 @@
+[
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 14,
+    "counter": 2
+   },
+   "left/cylinder": {
+    "correct": 7,
+    "counter": 3
+   },
+   "left/triangle": {
+    "correct": 8,
+    "counter": 6
+   },
+   "right/cube": {
+    "counter": 2,
+    "correct": 7
+   },
+   "right/cylinder": {
+    "correct": 11,
+    "counter": 7
+   },
+   "right/triangle": {
+    "counter": 10,
+    "correct": 5
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 5
+   },
+   "left/left/triangle": {
+    "correct": 5,
+    "counter": 5
+   },
+   "left/right/cube": {
+    "counter": 2,
+    "correct": 2
+   },
+   "left/right/cylinder": {
+    "correct": 3,
+    "counter": 1
+   },
+   "left/right/triangle": {
+    "counter": 2,
+    "correct": 3
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 2
+   },
+   "middle/left/triangle": {
+    "counter": 1,
+    "correct": 2
+   },
+   "middle/right/cube": {
+    "correct": 2
+   },
+   "middle/right/cylinder": {
+    "correct": 4,
+    "counter": 3
+   },
+   "middle/right/triangle": {
+    "counter": 3,
+    "correct": 1
+   },
+   "right/left/cube": {
+    "counter": 2,
+    "correct": 8
+   },
+   "right/left/cylinder": {
+    "counter": 3
+   },
+   "right/left/triangle": {
+    "correct": 1
+   },
+   "right/right/cube": {
+    "correct": 3
+   },
+   "right/right/cylinder": {
+    "correct": 4,
+    "counter": 3
+   },
+   "right/right/triangle": {
+    "counter": 5,
+    "correct": 1
+   }
+  },
+  "name": "baseline box A (flags off)",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 52,
+  "objects": 82,
+  "outcomes": {
+   "correct": 52,
+   "counter": 30
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 18,
+    "counter": 10
+   },
+   "cube": {
+    "correct": 21,
+    "counter": 4
+   },
+   "triangle": {
+    "counter": 16,
+    "correct": 13
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 15,
+    "counter": 3
+   },
+   "diagonal": {
+    "correct": 6,
+    "counter": 1
+   }
+  },
+  "picks": 135,
+  "picks_per_ep": 6.75,
+  "held": {},
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.99,
+  "rtf_mean": 0.41645000000000004,
+  "end": {
+   "done": 20
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 14,
+    "counter": 3
+   },
+   "left/cylinder": {
+    "correct": 25,
+    "counter": 1
+   },
+   "left/triangle": {
+    "correct": 15,
+    "counter": 6
+   },
+   "right/cube": {
+    "correct": 18,
+    "counter": 1
+   },
+   "right/cylinder": {
+    "correct": 17,
+    "counter": 3
+   },
+   "right/triangle": {
+    "correct": 16,
+    "counter": 5
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 8,
+    "counter": 1
+   },
+   "left/left/cylinder": {
+    "correct": 17
+   },
+   "left/left/triangle": {
+    "correct": 5,
+    "counter": 2
+   },
+   "left/right/cube": {
+    "correct": 4
+   },
+   "left/right/cylinder": {
+    "correct": 3,
+    "counter": 1
+   },
+   "left/right/triangle": {
+    "correct": 6,
+    "counter": 3
+   },
+   "middle/left/cube": {
+    "correct": 3,
+    "counter": 2
+   },
+   "middle/left/cylinder": {
+    "correct": 3
+   },
+   "middle/left/triangle": {
+    "correct": 5,
+    "counter": 2
+   },
+   "middle/right/cube": {
+    "correct": 5,
+    "counter": 1
+   },
+   "middle/right/cylinder": {
+    "correct": 3
+   },
+   "middle/right/triangle": {
+    "correct": 5
+   },
+   "right/left/cube": {
+    "correct": 3
+   },
+   "right/left/cylinder": {
+    "correct": 5,
+    "counter": 1
+   },
+   "right/left/triangle": {
+    "correct": 5,
+    "counter": 2
+   },
+   "right/right/cube": {
+    "correct": 9
+   },
+   "right/right/cylinder": {
+    "correct": 11,
+    "counter": 2
+   },
+   "right/right/triangle": {
+    "counter": 2,
+    "correct": 5
+   }
+  },
+  "name": "submission_9a28c41",
+  "episodes": 30,
+  "seeds": [
+   1040,
+   1041,
+   1042,
+   1043,
+   1044,
+   1045,
+   1046,
+   1047,
+   1048,
+   1049,
+   1050,
+   1051,
+   1052,
+   1053,
+   1054,
+   1055,
+   1056,
+   1057,
+   1058,
+   1059,
+   1060,
+   1061,
+   1062,
+   1063,
+   1064,
+   1065,
+   1066,
+   1067,
+   1068,
+   1069
+  ],
+  "score": 105,
+  "objects": 124,
+  "outcomes": {
+   "correct": 105,
+   "counter": 19
+  },
+  "shape": {
+   "triangle": {
+    "correct": 31,
+    "counter": 11
+   },
+   "cube": {
+    "correct": 32,
+    "counter": 4
+   },
+   "cylinder": {
+    "correct": 42,
+    "counter": 4
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 12
+   },
+   "diagonal": {
+    "correct": 20,
+    "counter": 4
+   }
+  },
+  "picks": 159,
+  "picks_per_ep": 5.3,
+  "held": {
+   "yes": 112,
+   "no": 47
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.97,
+  "rtf_mean": 0.3209666666666667,
+  "end": {
+   "done": 30
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 15,
+    "counter": 1
+   },
+   "left/cylinder": {
+    "correct": 25
+   },
+   "left/triangle": {
+    "correct": 18,
+    "counter": 3
+   },
+   "right/cube": {
+    "correct": 17,
+    "counter": 3
+   },
+   "right/cylinder": {
+    "correct": 19,
+    "counter": 2
+   },
+   "right/triangle": {
+    "counter": 4,
+    "correct": 17
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 8
+   },
+   "left/left/cylinder": {
+    "correct": 17
+   },
+   "left/left/triangle": {
+    "correct": 6,
+    "counter": 1
+   },
+   "left/right/cube": {
+    "counter": 3,
+    "correct": 2
+   },
+   "left/right/cylinder": {
+    "correct": 4
+   },
+   "left/right/triangle": {
+    "counter": 3,
+    "correct": 6
+   },
+   "middle/left/cube": {
+    "correct": 4,
+    "counter": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 2
+   },
+   "middle/left/triangle": {
+    "correct": 6,
+    "counter": 1
+   },
+   "middle/right/cube": {
+    "correct": 6
+   },
+   "middle/right/cylinder": {
+    "correct": 3,
+    "counter": 1
+   },
+   "middle/right/triangle": {
+    "correct": 4,
+    "counter": 1
+   },
+   "right/left/cube": {
+    "correct": 3
+   },
+   "right/left/cylinder": {
+    "correct": 6
+   },
+   "right/left/triangle": {
+    "correct": 6,
+    "counter": 1
+   },
+   "right/right/cube": {
+    "correct": 9
+   },
+   "right/right/cylinder": {
+    "correct": 12,
+    "counter": 1
+   },
+   "right/right/triangle": {
+    "correct": 7
+   }
+  },
+  "name": "cand_r16_9a28c41",
+  "episodes": 30,
+  "seeds": [
+   1040,
+   1041,
+   1042,
+   1043,
+   1044,
+   1045,
+   1046,
+   1047,
+   1048,
+   1049,
+   1050,
+   1051,
+   1052,
+   1053,
+   1054,
+   1055,
+   1056,
+   1057,
+   1058,
+   1059,
+   1060,
+   1061,
+   1062,
+   1063,
+   1064,
+   1065,
+   1066,
+   1067,
+   1068,
+   1069
+  ],
+  "score": 111,
+  "objects": 124,
+  "outcomes": {
+   "correct": 111,
+   "counter": 13
+  },
+  "shape": {
+   "triangle": {
+    "correct": 35,
+    "counter": 7
+   },
+   "cube": {
+    "correct": 32,
+    "counter": 4
+   },
+   "cylinder": {
+    "correct": 44,
+    "counter": 2
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 10,
+    "counter": 2
+   },
+   "diagonal": {
+    "correct": 22,
+    "counter": 2
+   }
+  },
+  "picks": 141,
+  "picks_per_ep": 4.7,
+  "held": {
+   "yes": 127,
+   "no": 14
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.96,
+  "rtf_mean": 0.32083333333333336,
+  "end": {
+   "done": 30
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "counter": 2,
+    "correct": 16
+   },
+   "left/cylinder": {
+    "correct": 23,
+    "counter": 2
+   },
+   "left/triangle": {
+    "correct": 16,
+    "counter": 4
+   },
+   "right/cube": {
+    "correct": 18
+   },
+   "right/cylinder": {
+    "correct": 20,
+    "counter": 1
+   },
+   "right/triangle": {
+    "correct": 18,
+    "counter": 4
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 9
+   },
+   "left/left/cylinder": {
+    "correct": 17
+   },
+   "left/left/triangle": {
+    "correct": 6,
+    "counter": 1
+   },
+   "left/right/cube": {
+    "correct": 4
+   },
+   "left/right/cylinder": {
+    "correct": 4
+   },
+   "left/right/triangle": {
+    "correct": 7,
+    "counter": 2
+   },
+   "middle/left/cube": {
+    "correct": 6
+   },
+   "middle/left/cylinder": {
+    "correct": 2
+   },
+   "middle/left/triangle": {
+    "counter": 3,
+    "correct": 3
+   },
+   "middle/right/cube": {
+    "correct": 5
+   },
+   "middle/right/cylinder": {
+    "correct": 3,
+    "counter": 1
+   },
+   "middle/right/triangle": {
+    "correct": 6
+   },
+   "right/left/cube": {
+    "counter": 2,
+    "correct": 1
+   },
+   "right/left/cylinder": {
+    "correct": 4,
+    "counter": 2
+   },
+   "right/left/triangle": {
+    "correct": 7
+   },
+   "right/right/cube": {
+    "correct": 9
+   },
+   "right/right/cylinder": {
+    "correct": 13
+   },
+   "right/right/triangle": {
+    "counter": 2,
+    "correct": 5
+   }
+  },
+  "name": "cand_r16_nopp_9a28c41",
+  "episodes": 30,
+  "seeds": [
+   1040,
+   1041,
+   1042,
+   1043,
+   1044,
+   1045,
+   1046,
+   1047,
+   1048,
+   1049,
+   1050,
+   1051,
+   1052,
+   1053,
+   1054,
+   1055,
+   1056,
+   1057,
+   1058,
+   1059,
+   1060,
+   1061,
+   1062,
+   1063,
+   1064,
+   1065,
+   1066,
+   1067,
+   1068,
+   1069
+  ],
+  "score": 111,
+  "objects": 124,
+  "outcomes": {
+   "correct": 111,
+   "counter": 13
+  },
+  "shape": {
+   "triangle": {
+    "correct": 34,
+    "counter": 8
+   },
+   "cube": {
+    "counter": 2,
+    "correct": 34
+   },
+   "cylinder": {
+    "correct": 43,
+    "counter": 3
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "counter": 1,
+    "correct": 11
+   },
+   "diagonal": {
+    "correct": 23,
+    "counter": 1
+   }
+  },
+  "picks": 165,
+  "picks_per_ep": 5.5,
+  "held": {
+   "yes": 139,
+   "no": 26
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.96,
+  "rtf_mean": 0.3342333333333333,
+  "end": {
+   "done": 30
+  }
+ }
+]

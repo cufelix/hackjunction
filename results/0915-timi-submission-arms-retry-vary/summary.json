@@ -1,0 +1,1473 @@
+[
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 14,
+    "counter": 2
+   },
+   "left/cylinder": {
+    "correct": 7,
+    "counter": 3
+   },
+   "left/triangle": {
+    "correct": 8,
+    "counter": 6
+   },
+   "right/cube": {
+    "counter": 2,
+    "correct": 7
+   },
+   "right/cylinder": {
+    "correct": 11,
+    "counter": 7
+   },
+   "right/triangle": {
+    "counter": 10,
+    "correct": 5
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 5
+   },
+   "left/left/triangle": {
+    "correct": 5,
+    "counter": 5
+   },
+   "left/right/cube": {
+    "counter": 2,
+    "correct": 2
+   },
+   "left/right/cylinder": {
+    "correct": 3,
+    "counter": 1
+   },
+   "left/right/triangle": {
+    "counter": 2,
+    "correct": 3
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 2
+   },
+   "middle/left/triangle": {
+    "counter": 1,
+    "correct": 2
+   },
+   "middle/right/cube": {
+    "correct": 2
+   },
+   "middle/right/cylinder": {
+    "correct": 4,
+    "counter": 3
+   },
+   "middle/right/triangle": {
+    "counter": 3,
+    "correct": 1
+   },
+   "right/left/cube": {
+    "counter": 2,
+    "correct": 8
+   },
+   "right/left/cylinder": {
+    "counter": 3
+   },
+   "right/left/triangle": {
+    "correct": 1
+   },
+   "right/right/cube": {
+    "correct": 3
+   },
+   "right/right/cylinder": {
+    "correct": 4,
+    "counter": 3
+   },
+   "right/right/triangle": {
+    "counter": 5,
+    "correct": 1
+   }
+  },
+  "name": "baseline box A (flags off)",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 52,
+  "objects": 82,
+  "outcomes": {
+   "correct": 52,
+   "counter": 30
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 18,
+    "counter": 10
+   },
+   "cube": {
+    "correct": 21,
+    "counter": 4
+   },
+   "triangle": {
+    "counter": 16,
+    "correct": 13
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 15,
+    "counter": 3
+   },
+   "diagonal": {
+    "correct": 6,
+    "counter": 1
+   }
+  },
+  "picks": 135,
+  "picks_per_ep": 6.75,
+  "held": {},
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.99,
+  "rtf_mean": 0.41645000000000004,
+  "end": {
+   "done": 20
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 10,
+    "counter": 4
+   },
+   "left/cylinder": {
+    "correct": 10,
+    "counter": 1
+   },
+   "left/triangle": {
+    "counter": 5,
+    "correct": 9
+   },
+   "none/cube": {
+    "counter": 2
+   },
+   "right/cube": {
+    "correct": 6,
+    "counter": 3
+   },
+   "right/cylinder": {
+    "correct": 15,
+    "counter": 2
+   },
+   "right/triangle": {
+    "correct": 12,
+    "counter": 3
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 5
+   },
+   "left/left/triangle": {
+    "counter": 4,
+    "correct": 6
+   },
+   "left/right/cube": {
+    "correct": 3,
+    "counter": 1
+   },
+   "left/right/cylinder": {
+    "correct": 4
+   },
+   "left/right/triangle": {
+    "correct": 4,
+    "counter": 1
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 3
+   },
+   "middle/left/triangle": {
+    "counter": 1,
+    "correct": 2
+   },
+   "middle/right/cube": {
+    "counter": 2
+   },
+   "middle/right/cylinder": {
+    "correct": 5,
+    "counter": 1
+   },
+   "middle/right/triangle": {
+    "correct": 4
+   },
+   "right/left/cube": {
+    "counter": 4,
+    "correct": 4
+   },
+   "right/left/cylinder": {
+    "correct": 2,
+    "counter": 1
+   },
+   "right/left/triangle": {
+    "correct": 1
+   },
+   "right/none/cube": {
+    "counter": 2
+   },
+   "right/right/cube": {
+    "correct": 3
+   },
+   "right/right/cylinder": {
+    "correct": 6,
+    "counter": 1
+   },
+   "right/right/triangle": {
+    "counter": 2,
+    "correct": 4
+   }
+  },
+  "name": "submission_2380e83",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 62,
+  "objects": 82,
+  "outcomes": {
+   "correct": 62,
+   "counter": 20
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 25,
+    "counter": 3
+   },
+   "cube": {
+    "correct": 16,
+    "counter": 9
+   },
+   "triangle": {
+    "correct": 21,
+    "counter": 8
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 10,
+    "counter": 8
+   },
+   "diagonal": {
+    "correct": 6,
+    "counter": 1
+   }
+  },
+  "picks": 116,
+  "picks_per_ep": 5.8,
+  "held": {
+   "yes": 73,
+   "no": 43
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.96,
+  "rtf_mean": 0.34885,
+  "end": {
+   "done": 20
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 10,
+    "counter": 5
+   },
+   "left/cylinder": {
+    "correct": 9,
+    "counter": 2
+   },
+   "left/triangle": {
+    "counter": 7,
+    "correct": 5,
+    "wrong": 1
+   },
+   "none/cube": {
+    "counter": 1
+   },
+   "right/cube": {
+    "correct": 7,
+    "counter": 2
+   },
+   "right/cylinder": {
+    "correct": 13,
+    "counter": 4
+   },
+   "right/triangle": {
+    "counter": 5,
+    "correct": 11
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 5
+   },
+   "left/left/triangle": {
+    "counter": 6,
+    "correct": 3,
+    "wrong": 1
+   },
+   "left/right/cube": {
+    "correct": 2,
+    "counter": 2
+   },
+   "left/right/cylinder": {
+    "counter": 1,
+    "correct": 3
+   },
+   "left/right/triangle": {
+    "counter": 2,
+    "correct": 3
+   },
+   "middle/left/cylinder": {
+    "correct": 3
+   },
+   "middle/left/triangle": {
+    "correct": 1,
+    "counter": 1
+   },
+   "middle/right/cube": {
+    "correct": 3
+   },
+   "middle/right/cylinder": {
+    "correct": 4,
+    "counter": 2
+   },
+   "middle/right/triangle": {
+    "correct": 4,
+    "counter": 1
+   },
+   "right/left/cube": {
+    "counter": 5,
+    "correct": 5
+   },
+   "right/left/cylinder": {
+    "correct": 1,
+    "counter": 2
+   },
+   "right/left/triangle": {
+    "correct": 1
+   },
+   "right/none/cube": {
+    "counter": 1
+   },
+   "right/right/cube": {
+    "correct": 2
+   },
+   "right/right/cylinder": {
+    "correct": 6,
+    "counter": 1
+   },
+   "right/right/triangle": {
+    "counter": 2,
+    "correct": 4
+   }
+  },
+  "name": "ab_depthgate_786ae65",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 55,
+  "objects": 82,
+  "outcomes": {
+   "correct": 55,
+   "counter": 26,
+   "wrong": 1
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 22,
+    "counter": 6
+   },
+   "cube": {
+    "correct": 17,
+    "counter": 8
+   },
+   "triangle": {
+    "counter": 12,
+    "correct": 16,
+    "wrong": 1
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 12,
+    "counter": 6
+   },
+   "diagonal": {
+    "correct": 5,
+    "counter": 2
+   }
+  },
+  "picks": 125,
+  "picks_per_ep": 6.25,
+  "held": {
+   "yes": 74,
+   "no": 51
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.97,
+  "rtf_mean": 0.34635,
+  "end": {
+   "done": 19,
+   "time_limit": 1
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 12,
+    "counter": 3
+   },
+   "left/cylinder": {
+    "correct": 10,
+    "counter": 1
+   },
+   "left/triangle": {
+    "correct": 9,
+    "counter": 5
+   },
+   "none/cube": {
+    "counter": 2
+   },
+   "right/cube": {
+    "correct": 8
+   },
+   "right/cylinder": {
+    "correct": 13,
+    "counter": 4
+   },
+   "right/triangle": {
+    "counter": 3,
+    "correct": 12
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 5
+   },
+   "left/left/triangle": {
+    "correct": 7,
+    "counter": 3
+   },
+   "left/right/cube": {
+    "correct": 4
+   },
+   "left/right/cylinder": {
+    "counter": 2,
+    "correct": 2
+   },
+   "left/right/triangle": {
+    "counter": 2,
+    "correct": 3
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 3
+   },
+   "middle/left/triangle": {
+    "counter": 1,
+    "correct": 2
+   },
+   "middle/right/cube": {
+    "correct": 2
+   },
+   "middle/right/cylinder": {
+    "correct": 5,
+    "counter": 1
+   },
+   "middle/right/triangle": {
+    "correct": 4
+   },
+   "right/left/cube": {
+    "counter": 3,
+    "correct": 6
+   },
+   "right/left/cylinder": {
+    "correct": 2,
+    "counter": 1
+   },
+   "right/left/triangle": {
+    "counter": 1
+   },
+   "right/none/cube": {
+    "counter": 2
+   },
+   "right/right/cube": {
+    "correct": 2
+   },
+   "right/right/cylinder": {
+    "correct": 6,
+    "counter": 1
+   },
+   "right/right/triangle": {
+    "counter": 1,
+    "correct": 5
+   }
+  },
+  "name": "cand_r14_786ae65",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 64,
+  "objects": 82,
+  "outcomes": {
+   "correct": 64,
+   "counter": 18
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 23,
+    "counter": 5
+   },
+   "cube": {
+    "correct": 20,
+    "counter": 5
+   },
+   "triangle": {
+    "counter": 8,
+    "correct": 21
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 13,
+    "counter": 5
+   },
+   "diagonal": {
+    "correct": 7
+   }
+  },
+  "picks": 117,
+  "picks_per_ep": 5.85,
+  "held": {
+   "yes": 75,
+   "no": 42
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.97,
+  "rtf_mean": 0.31595,
+  "end": {
+   "done": 20
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 12,
+    "counter": 3
+   },
+   "left/cylinder": {
+    "correct": 8,
+    "counter": 2
+   },
+   "left/triangle": {
+    "counter": 2,
+    "correct": 13
+   },
+   "none/cube": {
+    "counter": 1
+   },
+   "right/cube": {
+    "counter": 2,
+    "correct": 7
+   },
+   "right/cylinder": {
+    "correct": 17,
+    "counter": 1
+   },
+   "right/triangle": {
+    "correct": 11,
+    "counter": 2,
+    "wrong": 1
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 4,
+    "counter": 1
+   },
+   "left/left/triangle": {
+    "counter": 1,
+    "correct": 9
+   },
+   "left/right/cube": {
+    "counter": 1,
+    "correct": 3
+   },
+   "left/right/cylinder": {
+    "correct": 4
+   },
+   "left/right/triangle": {
+    "correct": 4,
+    "wrong": 1
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 2
+   },
+   "middle/left/triangle": {
+    "correct": 3,
+    "counter": 1
+   },
+   "middle/right/cube": {
+    "counter": 1,
+    "correct": 1
+   },
+   "middle/right/cylinder": {
+    "correct": 7
+   },
+   "middle/right/triangle": {
+    "correct": 3
+   },
+   "right/left/cube": {
+    "correct": 6,
+    "counter": 3
+   },
+   "right/left/cylinder": {
+    "correct": 2,
+    "counter": 1
+   },
+   "right/left/triangle": {
+    "correct": 1
+   },
+   "right/none/cube": {
+    "counter": 1
+   },
+   "right/right/cube": {
+    "correct": 3
+   },
+   "right/right/cylinder": {
+    "correct": 6,
+    "counter": 1
+   },
+   "right/right/triangle": {
+    "correct": 4,
+    "counter": 2
+   }
+  },
+  "name": "ab_retry_vary_6efbd05",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 68,
+  "objects": 82,
+  "outcomes": {
+   "correct": 68,
+   "counter": 13,
+   "wrong": 1
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 25,
+    "counter": 3
+   },
+   "cube": {
+    "correct": 19,
+    "counter": 6
+   },
+   "triangle": {
+    "correct": 24,
+    "counter": 4,
+    "wrong": 1
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 12,
+    "counter": 6
+   },
+   "diagonal": {
+    "correct": 7
+   }
+  },
+  "picks": 112,
+  "picks_per_ep": 5.6,
+  "held": {
+   "yes": 92,
+   "no": 20
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.97,
+  "rtf_mean": 0.32195,
+  "end": {
+   "done": 20
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 13,
+    "counter": 1
+   },
+   "left/cylinder": {
+    "correct": 11
+   },
+   "left/triangle": {
+    "correct": 13,
+    "counter": 1
+   },
+   "none/cube": {
+    "counter": 2
+   },
+   "right/cube": {
+    "correct": 9
+   },
+   "right/cylinder": {
+    "correct": 16,
+    "counter": 1
+   },
+   "right/triangle": {
+    "correct": 13,
+    "counter": 2
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 5
+   },
+   "left/left/triangle": {
+    "correct": 9,
+    "counter": 1
+   },
+   "left/right/cube": {
+    "correct": 4
+   },
+   "left/right/cylinder": {
+    "correct": 4
+   },
+   "left/right/triangle": {
+    "correct": 5
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 3
+   },
+   "middle/left/triangle": {
+    "correct": 3
+   },
+   "middle/right/cube": {
+    "correct": 2
+   },
+   "middle/right/cylinder": {
+    "correct": 5,
+    "counter": 1
+   },
+   "middle/right/triangle": {
+    "correct": 4
+   },
+   "right/left/cube": {
+    "correct": 7,
+    "counter": 1
+   },
+   "right/left/cylinder": {
+    "correct": 3
+   },
+   "right/left/triangle": {
+    "correct": 1
+   },
+   "right/none/cube": {
+    "counter": 2
+   },
+   "right/right/cube": {
+    "correct": 3
+   },
+   "right/right/cylinder": {
+    "correct": 7
+   },
+   "right/right/triangle": {
+    "correct": 4,
+    "counter": 2
+   }
+  },
+  "name": "ab_retry_vary_slots_6efbd05",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 75,
+  "objects": 82,
+  "outcomes": {
+   "correct": 75,
+   "counter": 7
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 27,
+    "counter": 1
+   },
+   "cube": {
+    "correct": 22,
+    "counter": 3
+   },
+   "triangle": {
+    "correct": 26,
+    "counter": 3
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 16,
+    "counter": 2
+   },
+   "diagonal": {
+    "counter": 1,
+    "correct": 6
+   }
+  },
+  "picks": 115,
+  "picks_per_ep": 5.75,
+  "held": {
+   "yes": 92,
+   "no": 23
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.96,
+  "rtf_mean": 0.3346,
+  "end": {
+   "done": 20
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 14,
+    "counter": 2
+   },
+   "left/cylinder": {
+    "correct": 10
+   },
+   "left/triangle": {
+    "correct": 11,
+    "counter": 3
+   },
+   "right/cube": {
+    "correct": 9
+   },
+   "right/cylinder": {
+    "correct": 14,
+    "counter": 4
+   },
+   "right/triangle": {
+    "correct": 14,
+    "counter": 1
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 5
+   },
+   "left/left/triangle": {
+    "correct": 7,
+    "counter": 3
+   },
+   "left/right/cube": {
+    "correct": 4
+   },
+   "left/right/cylinder": {
+    "correct": 2,
+    "counter": 2
+   },
+   "left/right/triangle": {
+    "correct": 5
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 2
+   },
+   "middle/left/triangle": {
+    "correct": 3
+   },
+   "middle/right/cube": {
+    "correct": 2
+   },
+   "middle/right/cylinder": {
+    "correct": 5,
+    "counter": 2
+   },
+   "middle/right/triangle": {
+    "correct": 4
+   },
+   "right/left/cube": {
+    "counter": 2,
+    "correct": 8
+   },
+   "right/left/cylinder": {
+    "correct": 3
+   },
+   "right/left/triangle": {
+    "correct": 1
+   },
+   "right/right/cube": {
+    "correct": 3
+   },
+   "right/right/cylinder": {
+    "correct": 7
+   },
+   "right/right/triangle": {
+    "counter": 1,
+    "correct": 5
+   }
+  },
+  "name": "ab_pp_center_7cd01bf",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 72,
+  "objects": 82,
+  "outcomes": {
+   "correct": 72,
+   "counter": 10
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 24,
+    "counter": 4
+   },
+   "cube": {
+    "correct": 23,
+    "counter": 2
+   },
+   "triangle": {
+    "correct": 25,
+    "counter": 4
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 16,
+    "counter": 2
+   },
+   "diagonal": {
+    "correct": 7
+   }
+  },
+  "picks": 104,
+  "picks_per_ep": 5.2,
+  "held": {
+   "yes": 76,
+   "no": 28
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.97,
+  "rtf_mean": 0.3337,
+  "end": {
+   "done": 20
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 13,
+    "counter": 2
+   },
+   "left/cylinder": {
+    "correct": 10,
+    "counter": 1
+   },
+   "left/triangle": {
+    "correct": 7,
+    "counter": 6
+   },
+   "none/cube": {
+    "counter": 2
+   },
+   "right/cube": {
+    "correct": 7,
+    "counter": 1
+   },
+   "right/cylinder": {
+    "correct": 14,
+    "counter": 3
+   },
+   "right/triangle": {
+    "correct": 14,
+    "counter": 2
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 4,
+    "counter": 1
+   },
+   "left/left/triangle": {
+    "correct": 5,
+    "counter": 5
+   },
+   "left/right/cube": {
+    "correct": 3,
+    "counter": 1
+   },
+   "left/right/cylinder": {
+    "counter": 1,
+    "correct": 3
+   },
+   "left/right/triangle": {
+    "correct": 5
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 3
+   },
+   "middle/left/triangle": {
+    "correct": 2
+   },
+   "middle/right/cube": {
+    "correct": 2
+   },
+   "middle/right/cylinder": {
+    "correct": 4,
+    "counter": 2
+   },
+   "middle/right/triangle": {
+    "correct": 4,
+    "counter": 1
+   },
+   "right/left/cube": {
+    "counter": 2,
+    "correct": 7
+   },
+   "right/left/cylinder": {
+    "correct": 3
+   },
+   "right/left/triangle": {
+    "counter": 1
+   },
+   "right/none/cube": {
+    "counter": 2
+   },
+   "right/right/cube": {
+    "correct": 2
+   },
+   "right/right/cylinder": {
+    "correct": 7
+   },
+   "right/right/triangle": {
+    "counter": 1,
+    "correct": 5
+   }
+  },
+  "name": "ab_prism_offset_1b65ffb",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 65,
+  "objects": 82,
+  "outcomes": {
+   "correct": 65,
+   "counter": 17
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 24,
+    "counter": 4
+   },
+   "cube": {
+    "correct": 20,
+    "counter": 5
+   },
+   "triangle": {
+    "correct": 21,
+    "counter": 8
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 14,
+    "counter": 4
+   },
+   "diagonal": {
+    "correct": 6,
+    "counter": 1
+   }
+  },
+  "picks": 116,
+  "picks_per_ep": 5.8,
+  "held": {
+   "yes": 76,
+   "no": 40
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.96,
+  "rtf_mean": 0.3099,
+  "end": {
+   "done": 20
+  }
+ },
+ {
+  "arm_shape": {
+   "left/cube": {
+    "correct": 14,
+    "counter": 1
+   },
+   "left/cylinder": {
+    "correct": 11
+   },
+   "left/triangle": {
+    "counter": 4,
+    "correct": 11
+   },
+   "none/cube": {
+    "counter": 1
+   },
+   "none/cylinder": {
+    "counter": 1
+   },
+   "right/cube": {
+    "correct": 8,
+    "counter": 1
+   },
+   "right/cylinder": {
+    "correct": 15,
+    "counter": 1
+   },
+   "right/triangle": {
+    "correct": 12,
+    "counter": 2
+   }
+  },
+  "side_arm_shape": {
+   "left/left/cube": {
+    "correct": 5
+   },
+   "left/left/cylinder": {
+    "correct": 5
+   },
+   "left/left/triangle": {
+    "counter": 3,
+    "correct": 7
+   },
+   "left/none/cylinder": {
+    "counter": 1
+   },
+   "left/right/cube": {
+    "correct": 4
+   },
+   "left/right/cylinder": {
+    "correct": 3
+   },
+   "left/right/triangle": {
+    "correct": 5
+   },
+   "middle/left/cube": {
+    "correct": 1
+   },
+   "middle/left/cylinder": {
+    "correct": 3
+   },
+   "middle/left/triangle": {
+    "counter": 1,
+    "correct": 3
+   },
+   "middle/right/cube": {
+    "counter": 1,
+    "correct": 1
+   },
+   "middle/right/cylinder": {
+    "correct": 5,
+    "counter": 1
+   },
+   "middle/right/triangle": {
+    "correct": 3
+   },
+   "right/left/cube": {
+    "correct": 8,
+    "counter": 1
+   },
+   "right/left/cylinder": {
+    "correct": 3
+   },
+   "right/left/triangle": {
+    "correct": 1
+   },
+   "right/none/cube": {
+    "counter": 1
+   },
+   "right/right/cube": {
+    "correct": 3
+   },
+   "right/right/cylinder": {
+    "correct": 7
+   },
+   "right/right/triangle": {
+    "counter": 2,
+    "correct": 4
+   }
+  },
+  "name": "cand_r14_1b65ffb",
+  "episodes": 20,
+  "seeds": [
+   1000,
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1009,
+   1010,
+   1011,
+   1012,
+   1013,
+   1014,
+   1015,
+   1016,
+   1017,
+   1018,
+   1019
+  ],
+  "score": 71,
+  "objects": 82,
+  "outcomes": {
+   "correct": 71,
+   "counter": 11
+  },
+  "shape": {
+   "cylinder": {
+    "correct": 26,
+    "counter": 2
+   },
+   "cube": {
+    "correct": 22,
+    "counter": 3
+   },
+   "triangle": {
+    "correct": 23,
+    "counter": 6
+   }
+  },
+  "cube_yaw": {
+   "flat": {
+    "correct": 15,
+    "counter": 3
+   },
+   "diagonal": {
+    "correct": 7
+   }
+  },
+  "picks": 113,
+  "picks_per_ep": 5.65,
+  "held": {
+   "yes": 81,
+   "no": 32
+  },
+  "gate_fail": [],
+  "clips": 0,
+  "hz_min": 29.97,
+  "rtf_mean": 0.3087,
+  "end": {
+   "done": 20
+  }
+ }
+]
