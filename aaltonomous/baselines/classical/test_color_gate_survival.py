@@ -65,7 +65,7 @@ class TestColorGateSurvival(unittest.TestCase):
     def test_fk_mask_coverage_at_home_pose(self):
         p, _, _ = self._detect(SPAWN)
         cov = p.fk_mask_px / (480 * 640)
-        self.assertTrue(0.15 < cov < 0.25, cov)   # 19.5 % at fk_dilate_px 5 (25.7 % at 15)
+        self.assertTrue(0.005 < cov < 0.25, cov)   # 1.3 % undilated at fk_dilate_px 0 (19.5 % at 5, 25.7 % at 15)
 
     def test_spawn_survivors_without_fk_mask(self):
         _, dets, _ = self._detect(SPAWN, {"perception.color_gate.fk_mask": False})
@@ -87,10 +87,8 @@ class TestColorGateSurvival(unittest.TestCase):
         _, dets, rej = self._detect(CENTRE_BIN_FRONT)
         self.assertEqual(len(dets), 1, [w for _, w in rej])
 
-    @unittest.expectedFailure
     def test_gate_keeps_every_spawn_region_object_visible_without_it(self):
-        # KNOWN at fk_dilate_px 5 / near_margin_m 0.05: (0.31, +-0.20) die as speckle (FK arm mask), (0.35, +-0.20) as
-        # in_bin (side-bin hedge). fk_dilate_px 0 + near_margin_m 0 keep all 25 (owner decision).
+        # Timi 14:29: fk_dilate_px 0 + near_margin_m 0 (at 5 / 0.05 the corners (0.31, +-0.20) and (0.35, +-0.20) died).
         # Timi 14:19: objects anywhere in the spawn region (x 0.19-0.35, |y| <= 0.2) must survive the gate.
         # One object per render; the gate may only drop what ungated perception does not see either.
         cols = ("red", "yellow", "blue")
