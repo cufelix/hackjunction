@@ -21,14 +21,14 @@ SHAPE_WORDS = {
     "round": ("ball", "sphere", "orb", "round"),
     "elongated": ("marker", "pen", "pencil", "rod", "stick", "wand", "spoon", "spatula", "bar"),
     "with-handle": ("pan", "cup", "mug", "handled", "handle", "skillet", "saucepan", "pot", "jug", "kettle", "ladle"),
-    "box-like": ("box", "carton", "packet"),
+    "box-like": ("carton", "packet"),
 }
 _GENERIC_NOUNS = {"object", "item", "thing", "piece", "one", "ones", "objects", "items", "things", "pieces",
                   "blocks", "block", "shapes", "shape", "stuff", "cube", "cubes", "cylinder", "cylinders",
                   "triangle", "triangles", "prism", "prisms"}
 _KNOWN_FAMILY = ("red", "orange", "yellow", "blue", "purple")   # known-task colours the existing detector owns
 _KNOWN_SHAPES = ("cube", "cylinder", "triangle")
-_BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+bin)?\b", re.I)
+_BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+(?:bins?|box(?:es)?|crates?|buckets?|baskets?|containers?|trays?|bowls?))?\b", re.I)
 _BIN_ALIAS = {"centre": "center", "middle": "center", "mid": "center", "central": "center"}
 _WORDS = re.compile(r"[a-z]+", re.I)
 # One filler/reserved vocabulary for match_instruction and unknown_words.
@@ -41,7 +41,8 @@ _FILLER = frozenset(set(PALETTE) | _GENERIC_NOUNS | {
     "goes", "belongs", "belong", "end", "ends", "must", "need", "needs", "want", "wants", "set", "toss", "throw",
     "deliver", "transfer", "carry", "bring", "all", "every", "each", "any", "them", "those", "these", "from",
     "where", "is", "are", "be", "get", "gets", "let", "has", "have", "which", "what", "there", "their", "s", "i",
-    "me", "we", "side", "bucket", "basket", "container", "tray"})
+    "me", "we", "side", "bucket", "basket", "container", "tray",
+    "box", "boxes", "crate", "crates", "buckets", "baskets", "containers", "trays", "bowl", "bowls", "bins"})
 _RESERVED = _FILLER | frozenset(w for ws in SHAPE_WORDS.values() for w in ws)
 
 

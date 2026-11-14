@@ -20,6 +20,11 @@ class MatchInstructionTest(unittest.TestCase):
         self.assertIsNotNone(m.matched)
         self.assertEqual(m.target_bin, "center")
 
+    def test_left_box_is_left_bin(self):
+        m = match_instruction("put the pan in the left box", [det("grey", "with-handle")])
+        self.assertIsNotNone(m.matched)
+        self.assertEqual(m.target_bin, "left")
+
     def test_gray_equals_grey(self):
         m = match_instruction("put the gray mug in the left bin", [det("grey", "with-handle")])
         self.assertIsNotNone(m.matched)
@@ -91,6 +96,8 @@ KNOWN_PARAPHRASES = [
     "Every red piece ends up in the right bin.", "Bring the blue cylinder to the center bin.",
     "Red ones go to the right-hand bin.", "Put all the orange shapes in the left bin.",
     "I want the yellow cube in the right bin.",
+    "Put the red cube in the left box.", "The blue ones go in the right box.",
+    "Drop the yellow cylinder into the middle crate.",
 ]
 NOVEL_NOUN_SENTENCES = [
     "put the pan in the middle bin", "The frying pan goes in the left bin.", "Put the mug into the right bin.",
