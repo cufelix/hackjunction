@@ -112,6 +112,7 @@ FLAGS = {
     "perception.relook_before_done": ("recall P0", False, "before nothing-left, retract to home, wait for fresh frames, and run one final relaxed detection"),
     "perception.split_by_solidity": ("gate fix", False, "classify compact blobs as single objects and force-split merged geometry"),
     "perception.tape_value_cut": ("gate fix", False, "reject thin orange candidates without a strong S/V core"),
+    "perception.bins_from_image": ("gate fix", False, "bin masks from the taped rims found in the image (no depth / untrusted bin poses)"),
     "perception.gate_below_bins": ("gate fix", False, "when live bins are untrusted, gate candidates below observed bin mass in image space"),
     "perception.reject_log": ("gate fix", False, "log and retain per-colour rejection-stage counts"),
     "perception.still_vote": ("gate fix", False, "non-blocking N-frame vote over policy-declared still frames"),
@@ -388,7 +389,7 @@ def check_flag_values(cfg):
                 raise ValueError(f"motion.output_caps.{key} = {caps[key]} exceeds finals cap {maximum}")
     p = cfg.get("perception") or {}
     for key in ("sim_center_principal_point", "split_by_solidity", "tape_value_cut", "gate_below_bins",
-                "reject_log", "still_vote"):
+                "bins_from_image", "reject_log", "still_vote"):
         if not isinstance(p.get(key), bool):
             raise ValueError(f"perception.{key}: want true or false")
     aim = p.get("aim_z_frac", 0.25)
@@ -442,6 +443,12 @@ def check_flag_values(cfg):
     fg = _get(cfg, "perception.flood_guard")
     if isinstance(fg, bool) or not isinstance(fg, (int, float)) or not (fg == 0 or 0.2 <= fg <= 1.0):
         raise ValueError(f"perception.flood_guard = {fg!r}: want 0 (off) or a fraction in [0.2, 1.0]")
+    bp = p.get("bins_from_image_params") or {}
+    if not isinstance(bp.get("hint", False), bool) or not isinstance(bp.get("with_depth", True), bool):
+        raise ValueError("perception.bins_from_image_params hint / with_depth: want true or false")
+    for key in ("hint_max_m", "hint_max_resid_px", "crosscheck_px", "rim_z_m"):
+        if key in bp and (isinstance(bp[key], bool) or not np.isfinite(float(bp[key]))):
+            raise ValueError(f"perception.bins_from_image_params.{key}: want a finite number")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
