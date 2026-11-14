@@ -2,6 +2,7 @@
 neutral obstacles with a 3D footprint (depth) and the planner keeps clear of them. Synthetic RGB-D, no GPU. Run:
     python -m unittest aaltonomous.baselines.classical.test_neutral_obstacles -v
 """
+import time
 import unittest
 
 import numpy as np
@@ -146,21 +147,50 @@ class TestPlannerNeutral(unittest.TestCase):
     def test_baseline_plan_is_ok_without_obstacles(self):
         self.assertTrue(self._plan(self._planner([])).ok)
 
-    def test_obstacle_at_the_target_is_rejected(self):
-        free = self._plan(self._planner([]))
-        pl = self._planner([_box_obstacle(self.top[:2] + [0.0, 0.05])])      # 5 cm beside the target: inside the finger spread
-        s = [e for n, _, e in free.phases if n == "descend"][0] - 1     # grasp pose
-        self.assertLess(pl.neutral_clearance(free.side, free.arm[s], free.hand[s]), 0.02)   # the free plan violates it
-        self.assertFalse(self._plan(pl).ok)
+    def _timed(self, obs):
+        pl, lines = self._planner(obs), []
+        pl.log = lines.append
+        t0 = time.monotonic()
+        p = self._plan(pl)
+        return pl, p, time.monotonic() - t0, lines
 
-    def test_obstacle_across_the_carry_path_is_rejected(self):
+    def _assert_fail_open(self, obs, free, t_free):
+        budget = self.cfg["perception"]["neutral_params"]["plan_timeout_s"]
+        pl, p, dt, lines = self._timed(obs)
+        self.assertTrue(p.ok, p.reason)
+        np.testing.assert_array_equal(p.arm, free.arm)             # the stock plan, unchanged
+        self.assertEqual(len([l for l in lines if l.startswith("[neutral]")]), 1, lines)
+        # one complete stock plan + the budget: the old search took ~140 s here (every side / hint variant)
+        self.assertLess(dt, 1.5 * t_free + budget + 1.0, (dt, t_free))
+        print(f"\n[neutral timing] blocked plan {dt:.1f}s, stock plan {t_free:.1f}s, budget {budget}s")
+        return pl, p
+
+    def test_obstacle_at_the_target_fails_open_to_the_stock_plan_within_budget(self):
+        t0 = time.monotonic()
         free = self._plan(self._planner([]))
+        t_free = time.monotonic() - t0
+        obs = [_box_obstacle(self.top[:2] + [0.0, 0.05])]          # 5 cm beside the target: inside the finger spread
+        pl, p = self._assert_fail_open(obs, free, t_free)
+        s = [e for n, _, e in free.phases if n == "descend"][0] - 1     # grasp pose
+        self.assertLess(pl.neutral_clearance(free.side, free.arm[s], free.hand[s]), 0.02)   # it does violate the obstacle
+
+    def test_obstacle_across_the_carry_path_fails_open_within_budget(self):
+        t0 = time.monotonic()
+        free = self._plan(self._planner([]))
+        t_free = time.monotonic() - t0
         mid = 0.5 * (free.waypoints["lift"][:2] + free.waypoints["carry"][:2])
-        pl = self._planner([_box_obstacle(mid, half=0.04, z_top=SC.counter_z + 0.20)])   # tall, mid carry leg
+        obs = [_box_obstacle(mid, half=0.04, z_top=SC.counter_z + 0.20)]   # tall, mid carry leg
+        pl, p = self._assert_fail_open(obs, free, t_free)
         s, e = [(s, e) for n, s, e in free.phases if n == "carry"][0]
         gaps = [pl.neutral_clearance(free.side, free.arm[i], free.hand[i]) for i in range(s, e, 3)]
         self.assertLess(min(gaps), 0.02)                                     # the straight carry crosses it
-        self.assertFalse(self._plan(pl).ok)
+
+    def test_unblocked_plan_is_unchanged_and_silent(self):
+        free = self._plan(self._planner([]))
+        pl, p, dt, lines = self._timed([_box_obstacle(self.top[:2] + [0.0, -0.18])])
+        self.assertTrue(p.ok)
+        np.testing.assert_array_equal(p.arm, free.arm)
+        self.assertEqual(lines, [])
 
     def test_plan_for_target_keeps_clearance_from_a_near_obstacle(self):
         margin = self.cfg["perception"]["neutral_params"]["margin_m"]

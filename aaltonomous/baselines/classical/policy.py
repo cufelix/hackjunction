@@ -108,6 +108,7 @@ class ClassicalPolicy:
             self._fk_xcheck_kin = ArmKinematics(self.cfg, self.spec)
             self._fk_xcheck = FkHandXCheck(self.cfg["calib"]["fk_xcheck_config"], self.perception)
         if self.cfg["perception"].get("neutral_obstacles", False):
+            self.planner.log = log or print
             self.planner.neutral_src = self.perception   # perception.neutral_obstacles: the planner reads the latest obstacles
         self.perception.bin_shift_src = self.planner   # perception.color_gate.live_bins reads planner.bin_shift (bin.vote)
         self.perception.geometry_runtime = bool((self.cfg.get("bin") or {}).get("geometry_runtime"))   # perception follows the shift without bin.vote/live_bins gates

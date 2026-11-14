@@ -196,10 +196,11 @@ perception:
   # overexposed yellow tops and excluded) are never detections. Sizeable ones (>= min_area_px, <= max_area_px) are listed in
   # Perception.neutral_obstacles; with depth they get a pelvis-frame xy footprint (needs min_height_m above the counter, <=
   # max_side_m wide, else dropped / image-only), without depth they stay image-only and are NOT used for collision. The
-  # planner rejects a plan when a hand point below z_top + margin_m is within margin_m of a footprint (all phases).
+  # planner rejects a plan when a hand point below z_top + margin_m is within margin_m of a footprint (all phases); once such a
+  # complete plan exists, the search stops after plan_timeout_s and fails OPEN (stock plan, one log line).
   neutral_obstacles: false
   neutral_params: {v_dark: 55, s_grey: 30, v_grey_max: 200, min_area_px: 300, max_area_px: 8000, min_height_m: 0.015,
-                   max_side_m: 0.15, max_obstacles: 6, colour_guard_px: 3, margin_m: 0.02}
+                   max_side_m: 0.15, max_obstacles: 6, colour_guard_px: 3, margin_m: 0.02, plan_timeout_s: 1.0}
   split:
     object_size: null         # m, expected object edge for the size gate; null = scene objects.size (perception.object_size)
     area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;
