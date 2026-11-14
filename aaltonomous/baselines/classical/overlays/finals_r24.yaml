@@ -7,7 +7,7 @@ flags:
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)
-  scene.counter_z_prior: 0.15                   # prior  NO-DEPTH fallback table height (pelvis frame, m); measured plane height (apply_height) overrides
+  scene.counter_z_prior: 0.09                   # prior  NO-DEPTH fallback table height (pelvis frame, m); measured plane height (apply_height) overrides
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
@@ -88,7 +88,7 @@ flags:
   # --- r24 add-ons, all OFF (decision = change false/0 here) ---
   profile_auto.force: null                      # null | sim | none ; the Dockerfile ARG PROFILE_MODE=sim|real bakes sim|none
   profile_auto.require_rgb_cue: false           # profile-harden: sim also needs a quiet RGB
-  grasp.left_hand_fix.shift_z: 0.0              # lh-r23: left arm + triangles (sim-helpful candidate)
+  grasp.left_hand_fix.shift_z: 0.01             # lh-r23: left arm + triangles, ON +0.01 (A102 49/52 vs 46/52); both profiles
   grasp.arm_xy_offset: {left: [0.0, 0.0], right: [0.0, 0.0]}   # experimental left [0,-0.01]
   policy.retry_cross_relocate: false            # grasp-r23
   policy.late_sweep: false                      # grasp-r23

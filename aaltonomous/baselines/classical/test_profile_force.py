@@ -122,7 +122,8 @@ class TestProfileForce(unittest.TestCase):
             c = load_config(profile="none", overlay=ov)
             self.assertIsNone(c["profile_auto"]["force"])
             self.assertFalse(c["profile_auto"]["require_rgb_cue"])
-            self.assertEqual(c["grasp"]["left_hand_fix"]["shift_z"], 0.0)
+            self.assertEqual(c["grasp"]["left_hand_fix"]["shift_z"], 0.01)   # A102 decision
+            self.assertEqual(c["scene"]["counter_z_prior"], 0.09)   # real-only; sim_overrides null
             self.assertEqual(c["grasp"]["arm_xy_offset"], {"left": [0.0, 0.0], "right": [0.0, 0.0]})
             for k in ("retry_cross_relocate", "late_sweep", "retry_repeat_ok", "late_regrant", "frozen_rgb_guard"):
                 self.assertFalse(c["policy"][k], k)
