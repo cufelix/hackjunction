@@ -86,12 +86,16 @@ class Scene:
     def nominal_counter_z(self):
         return float(self.origin[2])
 
+    counter_z_prior = None     # scene.counter_z_prior: fallback table height while no runtime estimate exists; None = nominal
+
     @property
     def counter_z(self):
         """Counter (mat) surface height in the pelvis frame: the ONE value every consumer reads (the nominal scene
         height unless calib.plane.apply_height set a runtime estimate)."""
-        z = self.counter_z_runtime
-        return float(self.origin[2]) if z is None else float(z)
+        for z in (self.counter_z_runtime, self.counter_z_prior):
+            if z is not None:
+                return float(z)
+        return float(self.origin[2])
 
     # ------------------------------------------------------------ geometry
     @property

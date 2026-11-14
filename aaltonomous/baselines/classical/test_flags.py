@@ -157,6 +157,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
+        for n in ("finals_r20", "finals_r21"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+            expect[n] = expect[n] | {"scene.counter_z_prior"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
