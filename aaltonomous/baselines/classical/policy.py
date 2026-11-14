@@ -32,7 +32,7 @@ from aaltonomous.scene.scene import Scene, resolve_bin
 from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Plan, Planner, lookup_bin
+from .planner import Planner, lookup_bin
 
 HZ = 30.0
 _HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence names a hole AND the lid
@@ -141,8 +141,6 @@ class ClassicalPolicy:
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
-        self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
-        self._abort = None          # policy.retry_vary_grasp: the close being watched for held=no
         self._summary_logged = False
         self.perception.reset_calibration()
         self.calibration = None
@@ -194,8 +192,6 @@ class ClassicalPolicy:
             self._grasp_diag(obs)
         if self._stall is not None:
             self._lift_on_stall(obs)
-        if self._abort is not None:
-            self._abort_watch(obs)
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":
@@ -414,16 +410,13 @@ class ClassicalPolicy:
 
     def _choose(self, dets, obs, verify):
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
-        cands, extra = [], []
-        mav = self._max_attempts_vary()
+        cands = []
         for d in dets:
             xy = d.top[:2]
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
                 continue
             n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < self.cfg["policy"]["same_object_radius"])
             if n >= self._attempt_limit(xy):
-                if mav is not None and n < mav:
-                    extra.append(d)   # policy.max_attempts_vary: one more varied try, after every other candidate
                 continue
             cands.append(d)
         if self.cfg["policy"]["order"] == "nearest_bin":
@@ -450,9 +443,6 @@ class ClassicalPolicy:
             cands.sort(key=lambda d: retry_prefix(d) + (base(d),))
         else:
             cands.sort(key=base)
-        if extra:
-            extra.sort(key=base)
-            cands += extra
         t = float(obs.get("t", 0.0))
         left = self.time_limit - t - self._time_reserve(corrective=False)
         n_long, shortest = 0, None
@@ -473,7 +463,8 @@ class ClassicalPolicy:
                 if slot is None:
                     self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
                     continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot))
+                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
+                                      drop_slot=slot)
             elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
                 free = [i for i in range(len(self.planner.drop_slots(target_bin)))
                         if i not in self.slot_used[target_bin]]
@@ -481,13 +472,11 @@ class ClassicalPolicy:
                 if slot is None:
                     self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
                     continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot))
+                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
+                                      drop_slot=slot)
             else:
-                p = self._plan_pick(d, dict(obstacles=others))
+                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, obstacles=others)
             self.plans.append(p)
-            if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
-                self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")
-                continue
             if p.ok:
                 if triage and p.duration > left:  # feasible but too slow for the time left: try the next candidate
                     self.too_long.append((d.top[:2], p.duration))
@@ -504,157 +493,6 @@ class ClassicalPolicy:
         if n_long:
             return ("notime", shortest, len(dets))
         return ("none", None, len(dets))
-
-    # ------------------------------------------------------------------ policy.retry_vary_grasp
-    def _vary_on(self):
-        return bool(self.cfg["policy"].get("retry_vary_grasp", False))
-
-    def _max_attempts_vary(self):
-        """policy.max_attempts_vary (needs retry_vary_grasp): attempt limit for extra, varied tries; None = off."""
-        mav = self.cfg["policy"].get("max_attempts_vary")
-        return int(mav) if (mav is not None and self._vary_on()) else None
-
-    def _posture_of(self, plan):
-        return plan.posture[0] if plan.posture else self.cfg["grasp"].get("close_posture", "closed")
-
-    def _hist_for(self, d):
-        """Earlier picks of this object that did not hold it (held no / unknown): same colour, within
-        retry_assoc_radius of the earlier grasp point (a missed object is often pushed a few cm)."""
-        r = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
-        xy = np.asarray(d.top[:2], float)
-        return [h for h in self.vary_hist if h["held"] is not True and h["color"] == d.color
-                and np.linalg.norm(xy - h["xy"]) < r]
-
-    def _same_grasp(self, key, h):
-        pol = self.cfg["policy"]
-        xy, yaw, posture = key
-        if posture != h["posture"] or np.linalg.norm(np.asarray(xy) - h["xy"]) >= float(pol.get("retry_same_xy_m", 0.01)):
-            return False
-        if yaw is None or h["yaw"] is None:
-            return True
-        dy = abs((yaw - h["yaw"] + np.pi) % (2 * np.pi) - np.pi)
-        return dy < np.radians(float(pol.get("retry_same_yaw_deg", 20.0)))
-
-    def _grasp_key(self, plan):
-        fh = getattr(self.planner, "finger_heading", None)
-        yaw = fh(plan) if fh is not None else None
-        return (np.asarray(plan.waypoints["grasp"][:2], float).copy(), yaw, self._posture_of(plan))
-
-    def _variants(self, d, hist):
-        """Grasp changes to try, best first: {"posture": name | None, "yaw": rad | None} (None = the stock choice).
-        Posture v1 <-> demo for a triangle / label None (demo = triangles 18/25 vs pinch_v1 3/9, but cubes 7/25 with
-        demo: a demo grasp on a non-triangle goes back to the configured posture first); the finger heading
-        +-retry_yaw_deg[label] from the last try (the miss direction relative to the pinch changes)."""
-        pol, g = self.cfg["policy"], self.cfg["grasp"]
-        prev = hist[-1]
-        label = getattr(d, "shape", None)
-        demo, v1 = "closed_demo", g.get("close_posture", "closed")
-        p0 = prev["posture"]
-        alt = v1 if p0 == demo else demo
-        degs = pol.get("retry_yaw_deg") or {}
-        dy = np.radians(float(degs.get(label if label is not None else "none", degs.get("default", 90.0))))
-        yaws = []
-        if prev["yaw"] is not None:
-            ref = np.radians(-25.0 if prev["side"] == "left" else 25.0)   # natural finger heading of that arm
-            ys = [prev["yaw"] + dy, prev["yaw"] - dy]
-            ys.sort(key=lambda a: abs((a - ref + np.pi) % (2 * np.pi) - np.pi))
-            yaws = [(a + np.pi) % (2 * np.pi) - np.pi for a in ys]
-        if label == "triangle":
-            out = ([{"posture": demo, "yaw": a} for a in yaws] + [{"posture": v1, "yaw": None}] if p0 == demo else
-                   [{"posture": demo, "yaw": None}] + [{"posture": demo, "yaw": a} for a in yaws])
-        elif label is None:
-            out = ([{"posture": alt, "yaw": None}] + [{"posture": p0, "yaw": a} for a in yaws]
-                   + [{"posture": alt, "yaw": a} for a in yaws])
-        else:   # cube / cylinder: never the demo posture (cubes 7/25 with it)
-            out = ([{"posture": v1, "yaw": None}] if p0 == demo else []) + [{"posture": v1, "yaw": a} for a in yaws]
-        return out[: int(pol.get("retry_max_variants", 3))]
-
-    def _plan_pick(self, d, kw):
-        """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
-        variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
-        differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""
-        if not self._vary_on():
-            return self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
-        hist = self._hist_for(d)
-        if not hist:
-            p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
-            if p.ok:
-                p.grasp_key = self._grasp_key(p)
-            return p
-        for v in self._variants(d, hist):
-            self.planner.vary = v
-            try:
-                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, relocate=False, **kw)
-            finally:
-                self.planner.vary = None
-            if not p.ok:
-                self.log(f"[retry_vary] {d.color} variant {self._vary_txt(v)} (before {self._key_txt((hist[-1]['xy'], hist[-1]['yaw'], hist[-1]['posture']))}) infeasible: {p.reason}")
-                continue
-            key = self._grasp_key(p)
-            if any(self._same_grasp(key, h) for h in hist):
-                self.log(f"[retry_vary] {d.color} variant {self._vary_txt(v)} repeats a tried grasp")
-                continue
-            p.grasp_key = key
-            self.log(f"[retry_vary] {d.color} label={getattr(d, 'shape', None)} try {len(hist) + 1}: "
-                     f"{self._vary_txt(v)} -> {self._key_txt(key)} (before: "
-                     + ", ".join(self._key_txt((h["xy"], h["yaw"], h["posture"])) for h in hist) + ")")
-            return p
-        p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, **kw)
-        if p.ok:
-            p.grasp_key = self._grasp_key(p)
-            if any(self._same_grasp(p.grasp_key, h) for h in hist):
-                return Plan(False, color=d.color, reason="retry_vary: every grasp repeats a tried (point, yaw, posture)")
-        return p
-
-    @staticmethod
-    def _vary_txt(v):
-        yaw = "stock" if v["yaw"] is None else f"{np.degrees(v['yaw']):.0f}"
-        return f"posture={v['posture']} yaw={yaw}"
-
-    @staticmethod
-    def _key_txt(k):
-        xy, yaw, posture = k
-        y = "n/a" if yaw is None else f"{np.degrees(yaw):.0f}"
-        return f"({xy[0]:+.3f},{xy[1]:+.3f}) yaw={y} {posture}"
-
-    def _abort_watch(self, obs):
-        """policy.retry_vary_grasp: at the end of the close hold, held = the active hand still lags its command by
-        >= 0.010 rad (the [grasp_diag] criterion). held=no -> the rest of the plan (carry to the bin, release) is
-        replaced by its abort branch: finish the lift, straight home. Only removes motion, never adds speed."""
-        w = self._abort
-        left = 0 if self.queue_a is None else len(self.queue_a)
-        if w["n"] - left < w["close_end"]:
-            return
-        self._abort = None
-        q = obs.get("hand_q")
-        if q is None:
-            return
-        sl = ArmKinematics.sl(w["plan"].side)
-        held = bool(np.abs(np.asarray(self.hand_cmd, float)[sl] - np.asarray(q, float)[sl]).max() >= 0.010)
-        w["hist"]["held"] = held
-        if held or w["plan"].abort is None or left == 0:
-            return
-        ls, arm, hand = w["plan"].abort
-        k = (w["n"] - ls) - left            # lift ticks already sent (also after a lift_on_stall cut of the hold)
-        nl = w["lift_len"]
-        if not 0 <= k < nl:
-            return
-        new_a, new_h = arm[k:], hand[k:]
-        t = float(obs.get("t", 0.0))
-        g = self._gdiag
-        if g is not None and g["plan"] is w["plan"]:
-            g["n"] = (g["n"] - left) + len(new_a)
-        self.queue_a, self.queue_h = new_a, new_h
-        plan = w["plan"]
-        if self.slot_pending is not None and self.slot_pending[1] == plan.drop_slot:
-            self.slot_used[self.slot_pending[0]].discard(plan.drop_slot)
-            self.slot_pending = None
-        vp = self.verification_pending
-        if vp is not None and vp["target_bin"] == plan.target_bin and vp["drop_slot"] == plan.drop_slot:
-            self.reserved_drop_slots[plan.target_bin].discard(plan.drop_slot)
-            self.verification_pending = None
-        self._note(t, f"held=no after the close: abort {plan.color} carry, back home "
-                      f"({len(new_a) / HZ:.1f} s instead of {left / HZ:.1f} s)")
 
     def _priority(self, d):
         """Triage tie-break tuple (lower = first): shape cost (cube < cylinder < triangle; `shape` attribute of the
@@ -822,16 +660,6 @@ class ClassicalPolicy:
             if "close" in ph and "lift" in ph:
                 self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1],
                                "lift_end": ph["lift"][1], "t": t, "samples": {}}
-        if self._vary_on() and plan.side in ("left", "right"):
-            key = plan.grasp_key or (np.asarray(xy, float).copy(), None, self._posture_of(plan))
-            h = {"color": plan.color, "xy": np.asarray(key[0], float), "yaw": key[1], "posture": key[2],
-                 "side": plan.side, "held": None}
-            self.vary_hist.append(h)
-            ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
-            self._abort = None
-            if "close" in ph and "lift" in ph:
-                self._abort = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1], "hist": h,
-                               "lift_len": ph["lift"][1] - ph["lift"][0]}
         self._enqueue(plan.arm, plan.hand)
         if self._slots_on() and plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
             self.slot_used[plan.target_bin].add(plan.drop_slot)

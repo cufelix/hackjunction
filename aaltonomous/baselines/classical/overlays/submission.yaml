@@ -12,7 +12,6 @@ flags:
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
-  perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
   perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
   perception.classify_shape: true              # Oliver #5/#7 shape from the top face
   perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre
@@ -30,9 +29,6 @@ flags:
   policy.retry_pass: false                      # Oliver #3  once-per-episode retry pass (retry_extra_attempts 2)
   policy.time_margin_s: 0.0                     # Oliver #3  e.g. 1.0; 0 = off
   policy.episode_summary_log: false             # Oliver #3  one log line per episode end
-  policy.retry_vary_grasp: false                # retry-vary another grasp after held=no; held=no -> abort the carry
-  policy.max_attempts_vary: null                # retry-vary e.g. 3 (needs retry_vary_grasp), only with time left
-  grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture
   policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
   policy.verify_yellow_unknown: false           # Felix #6r  yellow in-bin detection = unknown (needs verify)
   policy.max_corrections_per_episode: null      # Felix #6r  e.g. 1; set = counter picks first (needs verify)
