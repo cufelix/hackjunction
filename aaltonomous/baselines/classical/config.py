@@ -37,6 +37,8 @@ FLAGS = {
                                             "per-episode head-camera xy offset from the bin walls (depth)"),
     "perception.counter_plane.enabled": ("Oliver counter", False,
                                          "per-episode counter z from a RANSAC plane in the head depth (fail-safe nominal)"),
+    "perception.detect_bins": ("Oliver bins", False,
+                               "per-episode bin row detection (orange + depth walls); perceived footprints for masking"),
     "perception.classify_shape": ("Oliver #5/#7", False, "Detection.shape from the top face (shape_id)"),
     "perception.triangle_pose": ("Oliver #5", False, "triangles: apex yaw + robust xy centre"),
     "perception.near_bin_guard": ("Oliver #7", False, "classify_shape abstains next to a bin (cut top face)"),

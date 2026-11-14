@@ -15,6 +15,7 @@ flags:
   perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
   perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
   perception.counter_plane.enabled: false      # Oliver     per-episode counter z from the head depth (RANSAC)
+  perception.detect_bins: false                # Oliver bins  per-episode bin row detection (Perception.bin_layout)
   perception.classify_shape: true              # Oliver #5/#7 shape from the top face
   perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre
   perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)

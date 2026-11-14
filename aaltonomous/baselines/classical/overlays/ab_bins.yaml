@@ -1,0 +1,9 @@
+# A/B overlay: per-episode bin row detection (Oliver bins). Once per episode (first detect() with valid depth) the
+# three orange bins are fitted from colour + depth walls; accepted -> perceived footprints for the bin masking /
+# in_bin / near_bin tests; else nominal. Log line: "[bin_detect] perceived ... | accepted ..." or "nominal (<why>)".
+# Drop targets are NOT changed by this flag (planner still uses scene.yaml; Perception.bin_layout is exposed).
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_bins <image>.
+name: ab_bins
+flags:
+  perception.detect_bins: true
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes
