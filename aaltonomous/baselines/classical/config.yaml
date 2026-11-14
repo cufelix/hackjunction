@@ -33,6 +33,26 @@ perception:
   bin_pixel_margin: 0.004     # pixels whose 3D point is inside a bin footprint (+ margin) are dropped before grouping
   object_size: null           # null = scene.yaml objects.size (grasp width)
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
+  self_calibration:
+    enabled: true             # once per episode, align depth-only bin walls to their fixed known geometry
+    max_offset_m: 0.030       # reject rather than applying a correction outside this Euclidean gate
+    pixel_stride: 3           # calibration-only depth subsampling; keeps first-act latency well below the watchdog
+    min_valid_frac: 0.20
+    plane_z_window: 0.060     # initial counter-plane candidate band around nominal counter z
+    plane_inlier_m: 0.006
+    min_plane_points: 500
+    min_wall_height_m: 0.008  # reject the bin floor/counter; retain vertical walls and horizontal rim
+    max_wall_height_m: 0.075
+    min_wall_points: 180
+    max_points: 6000
+    grid_resolution_m: 0.001
+    coarse_step_m: 0.003
+    fine_step_m: 0.0005
+    score_truncate_m: 0.012
+    inlier_m: 0.006
+    min_inlier_ratio: 0.35
+    min_axis_points: 35
+    min_confidence: 0.30
   object_height: null         # null = scene.yaml size * height_ratio
   classify_shape: false       # set Detection.shape from the 2D blob (prism_pose.classify_blob); single-shape scenes: that shape
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud

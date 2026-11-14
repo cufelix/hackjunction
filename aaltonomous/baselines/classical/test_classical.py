@@ -10,6 +10,7 @@ from aaltonomous.interface.safety import JointSpec
 from aaltonomous.scene.scene import Scene
 
 from .config import hand_postures, home_arm, load_config, mirror_left_to_right
+from .calibration_sweep import jittered_camera, run_sweep
 from .kinematics import ArmKinematics
 from .mock_world import Renderer, make_mock_env
 from .perception import Perception
@@ -67,6 +68,83 @@ class TestPerception(unittest.TestCase):
     def test_bins_are_not_objects(self):
         rgb, depth = self.r.render([])
         self.assertEqual(self.p.detect(rgb, depth), [])
+
+
+class TestSelfCalibration(unittest.TestCase):
+    def test_recovers_known_camera_translation(self):
+        rng = np.random.default_rng(7)
+        translation = np.array([0.008, -0.006, 0.004])
+        actual = jittered_camera(CAL._T("head"), translation, np.zeros(3))
+        objects = scene_objects(rng)
+        rgb, depth = Renderer(SC, CAL, T_pelvis_optical=actual).render(
+            objects, rng, depth_noise_mm=2.0, hole_frac=0.05)
+        perception = Perception(CFG, SC, CAL)
+        before = {d.color: d for d in perception.detect(rgb, depth)}
+        result = perception.calibrate_bins(depth)
+        after = {d.color: d for d in perception.detect(rgb, depth)}
+
+        self.assertTrue(result.success, result)
+        np.testing.assert_allclose(result.xy_offset, translation[:2], atol=0.0025)
+        before_error = np.mean([np.linalg.norm(before[o["color"]].top[:2] - o["pos"][:2]) for o in objects])
+        after_error = np.mean([np.linalg.norm(after[o["color"]].top[:2] - o["pos"][:2]) for o in objects])
+        self.assertLess(after_error, 0.004)
+        self.assertLess(after_error, 0.5 * before_error)
+
+    def test_failure_keeps_configured_fallback(self):
+        cfg = load_config(overrides={"perception.xy_offset": [0.004, -0.003]})
+        perception = Perception(cfg, SC, CAL)
+        depth = np.full((480, 640), 500, np.uint16)
+        result = perception.calibrate_bins(depth)
+        self.assertTrue(result.valid_frame)
+        self.assertFalse(result.success)
+        np.testing.assert_allclose(perception.xy_offset, [0.004, -0.003])
+
+    def test_random_pose_sweep_reduces_xy_error(self):
+        out = run_sweep(trials=12, seed=2026)
+        self.assertEqual(out["calibration_failures"], 0, out)
+        self.assertEqual(out["detection_failures"], 0, out)
+        self.assertLess(out["after"]["mean_mm"], 0.5 * out["before"]["mean_mm"])
+        self.assertLess(out["after"]["p95_mm"], 7.0)
+        self.assertLess(out["calibration_time_p95_ms"], 500.0)
+
+    def test_policy_retries_invalid_frame_latches_valid_and_resets(self):
+        env = make_mock_env(seed=3)
+        policy = ClassicalPolicy(log=None, safety=env.filter.cfg)
+        obs = env.reset()
+        policy.reset({"instruction": obs["instruction"]})
+        invalid = dict(obs, head_depth=np.zeros_like(obs["head_depth"]))
+
+        policy.act(invalid)
+        self.assertFalse(policy._calibration_done)
+        policy.act(obs)
+        self.assertTrue(policy._calibration_done)
+        self.assertTrue(policy.calibration.success, policy.calibration)
+        accepted = policy.calibration
+        policy.act(invalid)
+        self.assertIs(policy.calibration, accepted)
+
+        policy.reset({"instruction": obs["instruction"]})
+        self.assertFalse(policy._calibration_done)
+        self.assertIsNone(policy.calibration)
+        np.testing.assert_allclose(policy.perception.xy_offset, policy.perception.base_xy_offset)
+
+    def test_policy_calibration_exception_uses_fallback(self):
+        cfg = load_config(overrides={"perception.xy_offset": [0.004, -0.003]})
+        env = make_mock_env(seed=4, cfg=cfg)
+        policy = ClassicalPolicy(config=cfg, log=None, safety=env.filter.cfg)
+        obs = env.reset()
+        policy.reset({"instruction": obs["instruction"]})
+
+        def broken_calibration(_depth):
+            raise RuntimeError("synthetic calibration failure")
+
+        policy.perception.calibrate_bins = broken_calibration
+        action = policy.act(obs)
+        self.assertFalse(action["done"])
+        self.assertTrue(policy._calibration_done)
+        self.assertFalse(policy.calibration.success)
+        self.assertIn("synthetic calibration failure", policy.calibration.reason)
+        np.testing.assert_allclose(policy.perception.xy_offset, [0.004, -0.003])
 
 
 class TestPostures(unittest.TestCase):

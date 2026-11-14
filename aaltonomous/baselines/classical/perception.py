@@ -13,6 +13,7 @@ height instead (method "plane"). Blobs over the bins, off the mat, or at a wrong
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 
 import numpy as np
 
@@ -38,6 +39,19 @@ class Detection:
                 f"[{self.method}]")
 
 
+@dataclass
+class BinCalibration:
+    """Result of one episode's depth-only alignment to the fixed bin geometry."""
+    success: bool
+    valid_frame: bool
+    confidence: float
+    xy_offset: np.ndarray
+    n_points: int
+    residual_m: float
+    elapsed_ms: float
+    reason: str
+
+
 class Perception:
     def __init__(self, cfg, scene, calibration):
         self.cfg = cfg["perception"]
@@ -46,11 +60,188 @@ class Perception:
         self.cam = self.cfg["camera"]
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
-        # pelvis-frame xy correction added to every detection (head extrinsics error; tuned on the robot)
-        self.xy_offset = np.asarray(self.cfg.get("xy_offset") or [0.0, 0.0], float)
+        # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
+        self.base_xy_offset = np.asarray(self.cfg.get("xy_offset") or [0.0, 0.0], float)
+        self.xy_offset = self.base_xy_offset.copy()
+        self.calibration = None
         # opt-in shape / triangle pose (all default OFF = stock behaviour)
         self.classify_shape = bool(self.cfg.get("classify_shape", False))
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
+
+    def reset_calibration(self):
+        """Restore the configured fallback at the start of every episode."""
+        self.xy_offset = self.base_xy_offset.copy()
+        self.calibration = None
+
+    def calibration_failure(self, reason, elapsed_ms=0.0):
+        """Latch a safe failed result after an unexpected calibration error."""
+        self.xy_offset = self.base_xy_offset.copy()
+        self.calibration = BinCalibration(False, True, 0.0, self.xy_offset.copy(), 0, np.inf,
+                                          float(elapsed_ms), str(reason))
+        return self.calibration
+
+    def calibrate_bins(self, depth):
+        """Estimate a single XY correction by aligning elevated depth points to the fixed bin walls.
+
+        A plane is fitted to the counter first, so camera z translation and small roll/pitch errors do not turn the
+        counter into false wall points. Only a bounded translation is optimized: pose translation and rotation are
+        intentionally not separated because they are nearly degenerate at this working distance.
+        """
+        started = time.perf_counter()
+        c = self.cfg.get("self_calibration") or {}
+
+        def result(success, valid, confidence, offset, n_points, residual, reason):
+            out = BinCalibration(success, valid, float(confidence), np.asarray(offset, float), int(n_points),
+                                 float(residual), (time.perf_counter() - started) * 1000.0, reason)
+            self.calibration = out
+            return out
+
+        if not c.get("enabled", True):
+            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, "disabled")
+        if depth is None or np.ndim(depth) != 2:
+            return result(False, False, 0.0, self.xy_offset.copy(), 0, np.inf, "no depth frame")
+        dlo, dhi = self.cfg["depth_range_mm"]
+        valid = (depth >= dlo) & (depth <= dhi)
+        if valid.mean() < float(c.get("min_valid_frac", self.cfg["min_valid_frac"])):
+            return result(False, False, 0.0, self.xy_offset.copy(), 0, np.inf, "insufficient valid depth")
+
+        stride = max(1, int(c.get("pixel_stride", 3)))
+        vv, uu = np.nonzero(valid[::stride, ::stride])
+        vv, uu = vv * stride, uu * stride
+        P = self.cal.pixel_to_pelvis(self.cam, uu, vv, depth[vv, uu].astype(float))
+        sc = self.scene
+
+        # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.
+        pm = sc.pelvis_to_mat(P)
+        mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
+        counter = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) &
+                   (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03) &
+                   (np.abs(P[:, 2] - sc.counter_z) < float(c.get("plane_z_window", 0.06))))
+        plane_points = P[counter]
+        if len(plane_points) < int(c.get("min_plane_points", 500)):
+            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, "counter plane not visible")
+        A = np.c_[plane_points[:, :2], np.ones(len(plane_points))]
+        keep = np.ones(len(A), bool)
+        coef = np.array([0.0, 0.0, sc.counter_z])
+        plane_tol = float(c.get("plane_inlier_m", 0.006))
+        for _ in range(3):
+            if keep.sum() < int(c.get("min_plane_points", 500)):
+                break
+            coef = np.linalg.lstsq(A[keep], plane_points[keep, 2], rcond=None)[0]
+            residual = plane_points[:, 2] - A @ coef
+            center = np.median(residual)
+            keep = np.abs(residual - center) <= plane_tol
+        if keep.sum() < int(c.get("min_plane_points", 500)):
+            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, "counter plane fit rejected")
+
+        height = P[:, 2] - (np.c_[P[:, :2], np.ones(len(P))] @ coef)
+        b = sc.cfg["bins"]
+        gate = float(c.get("max_offset_m", 0.03))
+        half_mat = np.asarray(b["outer_size"], float) / 2
+        around = np.zeros(len(P), bool)
+        centers = []
+        for ctr_mat in b["centers"].values():
+            ctr = sc.mat_to_pelvis([ctr_mat[0], ctr_mat[1], 0.0])[:2]
+            centers.append(ctr)
+            around |= np.all(np.abs(P[:, :2] - ctr) <= half_mat[::-1] + gate + 0.01, axis=1)
+        wall = (around & (height >= float(c.get("min_wall_height_m", 0.008))) &
+                (height <= float(c.get("max_wall_height_m", float(b["wall_height"]) + 0.015))))
+        Q = P[wall, :2]
+        max_points = int(c.get("max_points", 6000))
+        if len(Q) > max_points:
+            Q = Q[np.linspace(0, len(Q) - 1, max_points).astype(int)]
+        min_points = int(c.get("min_wall_points", 180))
+        if len(Q) < min_points:
+            return result(False, True, 0.0, self.xy_offset.copy(), len(Q), np.inf, "too few bin wall points")
+
+        # Rasterized distance-to-edge field makes the bounded search deterministic and fast on CPU.
+        resolution = float(c.get("grid_resolution_m", 0.001))
+        margin = gate + 0.02
+        outer_half = half_mat[::-1]
+        inner_half = outer_half - float(b["wall_thickness"])
+        lo = np.min(np.asarray(centers) - outer_half - margin, axis=0)
+        hi = np.max(np.asarray(centers) + outer_half + margin, axis=0)
+        shape = np.ceil((hi - lo) / resolution).astype(int) + 1
+        import cv2
+        edge_image = np.full((shape[1], shape[0]), 255, np.uint8)
+
+        def pixel(xy):
+            ij = np.round((np.asarray(xy) - lo) / resolution).astype(int)
+            return int(ij[0]), int(ij[1])
+
+        for ctr in centers:
+            for half in (outer_half, inner_half):
+                x0, y0 = pixel(ctr - half)
+                x1, y1 = pixel(ctr + half)
+                cv2.rectangle(edge_image, (x0, y0), (x1, y1), 0, 1)
+        distance = cv2.distanceTransform(edge_image, cv2.DIST_L2, 5) * resolution
+        truncate = float(c.get("score_truncate_m", 0.012))
+
+        def distances(offset):
+            ij = np.round((Q + offset - lo) / resolution).astype(int)
+            inside = ((ij[:, 0] >= 0) & (ij[:, 0] < shape[0]) &
+                      (ij[:, 1] >= 0) & (ij[:, 1] < shape[1]))
+            d = np.full(len(Q), truncate)
+            d[inside] = distance[ij[inside, 1], ij[inside, 0]]
+            return d
+
+        def search(center, span, step):
+            values = np.arange(-span, span + 0.5 * step, step)
+            best_score, best = np.inf, None
+            for dx in values:
+                for dy in values:
+                    off = center + [dx, dy]
+                    if np.linalg.norm(off) > gate:
+                        continue
+                    d = np.minimum(distances(off), truncate)
+                    score = float(np.mean(d * d))
+                    if score < best_score:
+                        best_score, best = score, off.copy()
+            return best
+
+        coarse_step = float(c.get("coarse_step_m", 0.003))
+        estimate = search(np.zeros(2), gate, coarse_step)
+        if estimate is None:
+            return result(False, True, 0.0, self.xy_offset.copy(), len(Q), np.inf, "search outside gate")
+        estimate = search(estimate, coarse_step, float(c.get("fine_step_m", 0.0005)))
+        if estimate is None or np.linalg.norm(estimate) > gate:
+            return result(False, True, 0.0, self.xy_offset.copy(), len(Q), np.inf, "offset outside gate")
+
+        d = distances(estimate)
+        inlier_m = float(c.get("inlier_m", 0.006))
+        inlier_ratio = float(np.mean(d <= inlier_m))
+        residual = float(np.median(d))
+
+        # Require constraints normal to both wall directions; one visible line cannot determine a 2-D shift safely.
+        def axis_support(axis):
+            normal, tangent = axis, 1 - axis
+            supported = np.zeros(len(Q), bool)
+            for ctr in centers:
+                for half in (outer_half, inner_half):
+                    for sign in (-1, 1):
+                        edge = ctr[normal] + sign * half[normal]
+                        normal_ok = np.abs(Q[:, normal] + estimate[normal] - edge) <= inlier_m
+                        tangent_ok = np.abs(Q[:, tangent] + estimate[tangent] - ctr[tangent]) <= half[tangent] + inlier_m
+                        supported |= normal_ok & tangent_ok
+            return int(supported.sum())
+
+        support_x, support_y = axis_support(0), axis_support(1)
+        support_min = int(c.get("min_axis_points", 35))
+        point_factor = min(1.0, len(Q) / max(2.0 * min_points, 1.0))
+        residual_factor = max(0.0, 1.0 - residual / max(inlier_m, 1e-9))
+        axis_factor = min(1.0, min(support_x, support_y) / max(2.0 * support_min, 1.0))
+        confidence = float(np.clip(inlier_ratio * point_factor * residual_factor * axis_factor, 0.0, 1.0))
+        confidence_min = float(c.get("min_confidence", 0.30))
+        if support_x < support_min or support_y < support_min:
+            return result(False, True, confidence, self.xy_offset.copy(), len(Q), residual,
+                          f"weak axis support x={support_x} y={support_y}")
+        if inlier_ratio < float(c.get("min_inlier_ratio", 0.35)) or confidence < confidence_min:
+            return result(False, True, confidence, self.xy_offset.copy(), len(Q), residual,
+                          f"low confidence (inliers={inlier_ratio:.2f})")
+
+        self.xy_offset = estimate.copy()
+        return result(True, True, confidence, estimate, len(Q), residual,
+                      f"accepted; support x={support_x} y={support_y}, inliers={inlier_ratio:.2f}")
 
     def masks(self, rgb):
         import cv2
