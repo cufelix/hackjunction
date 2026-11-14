@@ -58,6 +58,7 @@ FLAGS = {
     "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),
     "perception.principal_point": ("Oliver lane 3", "file", "file | center: Isaac renders cx,cy at the image centre"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
+    "perception.edge_blob": ("edge blob", False, "colour blob cut by the image edge (bbox within edge_blob_px of an edge_blob_sides side): top face from depth + edge_cut, else rejected edge_blob:cut"),
     "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = the policy's current bin estimate (bin.vote shift / calibrate_bins); none -> nominal + near_margin_m towards the robot"),
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),

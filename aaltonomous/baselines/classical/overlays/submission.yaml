@@ -35,6 +35,7 @@ flags:
   perception.color_gate.fk_mask: false          # Felix gate  FK arm/hand mask before blob grouping (needs arm_q)
   perception.color_gate.live_bins: false        # Felix gate  footprint follows the live bin estimate (else nominal + 10 cm near)
   perception.split_blobs: true                 # real colour  split touching same-colour objects
+  perception.edge_blob: false                  # edge blob    cut-by-image-edge blobs: depth top face or reject (needs depth)
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
   grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)

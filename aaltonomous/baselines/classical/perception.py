@@ -111,6 +111,7 @@ class Detection:
     shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
+    edge_cut: bool = False   # perception.edge_blob only: blob touched the image edge; top face from depth (not the 2D centroid)
 
     def __repr__(self):
         x, y, z = self.top
@@ -235,6 +236,11 @@ class Perception:
         # real colour (hf_perception 2026-11-14): one HSV set for sim + the real head cam; split touching objects
         self.hsv = self.cfg["hsv_robust"] if self.cfg.get("hsv_set", "stock") == "robust" else self.cfg["hsv"]
         self.split_blobs = bool(self.cfg.get("split_blobs", False))
+        # perception.edge_blob (FLAG, default off): a blob whose bbox touches an image side within edge_blob_px is cut
+        self.edge_blob = bool(self.cfg.get("edge_blob", False))
+        self.edge_blob_px = int(self.cfg.get("edge_blob_px", 3))
+        self.edge_blob_sides = tuple(self.cfg.get("edge_blob_sides", ["bottom"]))
+        self._edge_stats = {"cut": 0, "depth": 0, "reject": 0}
         self.place_gate = bool((cfg.get("policy") or {}).get("place_gate", False))
         # Per-episode colour k-means always starts/falls back at the measured
         # robust ranges, regardless of the separately selectable stock set.
@@ -986,6 +992,8 @@ class Perception:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
             self._fit_colour_kmeans(hsv, kkeep)
         masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
+        if self.edge_blob:
+            self._edge_stats = {"cut": 0, "depth": 0, "reject": 0}
         for color, m in masks.items():
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
             k = int(c["open_px"])
@@ -1004,9 +1012,21 @@ class Perception:
                     continue
                 self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected,
                                   hsv if self.place_gate else None)
+        if self.edge_blob:
+            st = self._edge_stats
+            self.log(f"[edge_blob] cut={st['cut']} depth={st['depth']} rejected={st['reject']} sides={list(self.edge_blob_sides)}")
         if self.color_gate:
             dets = self._color_gate(dets, rejected)
         return (dets, rejected) if debug else dets
+
+    def _edge_cut(self, blob):
+        """perception.edge_blob: True if the blob's bounding box lies within edge_blob_px of a configured image side."""
+        import cv2
+        x, y, w, h = cv2.boundingRect(blob.astype(np.uint8))
+        H, W = blob.shape[:2]
+        e, sides = self.edge_blob_px, self.edge_blob_sides
+        return ("bottom" in sides and y + h - 1 >= H - e) or ("top" in sides and y <= e - 1) \
+            or ("left" in sides and x <= e - 1) or ("right" in sides and x + w - 1 >= W - e)
 
     def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None):
         """One colour blob -> Detection (depth top face, else plane) -> dets or rejected (the stock per-blob body)."""
@@ -1021,8 +1041,17 @@ class Perception:
         d = depth[v, u].astype(float) if depth is not None else np.zeros(len(u))
         ok = (d >= dlo) & (d <= dhi)
         det = None
+        cut = self.edge_blob and self._edge_cut(blob)
         if ok.sum() >= c["min_valid_depth_px"]:
             det = self._from_depth(color, u[ok], v[ok], d[ok], area, blob, depth)
+        if cut:
+            self._edge_stats["cut"] += 1
+            if det is None:   # no usable depth: the 2D centroid of a cut blob is biased, so skip it
+                self._edge_stats["reject"] += 1
+                rejected.append((Detection(color, np.full(3, np.nan), area, int(ok.sum()), "edge"), "edge_blob:cut"))
+                return
+            det.edge_cut = True
+            self._edge_stats["depth"] += 1
         if det is None:
             det = self._from_plane(color, centroid, area, int(ok.sum()))
             if det is not None:
