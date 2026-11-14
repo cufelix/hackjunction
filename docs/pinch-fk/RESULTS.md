@@ -59,3 +59,17 @@ above; planner phi = -rel mod 120 (left heading = apex + phi + 120k; right: s = 
   tip error 0.00 mm) reproduces the left distances at both centres.
 - Assumed: point tips at kinematics.TIP, rigid contact, linear interpolation from our preshape, object fixed,
   centroid on the grasp point, no yaw_tri_shift, one IK pose per arm (0.30, +-0.10).
+
+## Prism grasp-point offset along the clamp axis (prism_offset.py / .out)
+Coverage = share of yaws with index AND thumb >= 1 mm (in brackets >= 0 mm). Width-midpoint offset +-7.5 mm, width 45-52 mm.
+- pinch_v1: no shift 0%; best constant 2%; yaw-dependent along-axis shift 3% (max +1.3 mm). Along-axis shift cannot
+  fix pinch_v1. A 2D shift (+-15 mm sideways) reaches >= 1 mm everywhere, middle/lead NOT checked.
+- pinch_demo: no shift 53% (100%); best constant d = -0.5 mm 68% (100%); yaw-dependent d*(rel) 100% (100%), still 100%
+  with +-5 and +-10 deg yaw error. d* = -0.61 * midoff (corr 0.999), not -1 * midoff (that drops to 54% at +-10 deg).
+  Middle >= +13 mm; worst lead 0.65 rad (exact d*), 0.48 (constant).
+- pinch_demo table, rel = (apex_yaw - finger heading) mod 120, linear interpolation, wraps:
+  rel 0 10 20 30 40 50 60 70 80 90 100 110 -> d mm -1.2 +0.2 +1.8 +3.2 +4.5 +2.8 +1.2 -0.2 -1.8 -3.5 -4.5 -2.8
+- Apply in pelvis xy at grasp time: target = centroid - d * u, u = horizontal unit vector index tip -> thumb tip
+  (for demo 98 deg CCW from finger heading, i.e. nearly sideways). Needs apex_yaw from triangle_pose (mod 120);
+  perception._yaw cannot be used. Left arm only; right expected rel -> -rel, NOT checked.
+- Assumed: left arm top-down, small shift as pure translation (no IK re-solve), rigid tips, 0.25 mm grid.
