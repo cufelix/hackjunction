@@ -12,7 +12,7 @@ height instead (method "plane"). Blobs over the bins, off the mat, or at a wrong
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import time
 
 import cv2
@@ -213,6 +213,10 @@ class Perception:
         self._colour_kmeans_tries = 0
         self.colour_kmeans_info = None
         self.log = log if log is not None else print
+        # perception.color_gate (FLAG, default OFF): post-filter at the end of detect(), see _color_gate
+        self.color_gate = bool((self.cfg.get("color_gate") or {}).get("enabled", False))
+        self.color_gate_cfg = dict(self.cfg.get("color_gate") or {})
+        self.color_gate_degraded = False
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
@@ -918,6 +922,7 @@ class Perception:
         import cv2
         c = self.cfg
         dets, rejected = [], []
+        self.color_gate_degraded = False
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
@@ -945,6 +950,8 @@ class Perception:
                     continue
                 self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected,
                                   hsv if self.place_gate else None)
+        if self.color_gate:
+            dets = self._color_gate(dets, rejected)
         return (dets, rejected) if debug else dets
 
     def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None):
@@ -1276,6 +1283,74 @@ class Perception:
         if bins_first and not lo <= h <= hi:
             return f"height {h:.2f} sizes"
         return None
+
+    def _color_gate(self, dets, rejected):
+        """perception.color_gate (FLAG): post-filter of the accepted detections. Rejected ones are appended to
+        `rejected` as (det, "color_gate:<why>"). More than max_cands survivors -> top_k by n_px and degraded."""
+        g = self.color_gate_cfg
+        kept = []
+        for det in dets:
+            why = self._color_gate_why(det, g)
+            if why:
+                rejected.append((det, why))
+            else:
+                kept.append(det)
+        if len(kept) > int(g["max_cands"]):
+            top_k = int(g["top_k"])
+            self.color_gate_degraded = True
+            self.log(f"[color_gate] degraded: {len(kept)} candidates > max_cands {g['max_cands']}; "
+                     f"kept top {top_k} by n_px")
+            kept = sorted(kept, key=lambda d: d.n_px, reverse=True)[:top_k]
+        return [self._color_gate_shape(d) for d in kept]
+
+    def _color_gate_why(self, det, g):
+        """Rules 1 (area floor scaled by distance) and 2 (bin zone). None = keep."""
+        Z = self._color_gate_depth(det.top)
+        if Z is None:
+            if det.n_px < g["min_px_no_z"]:
+                return "color_gate:speckle_no_z"
+        else:
+            fx = float(self.cal.cams[self.cam].K[0, 0])
+            expected = (fx * 0.045 / Z) ** 2   # 0.045 m = object edge (scene.yaml objects.size)
+            if det.n_px < g["area_frac"] * expected:
+                return "color_gate:speckle"
+        return self._color_gate_bin(det, g)
+
+    def _color_gate_depth(self, top):
+        """Camera-frame depth Z (optical axis, m) of a pelvis-frame point, or None (no extrinsics / not in front)."""
+        try:
+            z = float(self._project(np.asarray(top, float))[2])
+        except ValueError:   # calibration has no extrinsics yet
+            return None
+        return z if np.isfinite(z) and z > 0 else None
+
+    def _color_gate_bin(self, det, g):
+        """Rule 2, 3D in the mat frame (nominal footprint, no margin). Inside a bin -> in_bin. Within edge_m outside
+        one -> kept only as a depth top face edge_h above the counter (a bin rim), else bin_edge. Else keep."""
+        sc = self.scene
+        pm = sc.pelvis_to_mat(det.top)[:2]
+        half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2
+        near_edge = False
+        for ctr in sc.cfg["bins"]["centers"].values():
+            outside = np.maximum(np.abs(pm - np.asarray(ctr, float)) - half, 0.0)
+            gap = float(np.hypot(*outside))
+            if gap == 0.0:
+                return "color_gate:in_bin"
+            near_edge = near_edge or gap <= float(g["edge_m"])
+        if near_edge and not self._color_gate_rim_ok(det, g):
+            return "color_gate:bin_edge"
+        return None
+
+    def _color_gate_rim_ok(self, det, g):
+        h = float(det.top[2] - self.scene.counter_z)
+        lo, hi = g["edge_h"]
+        return det.method == "depth" and det.n_depth > 0 and lo <= h <= hi
+
+    def _color_gate_shape(self, det):
+        """Rule 4: a triangle that is not a depth top face (2D blob) has no trusted shape: unknown."""
+        if det.shape == "triangle" and det.method != "depth":
+            return replace(det, shape=None, shape_conf=0.0)
+        return det
 
 
 def _safe_near_bin(perc, top):
