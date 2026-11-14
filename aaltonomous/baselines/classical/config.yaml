@@ -518,6 +518,8 @@ policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)
   safety_shell_vel_reserve: 0.0  # with safety_shell: >0 slows every plan to <= (1 - this) x the SafetyFilter velocity limit (e.g. 0.2); 0 = plans untouched
   generation_workers: false   # H7 FLAG: immutable generation-tagged look results; reset invalidates without waiting
+  chunk_ticks: null          # FLAG. null = motion.chunk; int >= 1 overrides trajectory ticks returned per act()
+  hold_ticks: null           # FLAG. null = motion.hold_ticks; int >= 1 overrides waiting/settled hold reply ticks
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   fixed_mapping: null         # FLAG (organisers P0). explicit sort_fixed scene metadata passed at server reset;
                               # null = shared tasks.FIXED_MAPPING. Never used as a sort_language blank/error fallback

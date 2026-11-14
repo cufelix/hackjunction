@@ -56,6 +56,8 @@ FLAGS = {
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
     "policy.generation_workers": ("H7", False, "generation-tagged look workers compute on an episode snapshot; reset invalidates immediately and never waits for stale work"),
     "policy.fixed_mapping": ("organisers P0", None, "explicit sort_fixed scene metadata passed by server reset (null = shared FIXED_MAPPING; finals venue: yellow left, blue center, red right); never a language fallback"),
+    "policy.chunk_ticks": ("finals rate", None, "override motion.chunk; null keeps the profile value"),
+    "policy.hold_ticks": ("finals rate", None, "override motion.hold_ticks; null keeps the profile value"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
     "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
@@ -263,9 +265,19 @@ def load_config(path=None, overrides=None, profile=None, overlay=None):
     for k, v in (overrides or {}).items():
         _set(cfg, k, v)
     check_flag_values(cfg)
+    _apply_chunk_ticks(cfg)
     _apply_arm_vel_cap(cfg)
     _apply_output_caps(cfg)
     return cfg
+
+
+def _apply_chunk_ticks(cfg):
+    """Apply opt-in reply-size overrides. Null leaves both legacy motion values untouched."""
+    pol, motion = cfg["policy"], cfg["motion"]
+    if pol.get("chunk_ticks") is not None:
+        motion["chunk"] = pol["chunk_ticks"]
+    if pol.get("hold_ticks") is not None:
+        motion["hold_ticks"] = pol["hold_ticks"]
 
 
 def _apply_arm_vel_cap(cfg):
@@ -363,6 +375,10 @@ def check_flag_values(cfg):
         raise ValueError("tape_value_cut S/V thresholds must be in [0, 255]")
     if not 0.0 <= float(tp.get("min_core_frac", 0.2)) <= 1.0 or float(tp.get("min_aspect", 3.0)) < 1.0:
         raise ValueError("invalid tape_value_cut core/aspect")
+    for k in ("policy.chunk_ticks", "policy.hold_ticks"):
+        v = _get(cfg, k)
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
+            raise ValueError(f"{k} = {v!r}: want null or an int >= 1")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
