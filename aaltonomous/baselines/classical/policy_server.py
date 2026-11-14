@@ -48,7 +48,7 @@ class ClassicalServerPolicy(Policy):
             time.sleep(0.02)
         if task not in (None, "sort_fixed"):
             log.warning("task %r: the classical baseline only does rung 1 (colour = bin from scene.yaml)", task)
-        self.pol.reset({"instruction": instruction})
+        self.pol.reset({"instruction": instruction, "task": task})   # task id: policy.insert_guard
         log.info("reset task=%s seed=%s instruction=%r", task, seed, instruction)
 
     def act(self, obs):
@@ -62,4 +62,8 @@ if __name__ == "__main__":
     t0 = time.monotonic()
     pol = ClassicalServerPolicy()
     log.info("classical baseline loaded in %.1f s", time.monotonic() - t0)
+    from .config import effective_flags  # integration: which opt-in features this image runs (container log)
+    on = [f"{k}={v!r}" for k, v, is_on, _, _ in effective_flags(pol.pol.cfg) if is_on]
+    log.info("profile=%s overlay=%s flags on: %s", pol.pol.cfg.get("profile"), pol.pol.cfg.get("overlay", "none"),
+             ", ".join(on) or "none (stock baseline)")
     serve(pol, port=int(os.environ.get("PORT", 8000)))
