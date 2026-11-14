@@ -44,7 +44,7 @@ FLAGS = {
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
     "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner, hold the last emitted action (zero hold before any); non-finite head_depth -> 0 (missing)"),
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
-    "instruction.multilingual": ("FI/CZ language", False, "closed-grammar Finnish/Czech instructions -> English canonical form before resolve; unsupported foreign input stays unparsed (needs instruction.resolve)"),
+    "instruction.multilingual": ("multilingual", False, "closed-grammar FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK instructions -> cached English canonical form before resolve; unsupported foreign input stays unparsed (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
     "policy.fixed_mapping": ("organisers P0", None, "explicit sort_fixed scene metadata passed by server reset (null = shared FIXED_MAPPING; finals venue: yellow left, blue center, red right); never a language fallback"),

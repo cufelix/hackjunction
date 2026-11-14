@@ -222,6 +222,9 @@ class TestFlags(unittest.TestCase):
         self.assertFalse(load_config(overlay="none")["instruction"]["normalize"])
         self.assertFalse(load_config(overlay="none")["instruction"]["multilingual"])
         self.assertFalse(load_config(overlay="submission")["instruction"]["multilingual"])
+        description = FLAGS["instruction.multilingual"][2]
+        for language in ("FI", "CS", "DE", "SV", "ES", "FR", "IT", "PL", "PT", "UK", "RU", "SK"):
+            self.assertIn(language, description)
         self.assertFalse(load_config(overlay="cand_r17")["instruction"]["normalize"])
         base = load_config(overlay="cand_r17")
         rc1 = load_config(overlay="rc1")
