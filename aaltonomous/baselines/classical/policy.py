@@ -179,6 +179,7 @@ class ClassicalPolicy:
                 self.primary_calibration = None
                 (log or print)(f"primary calibration disabled: {type(exc).__name__}: {exc}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
+        self.perception.hand_opening_m = self.planner.generic_hand_opening   # novel: no-handle width gate
         mo = self.cfg["motion"]
         self.output_limiter = (MotionOutputLimiter(
             mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"], mo["hand_max_acc"], 1.0 / HZ,
@@ -254,6 +255,7 @@ class ClassicalPolicy:
         self.scene = scene
         self.planner.scene = scene
         self.perception = Perception(self.cfg, scene, self.cal, log=self.log)
+        self.perception.hand_opening_m = getattr(getattr(self, "planner", None), "generic_hand_opening", None)
         state = state or {}
         for name, value in state.items():
             if name != "counter_z_runtime" and hasattr(self.perception, name):
@@ -457,6 +459,7 @@ class ClassicalPolicy:
         self.budget_abandoned = []  # (color, xy) objects whose hard per-object budget was exhausted
         self.gate_skipped = []      # (color, xy) objects deliberately left on the counter by place_gate
         self.failed = []            # positions whose plans failed
+        self._novel_looks = {}      # novel ungraspable: (2 cm xy, reason) -> looks seen this episode
         self.pending = None         # Plan waiting for the operator
         self.pending_text = ""      # what the operator is asked to confirm
         self.waiting = False
@@ -2058,6 +2061,20 @@ class ClassicalPolicy:
         if any(d.color == color and np.linalg.norm(d.top[:2] - xy) < rad for d in dets):
             self.slot_used[bin_name].discard(slot)
 
+    def _novel_leave(self, dets):
+        """A novel blob ungraspable for the same reason at the same 2 cm spot on 2 looks is left alone (into failed)."""
+        for d in dets:
+            reason = getattr(d, "ungraspable_reason", None)
+            if not (getattr(d, "novel", False) and d.ungraspable and reason):
+                continue
+            key = (round(float(d.top[0]) / 0.02), round(float(d.top[1]) / 0.02), reason)
+            self._novel_looks[key] = n = self._novel_looks.get(key, 0) + 1
+            if n == 2:
+                xy = np.asarray(d.top[:2], float).copy()
+                self.failed.append(xy)
+                self.log(f"[novel] leave ({xy[0]:.2f}, {xy[1]:.2f}): {reason}")
+        return dets
+
     def _attempt_excluded(self, xy, color=None):
         """True when the object at xy is skipped for its attempt count only (not in `failed`)."""
         rad = self._attempt_radius()
@@ -2345,6 +2362,7 @@ class ClassicalPolicy:
             return stop
         if self._ftd_on():   # brain.find_to_detection: novel objects from find() points join the detections (re-grown per look)
             dets = self._with_novel(dets, obs)
+        dets = self._novel_leave(dets)
         cands, extra = self._ordered_cands(dets, obs, verify)
         triage = bool(pol.get("time_triage", False))
         forced = None   # (det, bin, variant, table_xy) from the brain or the whole-plan planner
@@ -3325,7 +3343,8 @@ class ClassicalPolicy:
             if d.ungraspable and not ent.get("skipped"):
                 ent["skipped"] = True
                 self.failed.append(np.asarray(d.top[:2], float).copy())
-                self.log(f"[novel] {d.label!r} ungraspable (footprint {d.footprint}, height {d.height_m}) -> skip")
+                self.log(f"[novel] {d.label!r} ungraspable ({d.ungraspable_reason or 'low confidence'}; "
+                         f"footprint {d.footprint}, height {d.height_m}) -> skip")
         self._novel_store = keep
         return known + out
 

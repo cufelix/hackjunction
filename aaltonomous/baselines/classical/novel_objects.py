@@ -242,15 +242,34 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         width = float(dims[1])
         grasp_kind = "pinch"
         handle_axis = None
+        ungraspable_reason = None
         if label == "with-handle" and handle_mask is not None:
             huse = handle_mask & valid
             HP = points[huse]
             if len(HP) >= 10:
                 _, hmajor, hminor, hdims = _axes_and_footprint(HP[:, :2])
-                centre_xy, width = np.median(HP[:, :2], axis=0), float(hdims[1])
+                # body centre (handle pixels excluded): the handle axis points outward from it; grasp >= rim + 3 cm
+                BP = points[blob & valid & ~handle_mask]
+                body_c = np.median(BP[:, :2], axis=0) if len(BP) >= 10 else object_centre_xy
+                u = hmajor if float((np.median(HP[:, :2], axis=0) - body_c) @ hmajor) >= 0 else -hmajor
+                w = np.array([-u[1], u[0]])
+                rel = HP[:, :2] - body_c
+                rim = float(np.percentile((BP[:, :2] - body_c) @ u, 95.0)) if len(BP) >= 10 else float(dims[0]) / 2
+                if len(BP) >= 10:
+                    rim = max(rim, float(_axes_and_footprint(BP[:, :2])[3][0]) / 2)   # body diameter, not just the visible reach
+                s_min = rim + 0.03
+                if float((rel @ u).max()) < s_min + 0.01:
+                    ungraspable_reason = "handle too short/occluded"
+                else:
+                    s = max(float(np.median(rel @ u)), s_min)
+                    centre_xy = body_c + s * u + float(np.median(rel @ w)) * w
+                    width = float(hdims[1])
                 handle_axis = hmajor
                 yaw = _fold_yaw(np.arctan2(hmajor[1], hmajor[0]))
                 grasp_kind = "handle"
+        hand_open = getattr(perception, "hand_opening_m", None)
+        if grasp_kind == "pinch" and hand_open is not None and width > float(hand_open):
+            ungraspable_reason = "wider than the hand, no handle"
         top_z = float(np.percentile(P[:, 2], 95.0))
         height = float(np.percentile(P[:, 2], 98.0) - perception.scene.counter_z)
         support = min(1.0, len(P) / 200.0)
@@ -273,9 +292,10 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         det.generic_required = True
         det.generic_width = width
         det.generic_confidence = confidence
-        det.graspable = confidence >= float(perception.cfg.get("novel_grasp_min_confidence",
-                                                               perception._root_cfg["grasp"].get("generic_min_confidence", 0.5)))
+        det.graspable = ungraspable_reason is None and confidence >= float(perception.cfg.get(
+            "novel_grasp_min_confidence", perception._root_cfg["grasp"].get("generic_min_confidence", 0.5)))
         det.ungraspable = not det.graspable
+        det.ungraspable_reason = ungraspable_reason
         det.novel_target_bin = None
         det.novel_matched = False
         novels.append(det)
