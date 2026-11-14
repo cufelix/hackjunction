@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Pitch cards</title>
+<style>
+:root{--bg:#0d0f12;--fg:#eef1f4;--dim:#9aa4ae;--acc:#ffb020;--line:#2a2f36}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#000;color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;overflow-x:hidden}
+section{width:1920px;height:1080px;overflow:hidden;background:var(--bg);padding:120px;display:flex;flex-direction:column;justify-content:center;gap:56px;position:relative}
+.k{font-size:32px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:600}
+h1{font-size:96px;line-height:1.05;font-weight:800;letter-spacing:-.02em}
+.acc{color:var(--acc)}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
+table{border-collapse:collapse;width:100%;font-size:56px}
+th{font-size:32px;color:var(--dim);font-weight:600;text-align:left;padding:0 0 20px;text-transform:uppercase;letter-spacing:.1em}
+td{padding:34px 0;border-top:2px solid var(--line)}
+td.n{font-weight:800;font-size:72px}
+.hl{border-left:10px solid var(--acc);padding:10px 0 10px 40px;font-size:80px;font-weight:800}
+.big{font-size:200px;font-weight:800;line-height:1;letter-spacing:-.03em}
+.row{display:flex;gap:80px;align-items:baseline}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:100px}
+.stat{display:flex;flex-direction:column;gap:2px;padding:14px 0;border-top:2px solid var(--line)}
+.stat .l{font-size:34px;color:var(--dim)}
+.stat .v{font-size:68px;font-weight:800;white-space:nowrap}
+.stat .v i{font-style:normal;color:var(--dim);font-weight:400;padding:0 .3em}
+.foot{font-size:30px;color:var(--dim)}
+pre{font-size:64px;line-height:1.5;background:#161a1f;border-left:10px solid var(--acc);padding:40px 56px}
+</style></head><body>
+
+<section id="card6">
+<div class="k">Scoring</div>
+<h1>Language sorting pays <span class="acc">double</span></h1>
+<table>
+<tr><th>Task</th><th>Correct</th><th>Wrong</th></tr>
+<tr><td class="mono">sort_fixed</td><td class="n">+1</td><td class="n">-1</td></tr>
+<tr><td class="mono">sort_language</td><td class="n acc">+2</td><td class="n">-1</td></tr>
+</table>
+<div class="hl">Language = ~83% of final points</div>
+</section>
+
+<section id="card7">
+<div class="k">Expected value</div>
+<div class="row" style="gap:120px">
+<div style="font-size:88px;font-weight:800" class="mono">guess = 3p - 1</div>
+<div style="font-size:88px;font-weight:800" class="mono">decline = 0</div>
+</div>
+<div style="font-size:48px;color:var(--dim)">p = confidence</div>
+<svg width="1680" height="260" viewBox="0 0 1680 260" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,sans-serif">
+<rect x="0" y="90" width="560" height="60" fill="#2a2f36"/>
+<rect x="560" y="90" width="1120" height="60" fill="#ffb020"/>
+<rect x="554" y="60" width="12" height="120" fill="#eef1f4"/>
+<text x="280" y="50" text-anchor="middle" font-size="48" font-weight="700" fill="#9aa4ae">abstain</text>
+<text x="1120" y="50" text-anchor="middle" font-size="48" font-weight="700" fill="#ffb020">guess</text>
+<text x="560" y="240" text-anchor="middle" font-size="64" font-weight="800" fill="#eef1f4">1/3</text>
+</svg>
+<div style="font-size:64px;font-weight:800">Guess only when <span class="acc mono">p &gt; 1/3</span></div>
+</section>
+
+<section id="card9">
+<div class="k">Pre-registered</div>
+<div style="font-size:72px;font-weight:700" class="mono"><span class="dim" style="color:var(--dim)">prediction:</span> 0 sentences change</div>
+<div style="font-size:72px;font-weight:700" class="mono"><span style="color:var(--dim)">result:</span> <span class="acc">0 changed</span></div>
+<div style="font-size:72px;font-weight:700">across 241 sentences</div>
+<div class="foot">The prediction was written down before measuring.</div>
+</section>
+
+<section id="card10" style="gap:24px;padding-top:100px;padding-bottom:100px">
+<div class="k">Held-out sets, before -> after</div>
+<div style="font-size:44px;font-weight:700">Blind set, 358 unseen sentences</div>
+<div>
+<div class="stat"><div class="l">expected value</div><div class="v">84.5%<i>-&gt;</i><span class="acc">96.8%</span></div></div>
+<div class="cols">
+<div class="stat"><div class="l">sentences scoring -1</div><div class="v">239<i>-&gt;</i><span class="acc">67</span></div></div>
+<div class="stat"><div class="l">abstentions</div><div class="v">132<i>-&gt;</i><span class="acc">0</span></div></div>
+</div></div>
+<div style="font-size:44px;font-weight:700;margin-top:8px">Second corpus, held-out test split, 3276 sentences</div>
+<div class="stat"><div class="l">exact match</div><div class="v">82.2%<i>-&gt;</i><span class="acc">87.9%</span></div></div>
+<div class="foot">Sealed sets, scored by a teammate who did not write the code.</div>
+</section>
+
+<section id="card12">
+<div class="k">Dependencies</div>
+<h1>Python standard library <span class="acc">only</span></h1>
+<pre class="mono">from __future__ import annotations
+import itertools
+import re</pre>
+<div style="font-size:72px;font-weight:800">No model. No network. Deterministic.</div>
+</section>
+
+<section id="card13" style="justify-content:center;align-items:flex-start;gap:40px">
+<div class="k">Junction 2026 &middot; Challenge 320</div>
+<h1 style="font-size:160px">V&auml;iski</h1>
+<div style="font-size:72px;font-weight:600;color:var(--dim)">Aaltonomous Humanoid</div>
+<div class="hl" style="font-size:60px;margin-top:40px">Guesses only when it is sure.</div>
+<div class="foot" style="margin-top:30px">Sim results. The real robot has not been scored.</div>
+</section>
+
+</body></html>

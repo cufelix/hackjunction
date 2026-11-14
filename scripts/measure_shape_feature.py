@@ -32,7 +32,7 @@ def surface(shape, yaw, n=140):
     elif shape == "cylinder":
         a = np.linspace(0, 2*np.pi, 4*n, endpoint=False)
         rr = np.sqrt(np.linspace(0, 1, n)) * (SIZE/2)
-        top = np.vstack([np.c_[np.cos(a[:n])*r, np.sin(a[:n])*r] for r in rr])
+        top = np.vstack([np.c_[np.cos(a[::4])*r, np.sin(a[::4])*r] for r in rr])
         ring = np.c_[np.cos(a), np.sin(a)] * (SIZE/2)
     else:
         side = 2*SIZE/np.sqrt(3); R = side/np.sqrt(3)
