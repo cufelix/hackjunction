@@ -10,8 +10,9 @@ from .policy import ClassicalPolicy
 from .mock_world import make_mock_env
 
 REAL = {"yellow": "left", "blue": "center", "red": "right"}
-FINALS = ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_real")
-SIM = ("submission", "cand_r17", "rc1")
+FINALS = ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_real",
+          "submission")
+SIM = ("cand_r17", "rc1")
 
 
 def mapping(overlay, instruction, **kw):

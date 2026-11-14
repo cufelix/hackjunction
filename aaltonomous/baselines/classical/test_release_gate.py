@@ -11,11 +11,11 @@ import release_gate  # noqa: E402
 
 
 class TestReleaseGate(unittest.TestCase):
-    def test_rc1_fails_today_because_it_differs_from_submission(self):
+    def test_rc1_fails_because_it_differs_from_promoted_finals(self):
         lines = []
         self.assertFalse(release_gate.gate("rc1", out=lines.append))
         self.assertEqual(lines[-1], "RELEASE GATE FAIL")
-        self.assertTrue(any(l.startswith("instruction.normalize: submission=") for l in lines))
+        self.assertTrue(any(l.startswith("instruction.strict: submission=") for l in lines))
 
     def test_identical_overlay_passes(self):
         lines = []

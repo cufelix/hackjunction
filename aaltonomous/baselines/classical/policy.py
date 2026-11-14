@@ -38,7 +38,7 @@ from .held import HeldDetector
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
+from .planner import MotionOutputLimiter, Plan, Planner, lookup_bin, lookup_detection_bin, ramp
 from .safety_shell import reserve_pair, reserve_plan
 from .brain import BrainLayer, build_world
 from .brain.find import FindClient, extract_queries, match_found
@@ -66,8 +66,10 @@ class ClassicalPolicy:
         return spec.hand_lower + margin, spec.hand_upper - margin
 
     def __init__(self, config=None, scene=None, calibration=None, safety: SafetyConfig | None = None,
-                 require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None):
-        self.cfg = config if isinstance(config, dict) else load_config(config, overrides)
+                 require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None,
+                 profile=None, overlay=None):
+        self.cfg = config if isinstance(config, dict) else load_config(
+            config, overrides, profile=profile, overlay=overlay)
         self.held_detector = HeldDetector(self.cfg["grasp"].get("held_detector", "stall"),
                                           self.cfg["grasp"].get("held_threshold_rad", 0.045))
         self.scene = scene if isinstance(scene, Scene) else Scene.load(scene)
@@ -101,6 +103,10 @@ class ClassicalPolicy:
                 self.hand_calib = None
                 (log or print)(f"hand calibration disabled: {type(e).__name__}: {e}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
+        mo = self.cfg["motion"]
+        self.output_limiter = (MotionOutputLimiter(
+            mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"], mo["hand_max_acc"], 1.0 / HZ)
+            if mo.get("output_caps") is not None else None)
         # calib.fk_xcheck (FLAG, default OFF, log-only): RGB head-pose cross-check vs the Dex3 hand FK. Its own
         # ArmKinematics: the worker thread must never touch the planner's pinocchio data.
         self.fk_xcheck_enabled = bool((self.cfg.get("calib") or {}).get("fk_xcheck", False))
@@ -248,6 +254,8 @@ class ClassicalPolicy:
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
+        if self.output_limiter is not None:
+            self.output_limiter.reset()
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
         # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
         lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
@@ -464,18 +472,44 @@ class ClassicalPolicy:
 
     def act(self, obs):
         ng = bool((self.cfg.get("safety") or {}).get("nan_guard", False))
+        hold = None
         if ng:
             obs, hold = self._nan_guard(obs)
-            if hold is not None:
-                return hold
-        if self.fk_xcheck_enabled:   # before both paths: the safety shell's act() is the same entry point
-            self._poll_fk_xcheck(obs, float(obs.get("t", 0.0)))
-        res = self._act_shell(obs) if self._shell else self._act(obs)
+        if hold is None:
+            if self.fk_xcheck_enabled:   # before both paths: the safety shell's act() is the same entry point
+                self._poll_fk_xcheck(obs, float(obs.get("t", 0.0)))
+            res = self._act_shell(obs) if self._shell else self._act(obs)
+        else:
+            res = hold
+        if self.output_limiter is not None:
+            res = self._limit_motion_output(res, obs)
         if ng:
             a, h = np.asarray(res["arm_q_target"], float), np.asarray(res["hand_q_target"], float)
             if len(a) and len(h):
                 self._emitted = (a[-1].copy(), h[-1].copy())
         return res
+
+    def _limit_motion_output(self, action, obs):
+        """M4 final boundary: cap every route, including holds, home, endgame and empty-grasp queue replacement."""
+        a, h = np.asarray(action["arm_q_target"], float), np.asarray(action["hand_q_target"], float)
+
+        def start(key, target):
+            try:
+                q = np.asarray(obs.get(key), float).reshape(-1)
+            except (AttributeError, TypeError, ValueError):
+                q = np.asarray(target, float)
+            return q if q.shape == (14,) and np.all(np.isfinite(q)) else np.asarray(target, float)
+
+        a, h = self.output_limiter.limit(
+            a, h, start("arm_q", a[0]), start("hand_q", h[0]), float(obs.get("t", 0.0)))
+        out = {**action, "arm_q_target": a, "hand_q_target": h}
+        if len(a):
+            self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()
+            if self._shell:
+                self._shell_last = (self.arm_cmd.copy(), self.hand_cmd.copy())
+            if (self.cfg.get("debug") or {}).get("log_joint_offset", False):
+                self._last_policy_arm_cmd, self._last_policy_hand_cmd = self.arm_cmd.copy(), self.hand_cmd.copy()
+        return out
 
     # ------------------------------------------------------------------ safety.nan_guard
     _nan_t = -1e9
@@ -1555,7 +1589,9 @@ class ClassicalPolicy:
         if what == "release":
             rel = self.hand_cmd.copy()
             rel[sl] = self.post[self.cfg["grasp"].get("release_posture", "preshape")][sl]
-            h1 = ramp(self.hand_cmd, rel, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
+            mo = self.cfg["motion"]
+            amax = mo.get("hand_max_acc") if mo.get("output_caps") is not None else None
+            h1 = ramp(self.hand_cmd, rel, mo["hand_max_vel"], 1.0 / HZ, amax=amax)
             h1 = np.vstack([h1, np.repeat(rel[None], int(round(float(self.cfg["motion"]["open_hold_s"]) * HZ)), 0)])
             a1 = np.repeat(self.arm_cmd[None], len(h1), 0)
             a2, h2 = self.planner.go_to(self.arm_cmd, rel, home, self.post["open"])

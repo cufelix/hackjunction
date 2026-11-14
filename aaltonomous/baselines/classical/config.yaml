@@ -362,6 +362,7 @@ motion:
   arm_max_vel: 0.5            # rad/s per joint (safety filter allows 1.0)
   arm_max_acc: 1.5            # rad/s^2
   arm_vel_cap: null           # FLAG (Timi vel). rad/s cap on arm_max_vel (acc scaled by the same ratio); null = profile
+  output_caps: null            # FLAG (M4). {arm_vel, arm_acc, hand_vel, hand_acc}: planner + final stateful per-joint caps
   carry_scale: 1.0            # FLAG (Felix). <= 1: vmax/amax scale for the lift + carry phases only (slower carry)
   hand_max_vel: 1.2           # rad/s (filter allows 3.0)
   cart_step: 0.02             # Cartesian segments are split into IK waypoints this far apart

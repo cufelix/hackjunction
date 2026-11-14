@@ -49,6 +49,7 @@ flags:
   perception.color_gate.live_bins: true        # Felix gate  footprint = live bin estimate, else nominal + 10 cm near
   perception.color_gate.fk_mask: true          # Felix gate  FK arm/hand mask (dilated 15 px)
   motion.arm_vel_cap: 0.90                       # Timi vel   rad/s cap (sim profile 0.97)
+  motion.output_caps: {arm_vel: 0.85, arm_acc: 4.0, hand_vel: 1.5, hand_acc: 8.0}  # M4: every planner/policy route, including home/abort
   instruction.normalize: true                   # Felix lang   rc1 language layer (Modal 106/117, 0 wrong)
   perception.hue_guard.enabled: true            # r19 Felix  cross-label hue gap + top-face hue + red_min_s: orange/yellow abstain, never swap
   instruction.max_chars: 2000                   # r19 fuzz   cap absurd instruction length (clause boundary)

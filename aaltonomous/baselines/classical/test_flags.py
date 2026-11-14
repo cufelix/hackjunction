@@ -26,35 +26,19 @@ class TestFlags(unittest.TestCase):
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
 
-    def test_shipped_submission_overlay_is_stock_plus_the_ab_proven_flags(self):
-        stock = load_config(overlay="none")
+    def test_shipped_submission_overlay_is_exactly_promoted_finals_r21(self):
         sub = load_config(overlay="submission")
+        finals = load_config(overlay="finals_r21")
         self.assertEqual(sub.pop("overlay"), "submission")
-        on = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        self.assertEqual(on, {"instruction.resolve", "policy.bin_lookup", "grasp.close_posture", "hand.closed_tight",
-                              "grasp.point_in_palm", "motion.close_hold_s", "perception.classify_shape",
-                              "perception.hsv_set", "perception.split_blobs", "policy.grasp_diag_log",
-                              "grasp.close_posture_by_shape", "grasp.posture_apex_gate",
-                              "policy.insert_guard"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
-        sub["instruction"]["resolve"] = False
-        sub["policy"]["bin_lookup"] = "colour"
-        sub["policy"]["insert_guard"] = stock["policy"]["insert_guard"]   # rung 3 only: abstain (0 instead of -1)
-        for k in ("close_posture", "point_in_palm"):                       # pinch_v1 grasp (Modal 60/82 vs 52/82)
-            sub["grasp"][k] = stock["grasp"][k]
-        sub["hand"]["closed_tight"] = stock["hand"]["closed_tight"]
-        sub["motion"]["close_hold_s"] = stock["motion"]["close_hold_s"]
-        for sec, k in (("perception", "classify_shape"), ("perception", "hsv_set"), ("perception", "split_blobs"),
-                       ("policy", "grasp_diag_log"), ("grasp", "close_posture_by_shape"),
-                       ("grasp", "posture_apex_gate")):                     # final = cand_r14 (r14: 32/38, 28/36)
-            sub[sec][k] = stock[sec][k]
-        self.assertEqual(sub, stock)
+        self.assertEqual(finals.pop("overlay"), "finals_r21")
+        self.assertEqual(sub, finals)
         self.assertEqual(set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"]), set(FLAGS))
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):
             return {k for k, _, is_on, _, _ in effective_flags(load_config(overlay=name)) if is_on}
         self.assertEqual(on("ab_safety"), on("cand_r17") | {"policy.safety_shell"})
-        self.assertNotIn("policy.safety_shell", on("submission"))
+        self.assertNotIn("policy.safety_shell", on("cand_r17"))
         self.assertEqual(load_config(overlay="ab_safety")["policy"]["safety_shell_vel_reserve"], 0.0)
 
     def test_overlay_flips_only_its_flags(self):
@@ -102,9 +86,9 @@ class TestFlags(unittest.TestCase):
                   "ab_realcolour": {"instruction.resolve", "policy.bin_lookup", "grasp.point_in_palm",
                                     "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
                                     "perception.hsv_set", "perception.split_blobs"}}
-        r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary",
-                                            "policy.max_total_attempts"}
+        r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r14")) if is_on}
+        expect["ab_retry_vary"] = r14 | {"policy.insert_guard", "policy.retry_vary_grasp",
+                                         "policy.max_attempts_vary", "policy.max_total_attempts"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
         nopp = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r17")) if is_on}
         expect["ab_shape2d"] = nopp | {"perception.shape_2d_v2"}
@@ -147,7 +131,7 @@ class TestFlags(unittest.TestCase):
                                                                               "perception.color_gate.live_bins", "perception.color_gate.fk_mask"}
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.geometry_runtime", "grasp.held_detector",
                                                           "calib.plane.apply_height"}
-        expect["finals_r21"] = expect["finals_r20"]   # R29: same flags, rc6 code
+        expect["finals_r21"] = expect["finals_r20"] | {"motion.output_caps"}   # M4 final output limits
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -208,7 +192,7 @@ class TestFlags(unittest.TestCase):
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
                                       "finals_r21", "finals_real", "rc1", "rc1_strict",
-                                      "safe_profile"})
+                                      "safe_profile", "submission"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
@@ -315,7 +299,8 @@ class TestFlags(unittest.TestCase):
         """Overlays can never make anything faster than the stock sim profile."""
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
                           ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
-                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap")])   # arm_vel_cap: min() only
+                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap",
+                           "motion.output_caps")])   # cap flags only reduce motion
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",

@@ -10,10 +10,11 @@ Uses only head_rgb, head_depth, arm_q, hand_q, t from obs; camera intrinsics/ext
 calibration.yaml baked into the image (spec §11), so rebuild after a calibration change.
 Rung 1 only: the colour -> bin mapping is scene.yaml's, whatever the instruction says.
 Env: AALTO_TIME_LIMIT (s, default 120; must match the runner's --time-limit), AALTO_ARM_VEL (rad/s override),
-AALTO_PROFILE (config.yaml profile; default `sim` = sim-tuned, `none` = robot base values).
+AALTO_PROFILE (explicit opt-in; default `none` = robot base values, `sim` is only for non-finals simulation).
 """
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import time
@@ -30,15 +31,28 @@ log = logging.getLogger("aaltonomous.baseline")
 class ClassicalServerPolicy(Policy):
     name = "classical-rung1"
 
-    def __init__(self, time_limit=None, arm_vel=None, **kw):
+    def __init__(self, time_limit=None, arm_vel=None, profile=None, overlay=None, **kw):
         tl = float(time_limit or os.environ.get("AALTO_TIME_LIMIT", 120.0))
+        # This server is the real-robot entry point. Simulation remains available only by an explicit argument/env.
+        effective_profile = profile if profile is not None else os.environ.get("AALTO_PROFILE", "none")
+        effective_profile = effective_profile or "none"
         ov = {}
         av = arm_vel or os.environ.get("AALTO_ARM_VEL")
         if av:
             ov["motion.arm_max_vel"] = float(av)
         self.pol = ClassicalPolicy(threaded=True, require_confirm=False, time_limit=tl, overrides=ov,
-                                   log=lambda m: log.info(m), **kw)
+                                   profile=effective_profile, overlay=overlay, log=lambda m: log.info(m), **kw)
+        cfg = self.pol.cfg
+        selected_overlay = str(cfg.get("overlay", "none"))
+        if cfg.get("profile") == "sim" and (selected_overlay == "submission" or selected_overlay.startswith("finals")):
+            raise RuntimeError(f"refusing finals overlay {selected_overlay!r} under profile 'sim'; use profile='none'")
+        self.config_snapshot = copy.deepcopy(cfg)
         self.action_horizon = int(self.pol.cfg["motion"]["chunk"])
+        mo = cfg["motion"]
+        log.info("effective config profile=%s overlay=%s motion arm_vel=%.3f arm_acc=%.3f hand_vel=%.3f "
+                 "hand_acc=%s", cfg.get("profile"), selected_overlay, float(mo["arm_max_vel"]),
+                 float(mo["arm_max_acc"]), float(mo["hand_max_vel"]),
+                 "n/a" if mo.get("hand_max_acc") is None else f"{float(mo['hand_max_acc']):.3f}")
 
     def reset(self, instruction, task=None, seed=None):
         # An episode can end mid-look (time limit): let that planning thread finish before the next one starts,
@@ -60,7 +74,7 @@ class ClassicalServerPolicy(Policy):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     t0 = time.monotonic()
-    pol = ClassicalServerPolicy()
+    pol = ClassicalServerPolicy(profile=os.environ.get("AALTO_PROFILE", "none"))
     log.info("classical baseline loaded in %.1f s", time.monotonic() - t0)
     from .config import effective_flags  # integration: which opt-in features this image runs (container log)
     on = [f"{k}={v!r}" for k, v, is_on, _, _ in effective_flags(pol.pol.cfg) if is_on]

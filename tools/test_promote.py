@@ -94,6 +94,12 @@ def test_dry_run_rc1_writes_release_md(repo, tmp_path):
     assert git(repo, "status", "--porcelain", "--untracked-files=all") == ""
 
 
+def test_dry_run_finals_r21_checks_reviewed_allow_list(repo, tmp_path):
+    res = promote(repo, "--dry-run", "--no-equiv", "finals_r21", tmp=tmp_path)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "RELEASE FLAGS PASS" in res.stdout
+
+
 def test_unknown_overlay_fails_cleanly(repo, tmp_path):
     before = sha256(repo / SUB)
     res = promote(repo, "--dry-run", "--no-equiv", "does_not_exist", tmp=tmp_path)
