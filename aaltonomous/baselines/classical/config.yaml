@@ -126,7 +126,18 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 policy:
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   same_object_radius: 0.03
+  max_total_attempts: null    # global per-episode cap on started picks, any object (null = off). Guards against
+                              # an object knocked > same_object_radius that is re-detected as 'new' forever
   order: nearest_bin          # nearest_bin | largest
+  # Time triage (default off = old behaviour: the first plan that does not fit the time left ends the episode).
+  # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
+  # lazily; the episode ends only when nothing fits. Plans are NOT computed for every candidate (IK 0.3-6 s each).
+  time_triage: false
+  triage_order: duration      # duration = cheap-estimate order only | priority = estimate ties (within triage_tie_m) go by
+                              # shape cost (policy.shape_cost, detection.shape) then mapping confidence
+  triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority
+  shape_cost: {cube: 0, cylinder: 1, triangle: 2}
+  time_margin_s: 0.0          # a plan must end this long before time_limit (applies with and without triage)
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.

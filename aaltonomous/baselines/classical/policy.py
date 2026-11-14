@@ -86,6 +86,10 @@ class ClassicalPolicy:
         self._job = None
         self._decision = None
         self.last_detections = []
+        self.mapping_conf = dict(info.get("mapping_conf") or {})   # colour -> confidence (default 1.0), triage tie-break
+        self.too_long = []          # (position, plan duration) of feasible plans that did not fit the time left
+        self.n_started = 0          # executed plans started this episode, whatever object they were for
+        self._summary_logged = False
 
     def confirm(self):
         self._decision = "go"
@@ -137,6 +141,11 @@ class ClassicalPolicy:
             self.state = "look"
             return self._pop()
         if self.state == "look":
+            cap = self.cfg["policy"].get("max_total_attempts")
+            if cap is not None and self.n_started >= int(cap):   # knocked objects reappear as 'new': hard stop
+                self._note(t, f"attempt cap reached ({self.n_started} >= max_total_attempts {int(cap)}): done")
+                self.state = "done"
+                return self._hold(done=True)
             if self.threaded:
                 if self._job is None:
                     self._job = {"obs": obs, "result": None}
@@ -195,16 +204,44 @@ class ClassicalPolicy:
         else:
             def key(d):
                 return -d.n_px
-        cands.sort(key=key)
+        pol = self.cfg["policy"]
+        triage = bool(pol.get("time_triage", False))
+        if triage and pol.get("triage_order", "duration") == "priority":
+            eps = float(pol.get("triage_tie_m", 0.02))   # candidates with ~equal cheap estimate: cheaper shape first
+            cands.sort(key=lambda d: (round(key(d) / eps), self._priority(d)))
+        else:
+            cands.sort(key=key)
+        t = float(obs.get("t", 0.0))
+        left = self.time_limit - t - float(pol.get("time_margin_s", 0.0))
+        n_long, shortest = 0, None
         for d in cands:
+            if triage:  # a plan that did not fit before cannot fit now (time only runs out; plans start from home)
+                rad = pol["same_object_radius"]
+                if any(np.linalg.norm(d.top[:2] - p) < rad and dur > left for p, dur in self.too_long):
+                    n_long += 1
+                    continue
             others = [o.top[:2] for o in dets if o is not d]
             p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, obstacles=others)
             self.plans.append(p)
             if p.ok:
+                if triage and p.duration > left:  # feasible but too slow for the time left: try the next candidate
+                    self.too_long.append((d.top[:2], p.duration))
+                    n_long += 1
+                    shortest = p if shortest is None or p.duration < shortest.duration else shortest
+                    self.log(f"[classical] {d.color} takes {p.duration:.1f} s > {left:.1f} s left: trying the next candidate")
+                    continue
                 return ("plan", p, len(dets))
             self.failed.append(d.top[:2])
             self.log(f"[classical] skip {d}: {p.reason}")
+        if n_long:
+            return ("notime", shortest, len(dets))
         return ("none", None, len(dets))
+
+    def _priority(self, d):
+        """Triage tie-break tuple (lower = first): shape cost (cube < cylinder < triangle; `shape` attribute of the
+        detection, unknown = 0), then -mapping confidence of the colour (default 1.0)."""
+        cost = self.cfg["policy"].get("shape_cost", {})
+        return (float(cost.get(getattr(d, "shape", None), 0.0)), -float(self.mapping_conf.get(d.color, 1.0)))
 
     def _after_look(self, res, t):
         kind = res[0]
@@ -216,8 +253,13 @@ class ClassicalPolicy:
             self._note(t, f"nothing left to sort ({res[2]} detections)")
             self.state = "done"
             return self._hold(done=True)
+        if kind == "notime":
+            self._note(t, f"no candidate fits the time left (shortest {res[1].duration:.0f} s)"
+                          if res[1] is not None else "no candidate fits the time left")
+            self.state = "done"
+            return self._hold(done=True)
         plan = res[1]
-        if t + plan.duration > self.time_limit:
+        if t + plan.duration + float(self.cfg["policy"].get("time_margin_s", 0.0)) > self.time_limit:
             self._note(t, f"not enough time for {plan.color} ({plan.duration:.0f} s)")
             self.state = "done"
             return self._hold(done=True)
@@ -231,6 +273,7 @@ class ClassicalPolicy:
     def _start(self, plan, t):
         xy = plan.waypoints["grasp"][:2]
         self.attempts.append((xy, 1))
+        self.n_started += 1
         self._enqueue(plan.arm, plan.hand)
         self.state = "executing"
         self._note(t, f"execute {plan.summary()}")
@@ -254,6 +297,10 @@ class ClassicalPolicy:
         remote runner needs one request per hold chunk instead of one per tick: the command rate stays at 30 Hz
         even when the planner thread and other processes (sims) load the CPU."""
         k = 1 if done else max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
+        if done and not self._summary_logged:   # passive end-of-episode summary (log only, once)
+            self._summary_logged = True
+            self.log(f"[classical] episode end: attempts={len(self.attempts)} failed={len(self.failed)} "
+                     f"too_long={len(getattr(self, 'too_long', []))} started={self.n_started}")
         return {"arm_q_target": np.repeat(self.arm_cmd[None], k, 0), "hand_q_target": np.repeat(self.hand_cmd[None], k, 0),
                 "done": bool(done)}
 
