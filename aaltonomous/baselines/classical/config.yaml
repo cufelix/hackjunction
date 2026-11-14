@@ -12,6 +12,7 @@ profile_auto:               # FLAG (auto profile). Used only when no AALTO_PROFI
   auto_detect: false         # true: decide sim | none from the first auto_frames head RGB-D frames (profile_detect.py)
   auto_frames: 5             # frames inspected before the decision (>= 1); sim needs ALL of them (palette is log-only)
   require_rgb_cue: false     # FLAG: sim also needs a quiet, non-degenerate RGB (rgb_noise <= RGB_SIM_MAX); disagreement -> none (real)
+  force: null                # FLAG: null | sim | none. sim/none = skip detection, always that profile (sim = sim profile + sim_overrides exactly as auto would on a sim decision). Baked by Dockerfile ARG PROFILE_MODE
   sim_overrides: {}          # dotted key -> value, applied as load_config overrides only when auto picks sim
 
 scene:

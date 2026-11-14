@@ -47,6 +47,19 @@ class ClassicalServerPolicy(Policy):
         if not explicit:
             from .config import _get, load_config
             probe = load_config(profile="none", overlay=overlay)   # flags only: no profile applied yet
+            force = probe["profile_auto"].get("force")
+            if force in ("sim", "none"):   # PROFILE_MODE image: no detection, the decision is made at build time
+                extra = None
+                if force == "sim":
+                    extra = dict(probe["profile_auto"]["sim_overrides"] or {})
+                    for k in extra:
+                        _get(probe, k)
+                    log.info("[profile] forced=sim, sim_overrides applied: %s", sorted(extra))
+                else:
+                    log.info("[profile] forced=none (real robot)")
+                self.pol = None
+                self._build(force, refuse_finals_sim=False, extra_overrides=extra)
+                return
             if probe["profile_auto"]["auto_detect"]:
                 for k in (probe["profile_auto"]["sim_overrides"] or {}):
                     _get(probe, k)   # KeyError at startup for a typo, not mid-episode

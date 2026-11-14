@@ -14,7 +14,14 @@
 #
 # CPU only (HSV + depth perception, Pinocchio IK); runs the same with or without --gpus. Context: needs
 # third_party/xr_teleoperate/assets/g1/g1_body29_hand14.urdf (a real file, not a symlink out of the context).
+# Build args: OVERLAY = which overlays/<name>.yaml is baked (default submission); PROFILE_MODE = auto (auto-detect sim|real
+# from the first frames, default) | sim (always the sim profile + sim_overrides) | real (always real profile 'none').
+#   docker build -f tools/submission.Dockerfile --build-arg OVERLAY=finals_r24 --build-arg PROFILE_MODE=real -t ... .
+ARG OVERLAY=submission
+ARG PROFILE_MODE=auto
 FROM nvidia/cuda:12.8.0-base-ubuntu22.04
+ARG OVERLAY
+ARG PROFILE_MODE
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 && rm -rf /var/lib/apt/lists/*
@@ -36,8 +43,10 @@ COPY aaltonomous/baselines/classical/brain/ aaltonomous/baselines/classical/brai
 COPY aaltonomous/baselines/classical/overlays/ aaltonomous/baselines/classical/overlays/
 COPY aaltonomous/baselines/classical/assets/ aaltonomous/baselines/classical/assets/
 # THE flag switch: the submission overlay, baked in where load_config() looks for it.
-COPY aaltonomous/baselines/classical/overlays/submission.yaml aaltonomous/baselines/classical/overlay.yaml
-COPY tools/flags.py tools/check_release_flags.py tools/
+COPY aaltonomous/baselines/classical/overlays/${OVERLAY}.yaml aaltonomous/baselines/classical/overlay.yaml
+COPY tools/flags.py tools/check_release_flags.py tools/set_profile_mode.py tools/
+RUN python3 tools/set_profile_mode.py aaltonomous/baselines/classical/overlay.yaml "${PROFILE_MODE}"
+ENV PROFILE_MODE=${PROFILE_MODE} OVERLAY=${OVERLAY}
 # Build-time checks (fail the build, not the run): config + overlay + URDF + calibration load; print the flag set.
 RUN python3 -c "from aaltonomous.baselines.classical.policy_server import ClassicalServerPolicy; ClassicalServerPolicy()" \
  && python3 tools/flags.py \

@@ -26,7 +26,7 @@ CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_postur
            "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust", "robust_v2"),
            "perception.topface_mode": ("top35", "whole_blob"),
            "perception.principal_point": ("file", "center"),
-           "perception.online_pitch_cal": (False, True, "table"), "brain.backend": ("stub", "llamacpp")}
+           "perception.online_pitch_cal": (False, True, "table"), "brain.backend": ("stub", "llamacpp"), "profile_auto.force": (None, "sim", "none")}
 VECTORS = {"grasp.point_in_palm": 3, "grasp.cage_point_in_palm": 3, "grasp.cage_finger_posture": 7,
            "hand.closed_tight": 7, "perception.y_affine": 2, "grasp.soft_overshoot": 7}
 
@@ -35,6 +35,7 @@ VECTORS = {"grasp.point_in_palm": 3, "grasp.cage_point_in_palm": 3, "grasp.cage_
 FLAGS = {
     "profile_auto.auto_detect": ("profile auto", False, "no AALTO_PROFILE/arg: pick sim | none (real) from the first frames (profile_detect.py); sim if a majority of frames pass; vote = depth holes only (plane std and palette are log-only)"),
     "profile_auto.auto_frames": ("profile auto", 5, "frames inspected before the profile is chosen (zero-row holds meanwhile), >= 1; sim needs a majority of frames; vote = depth holes only (plane std and palette are log-only)"),
+    "profile_auto.force": ("profile force", None, "null | sim | none: skip auto-detection and always build that profile (sim also applies profile_auto.sim_overrides, exactly as auto does on a sim decision); image build ARG PROFILE_MODE=sim|real sets it"),
     "profile_auto.require_rgb_cue": ("profile auto", False, "auto-detect: a frame votes sim only if depth is hole-free AND rgb is a valid, quiet image (rgb_noise <= 0.4, not black/flat); clean depth + noisy/missing/degenerate rgb -> none (real)"),
     "profile_auto.sim_overrides": ("profile auto", {}, "auto-detect=sim only: dotted key -> value applied as load_config overrides (sim-breaking finals flags back to rc1); real robot keeps the overlay values"),
     "brain.backend": ("brain", "stub", "stub (= classical choice) | llamacpp (bounded async HTTP + GBNF)"),
