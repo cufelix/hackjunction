@@ -78,4 +78,4 @@ flags:
   perception.gate_below_bins: true   # r23 candidate
   instruction.structured: true   # r23 candidate
   instruction.hazard_guard: true   # r23 candidate
-  profile_auto.sim_overrides: {calib.plane.apply_height: false, grasp.held_detector: stall, grasp.release_confirm: false, grasp.release_wait_s: null, policy.fixed_mapping: null, scene.counter_z_prior: null}  # sim only: X8 add-one round 1 losers back to rc1 (fixed_mapping -5, counter_z_prior 0, apply_height 0, release group 0, held_detector 1)
+  profile_auto.sim_overrides: {bin.vote.enabled: false, calib.plane.apply_height: false, grasp.held_calibration.enabled: false, grasp.held_detector: stall, grasp.release_confirm: false, grasp.release_wait_s: null, hand.mirror_index_middle: false, motion.arm_vel_cap: null, motion.output_caps: null, perception.online_pitch_cal: false, policy.fixed_mapping: null, scene.counter_z_prior: null}  # sim only (rc1 values): X8 add-one losers round 1 (6) + round 2 mild losers (6); real robot keeps r22
