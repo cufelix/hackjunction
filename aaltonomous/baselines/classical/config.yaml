@@ -11,6 +11,7 @@ profile: sim
 profile_auto:               # FLAG (auto profile). Used only when no AALTO_PROFILE / profile arg is given (policy_server)
   auto_detect: false         # true: decide sim | none from the first auto_frames head RGB-D frames (profile_detect.py)
   auto_frames: 5             # frames inspected before the decision (>= 1); sim needs more than half of them
+  sim_overrides: {}          # dotted key -> value, applied as load_config overrides only when auto picks sim
 
 scene:
   counter_z_prior: null       # FLAG: no-depth fallback table height (m, pelvis frame, 0..0.3); null = nominal scene.yaml z

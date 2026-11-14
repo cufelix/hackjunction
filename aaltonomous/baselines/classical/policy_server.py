@@ -45,9 +45,11 @@ class ClassicalServerPolicy(Policy):
         self._build_args = (tl, ov, overlay, kw)
         self._auto_buf, self._pending_reset, self.probe_cfg = None, None, None
         if not explicit:
-            from .config import load_config
+            from .config import _get, load_config
             probe = load_config(profile="none", overlay=overlay)   # flags only: no profile applied yet
             if probe["profile_auto"]["auto_detect"]:
+                for k in (probe["profile_auto"]["sim_overrides"] or {}):
+                    _get(probe, k)   # KeyError at startup for a typo, not mid-episode
                 self.probe_cfg = probe
                 self._auto_frames = max(1, int(probe["profile_auto"]["auto_frames"]))
                 self._auto_buf = []
@@ -57,9 +59,10 @@ class ClassicalServerPolicy(Policy):
                 return
         self._build(effective_profile, refuse_finals_sim=True)
 
-    def _build(self, profile, refuse_finals_sim):
+    def _build(self, profile, refuse_finals_sim, extra_overrides=None):
         tl, ov, overlay, kw = self._build_args
-        self.pol = ClassicalPolicy(threaded=True, require_confirm=False, time_limit=tl, overrides=ov,
+        self.pol = ClassicalPolicy(threaded=True, require_confirm=False, time_limit=tl,
+                                   overrides={**(ov or {}), **(extra_overrides or {})},
                                    profile=profile, overlay=overlay, log=lambda m: log.info(m), **kw)
         cfg = self.pol.cfg
         selected_overlay = str(cfg.get("overlay", "none"))
@@ -112,7 +115,11 @@ class ClassicalServerPolicy(Policy):
         log.info("[profile] auto=%s votes=%d/%d (depth_holes=%.4f, plane_std_mm=%.2f, palette=%s, frames=%d)", profile,
                  info["votes"], info["frames"], info["depth_holes"], info["plane_std_mm"], info["palette"],
                  info["frames"])
-        self._build(profile, refuse_finals_sim=False)   # sim from auto-detect may run finals overlays
+        extra = None
+        if profile == "sim":
+            extra = dict(self.probe_cfg["profile_auto"]["sim_overrides"] or {})
+            log.info("[profile] sim_overrides applied: %s", sorted(extra))
+        self._build(profile, refuse_finals_sim=False, extra_overrides=extra)   # sim from auto-detect may run finals overlays
         if self._pending_reset is not None:
             self._reset_now(*self._pending_reset)
             self._pending_reset = None

@@ -9,6 +9,7 @@ name: submission
 flags:
   profile_auto.auto_detect: false
   profile_auto.auto_frames: 5
+  profile_auto.sim_overrides: {}
   calib.hand_icp_primary: false
   calib.counter_after_hand: false
   calib.refit_per_look: false
