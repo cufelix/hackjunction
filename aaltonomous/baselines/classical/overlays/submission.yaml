@@ -7,6 +7,9 @@
 # Flip a flag ONLY after its A/B run (knowledge/humanoid/21-submission-pipeline.md), then rebuild. Check: python3 tools/flags.py --overlay submission
 name: submission
 flags:
+  policy.done_confirm: false
+  perception.look_timeout_s: null
+  planner.per_target_guard: false
   calib.plane.apply_height: false               # P0 table   runtime counter_z from head depth (ab_apply_height overlay turns it on)
   calib.fk_xcheck: false                        # B2         passive RGB/FK head-pose cross-check (log-only)
   policy.safety_shell: false                    # safety     hold-last + 20 % reserve + no blocking calls in act(); OFF until its A/B

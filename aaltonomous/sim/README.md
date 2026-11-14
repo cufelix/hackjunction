@@ -37,7 +37,7 @@ Pure-numpy parts (`layout.py`) are unit-tested offline: `python -m unittest aalt
 python -m aaltonomous.sim.evaluate --policy oracle --task sort_fixed    --trials 10 --no-cameras   # rung 1
 python -m aaltonomous.sim.evaluate --policy oracle --task sort_language --trials 10 --no-cameras   # rung 2
 python -m aaltonomous.sim.evaluate --policy ws://localhost:8000 --team demo --trials 20             # policy server
-python -m aaltonomous.sim.evaluate --container team/sub:latest --team demo --trials 20               # docker image
+python -m aaltonomous.sim.evaluate --container team/sub:latest --policy ws://localhost:8000 --team demo --trials 20  # docker image
 python -m unittest aaltonomous/sim/test_sim_offline.py                                              # offline
 ```
 (env `isaac` + `PYTHONPATH=$REPO`; `msgpack` was pip-installed into `isaac` for the deploy protocol.)

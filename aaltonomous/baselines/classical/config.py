@@ -45,6 +45,9 @@ FLAGS = {
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
+    "policy.done_confirm": ("finals done", False, "finish only after configured consecutive empty looks spanning the confirmation window; failed looks retry until the episode limit"),
+    "perception.look_timeout_s": ("finals done", None, "wall-clock deadline for one asynchronous detector call; timeout is a failed look, never evidence that the scene is clear"),
+    "planner.per_target_guard": ("finals done", False, "contain a planning exception or infeasible result to that target, cool it down, and continue with other detections"),
     "policy.fixed_mapping": ("organisers P0", None, "colour->bin fallback when the instruction is empty/missing (null = sim FIXED_MAPPING; real robot: yellow left, blue center, red right)"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
@@ -247,6 +250,27 @@ def check_flag_values(cfg):
         raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")
     if not isinstance(_get(cfg, "safety.nan_guard"), bool):
         raise ValueError("safety.nan_guard: want true or false")
+    if not isinstance(_get(cfg, "policy.done_confirm"), bool):
+        raise ValueError("policy.done_confirm: want true or false")
+    looks = _get(cfg, "policy.done_confirm_looks")
+    if not isinstance(looks, int) or isinstance(looks, bool) or looks < 2:
+        raise ValueError(f"policy.done_confirm_looks = {looks!r}: want an int >= 2")
+    span = _get(cfg, "policy.done_confirm_span_s")
+    if isinstance(span, bool) or not isinstance(span, (int, float)) or not np.isfinite(span) or span < 0.0:
+        raise ValueError(f"policy.done_confirm_span_s = {span!r}: want finite seconds >= 0")
+    deadline = _get(cfg, "perception.look_timeout_s")
+    if deadline is not None and (isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+                                 or not np.isfinite(deadline) or deadline <= 0.0):
+        raise ValueError(f"perception.look_timeout_s = {deadline!r}: want null or finite seconds > 0")
+    max_inflight = _get(cfg, "perception.detect_max_inflight")
+    if not isinstance(max_inflight, int) or isinstance(max_inflight, bool) or max_inflight < 1:
+        raise ValueError(f"perception.detect_max_inflight = {max_inflight!r}: want an int >= 1")
+    if not isinstance(_get(cfg, "planner.per_target_guard"), bool):
+        raise ValueError("planner.per_target_guard: want true or false")
+    cooldown = _get(cfg, "planner.per_target_cooldown_s")
+    if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)) \
+            or not np.isfinite(cooldown) or cooldown <= 0.0:
+        raise ValueError(f"planner.per_target_cooldown_s = {cooldown!r}: want finite seconds > 0")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:

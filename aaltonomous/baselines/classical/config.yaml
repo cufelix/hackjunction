@@ -39,6 +39,8 @@ calib:
     depth_tolerance_m: 0.15   # optional rejection cue only; invalid/missing depth is ignored
 
 perception:
+  look_timeout_s: null     # FLAG (finals done). null = off; e.g. 5.0 bounds one async detector call
+  detect_max_inflight: 2      # bounded retry: at most this many detector calls may remain wedged concurrently
   camera: head
   # OpenCV HSV (H 0-180, S/V 0-255). Each colour = list of [lo, hi] ranges (red wraps around H=0).
   hsv:
@@ -378,6 +380,10 @@ motion:
   hold_ticks: 6               # ticks per hold while planning / waiting (fewer requests; <= 0.2 s extra latency)
   counter_clearance: 0.03     # hand points above the counter footprint stay this high during transit
 
+planner:
+  per_target_guard: false     # FLAG (finals done). A failed/raising target cannot stop planning for other detections
+  per_target_cooldown_s: 2.0  # after a target fails planning, wait this long before offering it again
+
 # Arms out of the head camera's view of the cube region and above counter height. TUNE on the robot
 # (start = where teleop leaves the arms; the first move goes there at arm_max_vel).
 # Default (2026-11-11, layout v1): hands ~22 cm above pelvis height at y = +-0.22 m, all hand points >= 6 cm above
@@ -403,6 +409,9 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)
   safety_shell_vel_reserve: 0.0  # with safety_shell: >0 slows every plan to <= (1 - this) x the SafetyFilter velocity limit (e.g. 0.2); 0 = plans untouched
+  done_confirm: false         # FLAG (finals done). Empty/error look is not enough to end; confirm below before done
+  done_confirm_looks: 2       # minimum consecutive empty detector results (must be >= 2)
+  done_confirm_span_s: 10.0   # first-to-last empty-look span required before declaring the counter clear
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   fixed_mapping: null         # FLAG (organisers P0). colour->bin when the instruction is empty/missing; null = sim FIXED_MAPPING
   insert_guard: false         # FLAG (insert). insert_shapes (task id or 'hole ... lid' sentence): abstain on every
