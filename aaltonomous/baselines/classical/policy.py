@@ -86,6 +86,7 @@ class ClassicalPolicy:
                 (log or print)(f"hand calibration disabled: {type(e).__name__}: {e}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.perception.bin_shift_src = self.planner   # perception.color_gate.live_bins reads planner.bin_shift (bin.vote)
+        self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
         self.require_confirm = require_confirm
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
         if self._shell:   # policy.safety_shell: all heavy work off the 30 Hz loop (look/plan thread), plans within the reserve
