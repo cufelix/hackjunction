@@ -389,7 +389,7 @@ class Planner:
             p = self._plan_side_hints(det, side, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float),
                                       drop_slot=drop_slot, source_bin=source_bin)
             if p.ok:
-                if g.get("arm", "best") != "best":
+                if g.get("arm", "best") != "best" or self._lying_reach_on(det):   # lying: default arm first
                     return p
                 good.append(p)
             else:
@@ -428,6 +428,9 @@ class Planner:
         some arm has a full plan to `bin_name` (checked from home). Returns a Plan with target_bin 'counter'."""
         from dataclasses import replace
         last = Plan(False, color=det.color, reason="no relocation spot")
+        if self._lying_reach_on(det):   # its re-plan from the spot would use the stale ridge / prism_xy
+            last.reason = "lying prism: no relocation"
+            return last
         H = self._object_height(det)
         for spot in self.relocation_spots(det, bin_name, obstacles):
             d2 = replace(det, top=np.r_[spot, self.scene.counter_z + H])
@@ -476,10 +479,14 @@ class Planner:
             # Width is valid only across the proposal's minor axis. Never fall
             # through to legacy orientations after accepting a generic proposal.
             return self._plan_side_generic(det, side, bin_name, arm_q, hand_q, **kw)
-        if self._lying_on(det) and kw.get("place_xy") is None and kw.get("source_bin") is None:
-            p = self._plan_side_lying(det, side, bin_name, arm_q, hand_q, **kw)
-            if p is not None:
-                return p      # else: the current (standing-prism) path below
+        if self._lying_on(det):
+            if kw.get("place_xy") is None and kw.get("source_bin") is None:
+                p = self._plan_side_lying(det, side, bin_name, arm_q, hand_q, **kw)
+                if p is not None:
+                    return p      # else: the current (standing-prism) path below
+            if self._lying_reach_on(det):   # grasp.lying_prism_arm_by_reach: no standing-prism grasp of a lying prism
+                return Plan(False, side=side, color=det.color, target_bin=bin_name,
+                            reason=f"lying prism: no {side} ridge heading reachable")
         vy = (self.vary or {}).get("yaw")
         # A corrective cleanup has place_xy but still needs a changed grasp after a miss. Ordinary relocations keep
         # the legacy free-yaw planning because their destination search is already the fallback path.
@@ -554,6 +561,9 @@ class Planner:
         ry, pxy = getattr(det, "ridge_yaw", None), getattr(det, "prism_xy", None)
         return (bool(self.cfg["grasp"].get("lying_prism", False)) and getattr(det, "prism_orientation", None) == "lying"
                 and ry is not None and np.isfinite(ry) and pxy is not None and bool(np.all(np.isfinite(pxy))))
+
+    def _lying_reach_on(self, det):
+        return bool(self.cfg["grasp"].get("lying_prism_arm_by_reach", False)) and self._lying_on(det)
 
     def lying_headings(self, ridge_yaw, side):
         """Candidate palm-x headings (pelvis rad), best first, for a prism lying with its ridge along `ridge_yaw`. The jaw

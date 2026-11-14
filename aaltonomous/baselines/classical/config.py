@@ -74,6 +74,7 @@ FLAGS = {
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "perception.prism_orientation": ("prism orient", False, "Detection.prism_orientation standing|lying from the footprint fill + top-band strip (+ height when it differs); lying -> shape triangle, ridge_yaw, prism_xy"),
     "grasp.lying_prism": ("prism orient", False, "lying prism (needs perception.prism_orientation): jaw closes across the ridge (hand heading = ridge +- 90 deg), grasp at the triangle-section centroid height, configured close posture"),
+    "grasp.lying_prism_arm_by_reach": ("prism orient", False, "lying prism (needs grasp.lying_prism): arm + heading chosen by reachability (default arm first); no reachable ridge heading on either arm -> abstain, never the standing-prism path"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),

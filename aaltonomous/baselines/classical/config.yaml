@@ -280,6 +280,7 @@ grasp:
                               # (palm x = the closing axis = ridge +- 90 deg), grasp at the cross-section centroid height
                               # (object_dims apothem = altitude/3), grasp.close_posture (never the standing-prism demo posture)
   lying_yaw_tol_deg: 10.0     # lying_prism: achieved palm-x heading vs ridge +- 90 deg; 22.5 mm half length * sin(10 deg) = 3.9 mm < the 5.2 mm squeeze
+  lying_prism_arm_by_reach: false  # FLAG (prism orient, needs lying_prism). Arm + heading by reachability: default arm first, abstain when neither arm reaches a ridge heading
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height

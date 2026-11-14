@@ -63,3 +63,4 @@ flags:
   perception.color_gate.sat_floor: true
   perception.prism_orientation: true            # r22 prism standing vs lying triangular prism (organiser: orientation is random)
   grasp.lying_prism: true                       # r22 prism lying prism: close across the ridge, section-centroid height
+  grasp.lying_prism_arm_by_reach: true          # T6 lying prism: pick the arm + heading that reaches the ridge; abstain if none
