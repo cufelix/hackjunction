@@ -44,3 +44,18 @@ grasp.point_in_palm: [0.1094, -0.0694, 0.0142]
 fingertip = point at kinematics.TIP (52 mm along distal link), rigid point contact, no pad geometry; linear joint
 interpolation preshape->closed with the object fixed; lead = remaining joint travel at first contact; object centred on
 the grasp point; prism centred on its centroid; sim profile, fingers forward.
+
+## Prism yaw sweep (prism_yaw_sweep.py / .out, 2 deg steps over 0-120)
+Convention: pelvis frame at a real left-arm IK pose (tilt 0); rel = apex heading - finger heading (palm x), CCW from
+above; planner phi = -rel mod 120 (left heading = apex + phi + 120k; right: s = -1).
+- pinch_v1 (41.3 mm): NO window with thumb AND index >= 1 mm. Thumb inside only for rel 120..34 (to -4.1), index
+  inside only for rel 60..94 (to -4.2) while the thumb is +4.8..+5.5 outside. Best compromise rel 106: both still
+  outside (+2.7 / +2.8). No yaw alignment makes pinch_v1 two-sided on the prism.
+- pinch_demo (29.1 mm): two 30-deg windows, middle clear (>= +13):
+  rel 52..82, centre 67: i/t -2.6/-2.4, lead 0.247 (index_1), max 0.332 -> phi 53 (recommended, lower lead)
+  rel 114..24 (wraps), centre 9: i/t -2.6/-2.5, lead 0.412 (thumb_1), max 0.532 -> phi 111
+  Outside the windows both tips still penetrate >= 0.6 mm at every yaw (weak, not one-sided).
+- Sign check: oracle old optimum phi 105 = rel 15, inside the phi-111 window. Right arm (s = -1, config mirror,
+  tip error 0.00 mm) reproduces the left distances at both centres.
+- Assumed: point tips at kinematics.TIP, rigid contact, linear interpolation from our preshape, object fixed,
+  centroid on the grasp point, no yaw_tri_shift, one IK pose per arm (0.30, +-0.10).
