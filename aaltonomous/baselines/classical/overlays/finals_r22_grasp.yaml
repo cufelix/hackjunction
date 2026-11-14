@@ -1,0 +1,63 @@
+# finals_r22_grasp: finals_r21 plus the opt-in three-contact cage and standing-prism vertex alignment.
+name: finals_r22_grasp
+flags:
+  instruction.resolve: true
+  policy.fixed_mapping: {yellow: left, blue: center, red: right}
+  policy.insert_guard: true
+  policy.bin_lookup: resolve_bin
+  perception.self_calibration.enabled: false
+  perception.principal_point: file
+  perception.y_affine: null
+  perception.classify_shape: true
+  perception.triangle_pose: false
+  perception.near_bin_guard: false
+  perception.no_blob_shape: false
+  perception.shape_diag: false
+  perception.hsv_set: robust_v2
+  perception.split_blobs: true
+  grasp.yaw_align: false
+  grasp.yaw_phi_deg: 105
+  grasp.yaw_tri_shift: true
+  grasp.tri_vertex_align: true
+  policy.time_triage: false
+  policy.max_total_attempts: 18
+  policy.max_attempts: 2
+  policy.retry_pass: false
+  policy.time_margin_s: 0.0
+  policy.episode_summary_log: false
+  policy.retry_vary_grasp: true
+  policy.max_attempts_vary: 3
+  grasp.border_posture: false
+  policy.verify_placement: false
+  policy.verify_yellow_unknown: false
+  policy.max_corrections_per_episode: null
+  grasp.drop_slots: true
+  grasp.drop_slot_overflow: counter
+  policy.grasp_diag_log: true
+  motion.carry_scale: 1.0
+  motion.close_hold_s: 1.2
+  motion.lift_on_stall.enabled: false
+  motion.lift_on_stall.timeout_s: 1.2
+  grasp.point_in_palm: [0.0862, -0.0864, 0.0143]
+  grasp.cage_mode: true
+  grasp.close_posture: closed_tight
+  grasp.close_posture_by_shape: true
+  grasp.posture_by_shape_min_conf: 0.5
+  grasp.posture_apex_gate: true
+  hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]
+  perception.color_gate.enabled: true
+  perception.online_pitch_cal: table
+  perception.color_gate.live_bins: true
+  perception.color_gate.fk_mask: true
+  motion.arm_vel_cap: 0.90
+  instruction.normalize: true
+  perception.hue_guard.enabled: true
+  instruction.max_chars: 2000
+  safety.nan_guard: true
+  instruction.strict: true
+  policy.safety_shell: true
+  bin.vote.enabled: false
+  bin.geometry_runtime: true
+  grasp.held_detector: finger_sum
+  calib.plane.apply_height: true
+  perception.color_gate.sat_floor: true

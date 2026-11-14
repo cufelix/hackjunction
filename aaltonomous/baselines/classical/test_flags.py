@@ -148,6 +148,7 @@ class TestFlags(unittest.TestCase):
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.geometry_runtime", "grasp.held_detector",
                                                           "calib.plane.apply_height"}
         expect["finals_r21"] = expect["finals_r20"]   # R29: same flags, rc6 code
+        expect["finals_r22_grasp"] = expect["finals_r21"] | {"grasp.cage_mode", "grasp.tri_vertex_align"}
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -155,7 +156,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
-        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21"):
+        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21",
+                  "finals_r22_grasp"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
@@ -207,7 +209,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_real", "rc1", "rc1_strict",
+                                      "finals_r21", "finals_r22_grasp", "finals_real", "rc1", "rc1_strict",
                                       "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
@@ -220,6 +222,16 @@ class TestFlags(unittest.TestCase):
         self.assertTrue(rc1["instruction"]["normalize"])
         base["overlay"], base["instruction"]["normalize"] = "rc1", True
         self.assertEqual(rc1, base)
+
+    def test_finals_r22_is_r21_plus_only_the_two_grasp_flags(self):
+        r21 = load_config(overlay="finals_r21")
+        r22 = load_config(overlay="finals_r22_grasp")
+        self.assertEqual((r21.pop("overlay"), r22.pop("overlay")), ("finals_r21", "finals_r22_grasp"))
+        self.assertFalse(r21["grasp"]["cage_mode"])
+        self.assertFalse(r21["grasp"]["tri_vertex_align"])
+        r22["grasp"]["cage_mode"] = False
+        r22["grasp"]["tri_vertex_align"] = False
+        self.assertEqual(r22, r21)
 
     def test_cand_r17_differs_from_historical_r16_nopp_only_in_max_total_attempts(self):
         r16, r17 = load_config(overlay="cand_r16_nopp"), load_config(overlay="cand_r17")

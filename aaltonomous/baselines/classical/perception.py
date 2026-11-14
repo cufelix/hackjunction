@@ -105,9 +105,10 @@ class Detection:
     shape: str | None = None   # "cube" | "cylinder" | "triangle" | None (unknown)
     apex_yaw: float | None = None  # triangle only: pelvis-frame heading (rad, x fwd, y left) centre -> any one vertex (mod 120 deg)
     apex_conf: float = 0.0     # confidence of apex_yaw, 0..1 (from perception.triangle_pose)
+    vertex_yaw: float | None = None  # triangle only: blob rectangle's pelvis-frame vertex line (mod 120 deg)
     shape_conf: float = 0.0    # shape_id confidence (0..1) behind `shape`
     apex_gate: tuple | None = None  # grasp.posture_apex_gate only: (apex_conf, max vertex angle deg) of a "triangle" top
-    shape_path: str | None = None  # shape_id path ("metric" | "blob" | "abstain_*" | "off"), only filled when grasp.close_posture_by_shape
+    shape_path: str | None = None  # shape_id path; filled for shape-specific posture/cage planning
     generic_required: bool = False  # grasp.generic_fallback: label absent/below confidence threshold
     generic_width: float | None = None  # accepted proposal's closing-axis width (m); None means abstain
     generic_confidence: float = 0.0
@@ -223,11 +224,13 @@ class Perception:
         self.generic_min_confidence = float(grasp.get("generic_min_confidence", 0.5))
         self.generic_max_width = float(grasp.get("generic_max_width", 0.060))
         self.classify_shape = bool(self.cfg.get("classify_shape", False)) or self.generic_fallback
-        self.want_path = bool(grasp.get("close_posture_by_shape", False)) or self.generic_fallback
+        self.want_path = (bool(grasp.get("close_posture_by_shape", False))
+                          or bool(grasp.get("cage_mode", False)) or self.generic_fallback)
         self._last_path = None
         # grasp.posture_apex_gate (default off): prism-top check features for "triangle" detections (apex_gate.py)
         self.want_apex = self.want_path and bool(cfg.get("grasp", {}).get("posture_apex_gate", False))
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
+        self.tri_vertex_align = bool(grasp.get("tri_vertex_align", False))
         # #7 near-bin guard: abstain on shape when the top face may be cut by the bin exclusion (needs classify_shape)
         self.near_bin_guard = bool(self.cfg.get("near_bin_guard", False))
         # perception.y_affine [a, b] (23-grasp-failure §11b/§13): perceived - true y = a*y + b (pelvis) -> subtract it.
@@ -1165,6 +1168,10 @@ class Perception:
                 self._apply_shape2d(det, blob)
             elif color == "orange":
                 self._log_orange_candidate(blob)
+        if det is not None and self.tri_vertex_align and det.shape == "triangle":
+            # The pose estimator is preferred by the planner. This rectangle fallback keeps the feature useful when
+            # only a standing triangle label and colour blob survive depth filtering.
+            det.vertex_yaw = self._blob_vertex_yaw(blob, float(det.top[2]))
         if det is not None and hsv is not None and self.hue_guard:
             det.hsv_med = top_face_hsv(hsv[blob > 0])   # layer 3: colour from the top face, not the whole blob
         if det is not None and hsv is not None and self.sat_floor:
@@ -1182,6 +1189,44 @@ class Perception:
             rejected.append((det, why))
         else:
             dets.append(det)
+
+    def _blob_vertex_yaw(self, blob, z):
+        """Pelvis-frame direction of a triangle vertex line from the blob's minimum-area rectangle, modulo 120 deg.
+
+        For a triangle, the rectangle's shorter axis is an undirected altitude/vertex line. Two points on that pixel
+        axis are ray-intersected with the horizontal object-top plane before measuring yaw, so camera tilt does not
+        turn an image angle into a robot-frame angle. None is the safe fallback for a malformed/tiny blob.
+        """
+        try:
+            import cv2
+            m = (np.asarray(blob) > 0).astype(np.uint8)
+            cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if not cnts:
+                return None
+            (u, v), (w, h), angle_deg = cv2.minAreaRect(max(cnts, key=cv2.contourArea))
+            if min(float(w), float(h)) <= 1.0:
+                return None
+            # OpenCV's angle follows the width axis. Select the rectangle's shorter axis: a triangle altitude.
+            a = np.radians(float(angle_deg) + (0.0 if w <= h else 90.0))
+            duv = 20.0 * np.array([np.cos(a), np.sin(a)])
+            T, K = self._T(), self.cal.cams[self.cam].K
+
+            def hit(uv):
+                ray_opt = np.array([(uv[0] - K[0, 2]) / K[0, 0], (uv[1] - K[1, 2]) / K[1, 1], 1.0])
+                ray = T[:3, :3] @ ray_opt
+                if abs(ray[2]) <= 1e-9:
+                    return None
+                return T[:3, 3] + ((z - T[2, 3]) / ray[2]) * ray
+
+            p0, p1 = hit(np.array([u, v]) - duv), hit(np.array([u, v]) + duv)
+            if p0 is None or p1 is None or not np.all(np.isfinite([p0, p1])):
+                return None
+            d = p1[:2] - p0[:2]
+            if np.linalg.norm(d) <= 1e-9:
+                return None
+            return float(np.arctan2(d[1], d[0]) % (2.0 * np.pi / 3.0))
+        except Exception:
+            return None
 
     def expected_area_px(self, blob, centroid, depth):
         """Pixel area of ONE object (split.object_size) at this blob's distance: area_coef * (fx * size / Z)^2.

@@ -26,7 +26,8 @@ CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_postur
            "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust", "robust_v2"),
            "perception.principal_point": ("file", "center"),
            "perception.online_pitch_cal": (False, True, "table"), "brain.backend": ("stub", "llamacpp")}
-VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
+VECTORS = {"grasp.point_in_palm": 3, "grasp.cage_point_in_palm": 3, "grasp.cage_finger_posture": 7,
+           "hand.closed_tight": 7, "perception.y_affine": 2}
 
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
@@ -75,6 +76,8 @@ FLAGS = {
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
+    "grasp.tri_vertex_align": ("finals cage", False,
+                                 "standing triangle: align the index-middle gap with a vertex yaw"),
     "policy.time_triage": ("Oliver #3", False, "skip plans that do not fit the time left, try the next object"),
     "policy.max_total_attempts": ("Oliver #3", None, "global per-episode cap on started picks"),
     "policy.max_attempts": ("stock param", 2, "tries per object before it is skipped (stock 2)"),
@@ -107,6 +110,8 @@ FLAGS = {
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),
     "motion.lift_on_stall.timeout_s": ("round 9", STOCK, "lift_on_stall: longest close hold (stock 1.2 s)"),
     "grasp.point_in_palm": ("pinch fix", STOCK, "object centre in the LEFT palm frame (right = [1,-1,1] mirror)"),
+    "grasp.cage_mode": ("finals cage", False,
+                         "three-contact cage for metric cylinders/standing triangles; cubes keep their configured grasp"),
     "grasp.close_posture_by_shape": ("hybrid", False, "per pick: demo posture only for a confident metric triangle, else the configured one"),
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
     "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
@@ -289,6 +294,16 @@ def check_flag_values(cfg):
         raise ValueError("grasp.generic_yaw_max_dev_deg must be in [0, 90]")
     if not float(g.get("generic_yaw_hint_weight", 3.0)) > 0.0:
         raise ValueError("grasp.generic_yaw_hint_weight must be positive")
+    thumb_extra = g.get("cage_thumb_extra_rad") or {}
+    if set(thumb_extra) != {"cube", "cylinder", "triangle"}:
+        raise ValueError("grasp.cage_thumb_extra_rad must contain cube/cylinder/triangle")
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or v < 0.0
+           for v in thumb_extra.values()):
+        raise ValueError("grasp.cage_thumb_extra_rad values must be finite non-negative radians")
+    if not 0.0 <= float(g.get("cage_shape_min_conf", 0.5)) <= 1.0:
+        raise ValueError("grasp.cage_shape_min_conf must be in [0, 1]")
+    if not 0.0 <= float(g.get("tri_vertex_phi_deg", 90.0)) <= 180.0:
+        raise ValueError("grasp.tri_vertex_phi_deg must be in [0, 180]")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}
@@ -357,6 +372,21 @@ def hand_postures(cfg, spec: JointSpec | None = None):
         if bad:
             raise ValueError(f"hand posture {name!r} outside joint_spec limits: {bad}")
         out[name] = v
+    if cfg.get("grasp", {}).get("cage_mode", False):
+        # These are commands, not measured contact poses. Start with the FK-derived finger posture, then put thumb_1
+        # at the requested flexion past our existing closed posture. The soft hand stops on contact; clip both hands
+        # to the same URDF-backed limits as the safety filter.
+        g = cfg["grasp"]
+        base = np.asarray(g["cage_finger_posture"], float)
+        closed = np.asarray(h["closed"], float)
+        for shape, extra in g["cage_thumb_extra_rad"].items():
+            if float(extra) <= 0.0:  # cube=0 by default: no alternate cube posture or planning path
+                continue
+            left = base.copy()
+            left[1] = closed[1] + float(extra)
+            left = np.clip(left, spec.hand_lower[:7], spec.hand_upper[:7])
+            right = np.clip(mirror_left_to_right(left), spec.hand_lower[7:], spec.hand_upper[7:])
+            out[f"cage_{shape}"] = np.r_[left, right]
     return out
 
 

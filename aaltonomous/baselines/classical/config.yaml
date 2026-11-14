@@ -224,6 +224,18 @@ grasp:
   # tips are 57 mm apart (URDF): centred between them (auto) a 45 mm object wedges between the two fingers and is
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
+  # grasp.cage_mode (FLAG, default off): three-contact closure for confidently classified metric cylinders and
+  # standing triangle prisms. URDF FK at hand.closed puts the index/middle pad midpoint at [100.927,-88.917,0] mm.
+  # A nominal 50 mm object centre is half its width behind the pads: [75.927,-88.917,0], rounded here to 1 mm.
+  # cage_finger_posture is finals_r21 closed_tight plus -0.109 rad at each finger_0: FK moves both pads 10.0 mm
+  # inward. cage_thumb_extra_rad is measured from hand.closed thumb_1. FK plus each contact normal gives 10.0 mm
+  # surface penetration at 0.152 rad for a cylinder (normal x=1) and 0.177 rad for a vertex-aligned equilateral
+  # prism side (normal x=cos(30 deg)). Generated commands are clipped to the URDF limits; cube=0 keeps its path.
+  cage_mode: false
+  cage_point_in_palm: [0.076, -0.089, 0.0]
+  cage_thumb_extra_rad: {cube: 0.0, cylinder: 0.152, triangle: 0.177}
+  cage_finger_posture: [0.0, 0.0, 1.2, -1.109, -0.6, -1.109, -0.6]
+  cage_shape_min_conf: 0.5
   held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
   # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
@@ -271,6 +283,11 @@ grasp:
   yaw_max_hints: 2
   yaw_min_conf: 0.5
   yaw_tri_shift: true         # move the grasp point to the midpoint of the object's extent along the finger direction
+  # grasp.tri_vertex_align (FLAG, default off): for a standing triangle, use its vertex estimate (or the blob's
+  # minimum-area rectangle when no pose estimate exists) and rotate palm x by +/-90 deg so the index-middle gap,
+  # palm z, lies on a vertex line. The three equivalent vertex directions are tried nearest the natural arm yaw.
+  tri_vertex_align: false
+  tri_vertex_phi_deg: 90.0
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
