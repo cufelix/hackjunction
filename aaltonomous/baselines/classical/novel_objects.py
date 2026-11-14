@@ -225,6 +225,10 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         # the existing detector, even when that detector prudently abstains.
         if known_geometry and (nearby or known_family):
             continue
+        if nearby and dims[0] <= known_hi * float(cfg.get("supersede_min_ratio", 1.15)):
+            # universal: a colour detection coincides with a blob that is NOT larger than a known object (a known cube clipped
+            # by the bin / robot mask looks like a thin sliver).  Only a clearly larger/elongated component may supersede it.
+            continue
 
         label, handle_mask, image_axis, circularity = _shape(blob, dims, cfg)
         object_centre_xy = np.median(P[:, :2], axis=0)
@@ -301,3 +305,12 @@ def match_instruction(text, candidates):
     unresolved = unknown[0] if unknown else None
     return NovelMatch(None, target, tuple(pool) if unresolved and target is not None else (), unresolved)
 
+
+
+def named_noun(text):
+    """-> (noun, colour_named): the first recognised shape/category noun of the instruction (e.g. "ball") and whether a
+    colour word is also present.  Used by the universal VLM cross-check of a shape-noun-only deterministic match."""
+    low = str(text or "").lower()
+    words = _WORDS.findall(low)
+    noun = next((w for w in words if any(w in ws for ws in SHAPE_WORDS.values())), None)
+    return noun, any(c in words for c in PALETTE)

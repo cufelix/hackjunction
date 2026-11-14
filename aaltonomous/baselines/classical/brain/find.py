@@ -124,3 +124,22 @@ class FindClient:
                     for r in self._load().find(buf.tobytes(), query, **kw)]
         except Exception:
             return []
+
+    def detect_checked(self, rgb, query):
+        """-> (items, ok).  ok False = the server was unreachable / timed out / answered garbage: an EMPTY list then means
+        "no opinion", not "nothing found" (universal parser cross-check must tell the two apart)."""
+        try:
+            import cv2
+            import numpy as np
+            small, osz = downscale_rgb(rgb, self.max_side)
+            ok, buf = cv2.imencode(".png", cv2.cvtColor(np.asarray(small), cv2.COLOR_RGB2BGR))
+            if not ok:
+                return [], False
+            kw = self._kw(small, osz)
+            if self.url:
+                kw["url"] = self.url
+            res, meta = self._load().find(buf.tobytes(), query, return_meta=True, **kw)
+            return ([{"point": tuple(r["point"]), "bbox": list(r.get("bbox") or []), "label": str(r.get("label", ""))}
+                     for r in res], "error" not in meta)
+        except Exception:
+            return [], False

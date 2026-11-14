@@ -329,6 +329,8 @@ class ClassicalPolicy:
         self._novel_store, self._found, self._agent_dirty, self._last_find_items = [], {}, False, []
         self._novel_brain_candidates = []
         self._novel_brain_bin = None
+        self._parser_unreachable = 0
+        self._parser_verdicts = {}          # universal: VLM cross-check verdicts of shape-noun parser matches (per episode)
         if self.brain is not None:
             self.brain.reset()
         if self.plan_brain is not None:
@@ -1473,7 +1475,7 @@ class ClassicalPolicy:
             if dets is None:
                 return ("still_vote_pending",)
             if (self.cfg.get("instruction") or {}).get("novel_objects", False):
-                self._match_novel(dets)
+                self._match_novel(dets, obs)
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
             self._planner_observe(dets, obs)
@@ -1483,7 +1485,7 @@ class ClassicalPolicy:
         if dets is None:
             return ("still_vote_pending",)
         if (self.cfg.get("instruction") or {}).get("novel_objects", False):
-            self._match_novel(dets)
+            self._match_novel(dets, obs)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -1527,7 +1529,7 @@ class ClassicalPolicy:
                 return alt
         return res
 
-    def _match_novel(self, dets):
+    def _match_novel(self, dets, obs=None):
         """Attach a bin only to one deterministic visible novel match.
 
         Unknown nouns expose a closed visible-novel list to the already
@@ -1546,11 +1548,54 @@ class ClassicalPolicy:
             match.matched.novel_target_bin = match.target_bin
             match.matched.novel_matched = True
             self.log(f"[novel] matched {match.matched.color} {match.matched.shape} -> {match.target_bin}")
+            if not self._parser_match_confirmed(match.matched, obs):
+                match.matched.novel_target_bin, match.matched.novel_matched = None, False
         elif match.brain_candidates and self.brain is not None:
             self._novel_brain_candidates = list(match.brain_candidates)
             self._novel_brain_bin = match.target_bin
             self.log(f"[novel] unresolved noun {match.unresolved_noun!r}; offered "
                      f"{len(match.brain_candidates)} visible novel candidates to brain")
+
+    def _parser_match_confirmed(self, d, obs):
+        """universal (brain.ev_gate + brain.find): VLM cross-check of a deterministic SHAPE-NOUN-ONLY match ("the ball" ->
+        the only round blob).  A synonym is a heuristic: a round pan body is not a ball.  find(noun) must put a point on this
+        candidate; points elsewhere or none = contradicted -> the object is left (0 beats -1) and marked ungraspable so the
+        brain planner cannot pick it either.  VLM unavailable / error / colour named = the parser stands (classical fallback)."""
+        bc = self.cfg.get("brain") or {}
+        if obs is None or not bc.get("ev_gate", False) or not bc.get("find", False) or self.brain is None:
+            return True
+        from .novel_objects import named_noun
+        noun, coloured = named_noun(self._instruction)
+        if noun is None or coloured:
+            return True
+        key = (noun, round(float(d.top[0]), 2), round(float(d.top[1]), 2))
+        cache = self.__dict__.setdefault("_parser_verdicts", {})
+        if key not in cache and self.__dict__.get("_parser_unreachable", 0) >= 2:
+            return True                # the server failed twice this episode: stop spending look time on it
+        if key not in cache:
+            try:
+                fn = self._brain_find_fn
+                if fn is None:
+                    self._brain_find(noun, obs, [])        # lazily builds the FindClient; the result is not used
+                    fn = self._brain_find_fn
+                if hasattr(fn, "detect_checked"):
+                    raw, reachable = fn.detect_checked(obs["head_rgb"], noun)
+                else:
+                    raw, reachable = (fn.detect(obs["head_rgb"], noun) if hasattr(fn, "detect") else fn(obs["head_rgb"], noun)), True
+                if not reachable:
+                    raise ConnectionError("brain server unreachable")
+                pts = [tuple(map(float, (it["point"] if isinstance(it, dict) else it))) for it in raw]
+                cache[key] = bool(match_found(pts, [d]))
+                self.log(f"[universal] VLM find({noun!r}) {'confirms' if cache[key] else 'CONTRADICTS'} the parser match "
+                         f"({len(pts)} points)")
+            except Exception as e:
+                self.log(f"[universal] VLM cross-check unavailable ({type(e).__name__}); the parser match stands")
+                self._parser_unreachable = self.__dict__.get("_parser_unreachable", 0) + 1
+                return True            # not cached: the next look asks again (at most twice per episode)
+        if not cache[key]:
+            d.ungraspable = d.graspable = False
+            self.failed.append(np.asarray(d.top[:2], float).copy())
+        return cache[key]
 
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
@@ -1867,7 +1912,13 @@ class ClassicalPolicy:
         triage = bool(pol.get("time_triage", False))
         forced = None   # (det, bin, variant, table_xy) from the brain or the whole-plan planner
         planner_forced = False
-        if self._planner_needed:   # brain.planner (default off): a whole-instruction plan replaces the brain override
+        # universal: the deterministic parser/synonym match (instruction.novel_objects) is consulted FIRST; when it names a
+        # visible novel object and its bin, the classical loop acts on it and the brain is not asked at all.
+        parser_first = bool((self.cfg.get("instruction") or {}).get("novel_objects", False)) and \
+            any(getattr(d, "novel_matched", False) for d in dets)
+        if parser_first:
+            pass
+        elif self._planner_needed:   # brain.planner (default off): a whole-instruction plan replaces the brain override
             sel = self._planner_select(cands, dets, obs)
             if sel is None and self.plan_brain.steps is None and self.plan_brain.req.status == "pending":
                 return ("planner_pending", dets, verify)
