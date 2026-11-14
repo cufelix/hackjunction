@@ -4,7 +4,8 @@
 #   2. The feature flags come from a BAKED-IN overlay file: overlays/submission.yaml -> classical/overlay.yaml.
 #      The organisers run `docker run -d --gpus all -p <port>:8000 <image>` with no env, args or volumes, so the
 #      overlay file is the behavior switch and is checked against the reviewed finals allow-list at build time.
-#   3. AALTO_PROFILE=none selects the real-robot motion/home profile; finals under `sim` fail at startup.
+#   3. No AALTO_PROFILE in the image: the server default is the real profile 'none'. An overlay with
+#      profile_auto.auto_detect picks sim | none from the first frames (an env var would skip that path).
 #
 #   docker build -f tools/submission.Dockerfile -t hackjunction/policy:<tag> .        # from the repo root
 #   docker run --rm -p 8001:8000 hackjunction/policy:<tag>                            # (+ --gpus all on the GPU box)
@@ -15,7 +16,7 @@
 # third_party/xr_teleoperate/assets/g1/g1_body29_hand14.urdf (a real file, not a symlink out of the context).
 FROM nvidia/cuda:12.8.0-base-ubuntu22.04
 
-ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1 AALTO_PROFILE=none
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 && rm -rf /var/lib/apt/lists/*
 # Same pins as baseline.Dockerfile (pin 3.3.1 needs numpy >= 2.2).
 RUN pip3 install --no-cache-dir numpy==2.2.6 scipy==1.15.2 opencv-python-headless==4.10.0.84 pyyaml \

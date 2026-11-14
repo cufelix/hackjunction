@@ -31,7 +31,9 @@ class TestReleaseFlags(unittest.TestCase):
 
     def test_submission_dockerfile_runs_real_profile_assertion(self):
         dockerfile = (Path(__file__).resolve().parents[3] / "tools" / "submission.Dockerfile").read_text()
-        self.assertIn("AALTO_PROFILE=none", dockerfile)
+        # regression (X8 A91): an ENV AALTO_PROFILE skips profile_auto in the image
+        env_lines = [ln for ln in dockerfile.splitlines() if ln.lstrip().startswith(("ENV", "RUN", "ARG"))]
+        self.assertFalse(any("AALTO_PROFILE" in ln for ln in env_lines if ln.lstrip().startswith("ENV")))
         self.assertIn("python3 tools/check_release_flags.py", dockerfile)
 
 

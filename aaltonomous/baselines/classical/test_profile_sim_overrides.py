@@ -6,6 +6,7 @@ from unittest import mock
 from . import config, policy_server
 from .config import load_config
 from .policy_server import ClassicalServerPolicy
+from .test_profile_detect import sim_frame
 
 
 class OverridePolicy:
@@ -58,6 +59,19 @@ class TestSimOverrides(unittest.TestCase):
         self.assertEqual(cfg["policy"]["fixed_mapping"], {"yellow": "left", "blue": "center", "red": "right"})
         self.assertEqual(cfg["scene"]["counter_z_prior"], 0.15)
         self.assertTrue(cfg["grasp"]["release_confirm"])
+
+    def test_image_cmd_path_runs_auto_detect_and_sim_overrides(self):
+        # mirrors policy_server __main__ in the image: no AALTO_PROFILE, profile=None, baked-style overlay
+        os.environ.pop("AALTO_PROFILE", None)
+        pol = ClassicalServerPolicy(profile=os.environ.get("AALTO_PROFILE") or None, overlay="finals_r23")
+        self.assertIsNone(pol.pol)   # auto-detect pending, not skipped
+        with self.assertLogs("aaltonomous.baseline", "INFO") as cm:
+            for i in range(5):
+                pol.act({"t": i, **sim_frame()})
+        self.assertIsNotNone(pol.pol)
+        self.assertTrue(any("[profile] auto=sim" in m for m in cm.output), cm.output)
+        self.assertTrue(any("sim_overrides applied" in m for m in cm.output), cm.output)
+        self.assertIs(pol.pol.cfg["calib"]["plane"]["apply_height"], False)
 
     def test_bad_key_fails_at_construction(self):
         orig = config.load_config
