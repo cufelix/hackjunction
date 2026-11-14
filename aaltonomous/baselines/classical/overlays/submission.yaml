@@ -10,6 +10,9 @@ flags:
   calib.hand_icp_primary: false
   calib.counter_after_hand: false
   calib.refit_per_look: false
+  policy.done_confirm: false
+  perception.look_timeout_s: null
+  planner.per_target_guard: false
   calib.plane.apply_height: false               # P0 table   runtime counter_z from head depth (ab_apply_height overlay turns it on)
   scene.counter_z_prior: null                   # prior      no-depth table height (finals_* overlays: 0.15)
   calib.fk_xcheck: false                        # B2         passive RGB/FK head-pose cross-check (log-only)
