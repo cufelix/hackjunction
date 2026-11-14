@@ -132,6 +132,7 @@ FLAGS = {
     "policy.first_object_speed_scale": ("finals safe", None,
                                           "null | (0,1]: arm speed x this for every plan made before the first pick starts"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
+    "policy.verify_landing": ("r22", False, "observe each release (bin depth occupancy / colour): bounce -> re-queue with jitter + refund, wrong bin / lost -> log; in-bin exclusion; attempt regrant while time is left"),
     "policy.place_gate": ("EV gate", False, "require colour and target-bin confidence before planning a placement"),
     "policy.place_gate_colour_min": ("EV gate", 0.6, "minimum HSV/blob colour confidence (used only by place_gate)"),
     "policy.place_gate_bin_min": ("EV gate", 0.5, "minimum residual-derived bin confidence (used only by place_gate)"),
