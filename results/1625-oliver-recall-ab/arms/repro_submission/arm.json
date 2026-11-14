@@ -1,0 +1,10 @@
+{
+ "tree": "/home/oliver/work/e1-audit",
+ "overlay": "submission",
+ "overrides": {},
+ "frames": 160,
+ "robot_q_supported": false,
+ "frames_with_robot_q": 160,
+ "seconds": 12.9,
+ "tree_sha": "9e940de"
+}

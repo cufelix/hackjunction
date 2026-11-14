@@ -1,0 +1,515 @@
+[
+ {
+  "dir": "/tmp/claude-1000/-home-oliver-hackjunction/8d52d24e-7c5d-41dd-81c4-7a0e7f626189/scratchpad/ab/a_r21_rc6",
+  "arm": {
+   "tree": "/home/oliver/work/ab-r21",
+   "overlay": "finals_r21",
+   "overrides": {},
+   "frames": 160,
+   "robot_q_supported": true,
+   "frames_with_robot_q": 160,
+   "seconds": 27.8,
+   "tree_sha": "4540b9b"
+  },
+  "headline": {
+   "n": 538,
+   "matched": 195,
+   "recall": 0.362,
+   "per_class": {
+    "orange-cube": {
+     "n": 62,
+     "matched": 42,
+     "recall": 0.677
+    },
+    "orange-prism": {
+     "n": 79,
+     "matched": 27,
+     "recall": 0.342
+    },
+    "purple-cube": {
+     "n": 113,
+     "matched": 20,
+     "recall": 0.177
+    },
+    "yellow-cube": {
+     "n": 188,
+     "matched": 59,
+     "recall": 0.314
+    },
+    "yellow-cylinder": {
+     "n": 96,
+     "matched": 47,
+     "recall": 0.49
+    }
+   }
+  },
+  "fp": {
+   "fp": {
+    "tape": 0,
+    "bin_wall": 0,
+    "hand": 116,
+    "other": 0,
+    "phantom": 7
+   },
+   "fp_total": 123,
+   "fp_by_colour": {
+    "yellow": 2,
+    "blue": 116,
+    "red": 5
+   },
+   "tentative": 0,
+   "tentative_matched": 0
+  }
+ },
+ {
+  "dir": "/tmp/claude-1000/-home-oliver-hackjunction/8d52d24e-7c5d-41dd-81c4-7a0e7f626189/scratchpad/ab/x1_no_colorgate",
+  "arm": {
+   "tree": "/home/oliver/work/ab-r21",
+   "overlay": "finals_r21",
+   "overrides": {
+    "perception.color_gate.enabled": false
+   },
+   "frames": 160,
+   "robot_q_supported": true,
+   "frames_with_robot_q": 160,
+   "seconds": 28.0,
+   "tree_sha": "4540b9b"
+  },
+  "headline": {
+   "n": 538,
+   "matched": 282,
+   "recall": 0.524,
+   "per_class": {
+    "orange-cube": {
+     "n": 62,
+     "matched": 44,
+     "recall": 0.71
+    },
+    "orange-prism": {
+     "n": 79,
+     "matched": 29,
+     "recall": 0.367
+    },
+    "purple-cube": {
+     "n": 113,
+     "matched": 58,
+     "recall": 0.513
+    },
+    "yellow-cube": {
+     "n": 188,
+     "matched": 103,
+     "recall": 0.548
+    },
+    "yellow-cylinder": {
+     "n": 96,
+     "matched": 48,
+     "recall": 0.5
+    }
+   }
+  },
+  "fp": {
+   "fp": {
+    "tape": 22,
+    "bin_wall": 55,
+    "hand": 1027,
+    "other": 37,
+    "phantom": 539
+   },
+   "fp_total": 1680,
+   "fp_by_colour": {
+    "yellow": 33,
+    "blue": 1552,
+    "red": 95
+   },
+   "tentative": 0,
+   "tentative_matched": 0
+  }
+ },
+ {
+  "dir": "/tmp/claude-1000/-home-oliver-hackjunction/8d52d24e-7c5d-41dd-81c4-7a0e7f626189/scratchpad/ab/x2_no_hueguard",
+  "arm": {
+   "tree": "/home/oliver/work/ab-r21",
+   "overlay": "finals_r21",
+   "overrides": {
+    "perception.hue_guard.enabled": false
+   },
+   "frames": 160,
+   "robot_q_supported": true,
+   "frames_with_robot_q": 160,
+   "seconds": 21.1,
+   "tree_sha": "4540b9b"
+  },
+  "headline": {
+   "n": 538,
+   "matched": 218,
+   "recall": 0.405,
+   "per_class": {
+    "orange-cube": {
+     "n": 62,
+     "matched": 51,
+     "recall": 0.823
+    },
+    "orange-prism": {
+     "n": 79,
+     "matched": 28,
+     "recall": 0.354
+    },
+    "purple-cube": {
+     "n": 113,
+     "matched": 20,
+     "recall": 0.177
+    },
+    "yellow-cube": {
+     "n": 188,
+     "matched": 69,
+     "recall": 0.367
+    },
+    "yellow-cylinder": {
+     "n": 96,
+     "matched": 50,
+     "recall": 0.521
+    }
+   }
+  },
+  "fp": {
+   "fp": {
+    "tape": 0,
+    "bin_wall": 0,
+    "hand": 116,
+    "other": 0,
+    "phantom": 12
+   },
+   "fp_total": 128,
+   "fp_by_colour": {
+    "blue": 116,
+    "red": 9,
+    "yellow": 3
+   },
+   "tentative": 0,
+   "tentative_matched": 0
+  }
+ },
+ {
+  "dir": "/tmp/claude-1000/-home-oliver-hackjunction/8d52d24e-7c5d-41dd-81c4-7a0e7f626189/scratchpad/ab/x3_hsv_robust",
+  "arm": {
+   "tree": "/home/oliver/work/ab-r21",
+   "overlay": "finals_r21",
+   "overrides": {
+    "perception.hsv_set": "robust"
+   },
+   "frames": 160,
+   "robot_q_supported": true,
+   "frames_with_robot_q": 160,
+   "seconds": 29.3,
+   "tree_sha": "4540b9b"
+  },
+  "headline": {
+   "n": 538,
+   "matched": 187,
+   "recall": 0.348,
+   "per_class": {
+    "orange-cube": {
+     "n": 62,
+     "matched": 41,
+     "recall": 0.661
+    },
+    "orange-prism": {
+     "n": 79,
+     "matched": 24,
+     "recall": 0.304
+    },
+    "purple-cube": {
+     "n": 113,
+     "matched": 20,
+     "recall": 0.177
+    },
+    "yellow-cube": {
+     "n": 188,
+     "matched": 58,
+     "recall": 0.309
+    },
+    "yellow-cylinder": {
+     "n": 96,
+     "matched": 44,
+     "recall": 0.458
+    }
+   }
+  },
+  "fp": {
+   "fp": {
+    "tape": 0,
+    "bin_wall": 0,
+    "hand": 116,
+    "other": 0,
+    "phantom": 7
+   },
+   "fp_total": 123,
+   "fp_by_colour": {
+    "blue": 116,
+    "yellow": 2,
+    "red": 5
+   },
+   "tentative": 0,
+   "tentative_matched": 0
+  }
+ },
+ {
+  "dir": "/tmp/claude-1000/-home-oliver-hackjunction/8d52d24e-7c5d-41dd-81c4-7a0e7f626189/scratchpad/ab/x4_hsv_robust_no_hueguard",
+  "arm": {
+   "tree": "/home/oliver/work/ab-r21",
+   "overlay": "finals_r21",
+   "overrides": {
+    "perception.hsv_set": "robust",
+    "perception.hue_guard.enabled": false
+   },
+   "frames": 160,
+   "robot_q_supported": true,
+   "frames_with_robot_q": 160,
+   "seconds": 19.9,
+   "tree_sha": "4540b9b"
+  },
+  "headline": {
+   "n": 538,
+   "matched": 220,
+   "recall": 0.409,
+   "per_class": {
+    "orange-cube": {
+     "n": 62,
+     "matched": 51,
+     "recall": 0.823
+    },
+    "orange-prism": {
+     "n": 79,
+     "matched": 28,
+     "recall": 0.354
+    },
+    "purple-cube": {
+     "n": 113,
+     "matched": 20,
+     "recall": 0.177
+    },
+    "yellow-cube": {
+     "n": 188,
+     "matched": 70,
+     "recall": 0.372
+    },
+    "yellow-cylinder": {
+     "n": 96,
+     "matched": 51,
+     "recall": 0.531
+    }
+   }
+  },
+  "fp": {
+   "fp": {
+    "tape": 0,
+    "bin_wall": 0,
+    "hand": 116,
+    "other": 0,
+    "phantom": 9
+   },
+   "fp_total": 125,
+   "fp_by_colour": {
+    "blue": 116,
+    "red": 5,
+    "yellow": 4
+   },
+   "tentative": 0,
+   "tentative_matched": 0
+  }
+ },
+ {
+  "dir": "/tmp/claude-1000/-home-oliver-hackjunction/8d52d24e-7c5d-41dd-81c4-7a0e7f626189/scratchpad/ab/x5_r22bisect_no_cg",
+  "arm": {
+   "tree": "/home/oliver/work/ab-r21",
+   "overlay": "finals_r21",
+   "overrides": {
+    "perception.hsv_set": "robust",
+    "perception.hue_guard.enabled": false,
+    "perception.color_gate.enabled": false
+   },
+   "frames": 160,
+   "robot_q_supported": true,
+   "frames_with_robot_q": 160,
+   "seconds": 16.5,
+   "tree_sha": "4540b9b"
+  },
+  "headline": {
+   "n": 538,
+   "matched": 323,
+   "recall": 0.6,
+   "per_class": {
+    "orange-cube": {
+     "n": 62,
+     "matched": 52,
+     "recall": 0.839
+    },
+    "orange-prism": {
+     "n": 79,
+     "matched": 30,
+     "recall": 0.38
+    },
+    "purple-cube": {
+     "n": 113,
+     "matched": 58,
+     "recall": 0.513
+    },
+    "yellow-cube": {
+     "n": 188,
+     "matched": 131,
+     "recall": 0.697
+    },
+    "yellow-cylinder": {
+     "n": 96,
+     "matched": 52,
+     "recall": 0.542
+    }
+   }
+  },
+  "fp": {
+   "fp": {
+    "tape": 26,
+    "bin_wall": 77,
+    "hand": 1027,
+    "other": 40,
+    "phantom": 563
+   },
+   "fp_total": 1733,
+   "fp_by_colour": {
+    "red": 135,
+    "blue": 1553,
+    "yellow": 45
+   },
+   "tentative": 0,
+   "tentative_matched": 0
+  }
+ },
+ {
+  "dir": "/tmp/claude-1000/-home-oliver-hackjunction/8d52d24e-7c5d-41dd-81c4-7a0e7f626189/scratchpad/ab/x6_no_fkmask",
+  "arm": {
+   "tree": "/home/oliver/work/ab-r21",
+   "overlay": "finals_r21",
+   "overrides": {
+    "perception.color_gate.fk_mask": false
+   },
+   "frames": 160,
+   "robot_q_supported": true,
+   "frames_with_robot_q": 160,
+   "seconds": 30.9,
+   "tree_sha": "4540b9b"
+  },
+  "headline": {
+   "n": 538,
+   "matched": 193,
+   "recall": 0.359,
+   "per_class": {
+    "orange-cube": {
+     "n": 62,
+     "matched": 41,
+     "recall": 0.661
+    },
+    "orange-prism": {
+     "n": 79,
+     "matched": 27,
+     "recall": 0.342
+    },
+    "purple-cube": {
+     "n": 113,
+     "matched": 19,
+     "recall": 0.168
+    },
+    "yellow-cube": {
+     "n": 188,
+     "matched": 59,
+     "recall": 0.314
+    },
+    "yellow-cylinder": {
+     "n": 96,
+     "matched": 47,
+     "recall": 0.49
+    }
+   }
+  },
+  "fp": {
+   "fp": {
+    "tape": 0,
+    "bin_wall": 0,
+    "hand": 226,
+    "other": 0,
+    "phantom": 9
+   },
+   "fp_total": 235,
+   "fp_by_colour": {
+    "blue": 227,
+    "red": 6,
+    "yellow": 2
+   },
+   "tentative": 0,
+   "tentative_matched": 0
+  }
+ },
+ {
+  "dir": "/tmp/claude-1000/-home-oliver-hackjunction/8d52d24e-7c5d-41dd-81c4-7a0e7f626189/scratchpad/ab/x7_no_satfloor",
+  "arm": {
+   "tree": "/home/oliver/work/ab-r21",
+   "overlay": "finals_r21",
+   "overrides": {
+    "perception.color_gate.sat_floor": false
+   },
+   "frames": 160,
+   "robot_q_supported": true,
+   "frames_with_robot_q": 160,
+   "seconds": 28.3,
+   "tree_sha": "4540b9b"
+  },
+  "headline": {
+   "n": 538,
+   "matched": 195,
+   "recall": 0.362,
+   "per_class": {
+    "orange-cube": {
+     "n": 62,
+     "matched": 42,
+     "recall": 0.677
+    },
+    "orange-prism": {
+     "n": 79,
+     "matched": 27,
+     "recall": 0.342
+    },
+    "purple-cube": {
+     "n": 113,
+     "matched": 20,
+     "recall": 0.177
+    },
+    "yellow-cube": {
+     "n": 188,
+     "matched": 59,
+     "recall": 0.314
+    },
+    "yellow-cylinder": {
+     "n": 96,
+     "matched": 47,
+     "recall": 0.49
+    }
+   }
+  },
+  "fp": {
+   "fp": {
+    "tape": 0,
+    "bin_wall": 0,
+    "hand": 125,
+    "other": 19,
+    "phantom": 14
+   },
+   "fp_total": 158,
+   "fp_by_colour": {
+    "yellow": 3,
+    "blue": 150,
+    "red": 5
+   },
+   "tentative": 0,
+   "tentative_matched": 0
+  }
+ }
+]

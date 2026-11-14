@@ -1,0 +1,14 @@
+{
+ "tree": "/home/oliver/work/ab-r21",
+ "overlay": "finals_r21",
+ "overrides": {
+  "perception.hsv_set": "robust",
+  "perception.hue_guard.enabled": false,
+  "perception.color_gate.enabled": false
+ },
+ "frames": 160,
+ "robot_q_supported": true,
+ "frames_with_robot_q": 160,
+ "seconds": 16.5,
+ "tree_sha": "4540b9b"
+}

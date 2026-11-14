@@ -1,0 +1,10 @@
+{
+ "tree": "/home/oliver/work/ab-recall",
+ "overlay": "finals_r21",
+ "overrides": {},
+ "frames": 160,
+ "robot_q_supported": true,
+ "frames_with_robot_q": 160,
+ "seconds": 27.1,
+ "tree_sha": "ac2ee65"
+}
