@@ -121,6 +121,65 @@ class TestNovelPerception(unittest.TestCase):
         self.assertTrue(all(not getattr(d, "novel", False) for d in got))
 
 
+class TestNovelFpRobotAndMerge(unittest.TestCase):
+    """fp_filter (e)/(f): blobs hugging the FK robot silhouette, and same-colour known objects merged into one blob."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rgb, cls.depth, _ = novel_frame()
+        cls.cfg = novel_config()
+        cls.per = Perception(cls.cfg, SC, CAL, log=lambda *_: None)
+        uvz = cls.per._project(SC.mat_to_pelvis([.50, .13, .0275]))
+        cls.black_uv = np.asarray(uvz[:2], float)
+
+    def _arm_mask_beside_black_box(self, gap_px=8, radius_px=30):
+        h, w = self.depth.shape
+        vv, uu = np.mgrid[0:h, 0:w]
+        cu, cv = self.black_uv + [0.0, radius_px + gap_px + 12]   # disc just below (nearer the robot) the box
+        return (uu - cu) ** 2 + (vv - cv) ** 2 <= radius_px ** 2
+
+    def _novel(self, robot_q, mask):
+        with patch.object(self.per, "_fk_arm_mask", return_value=mask):
+            dets = self.per.detect(self.rgb, self.depth, robot_q=robot_q)
+        return {d.color: d for d in dets if getattr(d, "novel", False)}
+
+    def test_black_blob_hugging_arm_is_dropped_others_kept(self):
+        q = (np.zeros(14), np.zeros(14))
+        got = self._novel(q, self._arm_mask_beside_black_box())
+        self.assertNotIn("black", got)
+        self.assertIn("green", got)
+        self.assertIn("blue", got)       # the toy pan, away from the arm
+        self.assertIn("red", got)        # the marker
+
+    def test_far_arm_mask_keeps_black_box(self):
+        q = (np.zeros(14), np.zeros(14))
+        far = np.zeros(self.depth.shape, bool)
+        far[:20, :20] = True
+        self.assertEqual({"black", "green", "blue", "red"}, set(self._novel(q, far)))
+
+    def test_ring_rule_off_keeps_black_box(self):
+        cfg = copy.deepcopy(self.cfg)
+        cfg["perception"].setdefault("novel", {})["near_arm_px"] = 0
+        per = Perception(cfg, SC, CAL, log=lambda *_: None)
+        with patch.object(per, "_fk_arm_mask", return_value=self._arm_mask_beside_black_box()):
+            dets = per.detect(self.rgb, self.depth, robot_q=(np.zeros(14), np.zeros(14)))
+        self.assertIn("black", {d.color for d in dets if getattr(d, "novel", False)})
+
+    def test_two_touching_known_cubes_are_not_one_novel_blob(self):
+        renderer = Renderer(SC, CAL)
+        rgb, zbuf = renderer._bg[0].copy(), renderer._bg[1].copy()
+        for y in (.120, .165):           # 4.5 cm cubes, centres 4.5 cm apart: touching faces
+            renderer._box(rgb, zbuf, SC.mat_to_pelvis([.35, y, .0225]), np.eye(3), np.array([.0225] * 3),
+                          [230, 200, 30])
+        depth = np.where(np.isfinite(zbuf), zbuf * 1000.0, 0.0).astype(np.uint16)
+        rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+        far = np.zeros(depth.shape, bool)
+        far[:20, :20] = True
+        with patch.object(self.per, "_fk_arm_mask", return_value=far):
+            dets = self.per.detect(rgb, depth, robot_q=(np.zeros(14), np.zeros(14)))
+        self.assertEqual([d for d in dets if getattr(d, "novel", False)], [])
+
+
 class TestNovelInstructionAndSafety(unittest.TestCase):
     def setUp(self):
         rgb, depth, _ = novel_frame()

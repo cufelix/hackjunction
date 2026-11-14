@@ -27,6 +27,7 @@ _GENERIC_NOUNS = {"object", "item", "thing", "piece", "one", "ones", "objects", 
                   "blocks", "block", "shapes", "shape", "stuff", "cube", "cubes", "cylinder", "cylinders",
                   "triangle", "triangles", "prism", "prisms"}
 _KNOWN_FAMILY = ("red", "orange", "yellow", "blue", "purple")   # known-task colours the existing detector owns
+_ROBOT_COLOURS = ("black", "grey", "white")   # G1 hands are black, forearms white/grey
 _KNOWN_SHAPES = ("cube", "cylinder", "triangle")
 _BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+(?:bins?|box(?:es)?|crates?|buckets?|baskets?|containers?|trays?|bowls?))?\b", re.I)
 _BIN_ALIAS = {"centre": "center", "middle": "center", "mid": "center", "central": "center"}
@@ -70,6 +71,12 @@ class NovelMatch:
 
 def _fold_yaw(yaw):
     return float((float(yaw) + np.pi / 2.0) % np.pi - np.pi / 2.0)
+
+
+def _uv_in(blob, uv, stride):
+    """True if full-res pixel uv lies on the (strided) component mask."""
+    u, v = int(round(float(uv[0]) / stride)), int(round(float(uv[1]) / stride))
+    return 0 <= v < blob.shape[0] and 0 <= u < blob.shape[1] and bool(blob[v, u])
 
 
 def dominant_colour(rgb, mask):
@@ -221,6 +228,7 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
     good = np.zeros(raw.shape, bool)
     good[vv[ok], uu[ok]] = True
     mask = good.astype(np.uint8)
+    arm_ring = None
     if robot_q is not None:
         if fp:
             # FP filter (a): the robot silhouette is ALWAYS filled + dilated here, independent of the colour gate's
@@ -231,6 +239,12 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
             arm = perception._fk_arm_mask(raw_full.shape, *robot_q)
         if arm is not None:
             mask[arm[::stride, ::stride]] = 0
+            if fp and int(cfg.get("near_arm_px", 40)) > 0:
+                # (e) ring just outside the FK silhouette: where a lagging/approximate FK leaves robot fringes.
+                r = max(1, int(cfg.get("near_arm_px", 40)) // stride)
+                small = arm[::stride, ::stride].astype(np.uint8)
+                arm_ring = (cv2.dilate(small, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+                            > 0) & (small == 0)
         elif fp:
             return list(known)   # FK mask failed = arms would read as objects: no novel proposals this frame
     k = max(0, int(cfg.get("morph_px", 3)))
@@ -271,10 +285,22 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
                 continue   # (c) partial view at the image edge: robot body, table edge, objects half out of view
             if height98 < float(cfg.get("min_height_m", 0.015)) or dims[1] < float(cfg.get("min_width_m", 0.015)):
                 continue   # (c) flat (shadow, mat print, table edge) or a thin strip (mask fringe, wall edge)
+            if arm_ring is not None:
+                frac = float(cfg.get("near_arm_frac", 0.3) if colour in _ROBOT_COLOURS
+                             else cfg.get("near_arm_frac_coloured", 0.3))
+                if float((blob & arm_ring).sum()) >= frac * float(blob.sum()):
+                    continue   # (e) blob hugging the FK silhouette: the robot's own hand/forearm, or a fingertip
+                    #            fringe that picked up the bin/object colour behind it
             # (d) a blob at a known detection of the SAME known-family colour stays known unless it is clearly longer
             # than any known object (a 10 cm marker or a pan next to a cube). Merges with arms/bin walls, which made
             # a red cube read as 'red with-handle', are removed by (a)/(b) before this point.
             same = [d for d in nearby if d.color in _KNOWN_FAMILY and d.color == colour]
+            if colour in _KNOWN_FAMILY:
+                inside = [d for d in known if d.color == colour and _uv_in(blob, d.uv, stride)]
+                if len(inside) >= 2:
+                    continue   # (f) two same-colour known objects touching read as one larger blob
+                if (inside or same) and arm_ring is not None and bool((blob & arm_ring).any()):
+                    continue   # (f) a known object merged with the hand fringe; the known detector already has it
             elongated = dims[0] / max(dims[1], 1e-6) >= float(cfg.get("elongated_aspect", 2.2))
             if same and not elongated and dims[0] < float(cfg.get("supersede_same_colour_ratio", 1.4)) * known_hi:
                 continue   # elongated (marker) keeps the stock supersede_min_ratio rule below
