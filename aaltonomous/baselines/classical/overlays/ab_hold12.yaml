@@ -1,0 +1,6 @@
+# A/B overlay (GPU only, never baked): docker run ... -e AALTO_OVERLAY=<name> <image>. Arm B of one A/B vs flags-off;
+# everything not listed stays at the config.yaml OFF value. See knowledge/humanoid/21-submission-pipeline.md §7.
+name: ab_hold12
+flags:
+  motion.close_hold_s: 1.2
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes
