@@ -18,12 +18,16 @@ VOCAB: dict[str, str] = {**_ins._BIN_WORDS, **_ins._COLOR_WORDS, **_ins._SHAPE_W
 PROTECTED: frozenset[str] = frozenset(_ins._KNOWN) | _ins._NEAR_REAL | frozenset({
     "cute", "cure", "cures", "cub", "cubs", "cubed", "cubby", "cue", "cut", "cup", "cups", "cab", "lube",
     "rube", "read", "reed", "lift", "lent", "leaf", "lead", "rig", "rid", "ride", "wedge", "wedgy",
+    "violent", "violin", "violets", "people", "purpose", "orang", "golfer", "holden", "olden",
 })
 # Words a typo may be corrected TO. Deliberately a subset of VOCAB: short or common words (red, mid,
 # port, gold, round, disc...) have too many real-word neighbours, so they are matched exactly only.
 # ponytail: "red" is not fuzzy-matched (read/bed/rod/reed collide); add if a guard list covers it.
+# Real finals object colours are purple / yellow / orange: the resolver aliases purple/violet -> blue and
+# orange -> red, so their typos are corrected to those words (VOCAB below gives them their alias meaning).
+VOCAB.update({"purple": "blue", "violet": "blue", "orange": "red"})
 FUZZY_TARGETS: tuple[str, ...] = (
-    "left", "right", "center", "centre", "middle", "yellow", "blue",
+    "left", "right", "center", "centre", "middle", "yellow", "blue", "purple", "violet", "orange", "golden",
     "cube", "cubes", "cylinder", "cylinders", "triangle", "triangles",
     "prism", "prisms", "wedge", "wedges",
 )
@@ -150,9 +154,25 @@ def rewrite_ordinal_bins(sentence: str) -> str:
     return _ORD_RE.sub(_ord_sub, sentence)
 
 
+# Colour names for the real finals objects (purple / yellow / orange) the resolver does not know, incl. Finnish and
+# Czech (any inflection, with or without diacritics). Applied before the token pass; "amber" is ORANGE here (the
+# resolver alone reads it as yellow) because the real objects have no amber-yellow, only yellow and orange.
+_COLOUR_NAMES = [
+    (re.compile(r"\b(?:lavender|mauve|plum|amethyst|violet(?:t|i)\w*|purppur\w*|liila\w*|fialov\w*)", re.I), "purple"),
+    (re.compile(r"\b(?:tangerine|apricot|peach|amber|oranssi\w*|oran[žz]ov\w*)", re.I), "orange"),
+    (re.compile(r"\b(?:lemon|canary|keltai\w*|[žz]lut\w*)", re.I), "yellow"),
+]
+
+
+def name_colours(sentence: str) -> str:
+    for rx, word in _COLOUR_NAMES:
+        sentence = rx.sub(lambda m: word.capitalize() if m.group(0)[0].isupper() else word, sentence)
+    return sentence
+
+
 def normalize(sentence: str) -> str:
-    """Map near-miss tokens onto the resolver's closed vocabulary, then drop colour-named-bin clauses."""
-    return drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, sentence)))
+    """Map colour names and near-miss tokens onto the resolver's vocabulary, then drop colour-named-bin clauses."""
+    return drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, name_colours(sentence))))
 
 
 def _selfcheck() -> None:
