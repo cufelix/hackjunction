@@ -41,7 +41,7 @@ def _faces(kind, length):
     return f
 
 
-def render(kind, yaw, length=HSTAND, pos=POS, noise_mm=1.0, seed=0):
+def render(kind, yaw, length=HSTAND, pos=POS, noise_mm=1.0, seed=0, color="red"):
     """rgb, depth (uint16 mm) of one red prism on the counter, ray-cast through the head camera."""
     rgb, zb = _REND._bg[0].copy(), _REND._bg[1].copy()
     c, s = np.cos(yaw), np.sin(yaw)
@@ -58,7 +58,7 @@ def render(kind, yaw, length=HSTAND, pos=POS, noise_mm=1.0, seed=0):
         t_out = np.where(nr == 0, np.where(o @ n > d, -np.inf, t_out), t_out)
     hit = (t_in <= t_out) & (t_in > 0) & (t_in < zb)
     zb[hit] = t_in[hit]
-    rgb[hit] = np.asarray(SC.colors["red"], float)
+    rgb[hit] = np.asarray(SC.colors[color], float)
     depth = np.where(np.isfinite(zb), zb * 1000.0, 0.0)
     depth = depth + np.random.default_rng(seed).normal(0, noise_mm, depth.shape)
     return np.clip(rgb, 0, 255).astype(np.uint8), np.clip(depth, 0, 65535).astype(np.uint16)
@@ -121,11 +121,12 @@ class TestClassification(unittest.TestCase):
 class TestFlags(unittest.TestCase):
     def test_registered_and_default_off(self):
         cfg = load_config(overlay="none")
-        for k in ("perception.prism_orientation", "grasp.lying_prism"):
+        for k in ("perception.prism_orientation", "grasp.lying_prism", "grasp.lying_prism_arm_by_reach"):
             self.assertIn(k, FLAGS)
             self.assertIs(FLAGS[k][1], False)
         self.assertFalse(cfg["perception"]["prism_orientation"])
         self.assertFalse(cfg["grasp"]["lying_prism"])
+        self.assertFalse(cfg["grasp"]["lying_prism_arm_by_reach"])
 
     def test_lyingprism_overlay_is_r22_plus_the_two_flags(self):
         r22, lp = load_config(overlay="finals_r22"), load_config(overlay="finals_r22_lyingprism")
@@ -135,6 +136,14 @@ class TestFlags(unittest.TestCase):
         lp["perception"]["prism_orientation"] = r22["perception"]["prism_orientation"]
         lp["grasp"]["lying_prism"] = r22["grasp"]["lying_prism"]
         self.assertEqual(lp, r22)
+
+    def test_lyingarm_overlay_is_lyingprism_plus_the_arm_flag(self):
+        lp, la = load_config(overlay="finals_r22_lyingprism"), load_config(overlay="finals_r22_lyingarm")
+        self.assertEqual(la.pop("overlay"), "finals_r22_lyingarm")
+        lp.pop("overlay")
+        self.assertTrue(la["grasp"]["lying_prism_arm_by_reach"])
+        la["grasp"]["lying_prism_arm_by_reach"] = lp["grasp"]["lying_prism_arm_by_reach"]
+        self.assertEqual(la, lp)
 
 
 def _planner(**over):
@@ -267,6 +276,66 @@ class TestEpisode(unittest.TestCase):
         times = np.array(times)
         self.assertLess(times.max(), 1 / 27, f"act() max {1000 * times.max():.1f} ms")
         self.assertTrue(any(m for _, m in pol.events))
+
+
+class TestArmByReach(unittest.TestCase):
+    """grasp.lying_prism_arm_by_reach: the arm + heading is the first one whose lying grasp plan is reachable.
+    Sweep: ridge yaw 0..180 deg in 10 deg steps at POS, a yellow (drop: left bin) and a red (drop: right bin) prism."""
+    YAW_DEG = list(range(0, 181, 10))
+
+    @classmethod
+    def setUpClass(cls):
+        cls.pol, cls.pl = _planner(**{"perception.prism_orientation": True, "grasp.lying_prism": True,
+                                      "grasp.lying_prism_arm_by_reach": True})
+        cls.arm, cls.hand = cls.pol.home.copy(), cls.pol.post["open"].copy()
+        cls.cache = {}
+
+    def _plan(self, color, deg):
+        if (color, deg) not in self.cache:
+            rgb, depth = render("lying", np.radians(deg), color=color)
+            d, = Perception(load_config(overrides=ON), SC, CAL, log=lambda *_: None).detect(rgb, depth)
+            self.cache[(color, deg)] = self.pl.plan(d, self.arm, self.hand, relocate=True)
+        return self.cache[(color, deg)]
+
+    def test_every_yaw_is_a_reachable_lying_grasp_or_an_abstain(self):
+        for color in ("yellow", "red"):
+            for deg in self.YAW_DEG:
+                p = self._plan(color, deg)
+                if p.ok:
+                    self.assertIn("lying prism across ridge", p.reason, f"{color} {deg}: stock fallback {p.reason}")
+                    self.assertIn(p.side, ("left", "right"))
+                else:
+                    self.assertIn("lying prism", p.reason, f"{color} {deg}: fell back to the stock path: {p.reason}")
+
+    def test_left_arm_covers_the_yaws_it_reaches(self):
+        for deg in range(40, 101, 10):      # yellow drops into the left bin: the left arm reaches 40..100 deg
+            p = self._plan("yellow", deg)
+            self.assertTrue(p.ok, f"yellow {deg}: {p.reason}")
+            self.assertEqual(p.side, "left")
+            h = self.pl.finger_heading(p)
+            self.assertLess(np.degrees(ang_err(h, np.radians(deg) + np.pi / 2)), 10.0)
+
+    def test_right_arm_takes_over_where_the_left_cannot(self):
+        for deg in range(70, 141, 10):      # red drops into the right bin: the right arm reaches 70..140 deg
+            p = self._plan("red", deg)
+            self.assertTrue(p.ok and p.side == "right", f"red {deg}: {p.side} {p.reason}")
+
+    def test_unreachable_yaws_abstain_on_both_arms(self):
+        for deg in (150, 160, 170):
+            self.assertFalse(self._plan("red", deg).ok)
+        for deg in (0, 10, 20):
+            self.assertFalse(self._plan("yellow", deg).ok)
+
+    def test_flag_off_is_the_pre_flag_selection(self):
+        """Flag off: the stock arm loop (best arm, lying path first) and no abstain: yaws that fail the lying grasp
+        fall through to the standing path exactly as before the flag existed."""
+        pol, pl = _planner(**{"perception.prism_orientation": True, "grasp.lying_prism": True})
+        for deg in (0, 40, 160):
+            rgb, depth = render("lying", np.radians(deg), color="red")
+            d, = Perception(load_config(overrides=ON), SC, CAL, log=lambda *_: None).detect(rgb, depth)
+            p = pl.plan(d, self.arm, self.hand, relocate=False)
+            self.assertNotIn("no right ridge heading reachable", p.reason)
+            self.assertNotIn("no left ridge heading reachable", p.reason)
 
 
 if __name__ == "__main__":
