@@ -91,6 +91,7 @@ FLAGS = {
     "grasp.close_posture_by_shape": ("hybrid", False, "per pick: demo posture only for a confident metric triangle, else the configured one"),
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
     "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
+    "grasp.generic_fallback": ("generic grasp", False, "unknown/low-confidence shape: geometry-only top-down grasp, colour-only bin resolution"),
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
@@ -228,6 +229,20 @@ def check_flag_values(cfg):
                                 and all(isinstance(x, (int, float)) for x in ice)):
         raise ValueError(f"perception.inject_cam_error = {ice!r}: want null or [dpitch_deg, dyaw_deg, dx, dy, dz]")
     _check_color_gate(cfg)
+    g = cfg.get("grasp") or {}
+    for key in ("generic_shape_min_conf", "generic_min_confidence"):
+        if not 0.0 <= float(g.get(key, 0.5)) <= 1.0:
+            raise ValueError(f"grasp.{key} must be in [0, 1]")
+    narrow = float(g.get("generic_narrow_width", 0.035))
+    widest = float(g.get("generic_max_width", 0.060))
+    if not 0.005 <= narrow <= widest <= 0.060:
+        raise ValueError("generic grasp widths must satisfy 0.005 <= narrow <= max <= 0.060 m")
+    if not 0.0 <= float(g.get("generic_yaw_tol_deg", 15.0)) <= 90.0:
+        raise ValueError("grasp.generic_yaw_tol_deg must be in [0, 90]")
+    if not 0.0 <= float(g.get("generic_yaw_max_dev_deg", 45.0)) <= 90.0:
+        raise ValueError("grasp.generic_yaw_max_dev_deg must be in [0, 90]")
+    if not float(g.get("generic_yaw_hint_weight", 3.0)) > 0.0:
+        raise ValueError("grasp.generic_yaw_hint_weight must be positive")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}

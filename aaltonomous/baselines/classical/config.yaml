@@ -176,6 +176,16 @@ grasp:
   # tips are 57 mm apart (URDF): centred between them (auto) a 45 mm object wedges between the two fingers and is
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
+  # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
+  # gates, not independently switchable features. The classifier is consulted even when classify_shape is off.
+  generic_fallback: false
+  generic_shape_min_conf: 0.5    # below this, treat a known label as unreliable and use the generic proposal
+  generic_min_confidence: 0.5    # proposal support/width/border gate
+  generic_max_width: 0.060       # larger objects are not safe for the Dex3 top-down pinch
+  generic_narrow_width: 0.035    # <= this uses closed_demo; wider objects use grasp.close_posture
+  generic_yaw_hint_weight: 3.0   # align fingers with the proposal major axis before trying stock hints
+  generic_yaw_tol_deg: 15.0
+  generic_yaw_max_dev_deg: 45.0  # skip expensive/awkward yaw IK outside the arm's natural range
   # grasp.close_posture_by_shape (FLAG, default off): triangle posture ("demo", Oliver FK a44dd79) used only when the
   # shape is "triangle" AND shape_id path == "metric" AND shape confidence (shape_id._label conf * point-count
   # factor, 0..1) >= posture_by_shape_min_conf; every other pick uses grasp.close_posture + point_in_palm.

@@ -29,14 +29,14 @@ import numpy as np
 from aaltonomous.interface.calibration import Calibration
 from aaltonomous.interface.tasks import FIXED_MAPPING
 from aaltonomous.interface.safety import JointSpec, SafetyConfig
-from aaltonomous.scene.scene import Scene, resolve_bin
+from aaltonomous.scene.scene import Scene
 
 from . import decision as dec
 from .bin_vote import vote_bins
 from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Plan, Planner, lookup_bin, ramp
+from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
 from .safety_shell import reserve_pair, reserve_plan
 from .brain import BrainLayer, build_world
 from .brain.find import FindClient, extract_queries, match_found
@@ -710,7 +710,7 @@ class ClassicalPolicy:
     def _bin_of(self, d):
         """lookup_bin for a counter candidate; a miss (None / abstain) is logged once per object per episode."""
         shape = getattr(d, "shape", None)
-        b = lookup_bin(self.cfg, self.mapping, d.color, shape)
+        b = lookup_detection_bin(self.cfg, self.mapping, d)
         if b is None:
             rad = self.cfg["policy"]["same_object_radius"]
             xy = np.asarray(d.top[:2], float)
@@ -877,7 +877,7 @@ class ClassicalPolicy:
             cands.append(d)
         if self.cfg["policy"]["order"] == "nearest_bin":
             def base(d):
-                b = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
+                b = lookup_detection_bin(self.cfg, self.mapping, d)
                 return np.inf if b is None else np.linalg.norm(d.top[:2] - self.planner.bin_xy(b))
         else:
             def base(d):
@@ -1072,7 +1072,7 @@ class ClassicalPolicy:
         return min(names, key=lambda n: abs(float(self.planner.bin_xy(n)[1])))
 
     def _is_centre(self, d):
-        b = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
+        b = lookup_detection_bin(self.cfg, self.mapping, d)
         return b is not None and b == self._centre_name()
 
     def _push_frame(self, dets):
@@ -1114,7 +1114,7 @@ class ClassicalPolicy:
     def _conf_info(self, d, obs):
         """D1: p_colour, p_bin, p_grasp, p = product, gate = p_colour * p_bin, est time, target bin / centre flag."""
         dc = self._dcfg()
-        b = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
+        b = lookup_detection_bin(self.cfg, self.mapping, d)
         if b is None:
             return {"p": 0.0, "gate": 0.0, "t": 99.0, "bin": None, "centre": False, "pc": 0.0, "pb": 0.0, "pg": 0.0}
         bxy = np.asarray(self.planner.bin_xy(b), float)
@@ -1679,7 +1679,7 @@ class ClassicalPolicy:
             return None
 
     def _lookup(self, d):
-        return lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
+        return lookup_detection_bin(self.cfg, self.mapping, d)
 
     def _variant_plan_fn(self, variant):
         """The brain's retry grasp variant as a _plan_pick plan_fn, or None (same / None = the normal plan).
@@ -1735,7 +1735,7 @@ class ClassicalPolicy:
         corrections = []
         yellow_unknown = bool(self.cfg["policy"].get("verify_yellow_unknown", False))
         for d, footprint_bin in bin_dets:
-            target_bin = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
+            target_bin = lookup_detection_bin(self.cfg, self.mapping, d)
             score_bin = self._score_bin(d)
             scored.append((d, footprint_bin, score_bin))
             if score_bin is not None and score_bin == target_bin:
