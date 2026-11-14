@@ -215,7 +215,7 @@ _FROM_END = re.compile(r"\b(?:(?:starting|beginning|counting|going)\s+)?(?:at|fr
 _FILLER_END = frozenset("and then".split())
 # A sentence-opening direction ("Counting from the right,", "Number the bins starting from the left.")
 # is not a bin mention: it is dropped, and "right" also mirrors first/third (see _preamble).
-_PREAMBLE = re.compile(r"(?:^|(?<=[.;!?]\s))\s*(?:number\s+the\s+(?:bins|boxes|containers)\s+)?"
+_PREAMBLE = re.compile(r"(?:^|(?<=[.;!?]\s))\s*(?:(?:number|count)\s+the\s+(?:bins|boxes|containers)\s+)?"
                        r"(?:(?:starting|beginning|counting|numbering|going)\s+)?(?:at|from)\s+the\s+(left|right)(?:most|hand)?"
                        r"(?:\s+(?:bin|box|container|one))?\s*[:,.-]?\s*")
 _ORD_FIRST = re.compile(r"\b(?:first|third)\b")
@@ -240,7 +240,7 @@ def _preamble(low):
     # A bin noun only belongs to a preamble when a counting word introduces it ("number the bins
     # starting from the right"); bare "from the <dir> <bin noun>" keeps its bin and is left alone.
     if (re.search(r"\b(?:bin|box|container|one)\b", m.group(0))
-            and not re.search(r"\b(?:starting|beginning|counting|numbering|going|number|label)\b", m.group(0))):
+            and not re.search(r"\b(?:starting|beginning|counting|numbering|going|number|count|label)\b", m.group(0))):
         return low
     rest = _ORD_SUFFIX.sub(lambda o: ("first", "second", "third")[int(o.group(1)) - 1], low[m.end():])
     if m.group(1) == "right":
