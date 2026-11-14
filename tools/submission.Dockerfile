@@ -33,6 +33,7 @@ COPY aaltonomous/baselines/__init__.py aaltonomous/baselines/
 COPY aaltonomous/baselines/classical/*.py aaltonomous/baselines/classical/config.yaml aaltonomous/baselines/classical/
 COPY aaltonomous/baselines/classical/brain/ aaltonomous/baselines/classical/brain/
 COPY aaltonomous/baselines/classical/overlays/ aaltonomous/baselines/classical/overlays/
+COPY aaltonomous/baselines/classical/assets/ aaltonomous/baselines/classical/assets/
 # THE flag switch: the submission overlay, baked in where load_config() looks for it.
 COPY aaltonomous/baselines/classical/overlays/submission.yaml aaltonomous/baselines/classical/overlay.yaml
 COPY tools/flags.py tools/check_release_flags.py tools/
