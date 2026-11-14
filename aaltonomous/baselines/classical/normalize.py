@@ -1235,8 +1235,11 @@ def strict_mapping(text: str, mapping: dict) -> dict:
 #   amber    -> ambiguous (yellow or orange): becomes an unknown token, and the objects it could name are abstained.
 #   can      -> cylinder after a colour word when "can" cannot be the modal verb ("for orange can,", "orange can in the...").
 #   right in / right at the + position -> "right" is an intensifier, not a bin ("right in the middle" = middle).
-#   Czech    -> extra direction / colour inflections (doleva, vpravo, uprostred; cerveny, modry...) and "a" = "and".
+#   Czech    -> extra direction / colour inflections (doleva, vpravo, uprostred; cerveny, modry...).
+#               Right adverbs only (doprava, napravo, zprava, vpravo): dopravte/napravte are verbs. Lone "a" stays
+#               (it is the A bin and the English article; the resolver already joins lists on it).
 #   typos    -> a colour or "cubs" is repaired only when a shape word follows / a colour word precedes it.
+#               A protected real word (people, puddle, violent) is not a colour; the shape after it abstains.
 #   rest     -> "for the remaining shapes, red and blue left..." maps only the complement of what was named before.
 #   blocks   -> "yellow blocks X, the rest Y": cube-only vs colour-wide is ambiguous, only the cube cell is mapped.
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1253,14 +1256,13 @@ _S_INTENSIFIER = re.compile(
     re.I)
 _S_CZ_REPL = tuple((re.compile(p, re.I), w) for p, w in (
     (r"\b(?:dolev|nalev|zlev)\w*|\bvlevo\b|\blev(?:[ýáéí]|ou|ého|ém|ému|ým)\w*", "left"),
-    (r"\b(?:doprav|naprav|zprav)\w*|\bvpravo\b|\bprav(?:[ýáéí]|ou|ého|ém|ému|ým)\w*", "right"),
+    (r"\b(?:doprava|dopravo|napravo|zprava|vpravo)\b|\bprav(?:[ýáéí]|ou|ého|ém|ému|ým)\w*", "right"),
     (r"\b(?:do|u|na|v)?prost[řr]ed\w*|\bst[řr]edn\w*|\bst[řr]ed\w*", "middle"),
     (r"\b[čc]erven\w*", "red"),
     (r"\bmodr\w*", "blue"),
 ))
 _S_CZ_DETECT = re.compile(r"\b(?:[žz]lut|fialov|oran[žz]ov|[čc]erven|modr|dolev|doprav|nalev|naprav|vlevo|vpravo|"
                           r"prost[řr]ed|st[řr]ed|kostk|v[áa]lc|hranol|krabic|ko[šs]\b)", re.I)
-_S_CZ_AND = re.compile(r"(?<![A-Za-zÀ-ɏ])a(?![A-Za-zÀ-ɏ])")
 _S_COLOUR_TARGETS = ("yellow", "purple", "violet", "orange", "golden")
 _S_WORDS = re.compile(r"[A-Za-z]+")
 
@@ -1276,6 +1278,17 @@ def _s_colour_typo(word: str) -> str | None:
     return hits.pop() if len(hits) == 1 else None
 
 
+def _s_colour_repair(word: str) -> str | None:
+    """Colour a word before a shape may be rewritten to, else None. Protected real words stay ("people" is not
+    purple). A protected truncation of exactly one colour ("orang" -> orange) still repairs: leaving it makes the
+    following shape cover every colour."""
+    w = word.lower()
+    hit = _s_colour_typo(w)
+    if hit is None or (w in PROTECTED and not (hit.startswith(w) and len(w) < len(hit))):
+        return None
+    return hit
+
+
 def _s_typos(sentence: str) -> str:
     """After normalize(): repair a colour typo that sits directly before a shape word, and "cubs" after a colour."""
     ws = list(_S_WORDS.finditer(sentence))
@@ -1284,12 +1297,11 @@ def _s_typos(sentence: str) -> str:
         w, new = m.group(0), None
         nxt = ws[i + 1] if i + 1 < len(ws) else None
         if nxt and sentence[m.end():nxt.start()].isspace() and nxt.group(0).lower() in _ins._SHAPE_WORDS:
-            c = _s_colour_typo(w) if w.lower() in PROTECTED or w.lower() not in _ins._KNOWN else None
-            new = c
+            new = _s_colour_repair(w)
         prev = ws[i - 1] if i else None
         if (w.lower() == "cubs" and prev and sentence[prev.end():m.start()].isspace()
                 and (prev.group(0).lower() in _ins._COLOR_WORDS or prev.group(0).lower() in VOCAB and VOCAB[prev.group(0).lower()] in _ins.COLORS
-                     or ((_s_colour_typo(prev.group(0)) or "") in _S_COLOUR_TARGETS))):
+                     or (_s_colour_repair(prev.group(0)) or "") in _S_COLOUR_TARGETS)):
             new = "cubes"
         if new:
             out.append(sentence[last:m.start()] + (new.capitalize() if w[0].isupper() else new))
@@ -1311,7 +1323,6 @@ def structured_normalize(text: str) -> str:
         if _S_CZ_DETECT.search(s):
             for rx, w in _S_CZ_REPL:
                 s = rx.sub(lambda m, w=w: w.capitalize() if m.group(0)[0].isupper() else w, s)
-            s = _S_CZ_AND.sub("and", s)
         return _s_typos(normalize(s))
     except Exception:
         return normalize(text)
@@ -1351,6 +1362,7 @@ def _s_complement(text: str):
     m1, m2 = _s_core(first.rstrip(" ,;:.-")), _s_core(second.lstrip(" ,;:.-"))
     m1 = {k: v for k, v in m1.items() if k != "default"}
     m2 = {k: v for k, v in m2.items() if k != "default"}
+    m1 = _s_blocks_cube_only(first, m1)
     if not any(v for v in m1.values()) or not any(v for v in m2.values()):
         return None                         # a half is not understood: leave the sentence to the unchanged path
     out = dict(m1)
@@ -1363,6 +1375,18 @@ def _s_complement(text: str):
 
 
 _S_COLOUR_BLOCKS = re.compile(rf"\b({_S_COLOURS})\s+blocks\b", re.I)
+
+
+def _s_blocks_cube_only(text: str, mapping: dict) -> dict:
+    """"yellow blocks" is the cube or every solid of that colour. Keep only the cube cell so the other shapes of
+    that colour stay unnamed: a complement clause may fill them, otherwise they abstain."""
+    out = dict(mapping)
+    for m in _S_COLOUR_BLOCKS.finditer(text):
+        word = m.group(1).lower()
+        colour = _ins._COLOR_WORDS.get(word) or VOCAB.get(word)
+        if colour in _ins.COLORS and out.get(colour) and (colour, "cube") not in out:
+            out[(colour, "cube")] = out.pop(colour)
+    return out
 
 
 def _s_block_scope(text: str, mapping: dict) -> dict:
@@ -1383,13 +1407,38 @@ def _s_block_scope(text: str, mapping: dict) -> dict:
 
 
 def _s_amber(text: str, mapping: dict) -> dict:
-    """amber is yellow or orange: abstain every object it could name. Colours the text names explicitly keep their bin."""
+    """amber is yellow or orange: abstain every object it could name. Colours the text names explicitly keep their bin.
+    A bare shape key is the amber phrase read as every object of that shape; drop it. The catch-all stays, so
+    "everything else" still reaches the colour amber cannot be."""
     explicit = _strict_keys(text)[0]
     out = dict(mapping)
     for c in ("yellow", "red"):
         if c not in explicit:
             out[c] = None
-    out["default"] = None
+    for sh in _ins.SHAPES:
+        out.pop(sh, None)
+    return out
+
+
+def _s_mask_false_colour(text: str, mapping: dict) -> dict:
+    """A protected near-colour before a shape ("people cubes") is not that colour. Abstain the bare shape key so it
+    cannot place every colour. A more specific (colour, shape) entry is left as the sentence stated it."""
+    ws = list(_S_WORDS.finditer(text))
+    shapes = set()
+    for i, m in enumerate(ws[:-1]):
+        nxt = ws[i + 1]
+        if not text[m.end():nxt.start()].isspace():
+            continue
+        word = m.group(0)
+        if _s_colour_typo(word) and not _s_colour_repair(word):
+            sh = _ins._SHAPE_WORDS.get(nxt.group(0).lower())
+            if sh:
+                shapes.add(sh)
+    if not shapes:
+        return mapping
+    out = dict(mapping)
+    for sh in shapes:
+        out[sh] = None
     return out
 
 
@@ -1401,7 +1450,7 @@ def structured_final(text: str) -> dict:
             out = _s_block_scope(text, _s_core(text))
         if _S_AMBER_TOKEN in text.lower():
             out = _s_amber(text, out)
-        return out
+        return _s_mask_false_colour(text, out)
     except Exception:
         return {"default": None}
 
