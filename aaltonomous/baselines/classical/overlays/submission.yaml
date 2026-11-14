@@ -7,6 +7,7 @@
 # Flip a flag ONLY after its A/B run (knowledge/humanoid/21-submission-pipeline.md), then rebuild. Check: python3 tools/flags.py --overlay submission
 name: submission
 flags:
+  policy.safety_shell: false                    # safety     hold-last + 20 % reserve + no blocking calls in act(); OFF until its A/B
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)

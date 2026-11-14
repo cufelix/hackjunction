@@ -43,6 +43,13 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(sub, stock)
         self.assertEqual(set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"]), set(FLAGS))
 
+    def test_ab_safety_is_cand_r16_nopp_plus_the_safety_shell(self):
+        def on(name):
+            return {k for k, _, is_on, _, _ in effective_flags(load_config(overlay=name)) if is_on}
+        self.assertEqual(on("ab_safety"), on("cand_r16_nopp") | {"policy.safety_shell"})
+        self.assertNotIn("policy.safety_shell", on("submission"))
+        self.assertEqual(load_config(overlay="ab_safety")["policy"]["safety_shell_vel_reserve"], 0.0)
+
     def test_overlay_flips_only_its_flags(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "x.yaml"
