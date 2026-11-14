@@ -82,6 +82,7 @@ FLAGS = {
     "policy.done_confirm": ("finals done", False, "finish only after configured consecutive empty looks spanning the confirmation window; failed looks retry until the episode limit"),
     "perception.look_timeout_s": ("finals done", None, "wall-clock deadline for one asynchronous detector call; timeout is a failed look, never evidence that the scene is clear"),
     "planner.per_target_guard": ("finals done", False, "contain a planning exception or infeasible result to that target, cool it down, and continue with other detections"),
+    "policy.frozen_rgb_guard": ("frozen rgb", False, "head RGB bit-identical to the previous look's although a pick started (or the episode reset) since then: the look is frozen (log [frozen_rgb]), yields no picks, homes, waits and re-looks (never stops the episode); byte-identical only; last hash persists across episodes"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.fixed_instruction_first": ("policy", False, "sort_fixed: when the instruction resolver maps EVERY venue colour to a bin (no abstain/None), the instruction beats the venue map; else venue"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),

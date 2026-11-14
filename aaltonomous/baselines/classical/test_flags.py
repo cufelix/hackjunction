@@ -129,7 +129,8 @@ class TestFlags(unittest.TestCase):
         # The frozen submission is unchanged; only the newly registered, default-off overrides may be absent.
         sub_keys = set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"])
         self.assertEqual(set(FLAGS) - sub_keys, {"policy.chunk_ticks", "policy.hold_ticks",
-                                                  "policy.retry_cross_relocate", "policy.late_sweep"})
+                                                  "policy.retry_cross_relocate", "policy.late_sweep",
+                                                  "policy.frozen_rgb_guard"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):
@@ -358,7 +359,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_cgate", "ab_cgate_fk", "ab_cgate_live",
                                       "ab_colour_kmeans", "ab_cylinder", "ab_decision",
                                       "ab_drop_height_extra_m", "ab_drop_lateral_margin_m",
-                                      "ab_first_object_speed_scale", "ab_fk_xcheck",
+                                      "ab_first_object_speed_scale", "ab_fk_xcheck", "ab_frozen_rgb",
                                       "ab_generic_fallback", "ab_hand_calib", "ab_held_detector",
                                       "ab_hue_guard", "ab_hue_v2", "ab_inj_p4", "ab_inj_p7",
                                       "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_isolated_first",
