@@ -88,6 +88,13 @@ class TestFlags(unittest.TestCase):
             self.assertEqual(cfg["overlay"], name)
             on = {k for k, _, is_on, _, _ in effective_flags(cfg) if is_on}
             self.assertEqual(on, keys, name)
+        # lane 3 A/B arms are full submission copies + the flags under test
+        sub_on = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
+        for name, extra in (("ab_lane3_sim", {"perception.principal_point", "perception.reject_orange"}),
+                            ("ab_lane3_real", {"perception.counter_plane.enabled", "perception.detect_bins",
+                                               "perception.hand_calibration.enabled"})):
+            on = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay=name)) if is_on}
+            self.assertEqual(on, sub_on | extra, name)
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
 
