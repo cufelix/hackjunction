@@ -2218,7 +2218,9 @@ class ClassicalPolicy:
         if self._brain_find_fn is None:
             bc = self.cfg["brain"]
             self._brain_find_fn = FindClient(bc.get("find_path", "/data/brain/find/find_tool.py"), bc.get("find_url"),
-                                             float(bc.get("find_timeout_s", 1.5)))
+                                             float(bc.get("find_timeout_s", 1.5)),
+                                             int(bc.get("image_max_side_px", 0) or 0), int(bc.get("find_n_predict", 400)),
+                                             str(bc.get("find_layout", "image_first")))
         if not self._ftd_on():
             pts = self._brain_find_fn(obs["head_rgb"], query)
             return [d_i for d_i in match_found(pts, dets)]
@@ -2383,7 +2385,9 @@ class ClassicalPolicy:
         try:
             import base64
             import cv2
-            ok, buf = cv2.imencode(".jpg", cv2.cvtColor(np.asarray(obs["head_rgb"]), cv2.COLOR_RGB2BGR))
+            from .brain.find import downscale_rgb
+            rgb, _ = downscale_rgb(obs["head_rgb"], (self.cfg.get("brain") or {}).get("image_max_side_px", 0))
+            ok, buf = cv2.imencode(".jpg", cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR))
             return base64.b64encode(buf.tobytes()).decode() if ok else None
         except Exception:
             return None

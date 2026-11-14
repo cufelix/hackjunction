@@ -351,6 +351,9 @@ brain:
   find_path: /data/brain/find/find_tool.py
   find_url: null              # null = find_tool's default (127.0.0.1:8080 chat completions)
   find_timeout_s: 1.5
+  find_n_predict: 400         # find(): output token cap (box JSON; the old hard-coded max_tokens)
+  find_layout: image_first    # find(): image_first (original) | static_first (system prefix, image, phrase = cacheable prefix)
+  image_max_side_px: 0        # downscale the head RGB before encoding (find + decide image); 0 = full size. Boxes are scaled back to original pixels
   find_to_detection: false    # FLAG. find() point without a matching detection -> novel Detection from the depth blob (brain/novel.py)
   novel_min_height_m: 0.012   # blob must stand this far above the counter plane (flatter = ungraspable -> skip)
   novel_min_grasp_height_m: 0.02  # a blob lower than this is found but ungraspable -> skip
