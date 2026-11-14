@@ -43,6 +43,7 @@ class TestFlags(unittest.TestCase):
                   "ab_hold06": {"motion.close_hold_s"}, "ab_hold12": {"motion.close_hold_s"},
                   "ab_slots": {"grasp.drop_slots"}, "ab_hold12_slots": {"motion.close_hold_s", "grasp.drop_slots"},
                   "ab_carry05": {"motion.carry_scale"}, "ab_calib": {"perception.self_calibration.enabled"},
+                  "ab_yaff": {"perception.y_affine"},
                   "ab_verify_lang": {"policy.verify_placement", "policy.verify_yellow_unknown",
                                      "policy.max_corrections_per_episode"}}
         for name, keys in expect.items():
@@ -62,6 +63,8 @@ class TestFlags(unittest.TestCase):
             hand_postures(cfg)                            # raises outside joint_spec (URDF) limits
             home_arm(cfg)
         for name, pip in (("ab_pinch_v1", [0.0862, -0.0864, 0.0143]), ("ab_pinch_demo", [0.1094, -0.0694, 0.0142]),
+                          ("ab_pinch_v1_yaff", [0.0862, -0.0864, 0.0143]),
+                          ("ab_pinch_demo_yaff", [0.1094, -0.0694, 0.0142]),
                           ("ab_pinch_demo_yaw", [0.1094, -0.0694, 0.0142])):
             cfg = load_config(overlay=name)
             self.assertEqual(cfg["grasp"]["close_posture"], "closed_tight")

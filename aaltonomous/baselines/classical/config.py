@@ -22,12 +22,13 @@ STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config
 # Limits an overlay may never exceed (hard rule: nothing may move faster than the stock sim profile).
 LIMITS = {"motion.carry_scale": (0.0, 1.0)}
 CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight")}
-VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7}
+VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
 
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
 FLAGS = {
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
+    "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
     "perception.self_calibration.enabled": ("Timi calib", False,
                                             "per-episode head-camera xy offset from the bin walls (depth)"),
     "perception.classify_shape": ("Oliver #5/#7", False, "Detection.shape from the top face (shape_id)"),
@@ -149,6 +150,8 @@ def check_flag_values(cfg):
     for k, n in VECTORS.items():
         v = _get(cfg, k)
         if k == "grasp.point_in_palm" and v == "auto":
+            continue
+        if k == "perception.y_affine" and v is None:
             continue
         if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
             raise ValueError(f"{k} = {v!r}: want {n} numbers")

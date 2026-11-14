@@ -9,6 +9,7 @@ name: submission
 flags:
   instruction.resolve: false                    # Felix #1   instruction -> mapping
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
+  perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
   perception.classify_shape: false              # Oliver #5/#7 shape from the top face
   perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre
   perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)

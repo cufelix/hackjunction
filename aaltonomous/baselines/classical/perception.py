@@ -72,6 +72,11 @@ class Perception:
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
         # #7 near-bin guard: abstain on shape when the top face may be cut by the bin exclusion (needs classify_shape)
         self.near_bin_guard = bool(self.cfg.get("near_bin_guard", False))
+        # perception.y_affine [a, b] (23-grasp-failure §11b/§13): perceived - true y = a*y + b (pelvis) -> subtract it.
+        # Applied after xy_offset in both the depth and the plane path; null = off. Do not combine with a self-
+        # calibration that already absorbs the constant b without re-fitting.
+        ya = self.cfg.get("y_affine")
+        self.y_affine = None if ya is None else (float(ya[0]), float(ya[1]))
         # passive shape diagnostics: Detection.shape_diag + one log line per detection (default OFF, no action change)
         self.shape_diag = bool(self.cfg.get("shape_diag", False))
         # no-blob shape (Oliver f857054): no metric top face -> abstain instead of the 2D-blob ratio (default OFF)
@@ -375,6 +380,13 @@ class Perception:
         return any(np.any(np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1))
                    for ctr in sc.cfg["bins"]["centers"].values())
 
+    def _y_affine(self, xy):
+        """y_corrected = y - (a*y + b): the measured perceived-minus-true error model in the pelvis frame."""
+        a, b = self.y_affine
+        out = np.array(xy, float)
+        out[1] = out[1] - (a * out[1] + b)
+        return out
+
     def _shape_of(self, top_xy, blob, near_bin=False):
         """Shape label, or None (flags off / abstain). Delegates to `classify_top_face` and decides nothing itself;
         `near_bin` (top face possibly cut by the bin exclusion) only forces an abstain."""
@@ -439,6 +451,8 @@ class Perception:
             if rc is not None:
                 xy = rc  # unweighted, trimmed: the weighted mean is biased by the triangle's uneven pixel sampling
         xy = xy + self.xy_offset
+        if self.y_affine is not None:
+            xy = self._y_affine(xy)
         det = Detection(color, np.array([xy[0], xy[1], z]), area, len(u), "depth", _yaw(top[:, :2]),
                         (float(np.median(u)), float(np.median(v))))
         det.shape = shape
@@ -464,6 +478,8 @@ class Perception:
         s = (z_aim - o[2]) / ray[2]
         p = o + s * ray
         p[:2] += self.xy_offset
+        if self.y_affine is not None:
+            p[:2] = self._y_affine(p[:2])
         return Detection(color, np.array([p[0], p[1], z_top]), area, n_depth, "plane", None, (float(uv[0]), float(uv[1])))
 
     def _reject(self, det, bins_first=False):

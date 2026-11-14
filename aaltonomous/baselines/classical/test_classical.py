@@ -688,6 +688,31 @@ class TestRound3Flags(unittest.TestCase):
             self.assertEqual(len(lines), 2, lines)
             self.assertTrue(all("xy=(" in m and "confidence=" in m for m in lines), lines)
 
+    def test_y_affine_correction_values_and_signs(self):
+        """perception.y_affine [-0.0326, 0.0039]: y=-0.17 -> -0.0094 m, y=+0.17 -> +0.0016 m (corrected - perceived)."""
+        p = Perception(load_config(overrides={"perception.y_affine": [-0.0326, 0.0039]}), SC, CAL)
+        for y, corr in ((-0.17, -0.0094), (0.17, 0.0016)):
+            out = p._y_affine(np.array([0.30, y]))
+            self.assertAlmostEqual(out[1] - y, corr, places=4)
+            self.assertEqual(out[0], 0.30)
+        self.assertIsNone(Perception(CFG, SC, CAL).y_affine)
+        for name in ("ab_yaff", "ab_pinch_v1_yaff", "ab_pinch_demo_yaff"):
+            self.assertEqual(load_config(overlay=name)["perception"]["y_affine"], [-0.0326, 0.0039])
+
+    def test_y_affine_shifts_depth_and_plane_detections(self):
+        rng = np.random.default_rng(5)
+        objs = scene_objects(rng)
+        rgb, depth = Renderer(SC, CAL).render(objs)
+        off, on = Perception(CFG, SC, CAL), Perception(
+            load_config(overrides={"perception.y_affine": [-0.0326, 0.0039]}), SC, CAL)
+        for dep in (depth, np.zeros_like(depth)):                # depth path and plane fallback
+            a = {d.color: d.top for d in off.detect(rgb, dep)}
+            b = {d.color: d.top for d in on.detect(rgb, dep)}
+            self.assertEqual(set(a), set(b))
+            for c in a:
+                self.assertAlmostEqual(b[c][1], a[c][1] - (-0.0326 * a[c][1] + 0.0039), places=9)
+                self.assertEqual(b[c][0], a[c][0])
+
 
 if __name__ == "__main__":
     unittest.main()

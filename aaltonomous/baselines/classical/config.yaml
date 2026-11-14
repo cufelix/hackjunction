@@ -32,6 +32,7 @@ perception:
   min_valid_frac: 0.2         # below this fraction of valid depth pixels the frame counts as 'no depth'
   bin_pixel_margin: 0.004     # pixels whose 3D point is inside a bin footprint (+ margin) are dropped before grouping
   object_size: null           # null = scene.yaml objects.size (grasp width)
+  y_affine: null              # FLAG (23-grasp-failure §11b/§13). [a, b]: perceived - true y = a*y + b -> y -= a*y + b
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
   self_calibration:
     enabled: false            # FLAG (calib, Timi). Once per episode, align depth-only bin walls to their fixed known geometry
