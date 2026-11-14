@@ -365,6 +365,15 @@ def _clauses(low, ord_ok):
     return out or [low]
 
 
+# Lab colour words -> internal keys. "orange" before a bin noun describes a BIN ("the orange box"),
+# so it is left alone there; "box" itself is still not a bin word.
+_COLOUR_ALIAS = re.compile(r"\b(?:(purple|violet|lilac|magenta)|orange\b(?!\s+(?:box(?:es)?|bins?|containers?|crates?|baskets?)\b))")
+
+
+def _colour_aliases(low):
+    return _COLOUR_ALIAS.sub(lambda m: "blue" if m.group(1) else "red", low)
+
+
 def _aliases(low):
     """Apply label definitions ("bin A is the left bin") to the placements; no definitions -> unchanged."""
     found = []
@@ -416,7 +425,7 @@ def resolve(text, fallback=None):
     """
     if not text or not str(text).strip():
         return dict(FIXED_MAPPING if fallback is None else fallback)
-    low = _aliases(str(text).lower())
+    low = _aliases(_colour_aliases(str(text).lower()))
     # Structural pre-pass (see the patterns above). Order matters: appositive first, so the key
     # word survives; all-but second, so the excluded key never reaches clause parsing.
     rest_stays = bool(_REST_STAYS.search(low))
