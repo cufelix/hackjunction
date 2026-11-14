@@ -61,6 +61,36 @@ EXPECTED_FINALS_FLAGS = frozenset({   # finals_r22 (rc7): reviewed release set
     "scene.counter_z_prior",
 })
 
+# r23 layer on top of r22 (finals_r23*, finals_r24*): reviewed 2026-11-14/15
+R23_FLAGS = frozenset({
+    "bin.vote.max_shift_m", "instruction.hazard_guard", "instruction.structured", "instruction.venue_colour_aliases",
+    "perception.gate_below_bins", "planner.lift_from_contact", "policy.fixed_instruction_first", "policy.safety_shell",
+    "profile_auto.auto_detect", "profile_auto.sim_overrides",
+})
+# brain/universal layer: tuning values (present, non-default, in every universal-derived overlay incl. *_classic) ...
+BRAIN_PARAMS = frozenset({"brain.backend", "brain.call_timeout_s", "brain.find_n_predict", "brain.image_max_side_px",
+                          "brain.plan_timeout_s", "perception.novel.max_area_px"})
+# ... and the switches (ON only in finals_r24 / finals_r23_universal)
+BRAIN_SWITCHES = frozenset({"brain.closed_loop", "brain.enabled", "brain.ev_gate", "brain.find",
+                            "brain.find_to_detection", "brain.grounded_picks", "brain.planner", "grasp.generic",
+                            "instruction.novel_objects", "perception.novel_objects", "policy.novel_obstacles"})
+# real-only perception recall flags (r24; false in profile_auto.sim_overrides)
+REALPERC_FLAGS = frozenset({"perception.color_gate.fk_silhouette", "perception.prism_speckle_floor",
+                            "perception.real_merge_split"})
+
+
+def expected_flags(overlay_name):
+    """Reviewed ON-set for the baked overlay; any other overlay keeps the r22 allow-list."""
+    if overlay_name in ("finals_r24", "finals_r24_classic", "finals_r23_universal"):
+        exp = EXPECTED_FINALS_FLAGS | R23_FLAGS | BRAIN_PARAMS
+        if overlay_name != "finals_r24_classic":
+            exp |= BRAIN_SWITCHES
+        if overlay_name != "finals_r23_universal":
+            exp |= REALPERC_FLAGS
+        return exp
+    return EXPECTED_FINALS_FLAGS
+
+
 EXPECTED_OUTPUT_CAPS = {"arm_vel": 0.85, "arm_acc": 4.0, "hand_vel": 1.5, "hand_acc": 8.0}
 
 
@@ -70,7 +100,8 @@ def check(overlay=None, out=print):
     server = ClassicalServerPolicy(profile="none", overlay=overlay)
     cfg = server.config_snapshot
     on = {key for key, _, enabled, _, _ in effective_flags(cfg) if enabled}
-    unexpected, missing = sorted(on - EXPECTED_FINALS_FLAGS), sorted(EXPECTED_FINALS_FLAGS - on)
+    exp = expected_flags(str(cfg.get("overlay", "none")))
+    unexpected, missing = sorted(on - exp), sorted(exp - on)
     if unexpected:
         out(f"unexpected finals flags ON: {unexpected}")
     if missing:
