@@ -190,5 +190,86 @@ class TestOverlapLook(unittest.TestCase):
         self.assertLess(s_on, s_off)
 
 
+class TestLookRaceAndCapture(unittest.TestCase):
+    def _pol(self):
+        cfg = load_config(overlay="rc1")
+        cfg["motion"]["overlap_look"] = True
+        env = make_mock_env(seed=0)
+        pol = ClassicalPolicy(config=cfg, log=None, safety=env.filter.cfg, time_limit=120.0, threaded=True)
+        obs = env.reset()
+        pol.reset({"instruction": obs["instruction"], "time_limit": 120.0})
+        return pol, obs
+
+    def test_stale_job_never_publishes_and_reset_waits(self):
+        import threading
+        pol, obs = self._pol()
+        gate = threading.Event()
+        pol._look = lambda o: (gate.wait(), ("none", None, 0))[1]
+        job = {"obs": dict(obs), "result": None}
+        pol._launch_look(job)
+        self.assertTrue(pol._look_running())
+        threading.Timer(0.2, gate.set).start()
+        pol.reset({"instruction": obs["instruction"]})      # mid-thread: invalidates, then waits for it
+        self.assertFalse(pol._look_running())
+        self.assertIsNone(job["result"], "stale job published after reset")
+
+    def test_new_job_publishes_old_does_not(self):
+        pol, obs = self._pol()
+        pol._look = lambda o: ("none", None, 0)
+        old = {"obs": dict(obs), "result": None}
+        pol._launch_look(old); pol._look_thread.join()
+        self.assertIsNotNone(old["result"])
+        old2 = {"obs": dict(obs), "result": None, "token": pol._look_token}
+        new = {"obs": dict(obs), "result": None}
+        pol._launch_look(new); pol._look_thread.join()
+        pol._look_job(old2)                      # token no longer current
+        self.assertIsNone(old2["result"])
+        self.assertIsNotNone(new["result"])
+
+    def test_exception_in_thread_is_an_error_result(self):
+        pol, obs = self._pol()
+        def boom(o): raise RuntimeError("x")
+        pol._look = boom
+        job = {"obs": dict(obs), "result": None}
+        pol._launch_look(job); pol._look_thread.join()
+        self.assertEqual(job["result"][0], "error")
+        self.assertIsNone(getattr(pol._tl, "q0", None))
+
+    def test_no_second_look_while_one_runs(self):
+        import threading
+        pol, obs = self._pol()
+        gate = threading.Event()
+        pol._look = lambda o: (gate.wait(5), ("none", None, 0))[1]
+        pol._launch_look({"obs": dict(obs), "result": None})
+        self.assertFalse(pol._overlap_job is not None)
+        pol.state, pol.queue_a, pol.queue_h = "executing", np.zeros((10, 14)), np.zeros((10, 14))
+        pol.arm_cmd, pol.hand_cmd = np.zeros(14), np.zeros(14)
+        pol.act(obs)
+        self.assertIsNone(pol._overlap_job, "overlap launched while a look was still running")
+        gate.set(); pol._look_thread.join()
+
+    def test_capture_arm_q_not_queue_end(self):
+        pol, obs = self._pol()
+        seen = []
+        pol._look = lambda o: seen.append((pol._capture_arm_q(), pol._q0()[0])) or ("none", None, 0)
+        cap = np.full(14, 0.3); end = np.full(14, 0.7)
+        job = {"obs": {"arm_q": cap}, "result": None, "q0": (end, end)}
+        pol._launch_look(job); pol._look_thread.join()
+        np.testing.assert_allclose(seen[0][0], cap)
+        np.testing.assert_allclose(seen[0][1], end)
+        # arm_clear for perception comes from the capture pose (arm out of home = in view), not the queue end (home)
+        pol.cfg["perception"]["colour_kmeans"] = True
+        kw = []
+        pol._look = lambda o: kw.append(pol._detect_kw()) or ("none", None, 0)
+        job = {"obs": {"arm_q": cap}, "result": None, "q0": (pol.home.copy(), end)}
+        pol._launch_look(job); pol._look_thread.join()
+        self.assertFalse(kw[0]["arm_clear"])
+        # non-overlap job: unchanged (commanded pose, no capture context)
+        job = {"obs": {"arm_q": cap}, "result": None}
+        pol.arm_cmd = pol.home.copy()
+        pol._launch_look(job); pol._look_thread.join()
+        self.assertTrue(kw[1]["arm_clear"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,9 @@ class ClassicalPolicy:
     _plan_from = None      # motion.overlap_look: (arm, hand) queue end pose while an overlap look runs
     _overlap_job = None    # motion.overlap_look: {"obs", "result", "xy", "t0"} for the look during the return home
     _cur_xy = None         # grasp xy of the plan now executing (the object just attempted)
+    _look_token = 0        # monotonic job id: +1 at every look launch and at reset; a thread publishes only if it is current
+    _look_thread = None    # the one look thread that may be running (never two at once)
+    _tl = threading.local()  # per-thread look context: capture-time arm_q and the start pose of an overlap look
 
     def __init__(self, config=None, scene=None, calibration=None, safety: SafetyConfig | None = None,
                  require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None):
@@ -147,6 +150,11 @@ class ClassicalPolicy:
             return None
 
     def reset(self, info=None):
+        self._look_token += 1      # invalidates any running look: it can no longer publish
+        t = self._look_thread
+        if t is not None and t.is_alive():   # it still writes policy state: let it finish before that state is cleared
+            t.join(5.0)
+        self._look_thread = None
         if isinstance(info, str):
             info = {"instruction": info}
         info = info or {}
@@ -482,7 +490,7 @@ class ClassicalPolicy:
             if r is not None:
                 return r
         if self.state == "executing" and self._overlap_job is None and self.queue_a is not None \
-                and 0 < len(self.queue_a) <= self._overlap_ticks() and self._overlap_ok():
+                and 0 < len(self.queue_a) <= self._overlap_ticks() and self._overlap_ok() and not self._look_running():
             self._overlap_start(obs, t)
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
@@ -532,8 +540,10 @@ class ClassicalPolicy:
                 return self._hold(done=True)
             if self.threaded:
                 if self._job is None:
+                    if self._look_running():   # a stale/discarded overlap look is still running: never two at once
+                        return self._hold()
                     self._job = {"obs": obs, "result": None}
-                    threading.Thread(target=self._look_job, args=(self._job,), daemon=True).start()
+                    self._launch_look(self._job)
                 if self._job["result"] is None:
                     return self._hold()
                 res, self._job = self._job["result"], None
@@ -586,6 +596,9 @@ class ClassicalPolicy:
     def _q0(self):
         """Start pose for planning. With an overlap look running this is the END pose of the queued motion (the arm
         is still moving home, so arm_cmd is mid-motion); otherwise the current commanded pose, as before."""
+        q0 = getattr(self._tl, "q0", None)   # the look thread's own start pose: immune to main-thread resets
+        if q0 is not None:
+            return q0[0].copy(), q0[1].copy()
         if self._plan_from is not None:
             return self._plan_from[0].copy(), self._plan_from[1].copy()
         return self.arm_cmd, self.hand_cmd
@@ -594,9 +607,9 @@ class ClassicalPolicy:
         arm, hand = self.queue_a[-1].copy(), self.queue_h[-1].copy()
         self._plan_from = (arm, hand)
         snap = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in obs.items()}
-        job = {"obs": snap, "result": None, "xy": self._cur_xy, "t0": None}
+        job = {"obs": snap, "result": None, "xy": self._cur_xy, "t0": None, "q0": (arm, hand)}
         self._overlap_job = job
-        threading.Thread(target=self._look_job, args=(job,), daemon=True).start()
+        self._launch_look(job)
         self._note(t, f"overlap look started {len(self.queue_a) / HZ:.2f} s before home")
 
     def _overlap_drain(self, obs, t):
@@ -636,18 +649,44 @@ class ClassicalPolicy:
         self._note(t, f"overlap look discarded ({why}): settle + look")
 
     # ------------------------------------------------------------------ look + plan
+    def _launch_look(self, job):
+        self._look_token += 1
+        job["token"] = self._look_token
+        self._look_thread = threading.Thread(target=self._look_job, args=(job,), daemon=True)
+        self._look_thread.start()
+
+    def _look_running(self):
+        t = self._look_thread
+        return t is not None and t.is_alive()
+
     def _look_job(self, job):
         _lower_thread_priority()  # planning must not starve act() (the control loop's thread)
+        # Thread-local context: the capture-time (measured) arm_q of THIS frame, and for an overlap look the start pose.
+        # Perception needs the arm at the moment of the capture, never the queue end (the arm is still moving home).
+        self._tl.q0 = job.get("q0")
+        self._tl.arm_q = job["obs"].get("arm_q") if job.get("q0") is not None else None   # overlap only: flag off unchanged
         try:
-            job["result"] = self._look(job["obs"])
+            res = self._look(job["obs"])
         except Exception as e:  # never kill the control loop
-            job["result"] = ("error", repr(e))
+            res = ("error", repr(e))
+        finally:
+            self._tl.q0 = self._tl.arm_q = None
+        if job.get("token") == self._look_token:   # a stale job (reset, newer launch) never publishes
+            job["result"] = res
+
+    def _capture_arm_q(self):
+        """arm_q of the frame being processed by this look thread (None on the main thread / non-overlap path).
+        ponytail: perception here has no fk_mask / arm_q parameter. When color_gate.fk_mask lands (felix/rc2), pass
+        this value to its _fk_arm_mask call from _detect_kw, not _q0()."""
+        return getattr(self._tl, "arm_q", None)
 
     def _detect_kw(self):
         """Only with perception.colour_kmeans: tell detect() whether the arm is out of view (parked at home)."""
         if not self.cfg["perception"].get("colour_kmeans", False):
             return {}
-        return {"arm_clear": bool(np.abs(self._q0()[0] - self.home).max() < 0.05)}
+        q = self._capture_arm_q()
+        q = self._q0()[0] if q is None else np.asarray(q, float)
+        return {"arm_clear": bool(np.abs(q - self.home).max() < 0.05)}
 
     def _look(self, obs):
         verify = self._verify_on()
