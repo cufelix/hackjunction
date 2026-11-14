@@ -76,6 +76,7 @@ FLAGS = {
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
     "policy.time_triage": ("Oliver #3", False, "skip plans that do not fit the time left, try the next object"),
+    "policy.score_order": ("r22", False, "pick by expected value per second (p_success, p_wrong, t_cost); never EV <= 0; time-budget + endgame stop"),
     "policy.max_total_attempts": ("Oliver #3", None, "global per-episode cap on started picks"),
     "policy.max_attempts": ("stock param", 2, "tries per object before it is skipped (stock 2)"),
     "policy.retry_pass": ("Oliver #3", False, "once per episode: max_attempts-skipped objects get retry_extra_attempts"),

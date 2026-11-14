@@ -433,6 +433,15 @@ policy:
   # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
   # lazily; the episode ends only when nothing fits. Plans are NOT computed for every candidate (IK 0.3-6 s each).
   time_triage: false
+  score_order: false          # FLAG (r22). Next target = max EV/s, EV = ps*(2(1-pw)-pw); EV<=0 never; time-budget + endgame stop
+  score_safety_s: 3.0         # score_order: a pick must end this long before the time limit
+  score_endgame_s: 25.0       # score_order: with less time than this left, only the quickest certain object
+  score_certain_pw: 0.1       # score_order: "certain" = p_wrong at most this
+  score_overhead_s: 8.0       # score_order t_cost: fixed grasp/release seconds
+  score_speed_mps: 0.12       # score_order t_cost: effective hand path speed
+  score_arm_y_m: 0.2          # score_order: arm anchor y (+left/-right) for reach distance
+  score_reach_m: 0.55         # score_order: comfortable reach; beyond it p_success falls off
+  score_p_success: {cube: 0.9, cylinder: 0.8, triangle: 0.65, unknown: 0.5}   # score_order prior by shape
   triage_order: duration      # duration = cheap-estimate order only | priority = estimate ties (within triage_tie_m) go by
                               # shape cost (policy.shape_cost, detection.shape) then mapping confidence
   triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority
