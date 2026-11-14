@@ -616,9 +616,14 @@ class ClassicalPolicy:
         if plan.corrective:
             self.n_corrections += 1
         if plan.posture is not None and self.cfg["policy"].get("grasp_diag_log", False):
-            nm, label, conf, path = plan.posture
+            nm, label, conf, path = plan.posture[:4]
+            gate = ""
+            if len(plan.posture) > 4:   # grasp.posture_apex_gate decision (only logged when the flag is on)
+                ok, ac, ang = plan.posture[4]
+                gate = (f" apex_gate={'pass' if ok else 'fallback'} apex_conf={ac:.2f} "
+                        f"max_angle={'None' if ang is None else f'{ang:.1f}'}")
             self.log(f"[grasp_posture] t={t:.1f} {plan.color} {plan.side} label={label} conf={conf:.2f} path={path} "
-                     f"posture={'pinch_demo' if nm == 'closed_demo' else 'pinch_v1'} ({nm})")
+                     f"posture={'pinch_demo' if nm == 'closed_demo' else 'pinch_v1'} ({nm})" + gate)
         ls = self.cfg["motion"].get("lift_on_stall") or {}
         self._stall = None
         if ls.get("enabled", False) and plan.close_hold is not None and plan.side in ("left", "right"):

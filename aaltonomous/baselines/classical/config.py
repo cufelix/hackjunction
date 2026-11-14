@@ -60,6 +60,7 @@ FLAGS = {
     "grasp.point_in_palm": ("pinch fix", STOCK, "object centre in the LEFT palm frame (right = [1,-1,1] mirror)"),
     "grasp.close_posture_by_shape": ("hybrid", False, "per pick: demo posture only for a confident metric triangle, else the configured one"),
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
+    "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
 }

@@ -855,6 +855,79 @@ class TestPostureByShape(unittest.TestCase):
             self.assertIn("posture=", m)
 
 
+class TestApexGate(unittest.TestCase):
+    """grasp.posture_apex_gate: demo posture only for a real prism top (apex_conf >= 0.5, max angle <= 75 deg)."""
+    G = np.mgrid[-0.03:0.03:0.0015, -0.03:0.03:0.0015].reshape(2, -1).T
+
+    def _prism(self, yaw, a=0.045):
+        r = 2 * a / 3
+        v = [np.array([r * np.cos(yaw + k * 2 * np.pi / 3), r * np.sin(yaw + k * 2 * np.pi / 3)]) for k in range(3)]
+        g = self.G
+        s = [(v[(k + 1) % 3][0] - v[k][0]) * (g[:, 1] - v[k][1]) - (v[(k + 1) % 3][1] - v[k][1]) * (g[:, 0] - v[k][0])
+             for k in range(3)]
+        return g[(s[0] >= 0) & (s[1] >= 0) & (s[2] >= 0)]
+
+    def _cut_cube(self, yaw, s=0.045, keep=-0.005):
+        g = self.G
+        sq = g[(np.abs(g[:, 0]) <= s / 2) & (np.abs(g[:, 1]) <= s / 2)]
+        cut = sq[(sq[:, 0] + sq[:, 1]) <= keep]       # occluder took the far half: a triangle-ish patch with a 90 deg corner
+        c, sn = np.cos(yaw), np.sin(yaw)
+        return cut @ np.array([[c, -sn], [sn, c]]).T
+
+    def test_features(self):
+        from .apex_gate import apex_gate_features, apex_gate_pass
+        for yaw in (0.0, 0.3, 1.0):
+            ac, ang = apex_gate_features(self._prism(yaw))
+            self.assertTrue(apex_gate_pass(ac, ang, 0.5, 75.0), (yaw, ac, ang))
+            self.assertLess(ang, 65.0)
+        for yaw in (0.0, 0.35, 0.6):
+            ac, ang = apex_gate_features(self._cut_cube(yaw))
+            self.assertFalse(apex_gate_pass(ac, ang, 0.5, 75.0), (yaw, ac, ang))
+            self.assertGreater(ang, 85.0)
+        self.assertEqual(apex_gate_features(self._prism(0.0)[:3])[1], None)      # too few points -> no angle -> fail
+        self.assertFalse(apex_gate_pass(1.0, None, 0.5, 75.0))
+
+    def test_planner_fallback_and_demo(self):
+        from .apex_gate import apex_gate_features
+        tp = TestPostureByShape()
+        cfg = load_config(overrides={**TestPostureByShape.OV, "grasp.posture_apex_gate": True})
+        tri = apex_gate_features(self._prism(0.3))
+        cut = apex_gate_features(self._cut_cube(0.35))
+        for gate, want, ok in ((tri, "closed_demo", True), (cut, "closed_tight", False), (None, "closed_tight", False)):
+            p, _, pl = tp._plan(cfg, shape="triangle", shape_conf=0.9, shape_path="metric", apex_gate=gate)
+            self.assertEqual(p.posture[0], want, gate)
+            self.assertEqual(len(p.posture), 5)
+            self.assertEqual(p.posture[4][0], ok)
+        p, _, _ = tp._plan(cfg, shape="cube", shape_conf=0.9, shape_path="metric")    # gate not consulted for non-triangles
+        self.assertEqual((p.posture[0], len(p.posture)), ("closed_tight", 4))
+
+    def test_off_is_unchanged(self):
+        tp = TestPostureByShape()
+        cfg = load_config(overrides=TestPostureByShape.OV)
+        p, _, _ = tp._plan(cfg, shape="triangle", shape_conf=0.9, shape_path="metric", apex_gate=(0.0, 90.0))
+        self.assertEqual(p.posture, ("closed_demo", "triangle", 0.9, "metric"))    # flag off: 4-tuple, gate ignored
+
+    def test_episode_logs_gate(self):
+        cfg = load_config(overrides={**TestPostureByShape.OV, "perception.classify_shape": True,
+                                     "policy.grasp_diag_log": True, "grasp.posture_apex_gate": True})
+        logs = []
+        env = make_mock_env(seed=1, cfg=cfg)
+        pol = ClassicalPolicy(config=cfg, log=logs.append, safety=env.filter.cfg)
+        obs = env.reset()
+        pol.reset({"instruction": obs["instruction"]})
+        while True:
+            obs, info = env.step(pol.act(obs))
+            if info["episode_over"]:
+                break
+        lines = [m for m in logs if m.startswith("[grasp_posture]")]
+        self.assertEqual(len(lines), pol.n_started)
+        for m in lines:
+            if "posture=pinch_demo" in m:                  # demo only ever after a passed gate
+                self.assertIn("apex_gate=pass", m)
+            if "apex_gate=" in m:
+                self.assertIn("max_angle=", m)
+
+
 class TestLiftOnStall(unittest.TestCase):
     def _episode(self, ov, seed=1):
         logs = []
