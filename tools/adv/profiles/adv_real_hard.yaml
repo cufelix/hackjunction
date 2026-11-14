@@ -1,0 +1,27 @@
+# adv sim: the organisers' real setup (full ranges). Camera/bin errors are relative to the calibration / scene.yaml the
+# policy uses. Pitch convention = tools/pitch_fit.py: T' = T @ Rx(pitch) (about the optical x axis).
+# Colours: BASE diffuse colours are the measured drop_2 means (orange [152,90,47], purple [60,93,131], yellow [156,159,99],
+# bins [122,69,55], tape [112,52,39]) x1.2 minus the ~45/255 white veil the sim lighting adds (measured: base [60,93,131]
+# renders ~[113,141,165]); so the RENDERED lit faces land near measured x1.2 with realistic saturation.
+# Internal names stay red/blue/yellow (scoring + policy aliases): red renders ORANGE, blue renders PURPLE.
+name: real_hard
+adv:
+  cam_pitch_deg: [-12.0, -2.0]
+  cam_yaw_deg: [-3.0, 3.0]
+  cam_xyz_cm: 2.0                            # +-2 cm on each pelvis axis
+  bin_dx_cm: [0.0, 10.0]
+  bin_dx_jitter_cm: 1.0                      # per-bin extra: the real bins are not placed identically
+  exposure_ev: [-0.5, 0.5]
+  wb_jitter: [-0.08, 0.08]
+  gamma: [0.8, 1.25]
+  depth_noise_mm: 3.0
+  depth_hole_frac: [0.0, 0.4]
+  depth_hole_blob_frac: [0.0, 0.15]          # static blobs (counter / hands) on top of the random dropout
+  depth_hole_near_boost: 2.0                 # near field (< 0.5 m: hands) drops out twice as often
+  render_colors:
+    red:    [137, 63, 11]
+    blue:   [27, 67, 112]
+    yellow: [142, 146, 74]
+  bin_rgb: [101, 38, 21]
+  tape_rgb: [89, 17, 2]
+  ensure_object: [yellow, cylinder]

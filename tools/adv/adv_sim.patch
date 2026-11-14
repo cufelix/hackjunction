@@ -1,0 +1,304 @@
+--- a/aaltonomous/sim/aalto_task/dr.py	2026-11-14 12:17:15.075075032 +0100
++++ b/aaltonomous/sim/aalto_task/dr.py	2026-11-14 12:18:22.935337870 +0100
+@@ -104,9 +104,63 @@
+         "rot_offset_rad": [float(rc.uniform(-aj, aj)) if aj else 0.0 for _ in range(3)],
+         "stream_seed": int(rc.integers(2 ** 31)),
+     }
++    out["adv"] = sample_adv(cfg.get("adv"), seed, bin_names)
++    if out["adv"]:
++        out["camera"].update(out["adv"].pop("image"))
+     return out
+ 
+ 
++# ---------------------------------------------------------------------------------------------- adversarial sim
++def _draw(rng, spec, default=0.0):
++    """scalar | [lo, hi] (uniform) | {mean, std} (normal, clipped to +-3 std) | {lo, hi}."""
++    if spec is None:
++        return float(default)
++    if isinstance(spec, dict):
++        if "std" in spec:
++            m, sd = float(spec.get("mean", 0.0)), float(spec["std"])
++            return float(np.clip(rng.normal(m, sd), m - 3 * sd, m + 3 * sd)) if sd > 0 else m
++        return _u(rng, [spec["lo"], spec["hi"]])
++    return _u(rng, spec, default)
++
++
++def _sym(v):
++    return [-abs(v), abs(v)] if isinstance(v, (int, float)) else v
++
++
++def sample_adv(A, seed, bin_names=()):
++    """`adv:` profile section -> per-episode params (own seed stream, so existing DR draws are unchanged).
++    Camera pose is relative to calibration.yaml: T' = T @ Rx(pitch) @ Ry(yaw), translation + cam_xyz_cm in the
++    pelvis frame (same convention as tools/pitch_fit.py). Bins: pelvis +x shift, common + per-bin jitter."""
++    if not A:
++        return None
++    ss = np.random.SeedSequence([int(seed) if seed is not None else 0, 0xAD7])
++    r = np.random.default_rng(ss)
++    xyz = A.get("cam_xyz_cm") or [0, 0, 0]
++    xyz = [xyz] * 3 if isinstance(xyz, (int, float)) else list(xyz)      # cm; scalar a = +-a on every axis
++    jit = float(A.get("bin_dx_jitter_cm") or 0.0)
++    common = _draw(r, A.get("bin_dx_cm"), 0.0)
++    img = {
++        "exposure_gain": float(2.0 ** _draw(r, A.get("exposure_ev"), 0.0)),
++        "wb_gain": [float(1.0 + _draw(r, A.get("wb_jitter"), 0.0)) for _ in range(3)] if A.get("wb_jitter") else [1.0] * 3,
++        "gamma": _draw(r, A.get("gamma"), 1.0),
++        "depth_hole_blob_frac": float(_draw(r, A.get("depth_hole_blob_frac"), 0.0)),
++        "depth_hole_near_boost": float(A.get("depth_hole_near_boost") or 1.0),
++        "depth_hole_blob_seed": int(r.integers(2 ** 31)),
++    }
++    if A.get("depth_hole_frac") is not None:          # explicit in the profile -> overrides the legacy camera: section
++        img["depth_hole_frac"] = float(_draw(r, A["depth_hole_frac"], 0.0))
++    if A.get("depth_noise_mm") is not None:
++        img["depth_noise_mm"] = float(_draw(r, A["depth_noise_mm"], 0.0))
++    return {
++        "image": img,
++        "cam": {"pitch_deg": _draw(r, A.get("cam_pitch_deg"), 0.0), "yaw_deg": _draw(r, A.get("cam_yaw_deg"), 0.0),
++                "xyz_m": [_draw(r, _sym(v)) / 100.0 for v in xyz]},
++        "bin_dx_m": {b: (common + float(r.uniform(-jit, jit)) if jit else common) / 100.0 for b in bin_names},
++        "render_colors": A.get("render_colors"), "bin_rgb": A.get("bin_rgb"), "tape_rgb": A.get("tape_rgb"),
++        "ensure_object": A.get("ensure_object"),
++    }
++
++
+ def jitter_layout(layout, params):
+     """Apply pose jitter (mat coords) to a layout copy. Deterministic for the params' stream seed."""
+     P = (params or {}).get("pose") or {}
+@@ -125,23 +179,42 @@
+     return out
+ 
+ 
++def _blob_mask(shape, frac, seed):
++    """Per-episode static smooth blobs covering ~frac of the image (True = hole)."""
++    import cv2
++    h, w = shape
++    f = np.random.default_rng(seed).uniform(size=(max(h // 40, 3), max(w // 40, 3))).astype(np.float32)
++    f = cv2.resize(f, (w, h), interpolation=cv2.INTER_CUBIC)
++    return f <= np.quantile(f, min(max(frac, 0.0), 1.0))
++
++
+ def corrupt(rgb, depth, cam, rng):
+     """Camera noise on one head frame: rgb uint8 (H,W,3), depth uint16 mm (0 = invalid)."""
+     if not cam:
+         return rgb, depth
+     g, sd = cam.get("rgb_gain", 1.0), cam.get("rgb_noise_std", 0.0)
+-    if g != 1.0 or sd > 0:
+-        f = rgb.astype(np.float32) * g
++    eg, wb, gm = cam.get("exposure_gain", 1.0), cam.get("wb_gain"), cam.get("gamma", 1.0)
++    if g != 1.0 or sd > 0 or eg != 1.0 or gm != 1.0 or (wb and any(x != 1.0 for x in wb)):
++        f = rgb.astype(np.float32) * (g * eg)
++        if wb:
++            f *= np.asarray(wb, np.float32)
++        if gm != 1.0:
++            f = 255.0 * np.power(np.clip(f, 0, 255) / 255.0, gm)
+         if sd > 0:
+             f += rng.normal(0.0, sd, f.shape).astype(np.float32)
+         rgb = np.clip(f, 0, 255).astype(np.uint8)
+     dn, dr, hole = cam.get("depth_noise_mm", 0.0), cam.get("depth_noise_rel", 0.0), cam.get("depth_hole_frac", 0.0)
+-    if dn > 0 or dr > 0 or hole > 0:
++    blob = cam.get("depth_hole_blob_frac", 0.0)
++    if dn > 0 or dr > 0 or hole > 0 or blob > 0:
+         valid = depth > 0
+         d = depth.astype(np.float32)
+         if dn > 0 or dr > 0:
+             d += rng.normal(0.0, 1.0, d.shape).astype(np.float32) * (dn + dr * d)
+         if hole > 0:
+-            valid &= rng.uniform(size=d.shape) >= hole
++            # near_boost: hands / near-field returns drop out more often (no segmentation channel, range proxy < 0.5 m)
++            p = hole * np.where(depth < 500, float(cam.get("depth_hole_near_boost", 1.0)), 1.0)
++            valid &= rng.uniform(size=d.shape) >= p
++        if blob > 0:
++            valid &= ~_blob_mask(d.shape, blob, cam.get("depth_hole_blob_seed", 0))
+         depth = np.where(valid, np.clip(np.round(d), 1, 65535), 0).astype(np.uint16)
+     return rgb, depth
+--- a/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 12:17:15.505077988 +0100
++++ b/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 12:18:57.240775182 +0100
+@@ -68,7 +68,18 @@
+             print(f"[aalto] head RGB-D on tcp :{rp}")
+         self.last_frame = None
+         self.zmq = zmq
+-        self.dr_cfg = dr.load()
++        self.dr_cfg = dr.load() or dr.load("adv_nominal")     # adv sim: a profile is always active (see tools/adv)
++        self._counter_depth0 = float(self.sc.cfg["counter"]["counter_size"][1])
++        self._bin_y0 = {b: float(c[1]) for b, c in self.sc.cfg["bins"]["centers"].items()}
++        try:                                  # tape bands are visible only for profiles with tape_rgb
++            from pxr import UsdGeom
++            for bn in self.sc.bin_names:
++                for part in ("wall_xlo", "wall_xhi", "wall_ylo", "wall_yhi"):
++                    pr = _stage().GetPrimAtPath(f"/World/envs/env_0/Tape_{bn}_{part}")
++                    if pr.IsValid():
++                        UsdGeom.Imageable(pr).MakeInvisible()
++        except Exception as e:
++            print(f"[aalto] adv: could not hide tape: {e}")
+         self.dr_params, self._dr_base, self._cam_rng = None, None, None
+         cp = int(os.environ.get("AALTO_CLOCK_PORT", str(sp + 1 if sp else 0)))
+         self.clock = None
+@@ -122,12 +133,32 @@
+                         "speed": round(float(np.linalg.norm(v)), 5)})
+         return out
+ 
++    def _ensure_object(self, layout):
++        """adv profile `ensure_object: [colour, shape]`: make sure one such object is in the layout (replaces the
++        first entry otherwise). Scoring reads the placed objects' names, so it stays consistent."""
++        eo = ((self.dr_params or {}).get("adv") or {}).get("ensure_object")
++        if not eo or not layout:
++            return layout
++        c, sh = eo
++        if any(o.get("color") == c and o.get("shape", "cube") == sh for o in layout):
++            return layout
++        layout = [dict(o) for o in layout]
++        layout[0]["color"], layout[0]["shape"] = c, sh
++        return layout
++
+     def handle(self, env, req):
+         cmd = req.get("cmd")
+         if cmd == "ping":
+             return {"ok": True, "t": time.time(), **self.clock_info()}
++        if cmd == "set_profile":      # adv sim: switch profile at run time (takes effect at the next `randomize`)
++            cfg = dr.load(req["name"])
++            if cfg is None:
++                return {"ok": False, "error": "profile off"}
++            self.dr_cfg = cfg
++            return {"ok": True, "dr": {"name": cfg.get("name"), "path": cfg["_path"]}}
+         if cmd == "reset":
+-            return {"ok": True, "active": self.place(env, req["layout"]), "layout": req["layout"]}
++            lay = self._ensure_object(req["layout"])
++            return {"ok": True, "active": self.place(env, lay), "layout": lay}
+         if cmd == "info":
+             d = None if not self.dr_cfg else {"name": self.dr_cfg.get("name"), "path": self.dr_cfg["_path"]}
+             return {"ok": True, "dr": d, "ports": self.ports, "n_objects": len(self.names), **self.clock_info()}
+@@ -136,7 +167,7 @@
+         if cmd == "reset_random":
+             if self.dr_cfg:
+                 self.randomize(env, req.get("seed"))
+-            lay = random_layout(self.sc, req.get("seed"))
++            lay = self._ensure_object(random_layout(self.sc, req.get("seed")))
+             return {"ok": True, "active": self.place(env, lay), "layout": lay}
+         if cmd == "state":
+             return {"ok": True, "objects": self.state(env), "layout": self.layout}
+@@ -254,9 +285,16 @@
+                                 "color": tuple(p.GetAttribute("inputs:color").Get() or (1, 1, 1)),
+                                 "translate": tuple(t.Get()) if t and t.Get() is not None else None}
+     roots = {"Counter": "/World/envs/env_0/Counter"}
++    b["xf"] = {}
+     for bn in rt.sc.bin_names:
+         for part in ("floor", "wall_xlo", "wall_xhi", "wall_ylo", "wall_yhi"):
+             roots[f"bin:{bn}:{part}"] = f"/World/envs/env_0/Bin_{bn}_{part}"
++            b["xf"][(bn, f"Bin_{bn}_{part}")] = tuple(stage.GetPrimAtPath(roots[f"bin:{bn}:{part}"]).GetAttribute("xformOp:translate").Get())
++        for part in ("wall_xlo", "wall_xhi", "wall_ylo", "wall_yhi"):
++            tp = f"/World/envs/env_0/Tape_{bn}_{part}"
++            if stage.GetPrimAtPath(tp).IsValid():
++                roots[f"tape:{bn}:{part}"] = tp
++                b["xf"][(bn, f"Tape_{bn}_{part}")] = tuple(stage.GetPrimAtPath(tp).GetAttribute("xformOp:translate").Get())
+     for n in rt.names:
+         roots[f"obj:{n}"] = _env0(env.scene[n].cfg.prim_path)
+     for k, r in roots.items():
+@@ -303,12 +341,22 @@
+         T, O = P["textures"], P["objects"]
+         for k, lst in base["colors"].items():
+             for sh, rgb in lst:
++                adv = P.get("adv") or {}
+                 if k == "Counter":
+                     new = [c * j for c, j in zip(rgb, T["counter_rgb"])]
++                elif k.startswith("tape:"):
++                    if adv.get("tape_rgb"):
++                        rgb = [c / 255.0 for c in adv["tape_rgb"]]
++                    new = [c * j for c, j in zip(rgb, T["bin_rgb"][k.split(":")[1]])]
+                 elif k.startswith("bin:"):
++                    if adv.get("bin_rgb"):
++                        rgb = [c / 255.0 for c in adv["bin_rgb"]]
+                     new = [c * j for c, j in zip(rgb, T["bin_rgb"][k.split(":")[1]])]
+                 else:
+                     o = O[k[4:]]
++                    rc = (adv.get("render_colors") or {}).get(parse_name(k[4:])[0])
++                    if rc:      # render colour differs from the scoring name (red -> orange, blue -> purple)
++                        rgb = [c / 255.0 for c in rc]
+                     new = dr.jitter_color(rgb, o["dh"], o["s"], o["v"])
+                 sh.GetInput("diffuseColor").Set(Gf.Vec3f(*[float(min(max(c, 0.0), 1.0)) for c in new]))
+         tex = stage.GetPrimAtPath("/World/envs/env_0/Mat/material/texture")
+@@ -344,11 +392,36 @@
+             C = P["camera"]
+             q = (R.from_rotvec(C["rot_offset_rad"]) * R.from_quat(q0[0].cpu().numpy())).as_quat()   # xyzw
+             pos = pos0[0].cpu().numpy() + np.asarray(C["pos_offset"])
++            A = (P.get("adv") or {}).get("cam")
++            if A:      # adv: pose relative to the calibration the policy uses: T' = T @ Rx(pitch) @ Ry(yaw), + xyz (pelvis frame)
++                p, y = np.radians(A["pitch_deg"]), np.radians(A["yaw_deg"])
++                Rx = R.from_rotvec([p, 0.0, 0.0])
++                Ry = R.from_rotvec([0.0, y, 0.0])
++                q = (R.from_quat(q0[0].cpu().numpy()) * Rx * Ry).as_quat()
++                pos = pos0[0].cpu().numpy() + np.asarray(A["xyz_m"])
+             env.scene["front_camera"].set_world_poses(torch.tensor([pos], dtype=torch.float32),
+                                                       torch.tensor([q], dtype=torch.float32), convention="ros")
+             ok["camera_pose"] = True
+     except Exception as e:
+         ok["camera_pose"] = f"{type(e).__name__}: {e}"
++    try:
++        adv = P.get("adv") or {}
++        dx = adv.get("bin_dx_m") or {}
++        from pxr import UsdGeom
++        for (bn, prim_name), t0 in base["xf"].items():
++            prim = stage.GetPrimAtPath(f"/World/envs/env_0/{prim_name}")
++            prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(t0[0] + float(dx.get(bn, 0.0)), t0[1], t0[2]))
++            if prim_name.startswith("Tape_"):
++                (UsdGeom.Imageable(prim).MakeVisible if adv.get("tape_rgb") else UsdGeom.Imageable(prim).MakeInvisible)()
++        for bn, y0 in rt._bin_y0.items():          # scoring follows the moved bins (mat y = pelvis x - 0.14)
++            c = list(rt.sc.cfg["bins"]["centers"][bn])
++            rt.sc.cfg["bins"]["centers"][bn] = [c[0], y0 + float(dx.get(bn, 0.0))]
++        cs = list(rt.sc.cfg["counter"]["counter_size"])
++        cs[1] = rt._counter_depth0 + 2 * max([0.0] + [float(v) for v in dx.values()])
++        rt.sc.cfg["counter"]["counter_size"] = cs
++        ok["bins"] = True
++    except Exception as e:
++        ok["bins"] = f"{type(e).__name__}: {e}"
+     return ok
+ 
+ 
+--- a/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-14 12:17:15.829080216 +0100
++++ b/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-14 12:18:29.208269694 +0100
+@@ -208,6 +208,37 @@
+     return out
+ 
+ 
++TAPE_H = 0.02          # adv sim: visual-only tape band on every rim (hidden unless the profile sets tape_rgb)
++
++
++def _visual_box(name, center_pelvis, size, rgb):
++    return AssetBaseCfg(
++        prim_path=f"{ENV}/{name}",
++        init_state=AssetBaseCfg.InitialStateCfg(pos=_w(center_pelvis)),
++        spawn=sim_utils.CuboidCfg(size=tuple(float(v) for v in size),
++                                  visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=rgb, roughness=0.8, metallic=0.0)),
++    )
++
++
++def tape_cfgs():
++    b = SC.cfg["bins"]
++    ox, oy = b["outer_size"]
++    t, h = b["wall_thickness"] + 0.002, b["wall_height"]
++    out = {}
++    for name, (cx, cy) in b["centers"].items():
++        rgb = tuple(c / 255.0 for c in SC.bin_rgb)
++        z = h - TAPE_H / 2
++        parts = {
++            "wall_xlo": ((cx - ox / 2 + t / 2 - 0.001, cy, z), (t, oy + 0.002, TAPE_H)),
++            "wall_xhi": ((cx + ox / 2 - t / 2 + 0.001, cy, z), (t, oy + 0.002, TAPE_H)),
++            "wall_ylo": ((cx, cy - oy / 2 + t / 2 - 0.001, z), (ox - 2 * t, t, TAPE_H)),
++            "wall_yhi": ((cx, cy + oy / 2 - t / 2 + 0.001, z), (ox - 2 * t, t, TAPE_H)),
++        }
++        for part, (c, sz) in parts.items():
++            out[f"tape_{name}_{part}"] = _visual_box(f"Tape_{name}_{part}", SC.mat_to_pelvis(c), (sz[1], sz[0], sz[2]), rgb)
++    return out
++
++
+ def object_cfgs():
+     poses, _ = assign(SC, [])  # everything parked; the reset event places the layout
+     out = {}
+@@ -295,7 +326,7 @@
+ 
+ def make_scene_cfg_class(name="AaltoSceneCfg", lid=False):
+     """InteractiveSceneCfg subclass with every entity as a dataclass field (InteractiveScene reads fields only)."""
+-    attrs = {**_fixed_cfgs(), **bin_cfgs(), **object_cfgs()}
++    attrs = {**_fixed_cfgs(), **bin_cfgs(), **tape_cfgs(), **object_cfgs()}
+     if lid:
+         attrs["lid"] = lid_cfg()
+     ns = dict(attrs)

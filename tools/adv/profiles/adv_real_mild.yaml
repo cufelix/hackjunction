@@ -1,0 +1,19 @@
+# adv sim: the organisers' real setup (means). Camera/bin errors are relative to the calibration / scene.yaml the
+# policy uses. Pitch convention = tools/pitch_fit.py: T' = T @ Rx(pitch) (about the optical x axis).
+# Colours: BASE diffuse colours are the measured drop_2 means (orange [152,90,47], purple [60,93,131], yellow [156,159,99],
+# bins [122,69,55], tape [112,52,39]) x1.2 minus the ~45/255 white veil the sim lighting adds (measured: base [60,93,131]
+# renders ~[113,141,165]); so the RENDERED lit faces land near measured x1.2 with realistic saturation.
+# Internal names stay red/blue/yellow (scoring + policy aliases): red renders ORANGE, blue renders PURPLE.
+name: real_mild
+adv:
+  cam_pitch_deg: {mean: -7.5, std: 1.5}
+  bin_dx_cm: {mean: 7.0, std: 3.0}           # bins farther from the robot (pelvis +x) than scene.yaml
+  depth_noise_mm: 3.0
+  depth_hole_frac: 0.03
+  render_colors:
+    red:    [137, 63, 11]
+    blue:   [27, 67, 112]
+    yellow: [142, 146, 74]
+  bin_rgb: [101, 38, 21]
+  tape_rgb: [89, 17, 2]
+  ensure_object: [yellow, cylinder]

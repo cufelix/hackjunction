@@ -1,0 +1,27 @@
+# adv sim: the organisers' real setup (outside the measured ranges). Camera/bin errors are relative to the calibration / scene.yaml the
+# policy uses. Pitch convention = tools/pitch_fit.py: T' = T @ Rx(pitch) (about the optical x axis).
+# Colours: BASE diffuse colours are the measured drop_2 means (orange [152,90,47], purple [60,93,131], yellow [156,159,99],
+# bins [122,69,55], tape [112,52,39]) x1.2 minus the ~45/255 white veil the sim lighting adds (measured: base [60,93,131]
+# renders ~[113,141,165]); so the RENDERED lit faces land near measured x1.2 with realistic saturation.
+# Internal names stay red/blue/yellow (scoring + policy aliases): red renders ORANGE, blue renders PURPLE.
+name: out_of_range
+adv:
+  cam_pitch_deg: [-16.0, 4.0]                # pitch +-12 around the -2..-12 band edges: both signs
+  cam_yaw_deg: [-4.0, 4.0]
+  cam_xyz_cm: 3.0
+  bin_dx_cm: [-6.0, 16.0]                    # bins +-6 cm beyond 0..10
+  bin_dx_jitter_cm: 1.5
+  exposure_ev: [-0.7, 0.7]
+  wb_jitter: [-0.1, 0.1]
+  gamma: [0.7, 1.4]
+  depth_noise_mm: 4.0
+  depth_hole_frac: [0.2, 0.5]
+  depth_hole_blob_frac: [0.05, 0.2]
+  depth_hole_near_boost: 2.0
+  render_colors:
+    red:    [137, 63, 11]
+    blue:   [27, 67, 112]
+    yellow: [142, 146, 74]
+  bin_rgb: [101, 38, 21]
+  tape_rgb: [89, 17, 2]
+  ensure_object: [yellow, cylinder]
