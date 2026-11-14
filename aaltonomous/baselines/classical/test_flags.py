@@ -25,13 +25,19 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(sub.pop("overlay"), "submission")
         on = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
         self.assertEqual(on, {"instruction.resolve", "policy.bin_lookup", "grasp.close_posture", "hand.closed_tight",
-                              "grasp.point_in_palm", "motion.close_hold_s"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
+                              "grasp.point_in_palm", "motion.close_hold_s", "perception.classify_shape",
+                              "perception.hsv_set", "perception.split_blobs", "policy.grasp_diag_log",
+                              "grasp.close_posture_by_shape", "grasp.posture_apex_gate"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
         sub["instruction"]["resolve"] = False
         sub["policy"]["bin_lookup"] = "colour"
         for k in ("close_posture", "point_in_palm"):                       # pinch_v1 grasp (Modal 60/82 vs 52/82)
             sub["grasp"][k] = stock["grasp"][k]
         sub["hand"]["closed_tight"] = stock["hand"]["closed_tight"]
         sub["motion"]["close_hold_s"] = stock["motion"]["close_hold_s"]
+        for sec, k in (("perception", "classify_shape"), ("perception", "hsv_set"), ("perception", "split_blobs"),
+                       ("policy", "grasp_diag_log"), ("grasp", "close_posture_by_shape"),
+                       ("grasp", "posture_apex_gate")):                     # final = cand_r14 (r14: 32/38, 28/36)
+            sub[sec][k] = stock[sec][k]
         self.assertEqual(sub, stock)
         self.assertEqual(set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"]), set(FLAGS))
 
