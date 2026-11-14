@@ -386,7 +386,8 @@ class TestFlags(unittest.TestCase):
                                       "finals_r22_lyingprism", "finals_r22_neutral",
                                       "finals_r22_novel", "finals_r22_order", "finals_r22_recall",
                                       "finals_r22_rimz", "finals_r22_softgrip", "finals_r22_verify",
-                                      "finals_r23", "finals_r23_candidate", "finals_r23_realperc", "finals_r23_universal",
+                                      "finals_r23", "finals_r23_candidate", "finals_r23_realperc", "finals_r23_realperc3",
+                                      "finals_r23_universal", "finals_r24", "finals_r24_classic",
                                       "finals_real", "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
