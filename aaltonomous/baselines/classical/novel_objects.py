@@ -37,16 +37,19 @@ _FILLER = frozenset(set(PALETTE) | _GENERIC_NOUNS | {
     "in", "into", "to", "on", "bin", "left", "right", "center", "centre", "middle", "mid", "central", "hand",
     "please", "up", "and", "small", "little", "large", "big", "toy", "cube", "cylinder", "prism",
     "can", "could", "would", "you", "kindly", "it", "of", "with", "onto", "inside", "over", "there", "that",
-    "this", "now", "then", "go", "should", "frying", "sauce", "metal", "wooden", "plastic", "kitchen", "my", "its"})
+    "this", "now", "then", "go", "should", "frying", "sauce", "metal", "wooden", "plastic", "kitchen", "my", "its",
+    "goes", "belongs", "belong", "end", "ends", "must", "need", "needs", "want", "wants", "set", "toss", "throw",
+    "deliver", "transfer", "carry", "bring", "all", "every", "each", "any", "them", "those", "these", "from",
+    "where", "is", "are", "be", "get", "gets", "let", "has", "have", "which", "what", "there", "their", "s", "i",
+    "me", "we", "side", "bucket", "basket", "container", "tray"})
 _RESERVED = _FILLER | frozenset(w for ws in SHAPE_WORDS.values() for w in ws)
 
 
 def novel_noun_named(text):
-    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) or an unknown word."""
+    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) from SHAPE_WORDS only."""
     low = str(text or "").lower().replace("gray", "grey")
     words = set(_WORDS.findall(low))
-    named = any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
-    return named or bool(_unknown(words))
+    return any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
 
 
 def _unknown(words):

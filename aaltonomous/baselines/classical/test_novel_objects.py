@@ -149,6 +149,7 @@ class TestNovelInstructionAndSafety(unittest.TestCase):
         obstacle = next(d for d in self.novels if d.color == "black")
         # Keep only one known target and one deliberately unmatched novel.
         pol._match_novel([known, obstacle])
+        obstacle.novel_matched = True  # keep-outs are only instruction-matched novel dets
         calls = []
 
         def fake_plan(det, kw, plan_fn=None):

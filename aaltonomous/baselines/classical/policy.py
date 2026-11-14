@@ -2438,7 +2438,7 @@ class ClassicalPolicy:
             if pol.get("novel_obstacles", False) and not self._universal_inert:
                 clearance = []
                 for o in dets:
-                    if o is d or not getattr(o, "novel", False):
+                    if o is d or not getattr(o, "novel_matched", False):
                         continue
                     dims = np.asarray(getattr(o, "footprint_dims", [0.05, 0.05]), float)
                     radius = 0.5 * float(np.max(dims))
