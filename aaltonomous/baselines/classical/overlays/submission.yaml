@@ -29,7 +29,7 @@ flags:
   perception.shape_diag: false                  # Oliver     passive [shape_diag] log lines
   perception.hsv_set: robust                     # real colour  stock | robust (one HSV set for sim + real head cam)
   perception.colour_kmeans: false               # EV gate    per-episode object-pixel HSV k=3 hue re-centering
-  perception.color_gate.enabled: false          # Felix gate   post-filter: area floor, bin footprint/rim, top_k
+  perception.color_gate.enabled: false          # Felix gate   post-filter: area floor+ceiling, workspace, bin footprint/rim
   perception.color_gate.fk_mask: false          # Felix gate  FK arm/hand mask before blob grouping (needs arm_q)
   perception.color_gate.live_bins: false        # Felix gate  footprint follows the live bin estimate (else nominal + 10 cm near)
   perception.split_blobs: true                 # real colour  split touching same-colour objects

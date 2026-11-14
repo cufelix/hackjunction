@@ -114,10 +114,20 @@ class TestColorGate(unittest.TestCase):
         d = _det(_top(BIN))
         rejected = []
         self.assertEqual(self.p._color_gate([d], rejected), [])
+        self.assertEqual(rejected[0][1], "color_gate:workspace")   # rule 2b fires first: behind the bin row near edge
+        self.p.color_gate_cfg["ws_x"] = None                       # 2b off: the bin footprint rule
+        rejected = []
+        self.assertEqual(self.p._color_gate([d], rejected), [])
         self.assertEqual(rejected[0][1], "color_gate:in_bin")
 
-    def test_just_outside_edge_with_plane_method_rejected(self):
-        d = _det(_top(BIN - [0, HALF[1] + 0.01]), method="plane", n_depth=0)
+    def test_just_outside_edge_with_plane_method_kept(self):
+        # no depth cannot tell a rim from a real object right in front of a bin: keep (Codex H2)
+        d = _det(_top(BIN - [0, HALF[1] + 0.015]), method="plane", n_depth=0)
+        self.assertEqual(self.p._color_gate([d], []), [d])
+
+    def test_just_outside_edge_depth_at_rim_height_rejected(self):
+        # a 6 cm rim top just outside the footprint is not an object (4.5 cm): the band stops at 5.5 cm (Codex H4)
+        d = _det(_top(BIN - [0, HALF[1] + 0.015], h=0.06), method="depth", n_depth=500)
         rejected = []
         self.assertEqual(self.p._color_gate([d], rejected), [])
         self.assertEqual(rejected[0][1], "color_gate:bin_edge")
@@ -136,12 +146,13 @@ class TestColorGate(unittest.TestCase):
         d = _det(_top(BIN - [0, HALF[1] + 0.03]), method="plane", n_depth=0)
         self.assertEqual(self.p._color_gate([d], []), [d])
 
-    def test_more_than_six_survivors_keep_top3_by_n_px_and_degrade(self):
+    def test_more_than_six_survivors_all_passed_on_largest_first_and_degrade(self):
+        # nothing truncated in perception: an unplannable big blob must never hide a real object (Codex C1)
         pts = [REGION_XY + np.array([0.02 * i, 0.0]) for i in range(8)]
         dets = [_det(_top(xy), n_px=5000 + 100 * i) for i, xy in enumerate(pts)]
         rejected = []
         kept = self.p._color_gate(dets, rejected)
-        self.assertEqual(sorted((d.n_px for d in kept), reverse=True), [5700, 5600, 5500])
+        self.assertEqual([d.n_px for d in kept], [5700, 5600, 5500, 5400, 5300, 5200, 5100, 5000])
         self.assertTrue(self.p.color_gate_degraded)
         self.assertEqual(rejected, [])
         self.assertTrue(any("degraded" in line for line in lines))
@@ -169,6 +180,56 @@ class TestColorGate(unittest.TestCase):
         mapping = {"cube": "left", "triangle": "right"}
         self.assertIsNone(lookup_bin(cfg, mapping, "red", None))
         self.assertEqual(lookup_bin(cfg, mapping, "red", "cube"), "left")
+
+
+class TestColorGateWorkspaceAndCeiling(unittest.TestCase):
+    """Rule 2b (positive workspace: the counter in front of the bin row) and rule 1b (area ceiling)."""
+
+    def setUp(self):
+        self.p = _perception()
+        self.g = self.p.color_gate_cfg
+
+    def _pel(self, x, y, h=H_TOP, **kw):
+        top = np.array([x, y, SC.counter_z + h])
+        return _det(top, n_px=int(2 * _floor(top)) + 1, **kw)
+
+    def test_workspace_bounds(self):
+        near_x = float(SC.mat_to_pelvis(np.array([0.0, min(float(c[1]) for c in SC.cfg["bins"]["centers"].values())
+                                                    - HALF[1]]))[0])
+        self.assertAlmostEqual(near_x, 0.40, places=2)                              # bin row near edge (pelvis x)
+        self.assertIsNone(self.p._color_gate_why(self._pel(0.30, 0.0), self.g))     # in front of the bins
+        self.assertIsNone(self.p._color_gate_why(self._pel(0.385, 0.2), self.g))    # just before near edge - 1 cm
+        for x, y in ((0.395, 0.0), (0.45, 0.0), (0.10, 0.0), (0.30, 0.41), (0.30, -0.41)):
+            self.assertEqual(self.p._color_gate_why(self._pel(x, y), self.g), "color_gate:workspace", (x, y))
+
+    def test_area_ceiling(self):
+        d = self._pel(0.30, 0.0)
+        Z = _Z(d.top)
+        K = CAL.cams[CAM].K
+        expected = K[0, 0] * K[1, 1] * (SC.cfg["objects"]["size"] / Z) ** 2
+        big = _det(d.top, n_px=int(3.2 * expected))
+        self.assertEqual(self.p._color_gate_why(big, self.g), "color_gate:too_big")
+        two = _det(d.top, n_px=int(2.2 * expected))                                 # two touching objects: kept
+        self.assertIsNone(self.p._color_gate_why(two, self.g))
+
+    def test_area_ceiling_without_depth(self):
+        p = _perception()
+        p._color_gate_depth = lambda top: None
+        d = self._pel(0.30, 0.0)
+        self.assertEqual(p._color_gate_why(_det(d.top, n_px=6500), p.color_gate_cfg), "color_gate:too_big_no_z")
+        self.assertIsNone(p._color_gate_why(_det(d.top, n_px=3000), p.color_gate_cfg))
+
+    def test_bad_tuning_fails_at_load(self):
+        for k, v in (("max_cands", 0), ("area_frac", float("nan")), ("edge_h", [0.07, 0.03]), ("ws_x", [0.1]),
+                     ("max_area_frac", "x")):
+            with self.assertRaises(ValueError, msg=(k, v)):
+                load_config(overlay="none", overrides={"perception.color_gate.enabled": True,
+                                                       f"perception.color_gate.{k}": v})
+
+    def test_plane_triangle_clears_all_shape_metadata(self):
+        d = _det(_top(REGION_XY), method="plane", n_depth=0, shape="triangle", shape_conf=0.9)
+        out = self.p._color_gate_shape(d)
+        self.assertEqual((out.shape, out.shape_conf, out.shape_path, out.apex_yaw), (None, 0.0, "abstain_color_gate", None))
 
 
 if __name__ == "__main__":
@@ -205,6 +266,9 @@ class TestColorGateLiveBins(unittest.TestCase):
     def test_bin_vote_shift_moves_the_footprint(self):
         p, g = self._p()
         p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([-0.07, 0.0])}})()   # pelvis dx -7 cm
-        self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")   # inside the SHIFTED box
+        self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:workspace")   # 2b edge follows the shift
         far = _det(_top([BIN[0], BIN[1] + HALF[1] - 0.03]), method="plane", n_depth=0)  # nominal far strip, now outside
+        self.assertEqual(p._color_gate_why(far, g), "color_gate:workspace")             # behind the bin row: 2b
+        g["ws_x"] = None
+        self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")   # inside the SHIFTED box
         self.assertIsNone(p._color_gate_why(far, g))
