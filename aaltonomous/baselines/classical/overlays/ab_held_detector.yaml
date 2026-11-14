@@ -1,0 +1,45 @@
+# A/B overlay: cand_r16_nopp plus passive, bias-corrected real-Dex3 held logging.
+name: ab_held_detector
+flags:
+  instruction.resolve: true
+  policy.insert_guard: true
+  policy.bin_lookup: resolve_bin
+  perception.self_calibration.enabled: false
+  perception.principal_point: file
+  perception.y_affine: null
+  perception.classify_shape: true
+  perception.triangle_pose: false
+  perception.near_bin_guard: false
+  perception.no_blob_shape: false
+  perception.shape_diag: false
+  perception.hsv_set: robust
+  perception.split_blobs: true
+  grasp.yaw_align: false
+  grasp.yaw_phi_deg: 105
+  grasp.yaw_tri_shift: true
+  policy.time_triage: false
+  policy.max_total_attempts: null
+  policy.max_attempts: 2
+  policy.retry_pass: false
+  policy.time_margin_s: 0.0
+  policy.episode_summary_log: false
+  policy.retry_vary_grasp: true
+  policy.max_attempts_vary: 3
+  grasp.border_posture: false
+  policy.verify_placement: false
+  policy.verify_yellow_unknown: false
+  policy.max_corrections_per_episode: null
+  grasp.drop_slots: true
+  grasp.drop_slot_overflow: counter
+  policy.grasp_diag_log: true
+  grasp.held_detector: finger_sum
+  motion.carry_scale: 1.0
+  motion.close_hold_s: 1.2
+  motion.lift_on_stall.enabled: false
+  motion.lift_on_stall.timeout_s: 1.2
+  grasp.point_in_palm: [0.0862, -0.0864, 0.0143]
+  grasp.close_posture: closed_tight
+  grasp.close_posture_by_shape: true
+  grasp.posture_by_shape_min_conf: 0.5
+  grasp.posture_apex_gate: true
+  hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]

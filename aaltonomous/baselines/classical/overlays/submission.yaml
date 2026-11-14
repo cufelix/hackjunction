@@ -39,6 +39,7 @@ flags:
   grasp.drop_slots: false                       # Timi 23    standalone drop slots (no verify needed)
   grasp.drop_slot_overflow: counter             # Felix #6r  counter | stack, when the slots are used up
   policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
+  grasp.held_detector: stall                   # real held  legacy diagnostic; ab_held_detector selects finger_sum
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
   motion.lift_on_stall.enabled: false           # round 9    lift on finger stall (min close_hold_s, max timeout_s)

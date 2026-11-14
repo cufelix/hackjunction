@@ -98,6 +98,8 @@ grasp:
   # tips are 57 mm apart (URDF): centred between them (auto) a 45 mm object wedges between the two fingers and is
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
+  held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
+  held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
   # grasp.close_posture_by_shape (FLAG, default off): triangle posture ("demo", Oliver FK a44dd79) used only when the
   # shape is "triangle" AND shape_id path == "metric" AND shape confidence (shape_id._label conf * point-count
   # factor, 0..1) >= posture_by_shape_min_conf; every other pick uses grasp.close_posture + point_in_palm.

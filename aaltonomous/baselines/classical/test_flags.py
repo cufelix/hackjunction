@@ -109,6 +109,16 @@ class TestFlags(unittest.TestCase):
             self.assertEqual(list(kin.offset["left"]), pip)
             self.assertEqual(list(kin.offset["right"]), [pip[0], -pip[1], pip[2]])   # right = [x, +y, z]
 
+    def test_ab_held_detector_is_cand_r16_nopp_plus_finger_sum(self):
+        cand = load_config(overlay="cand_r16_nopp")
+        ab = load_config(overlay="ab_held_detector")
+        self.assertEqual(cand.pop("overlay"), "cand_r16_nopp")
+        self.assertEqual(ab.pop("overlay"), "ab_held_detector")
+        self.assertEqual(cand["grasp"]["held_detector"], "stall")
+        ab["grasp"]["held_detector"] = "stall"
+        self.assertEqual(ab, cand)
+        self.assertEqual(load_config(overlay="ab_held_detector")["grasp"]["held_threshold_rad"], 0.045)
+
     def test_thumb0_nonzero_fails_until_the_mirror_is_fixed(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "t0.yaml"

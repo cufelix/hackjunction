@@ -22,6 +22,7 @@ STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config
 # Limits an overlay may never exceed (hard rule: nothing may move faster than the stock sim profile).
 LIMITS = {"motion.carry_scale": (0.0, 1.0)}
 CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight"),
+           "grasp.held_detector": ("stall", "finger_sum"),
            "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust"),
            "perception.principal_point": ("file", "center")}
 VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
@@ -57,6 +58,7 @@ FLAGS = {
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
+    "grasp.held_detector": ("real held", "stall", "stall (legacy max error) | finger_sum (bias-corrected Dex3 fingers)"),
     "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
