@@ -1,0 +1,17 @@
+# A/B overlay: ab_pinch_demo + yaw-aligned prism grasp (Oliver e8bdc0a docs/pinch-fk/RESULTS.md, prism yaw sweep:
+# only pinch_demo has a two-sided window, rel 52..82 -> phi 53, lower lead; computed without yaw_tri_shift).
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_pinch_demo_yaw <image>.
+name: ab_pinch_demo_yaw
+flags:
+  grasp.close_posture: closed_tight
+  hand.closed_tight: [0.00, 0.92, 0.25, -0.50, -1.41, -0.49, -1.21]
+  grasp.point_in_palm: [0.1094, -0.0694, 0.0142]       # right = [0.1094, 0.0694, 0.0142]
+  motion.close_hold_s: 1.2
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes
+  grasp.yaw_align: true
+  perception.classify_shape: true
+  perception.triangle_pose: true
+  grasp.yaw_phi_deg: 53
+  grasp.yaw_tri_shift: false
+  perception.no_blob_shape: true
+  perception.shape_diag: true
