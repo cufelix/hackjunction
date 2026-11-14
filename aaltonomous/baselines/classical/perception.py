@@ -314,6 +314,7 @@ class Perception:
         self.still_vote = bool(self.cfg.get("still_vote", False))
         self.still_vote_cfg = dict(self.cfg.get("still_vote_params") or {})
         self._still_frames = []
+        self.flood_guard = float(self.cfg.get("flood_guard", 0.0) or 0.0)   # perception.flood_guard (FLAG, default OFF)
         self.place_gate = bool((cfg.get("policy") or {}).get("place_gate", False))
         # perception.hue_guard (default OFF): abstain on orange/yellow hues near the red|yellow boundary (hue_guard.py)
         hg = self.cfg.get("hue_guard") or {}
@@ -1430,6 +1431,10 @@ class Perception:
             all_masks = np.zeros(keep.shape, np.uint8)
             for m_ in masks.values():
                 all_masks |= (m_ > 0).astype(np.uint8)
+        if self.flood_guard > 0.0 and any(float(m_.mean()) / 255.0 > self.flood_guard for m_ in masks.values()):
+            self.log(f"[flood_guard] one colour class covers > {self.flood_guard:.0%} of the frame: no colour information, "
+                     f"no detections")
+            return ([], []) if debug else []
         if self.hue_guard:
             # H1: the red|yellow union is grouped and split before any colour is
             # assigned.  Each resulting part is then classified and guarded

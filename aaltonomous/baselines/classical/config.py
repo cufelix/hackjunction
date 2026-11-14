@@ -53,6 +53,10 @@ FLAGS = {
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
     "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner and hold the last trusted target (before trust, return no action until one complete finite encoder frame); non-finite head_depth -> 0 (missing)"),
+    "instruction.empty_abstain": ("fault drill", False, "with instruction.resolve: empty / whitespace-only instruction abstains (0 pts) instead of the policy.fixed_mapping fallback"),
+    "grasp.abort_lift_first": ("fault drill", False, "empty-grasp abort (held_detector finger_sum): open in place, lift along the plan's clearance-checked lift, then go home (stock: straight joint-space line, dips ~16 mm below the counter)"),
+    "policy.no_objects_relook": ("fault drill", False, "no detection and nothing picked yet: hold and look again until the time limit instead of done"),
+    "perception.flood_guard": ("fault drill", 0.0, "one colour class covering more than this fraction of the frame (tape / flood) = no colour information: no detections; 0 = off"),
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.multilingual": ("multilingual", False, "closed-grammar FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK instructions -> cached English canonical form before resolve; unsupported foreign input stays unparsed (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
@@ -355,7 +359,8 @@ def check_flag_values(cfg):
     if not isinstance(_get(cfg, "calib.wide_counter_window"), bool):
         raise ValueError("calib.wide_counter_window: want true or false")
     for key in ("safety.nan_guard", "policy.generation_workers", "grasp.held_calibration.enabled",
-                "grasp.drop_slot_grid"):
+                "grasp.drop_slot_grid", "instruction.empty_abstain", "grasp.abort_lift_first",
+                "policy.no_objects_relook"):
         if not isinstance(_get(cfg, key), bool):
             raise ValueError(f"{key}: want true or false")
     caps = _get(cfg, "motion.output_caps")
@@ -424,6 +429,9 @@ def check_flag_values(cfg):
     if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)) \
             or not np.isfinite(cooldown) or cooldown <= 0.0:
         raise ValueError(f"planner.per_target_cooldown_s = {cooldown!r}: want finite seconds > 0")
+    fg = _get(cfg, "perception.flood_guard")
+    if isinstance(fg, bool) or not isinstance(fg, (int, float)) or not (fg == 0 or 0.2 <= fg <= 1.0):
+        raise ValueError(f"perception.flood_guard = {fg!r}: want 0 (off) or a fraction in [0.2, 1.0]")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:

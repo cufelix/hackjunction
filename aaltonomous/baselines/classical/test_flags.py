@@ -237,10 +237,11 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_done"] = expect["finals_r22"] | {"policy.done_confirm", "perception.look_timeout_s", "planner.per_target_guard"}   # done A/B (integ-all)
         expect["finals_r22_pregrasp"] = expect["finals_r22"] | {"grasp.pregrasp_relocalise"}   # pregrasp A/B (integ-all)
         expect["finals_r22_verify"] = expect["finals_r22"] | {"policy.verify_landing"}   # verify A/B (integ-all)
+        expect["finals_r22_robust"] = expect["finals_r22"] | {"grasp.abort_lift_first", "policy.no_objects_relook", "perception.flood_guard"}   # robust A/B (integ-all)
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
-                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_counter", "finals_r22_bare", "finals_r22_prism", "finals_r22_cage", "finals_r22_done", "finals_r22_pregrasp", "finals_r22_verify"):
+                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_counter", "finals_r22_bare", "finals_r22_prism", "finals_r22_cage", "finals_r22_done", "finals_r22_pregrasp", "finals_r22_verify", "finals_r22_robust"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
-        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_counter", "finals_r22_bare", "finals_r22_prism", "finals_r22_cage", "finals_r22_done", "finals_r22_pregrasp", "finals_r22_verify"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_counter", "finals_r22_bare", "finals_r22_prism", "finals_r22_cage", "finals_r22_done", "finals_r22_pregrasp", "finals_r22_verify", "finals_r22_robust"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
@@ -255,6 +256,17 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
         self.assertEqual(load_config(overlay="ab_pitch_cal_table")["perception"]["online_pitch_cal"], "table")
+
+    def test_fault_drill_flags_default_off_and_are_validated(self):
+        cfg = load_config(overlay="none")
+        self.assertEqual((cfg["instruction"]["empty_abstain"], cfg["grasp"]["abort_lift_first"],
+                          cfg["policy"]["no_objects_relook"], cfg["perception"]["flood_guard"]), (False, False, False, 0.0))
+        for bad in ({"grasp.abort_lift_first": 1}, {"policy.no_objects_relook": "yes"}, {"instruction.empty_abstain": None},
+                    {"perception.flood_guard": 0.05}, {"perception.flood_guard": True}, {"perception.flood_guard": 1.5}):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                load_config(overrides=bad)
+        self.assertEqual(load_config(overlay="finals_r22_robust")["perception"]["flood_guard"], 0.6)
+        self.assertFalse(load_config(overlay="finals_r22_robust")["instruction"]["empty_abstain"])
 
     def test_finals_real_loads_as_cand_r16_with_calibrated_intrinsics(self):
         from aaltonomous.interface.calibration import Calibration
@@ -312,7 +324,7 @@ class TestFlags(unittest.TestCase):
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
                                       "finals_r21", "finals_r22", "finals_r22_cal",
                                       "finals_r22_chunk", "finals_r22_counter", "finals_r22_gate", "finals_r22_grasp",
-                                      "finals_r22_recall", "finals_r22_softgrip", "finals_r22_bare", "finals_r22_prism", "finals_r22_cage", "finals_r22_done", "finals_r22_pregrasp", "finals_r22_verify", "finals_real",
+                                      "finals_r22_recall", "finals_r22_softgrip", "finals_r22_bare", "finals_r22_prism", "finals_r22_cage", "finals_r22_done", "finals_r22_pregrasp", "finals_r22_verify", "finals_r22_robust", "finals_real",
                                       "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)

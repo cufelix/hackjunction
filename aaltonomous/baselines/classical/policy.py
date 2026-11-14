@@ -281,7 +281,10 @@ class ClassicalPolicy:
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
             if not str(text).strip():               # fixed mapping is reserved for an identified sort_fixed task
-                return {"default": None}
+                if (self.cfg.get("instruction") or {}).get("empty_abstain", False):   # fault drill FLAG: explicit abstain
+                    self.log("[instruction] empty instruction: abstain on every object")
+                    return {"default": "abstain"}
+                return {"default": None}        # fixlang: abstains too (integ-all: empty_abstain only changes the marker)
             from .instruction import resolve
             if (self.cfg.get("instruction") or {}).get("multilingual", False):   # FI/CZ + 10 languages (Timi)
                 from .normalize import canonicalize_multilingual
@@ -429,6 +432,7 @@ class ClassicalPolicy:
         self._summary_logged = False
         self._pg = None             # grasp.pregrasp_relocalise: the pick paused at its pre-grasp pose
         self._pg_aborts = []        # (colour, xy) of picks aborted at the pre-grasp pose
+        self._relook_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
         self._encoder_hold = None    # M2: last complete finite encoder sample; never synthesize an unobserved joint
         self._encoder_latched = False
@@ -824,7 +828,8 @@ class ClassicalPolicy:
         res = self._act_entry(obs)
         if self._mirror_im:   # hand.mirror_index_middle (R42a): last stop before the runner, every return path
             h = np.asarray(res["hand_q_target"], float)
-            res = dict(res, hand_q_target=np.stack([self._im_emit(r) for r in h]) if h.ndim == 2 else self._im_emit(h))
+            if h.size:   # integ-all: nan_guard returns an EMPTY action before the first trusted state
+                res = dict(res, hand_q_target=np.stack([self._im_emit(r) for r in h]) if h.ndim == 2 else self._im_emit(h))
         return res
 
     def _im_emit(self, r):
@@ -858,6 +863,8 @@ class ClassicalPolicy:
     def _limit_motion_output(self, action, obs):
         """M4 final boundary: cap every route, including holds, home, endgame and empty-grasp queue replacement."""
         a, h = np.asarray(action["arm_q_target"], float), np.asarray(action["hand_q_target"], float)
+        if len(a) == 0 or len(h) == 0:   # integ-all: nan_guard returns an EMPTY action before the first trusted state
+            return action
 
         def start(key, target):
             try:
@@ -3119,6 +3126,9 @@ class ClassicalPolicy:
             self._note(t, "known wrong-bin object has no safe corrective or cleanup plan; stopping")
             self.state = "done"
             return self._hold(done=True)
+        if kind == "none" and self._relook_blind(res, t):
+            self.state = "settle"
+            return self._hold()
         if kind == "none":
             if confirm:
                 n_dets = int(res[2])
@@ -3170,6 +3180,18 @@ class ClassicalPolicy:
         self._relook_reason = reason
         self._note(t, f"{note}: retract arms to home before re-detection")
         return self._pop()
+
+    def _relook_blind(self, res, t):
+        """policy.no_objects_relook: nothing seen at all and nothing picked yet this episode = a blind or empty-looking
+        frame, not a finished sort. Look again (after a settle) while the time limit has not run out. Off = stock."""
+        if not self.cfg["policy"].get("no_objects_relook", False) or self.n_started or res[2]:
+            return False
+        if t - getattr(self, "_ep_t0", 0.0) >= float(self.time_limit) - 1.0:
+            return False
+        if not getattr(self, "_relook_logged", False):
+            self._relook_logged = True
+            self._note(t, "no object seen and nothing picked: holding and looking again until the time limit")
+        return True
 
     def _verify_on(self):
         return bool(self.cfg["policy"].get("verify_placement", False))
@@ -3621,6 +3643,29 @@ class ClassicalPolicy:
         self._enqueue(a, h)
         self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: still not empty after the re-open -> home, stop")
         return self._pop()
+
+    def _abort_path_lift_first(self, plan, home):
+        """grasp.abort_lift_first: open the hand in place, replay the plan's own lift (its Cartesian lift was clearance-
+        checked at plan time, and the abort fires with the arm still at the end of the close), then go home from the top
+        of the lift. The stock path is one joint-space line from the grasp pose to home, which dips the fingertips
+        ~16 mm below the counter surface (and across a bin wall) for some grasps."""
+        lift = next(((s, e) for name, s, e in plan.phases if name == "lift"), None)
+        if lift is None or lift[1] <= lift[0]:
+            raise ValueError("plan has no lift phase")
+        s0, s1 = lift
+        lo = max(s0 - 40, 0)             # the abort fires a chunk after close_end: the arm may already be a few ticks into the lift
+        d = np.abs(np.asarray(plan.arm[lo:s1], float) - self.arm_cmd).max(axis=1)
+        j = lo + int(d.argmin())
+        if d.min() > 0.05:
+            raise ValueError("arm is not on the plan's close/lift path")
+        s0 = max(j, s0)
+        a0, h0 = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.arm_cmd, self.post["open"])   # open in place
+        up = np.asarray(plan.arm[s0:s1], float)
+        top = up[-1] if len(up) else self.arm_cmd
+        a1, h1 = np.asarray(up), np.repeat(np.asarray(self.post["open"], float)[None], len(up), 0)
+        a2, h2 = self.planner.go_to(top, self.post["open"], home, self.post["open"])
+        return (np.vstack([np.asarray(a0, float).reshape(-1, 14), a1, np.asarray(a2, float).reshape(-1, 14)]),
+                np.vstack([np.asarray(h0, float).reshape(-1, 14), h1, np.asarray(h2, float).reshape(-1, 14)]))
 
     def _joint_offset_diag(self, obs, t):
         """debug.log_joint_offset (passive): cmd-minus-measured over the first second of steady holds, from the policy's

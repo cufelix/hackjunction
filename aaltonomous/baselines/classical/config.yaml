@@ -271,6 +271,8 @@ perception:
     ring_px: 10
     dh: 5
     ds: 25
+  flood_guard: 0.0           # FLAG (fault drill). >0: a frame where ONE colour class covers more than this fraction of the image
+                              # (e.g. tape over the lens, 0.6) has no colour information: no detections, never a pick. 0 = off
   colour_kmeans: false       # FLAG (EV gate). Once per episode, bounded k=3 on robust object-blob HSV pixels;
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
@@ -373,6 +375,8 @@ grasp:
   release_wait_s: null        # FLAG (lag R44): null = today (open_hold_s); s = hold >= this after the open command before the retreat starts
   release_confirm: false      # FLAG (lag R49): after open + wait the finger state must read empty (held detector); not empty -> re-open once, then home and stop picking
   release_confirm_s: 1.5      # release_confirm: how long to poll for an empty hand after each open (Dex3 lag 0.3-0.4 s)
+  abort_lift_first: false     # FLAG (fault drill). An empty-grasp abort opens the hand IN PLACE, lifts along the plan's own
+                              # clearance-checked lift, then goes home; off = straight joint-space line home (dips below the counter)
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
   held_calibration:           # M3 FLAG: an empty close at home supplies e0; invalid/unfinished calibration disables abort
     enabled: false
@@ -516,6 +520,8 @@ instruction:
   multilingual: false         # FLAG. cached FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK -> English; needs resolve
   strict: false               # FLAG (Felix strict). never guess: abstain instead of FIXED / inferred keys; needs resolve
   structured: false           # FLAG (langzip). deterministic complete list/conditional rules before strict; needs resolve + strict
+  empty_abstain: false        # FLAG (fault drill). With resolve: an empty / whitespace-only instruction abstains (0) instead of the
+                              # fixed-mapping fallback. NOT in finals_r22_robust: the real-robot fixed mapping is the organisers' P0
   max_chars: 0                # FLAG (fuzz). >0: cap the text at this many chars, cut at the last sentence/clause boundary
                               # (. ; ! ? newline) else the last space; the resolver is quadratic (50k chars = 19 s). 0 = off
 
@@ -611,6 +617,8 @@ policy:
   done_confirm: false         # FLAG (finals done). Empty/error look is not enough to end; confirm below before done
   done_confirm_looks: 2       # minimum consecutive empty detector results (must be >= 2)
   done_confirm_span_s: 10.0   # first-to-last empty-look span required before declaring the counter clear
+  no_objects_relook: false    # FLAG (fault drill). Nothing detected and nothing picked yet: hold and look again (every settle_s)
+                              # until the time limit instead of ending the episode (a blind camera / empty-looking frame is not "done")
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   fixed_mapping: null         # FLAG (organisers P0). explicit sort_fixed scene metadata passed at server reset;
                               # null = shared tasks.FIXED_MAPPING. Never used as a sort_language blank/error fallback
