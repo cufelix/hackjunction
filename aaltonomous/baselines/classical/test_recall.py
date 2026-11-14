@@ -146,11 +146,14 @@ class TestRecallSyntheticFrames(unittest.TestCase):
         # Bright red/orange glare occupies >half of the brightest 35%, but <half of the whole component.
         cv2.rectangle(hsv, (u - 10, v - 15), (u + 10, v - 1), (12, 160, 255), -1)
         rgb = _rgb(hsv)
-        self.assertNotEqual([d.color for d in top35.detect(rgb, None)], ["yellow"])
+        old, old_rej = top35.detect(rgb, None, debug=True)
+        self.assertNotIn("yellow", [d.color for d in old] + [d.color for d, why in old_rej if why.startswith("hue_guard")])
         found, rej = whole.detect(rgb, None, debug=True)
-        # whole_blob votes yellow; H1 (fixh1h7) still abstains on a part with red+yellow source pixels (0, never -1).
-        self.assertEqual([d.color for d in found] + [d.color for d, why in rej if why.startswith("hue_guard")],
-                         ["yellow"])
+        # whole_blob relabels the candidate yellow; H1 (fixh1h7) still abstains on a part whose source pixels hold
+        # both red and yellow, so it is rejected as ambiguous (0, never -1) instead of being placed.
+        self.assertEqual(found, [])
+        self.assertEqual([(d.color, why) for d, why in rej if why.startswith("hue_guard")],
+                         [("yellow", "hue_guard:ambiguous")])
 
     def test_low_s_thin_tape_stays_rejected(self):
         p = _perception(**{"perception.sat_floor_adaptive": True,
@@ -268,6 +271,7 @@ class TestRecallPolicyGuards(unittest.TestCase):
         p._shell = False
         p._stall = None
         p._rel = None
+        p._gdiag = None             # release: _pop checks the carry read window
         p.arm_cmd = p.home = np.zeros(14)
         p.hand_cmd = np.zeros(14)
         p.post = {"open": np.zeros(14)}

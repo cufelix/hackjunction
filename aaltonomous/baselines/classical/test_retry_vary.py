@@ -88,6 +88,31 @@ def obs(t=10.0):
 
 
 class TestVariants(unittest.TestCase):
+    def test_retry_jitter_uses_deterministic_five_millimetre_pattern(self):
+        d = det("red", 0.30, shape="cube")
+        pol = make([d], overrides={"policy.retry_jitter_m": 0.004, "policy.max_attempts": 6,
+                                   "policy.retry_same_xy_m": 0.001})
+        got = []
+        for _ in range(5):
+            p = pol._plan_pick(d, {})
+            self.assertTrue(p.ok, p.reason)
+            got.append(p.waypoints["grasp"][:2] - d.top[:2])
+            miss(pol, p)
+        np.testing.assert_allclose(got, [[0.0, 0.0], [0.004, 0.0], [-0.004, 0.0],
+                                         [0.0, 0.004], [0.0, -0.004]], atol=1e-12)
+
+    def test_association_radius_tracks_seven_centimetre_drift_across_frames(self):
+        first = det("red", 0.30, shape="cube")
+        moved = det("red", 0.37, shape="cube")
+        stock = make([first])
+        miss(stock, stock._plan_pick(first, {}))
+        self.assertEqual(stock._hist_for(moved), [])
+
+        finals = make([first], overrides={"perception.assoc_radius_m": 0.10})
+        miss(finals, finals._plan_pick(first, {}))
+        self.assertEqual(len(finals._hist_for(moved)), 1)
+        self.assertEqual(finals._attempt_count(moved.top[:2], moved.color), 1)
+
     def test_retry_never_repeats_an_identical_grasp(self):
         for shape, stock in (("triangle", DEMO), ("triangle", V1), (None, V1), ("cube", V1), ("cylinder", V1)):
             d = det("red", 0.30, shape=shape)

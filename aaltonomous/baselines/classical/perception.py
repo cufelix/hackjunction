@@ -386,6 +386,8 @@ class Perception:
 
     def _pixel_to_pelvis(self, u, v, depth_mm, frame=None, transform_snapshot=None):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.pixel_to_pelvis.
+        if frame is not None and not isinstance(frame, FrameTransform):   # a raw 4x4 here would be silently transposed
+            raise TypeError(f"frame must be a FrameTransform, got {type(frame).__name__}; pass transform_snapshot=")
         if transform_snapshot is not None:   # fixvote H4 explicit per-frame pose
             T = np.asarray(transform_snapshot, float)
             p = self.cal.deproject(self.cam, u, v, depth_mm)
@@ -401,6 +403,8 @@ class Perception:
 
     def _project(self, p_pelvis, frame=None):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.project.
+        if frame is not None and not isinstance(frame, FrameTransform):   # a raw 4x4 here would be silently transposed
+            raise TypeError(f"frame must be a FrameTransform, got {type(frame).__name__}; pass transform_snapshot=")
         snap = frame if frame is not None else self._frame_transform.get()
         T = snap.T if snap is not None else self.pitch_T
         if T is None and snap is None:
@@ -879,7 +883,7 @@ class Perception:
         vv, uu = np.nonzero(valid[::stride, ::stride])
         vv, uu = vv * stride, uu * stride
         P = (self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float)) if transform_snapshot is None else
-             self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float), transform_snapshot))
+             self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float), transform_snapshot=transform_snapshot))
         sc = self.scene
 
         # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.

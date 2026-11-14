@@ -89,6 +89,7 @@ calib:
 
 perception:
   camera: head
+  assoc_radius_m: 0.06       # FLAG. Same-colour detection-to-retry association across frames; finals uses 0.10
   # OpenCV HSV (H 0-180, S/V 0-255). Each colour = list of [lo, hi] ranges (red wraps around H=0).
   hsv:
     # S min 70: lit TOP faces are washed out (sim: S ~95 red/blue, ~123 yellow vs ~150 on the side faces). With
@@ -382,6 +383,8 @@ grasp:
                               # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
   cylinder_no_yaw_vary: false # FLAG (cyl yaw). Retry on a detected cylinder: no finger-yaw variants (it is rotationally
                               # symmetric); only the posture variant remains. Off = stock (+-retry_yaw_deg[cylinder]).
+  staggered_release: false    # FLAG. Open thumb + DDS slots 3/4 first, then slots 5/6 without blocking act()
+  staggered_release_delay_s: 0.30  # delay before DDS slots 5/6 begin opening (overlapping ramps)
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   close_posture: closed       # FLAG (pinch fix): hand posture for the grasp, closed | closed_tight (hand.closed_tight)
@@ -495,6 +498,9 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
   mirror_index_middle: false   # FLAG (R42a): index pair == middle pair in every posture + every emitted hand target
   right: null                  # optional explicit right-hand postures {open, preshape, closed} in RIGHT DDS order
 
+held:
+  read_through_carry: false   # FLAG. finger_sum: post-lift + carry max-of-N reads; empty post-lift aborts to retry
+
 policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)
   safety_shell_vel_reserve: 0.0  # with safety_shell: >0 slows every plan to <= (1 - this) x the SafetyFilter velocity limit (e.g. 0.2); 0 = plans untouched
@@ -550,7 +556,7 @@ policy:
   retry_yaw_deg: {triangle: 60, cube: 90, cylinder: 90, none: 90, default: 90}   # heading change per label
   retry_same_xy_m: 0.01       # two grasps closer than this, same posture and heading within retry_same_yaw_deg = identical
   retry_same_yaw_deg: 20.0
-  retry_assoc_radius: 0.06    # an earlier miss belongs to an object of the same colour within this (pushed objects)
+  retry_jitter_m: 0.0         # FLAG. Retry offsets: +x, -x, +y, -y; zero keeps the detected grasp point
   retry_max_variants: 3       # grasp variants planned per retry (each costs one plan() call)
   first_object_speed_scale: null  # FLAG (finals safe). null | (0,1]: arm speed x this for every plan made before the first pick starts
   # Decision layer D1-D4 (decision.py, numbers in `decision:` below). All default off = stock behaviour.

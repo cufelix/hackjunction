@@ -48,6 +48,16 @@ class TestFlags(unittest.TestCase):
         self.assertIn("perception.depth_blob_recover", FLAGS)
         self.assertFalse(load_config(overlay="submission")["perception"]["depth_blob_recover"])
 
+    def test_finals_r22_enables_only_the_grasp_reliability_flags_over_r22(self):
+        base = load_config(overlay="finals_r22")
+        got = load_config(overlay="finals_r22_grasp")
+        base["overlay"] = "finals_r22_grasp"
+        base["grasp"]["staggered_release"] = True
+        base["policy"]["retry_jitter_m"] = 0.004
+        base["perception"]["assoc_radius_m"] = 0.10
+        base["held"]["read_through_carry"] = True
+        self.assertEqual(got, base)
+
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
 
@@ -184,6 +194,8 @@ class TestFlags(unittest.TestCase):
             "perception.partial_ok_near_hand", "perception.relook_before_done"}   # recall A/B on top of r22
         expect["finals_r22_cal"] = expect["finals_r22"] | {"calib.hand_icp_primary", "calib.counter_after_hand",
                                                        "calib.refit_per_look", "perception.principal_point"}   # handcal A/B
+        expect["finals_r22_grasp"] = expect["finals_r22"] | {"perception.assoc_radius_m", "policy.retry_jitter_m",
+                                                         "grasp.staggered_release", "held.read_through_carry"}   # release A/B
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -192,9 +204,9 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
-                  "finals_r22_recall", "finals_r22_cal"):
+                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
-        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
@@ -263,8 +275,8 @@ class TestFlags(unittest.TestCase):
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
                                       "finals_r21", "finals_r22", "finals_r22_cal",
-                                      "finals_r22_recall", "finals_real", "rc1", "rc1_strict",
-                                      "safe_profile"})
+                                      "finals_r22_grasp", "finals_r22_recall", "finals_real", "rc1",
+                                      "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 

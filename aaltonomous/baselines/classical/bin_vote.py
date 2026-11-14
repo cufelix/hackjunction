@@ -206,15 +206,15 @@ def tape_votes(perception, rgb, depth, centers, v, transform_snapshot=None):
     pts = np.zeros((len(vv), 3))
     if ok.any():
         pts[ok] = (perception._pixel_to_pelvis(uu[ok], vv[ok], d[ok]) if transform_snapshot is None else
-                   perception._pixel_to_pelvis(uu[ok], vv[ok], d[ok], transform_snapshot))
+                   perception._pixel_to_pelvis(uu[ok], vv[ok], d[ok], transform_snapshot=transform_snapshot))
     if (~ok).any():  # pelvis z is linear in depth along a ray: solve z(d) = rim_z from two samples
         u, w = uu[~ok], vv[~ok]
         if transform_snapshot is None:
             p1 = perception._pixel_to_pelvis(u, w, np.full(len(u), 1000.0))
             p2 = perception._pixel_to_pelvis(u, w, np.full(len(u), 2000.0))
         else:
-            p1 = perception._pixel_to_pelvis(u, w, np.full(len(u), 1000.0), transform_snapshot)
-            p2 = perception._pixel_to_pelvis(u, w, np.full(len(u), 2000.0), transform_snapshot)
+            p1 = perception._pixel_to_pelvis(u, w, np.full(len(u), 1000.0), transform_snapshot=transform_snapshot)
+            p2 = perception._pixel_to_pelvis(u, w, np.full(len(u), 2000.0), transform_snapshot=transform_snapshot)
         dz = p2[:, 2] - p1[:, 2]
         t = np.where(np.abs(dz) > 1e-9, (rim_z - p1[:, 2]) / np.where(np.abs(dz) > 1e-9, dz, 1.0), np.nan)
         pts[~ok] = p1 + (p2 - p1) * t[:, None]

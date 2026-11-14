@@ -150,6 +150,14 @@ class TestFingerSumHeldDetector(unittest.TestCase):
         stall = HeldDetector("stall", 0.045)
         self.assertEqual(stall.evaluation_tick(close_start=10, close_end=20, hz=30.0), 20)
 
+    def test_max_of_samples_uses_the_existing_threshold(self):
+        det = self.detector_with_reference("right")
+        empty = trace("right", -0.01, -0.01)
+        held = trace("right", 0.19, 0.02)
+        verdict, scores = det.held_max("right", [empty, held, empty])
+        self.assertTrue(verdict)
+        self.assertAlmostEqual(scores["finger_sum"], 0.23)
+
 
 class TestLegacyStallHeldDetector(unittest.TestCase):
     def test_current_max_absolute_error_rule_is_unchanged(self):
@@ -223,6 +231,46 @@ class TestEmptyGraspAbort(unittest.TestCase):
         _, pol, q = self.started()
         pol.held_detector = HeldDetector("stall", 0.045)
         self.assertFalse(pol._held_abort_due({"plan": SimpleNamespace(side="left")}, q, pol.hand_cmd))
+
+    def test_read_through_carry_keeps_a_held_object_and_uses_carry_samples(self):
+        _, pol, held_q = self.started(sums=(0.19, 0.02))
+        pol.cfg["held"]["read_through_carry"] = True
+        pol._gdiag["carry"] = (30, 60)
+        pol._gdiag["samples"] = {"close": (20, held_q, pol.hand_cmd),
+                                  "lift": (30, held_q, pol.hand_cmd)}
+        pol.queue_a = pol.queue_h = np.zeros((60 - 40, 14))
+        pol._grasp_diag({"hand_q": held_q})
+        self.assertIsNotNone(pol._gdiag)
+        self.assertIn("carry", pol._gdiag["samples"])
+        self.assertEqual(len(pol._gdiag["samples"]["carry"]), 1)
+
+    def test_slip_during_lift_aborts_before_any_carry_command(self):
+        _, pol, empty_q = self.started(sums=(-0.01, -0.01))
+        logs = []
+        pol.log = logs.append
+        pol.cfg["held"]["read_through_carry"] = True
+        pol._gdiag["carry"] = (30, 60)
+        held_cmd, held_q = trace("left", 0.19, 0.02, thumb0_native=0.70)
+        pol._gdiag["samples"] = {"close": (20, held_q, held_cmd)}
+        pol.hand_cmd = held_cmd
+        pol.queue_a = pol.queue_h = np.zeros((60 - 30, 14))
+        pol._grasp_diag({"hand_q": empty_q})
+        self.assertIsNone(pol._gdiag)
+        # rc7 (fixcal C4): the carry is cancelled and a proved open -> vertical lift -> home recovery is requested
+        self.assertEqual(len(pol.queue_a), 0)
+        self.assertEqual(pol._empty_recovery["side"], "left")
+        self.assertIs(pol.vary_hist[-1]["held"], False)
+        self.assertTrue(any("post-lift sample empty" in m for m in logs))
+
+    def test_action_chunk_stops_exactly_at_lift_end_before_the_read(self):
+        _, pol, _ = self.started(sums=(0.19, 0.02))
+        pol.cfg["held"]["read_through_carry"] = True
+        pol._gdiag["lift_end"] = 30
+        pol._gdiag["carry"] = (30, 60)
+        pol.queue_a = pol.queue_h = np.zeros((60 - 22, 14))
+        action = pol._pop()
+        self.assertEqual(len(action["arm_q_target"]), 8)
+        self.assertEqual(len(pol.queue_a), 30)  # next act reads hand_q before queueing tick 30 of carry
 
 
 class TestPolicyHeldWiring(unittest.TestCase):
