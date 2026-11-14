@@ -98,6 +98,7 @@ FLAGS = {
     "perception.still_vote": ("gate fix", False, "non-blocking N-frame vote over policy-declared still frames"),
     "perception.color_gate.fk_silhouette": ("gate fix", False, "fill one projected polygon per FK arm/hand link before dilation"),
     "perception.color_gate.sat_floor_params.blue": ("gate fix", 110, "blue/purple saturation floor variant"),
+    "perception.neutral_obstacles": ("Oliver neutral", False, "dark / grey / colourless non-target blobs (median V < neutral_params.v_dark 55, or S < s_grey 30; sizeable >= min_area_px 300; above the counter when depth exists) are never detections; they become Perception.neutral_obstacles (3D footprint from depth when present, else image-only and ignored) and the planner rejects hand points within margin_m 0.02 of a footprint (any phase); search budget plan_timeout_s 1.0 then fail open to the stock plan. No new colour class"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "

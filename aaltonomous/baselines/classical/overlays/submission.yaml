@@ -129,3 +129,4 @@ flags:
   perception.inject_cam_error: null             # TEST ONLY [dpitch_deg, dyaw_deg, dx, dy, dz]: perturb the head extrinsics
   instruction.max_chars: 0                      # fuzz fix   0 = off; N>0 caps the instruction text at N chars (boundary cut)
   safety.nan_guard: false                       # fuzz fix   non-finite arm_q/hand_q -> hold last action, no planner tick
+  perception.neutral_obstacles: false           # Oliver neutral  dark/grey non-target blobs: never detections, planner obstacles (OFF)
