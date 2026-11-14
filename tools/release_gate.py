@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from aaltonomous.baselines.classical.config import FLAGS, _get, load_config, pitch_cal_conflicts  # noqa: E402
+from aaltonomous.baselines.classical.config import FLAGS, _get, hand_cal_conflicts, load_config, pitch_cal_conflicts  # noqa: E402
 
 
 def diff_flags(a, b):
@@ -23,7 +23,7 @@ def gate(rc, out=print):
     diffs = diff_flags(sub, rcfg)
     for k, s, r in diffs:
         out(f"{k}: submission={s} rc={r}")
-    conflicts = pitch_cal_conflicts(rcfg)
+    conflicts = pitch_cal_conflicts(rcfg) + hand_cal_conflicts(rcfg)
     for c in conflicts:
         out(f"CONFLICT: {c}")
     ok = not diffs and not conflicts

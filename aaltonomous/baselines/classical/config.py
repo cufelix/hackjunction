@@ -40,6 +40,8 @@ FLAGS = {
                                             "per-episode head-camera xy offset from the bin walls (depth)"),
     "perception.online_pitch_cal": ("Timi pitch", False,
                                     "per-episode camera pitch: true=orange bin rims | table=counter plane"),
+    "perception.hand_calibration.enabled": ("Oliver hand-calib", False,
+                                            "per-episode head-camera 6-DOF pose from the arms in depth (ICP vs FK)"),
     "perception.classify_shape": ("Oliver #5/#7", False, "Detection.shape from the top face (shape_id)"),
     "perception.triangle_pose": ("Oliver #5", False, "triangles: apex yaw + robust xy centre"),
     "perception.near_bin_guard": ("Oliver #7", False, "classify_shape abstains next to a bin (cut top face)"),
@@ -248,6 +250,23 @@ def home_arm(cfg, spec: JointSpec | None = None):
         raise ValueError(f"home_arm_q too close to the joint limits: {bad}")
     return q
 
+
+
+def hand_cal_conflicts(cfg):
+    """Release-gate rule: perception.hand_calibration ON + a non-zero y_affine / xy_offset (or self_calibration) is a
+    FAIL: all correct the same head-camera error, stacking double-corrects. hand_calibration + online_pitch_cal is
+    ALLOWED (B1 chains after the pitch fit)."""
+    p = cfg.get("perception") or {}
+    if not (p.get("hand_calibration") or {}).get("enabled", False):
+        return []
+    out = []
+    for k in ("y_affine", "xy_offset"):
+        v = p.get(k)
+        if v is not None and any(abs(float(x)) > 0.0 for x in v):
+            out.append(f"perception.hand_calibration is ON together with {k}={list(v)} (double correction)")
+    if (p.get("self_calibration") or {}).get("enabled", False):
+        out.append("perception.hand_calibration is ON together with perception.self_calibration (double correction)")
+    return out
 
 
 def pitch_cal_conflicts(cfg):

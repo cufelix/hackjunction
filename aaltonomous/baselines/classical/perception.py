@@ -168,6 +168,9 @@ class Perception:
             self.cal = copy.copy(calibration)
             self.cal.cams = dict(calibration.cams)
             self.cal.cams[self.cam] = dataclasses.replace(cam, K=K)
+        # what reset_calibration() restores: AFTER every construction step above (principal_point copy), so a reset never
+        # reverts perception to the file K. perception.hand_calibration swaps self.cal for a corrected COPY per episode.
+        self.cal_nominal = self.cal
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
@@ -222,6 +225,7 @@ class Perception:
             self._colour_kmeans_done = False
             self._colour_kmeans_tries = 0
             self.colour_kmeans_info = None
+        self.cal = self.cal_nominal   # B1: a hand-calibrated copy never outlives its episode
 
     def _T(self):
         """Episode-corrected camera pose, or the untouched nominal calibration."""
@@ -667,6 +671,21 @@ class Perception:
                           "invalid camera height")
         return result(True, True, pitch, roll, camera_height, n_points, n_inliers, residual,
                       f"accepted; height delta={height_delta * 1000.0:+.1f} mm (not applied)", corrected)
+
+    def current_T(self):
+        """T_pelvis_optical perception uses right now. perception.online_pitch_cal (timi/pitch-cal) keeps its corrected
+        pose in self.pitch_T (None = nominal); hand calibration starts from whatever is current, so it chains AFTER it."""
+        T = getattr(self, "pitch_T", None)
+        return np.array(T if T is not None else self.cal._T(self.cam), float)
+
+    def set_camera_pose(self, T):
+        """perception.hand_calibration: use T as this camera's T_pelvis_optical until the next reset, on a copy of the
+        calibration (the shared object stays nominal). With online_pitch_cal merged, pitch_T (which wins in _T /
+        _pixel_to_pelvis / _project) is set too, so every path sees the refined pose."""
+        from .hand_calib import corrected_calibration
+        self.cal = corrected_calibration(self.cal, self.cam, T)
+        if hasattr(self, "pitch_T"):
+            self.pitch_T = np.array(T, float)
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""

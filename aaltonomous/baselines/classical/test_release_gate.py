@@ -37,6 +37,15 @@ class TestReleaseGate(unittest.TestCase):
         self.assertTrue(lines[0].startswith("CONFLICT: perception.online_pitch_cal is ON"))
         self.assertEqual(lines[-1], "RELEASE GATE FAIL")
 
+    def test_hand_cal_conflict_rules(self):
+        from .config import hand_cal_conflicts
+        on = {"perception.hand_calibration.enabled": True}
+        self.assertEqual(hand_cal_conflicts(load_config(overrides=on)), [])
+        self.assertEqual(hand_cal_conflicts(load_config(overrides={**on, "perception.online_pitch_cal": True})), [])
+        self.assertEqual(len(hand_cal_conflicts(load_config(overrides={**on, "perception.y_affine": [0.02, 0.0]}))), 1)
+        self.assertEqual(len(hand_cal_conflicts(load_config(overrides={**on, "perception.xy_offset": [0.0, 0.01]}))), 1)
+        self.assertEqual(hand_cal_conflicts(load_config(overrides={"perception.y_affine": [0.02, 0.0]})), [])
+
 
 if __name__ == "__main__":
     unittest.main()

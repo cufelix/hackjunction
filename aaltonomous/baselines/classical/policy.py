@@ -63,6 +63,24 @@ class ClassicalPolicy:
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
         self.perception = Perception(self.cfg, self.scene, self.cal, log=log or (lambda *a: None))
+        # perception.hand_calibration (default OFF): head-camera pose from the arms in depth. The arm model + URDF load
+        # here (~0.5 s, outside any episode); a load failure only disables the feature.
+        self.hand_calib = None
+        hcfg = self.cfg["perception"].get("hand_calibration") or {}
+        if hcfg.get("enabled", False):
+            try:
+                from .hand_calib import HandCalibrator
+                self.hand_calib = HandCalibrator(hcfg)
+                _ = self.hand_calib.surface
+                pc = self.cfg["perception"]
+                others = [k for k, on in (("xy_offset", any(pc.get("xy_offset") or [])), ("y_affine", pc.get("y_affine")),
+                                         ("self_calibration", (pc.get("self_calibration") or {}).get("enabled")))
+                          if on]
+                if others:     # all correct the same head-camera error: stacking them double-corrects
+                    (log or print)(f"WARNING hand_calibration is ON together with {others}: double-correction risk")
+            except Exception as e:
+                self.hand_calib = None
+                (log or print)(f"hand calibration disabled: {type(e).__name__}: {e}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.require_confirm = require_confirm
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
@@ -170,6 +188,12 @@ class ClassicalPolicy:
         self._pitch_thread = None
         self.calibration = None
         self._calibration_done = False
+        self.hand_calibration = None    # HeadCalibResult of this episode (perception.hand_calibration)
+        self._hc_done = self.hand_calib is None
+        self._hc_tries = 0
+        self._hc_prev_q = None
+        self._hc_job = None
+        self._hc_still = 0
         self.last_bin_detections = []
         self.used_drop_slots = {name: set() for name in self.scene.bin_names}
         self.reserved_drop_slots = {name: set() for name in self.scene.bin_names}
@@ -228,6 +252,71 @@ class ClassicalPolicy:
                      f"residual={pitch_cal.residual_m * 1000.0:.1f} mm, "
                      f"points={pitch_cal.n_points}, time={pitch_cal.elapsed_ms:.1f} ms "
                      f"({pitch_cal.reason})")
+
+    def _hand_calibrate(self, obs, t):
+        """perception.hand_calibration, ASYNC: on a still frame (encoders vs depth in sync) the 30-300 ms ICP runs on a
+        worker thread over copies of depth/arm_q/hand_q; act() keeps returning its normal action and only polls the
+        job (a few us). A finished success -> perception uses a corrected copy until the next reset; a failure retries
+        on a later still frame (max_tries); a job older than job_timeout_s is abandoned -> nominal, logged. Never raises."""
+        job = self._hc_job
+        if job is not None:
+            if job["done"].is_set():
+                self._hc_job = None
+                self._hand_calib_apply(job["res"], t)
+            elif time.perf_counter() - job["t0"] > float(self.hand_calib.p.get("job_timeout_s", 1.5)):
+                self._hc_job = None
+                self._hc_done = True
+                self._note(t, f"hand calibration fallback: solve timed out (> {self.hand_calib.p.get('job_timeout_s', 1.5)} s)")
+            return
+        try:
+            p = self.hand_calib.p
+            q = np.array(obs["arm_q"], float)
+            hq = None if obs.get("hand_q") is None else np.array(obs["hand_q"], float)
+            cur = q if hq is None else np.r_[q, hq]
+            prev, self._hc_prev_q = self._hc_prev_q, cur
+            if prev is None or prev.shape != cur.shape or np.abs(cur - prev).max() > p["still_rad"]:
+                self._hc_still = 0
+            else:
+                self._hc_still += 1
+            # still_ticks consecutive still ticks (arms AND hands): the depth lags the encoders by 50-100 ms
+            if self._hc_still < int(p.get("still_ticks", 5)) or obs.get("head_depth") is None:
+                return
+            self._hc_tries += 1
+            from .hand_calib import corrected_calibration
+            start = corrected_calibration(self.perception.cal, self.perception.cam, self.perception.current_T())
+            depth = np.array(obs["head_depth"])
+        except Exception as e:
+            self._hc_done = True
+            self._note(t, f"hand calibration fallback: {type(e).__name__}: {e}")
+            return
+        job = {"done": threading.Event(), "res": None, "t0": time.perf_counter()}
+        self._hc_job = job
+        self._hc_still = 0
+        cam, solver = self.perception.cam, self.hand_calib
+
+        def work():
+            try:
+                job["res"] = solver.solve(start, cam, depth, q, hq)
+            except Exception as e:   # solve() never raises; belt and braces
+                job["res"] = e
+            finally:
+                job["done"].set()
+
+        threading.Thread(target=work, daemon=True, name="hand-calib").start()
+
+    def _hand_calib_apply(self, res, t):
+        if isinstance(res, Exception):
+            self._hc_done = True
+            self._note(t, f"hand calibration fallback: {type(res).__name__}: {res}")
+            return
+        if res.success:
+            self.perception.set_camera_pose(res.T)
+        elif self._hc_tries < int(self.hand_calib.p["max_tries"]):
+            return
+        self._hc_done = True
+        self.hand_calibration = res
+        self._note(t, f"hand calibration {'accepted' if res.success else 'fallback'} (try {self._hc_tries}): "
+                      f"{res.summary()}")
 
     def confirm(self):
         self._decision = "go"
@@ -355,6 +444,8 @@ class ClassicalPolicy:
                 self._note(t, f"head calibration {state}: xy=({off[0]:+.1f},{off[1]:+.1f}) mm, "
                               f"confidence={cal.confidence:.2f}, residual={cal.residual_m * 1000.0:.1f} mm, "
                               f"points={cal.n_points}, time={cal.elapsed_ms:.1f} ms ({cal.reason})")
+        if not self._hc_done:
+            self._hand_calibrate(obs, t)
         if self._gdiag is not None:
             self._grasp_diag(obs)
         if self._stall is not None:
