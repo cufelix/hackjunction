@@ -26,7 +26,7 @@ import numpy as np
 from aaltonomous.interface.calibration import Calibration
 from aaltonomous.interface.tasks import FIXED_MAPPING
 from aaltonomous.interface.safety import JointSpec, SafetyConfig
-from aaltonomous.scene.scene import Scene
+from aaltonomous.scene.scene import Scene, resolve_bin
 
 from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
@@ -86,6 +86,15 @@ class ClassicalPolicy:
         self._job = None
         self._decision = None
         self.last_detections = []
+        self.last_bin_detections = []
+        self.used_drop_slots = {name: set() for name in self.scene.bin_names}
+        self.reserved_drop_slots = {name: set() for name in self.scene.bin_names}
+        self.verification_pending = None
+        self.last_verification = None
+        self.retry_colors = set()
+        self.retry_targets = []
+        self.verify_relooks_remaining = 0
+        self.scheduled_corrections = []
 
     def confirm(self):
         self._decision = "go"
@@ -151,6 +160,10 @@ class ClassicalPolicy:
             d, self._decision = self._decision, None
             if d == "go":
                 self.waiting = False
+                if not self._has_time(self.pending, t):
+                    self.state = "done"
+                    self._note(t, f"confirmation came too late for {self.pending.color}")
+                    return self._hold(done=True)
                 return self._start(self.pending, t)
             if d == "skip":
                 self.waiting = False
@@ -177,8 +190,48 @@ class ClassicalPolicy:
             job["result"] = ("error", repr(e))
 
     def _look(self, obs):
-        dets = self.perception.detect(obs["head_rgb"], obs["head_depth"])
+        dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True)
+        bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
+        self.last_bin_detections = bin_dets
+        corrections = self._review_bins(bin_dets)
+
+        # A known wrong-bin object is the largest score swing, so repair it before
+        # touching a new counter object.  The fresh detection is planned directly;
+        # stale corrective targets are never retained between camera frames.
+        self.scheduled_corrections = corrections
+        for d, source_bin, target_bin in corrections:
+            for slot in self._free_drop_slots(target_bin):
+                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, relocate=False,
+                                      drop_slot=slot, source_bin=source_bin)
+                self.plans.append(p)
+                if p.ok:
+                    return ("plan", p, len(dets))
+                self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
+            p = self.planner.plan_to_counter(d, self.arm_cmd, self.hand_cmd, source_bin,
+                                             obstacles=[o.top[:2] for o in dets])
+            self.plans.append(p)
+            if p.ok:
+                return ("plan", p, len(dets))
+            self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
+        if corrections:
+            return ("uncorrectable", corrections, len(dets))
+
+        fresh_retry = self.last_verification is not None and self.last_verification[0] == "retry"
+        pending_retry = self.last_verification[1] if fresh_retry else None
+        attributable = False
+        if pending_retry is not None:
+            source = pending_retry.get("source_xy")
+            attributable = any(d.color == pending_retry["color"] and
+                               (source is None or np.linalg.norm(d.top[:2] - source) <
+                                2 * self.cfg["policy"]["same_object_radius"])
+                               for d in dets)
+            if attributable:
+                self.verify_relooks_remaining = 0
+            elif self.verify_relooks_remaining > 0:
+                self.verify_relooks_remaining -= 1
+                return ("relook", None, len(dets))
+
         cands = []
         for d in dets:
             xy = d.top[:2]
@@ -190,26 +243,121 @@ class ClassicalPolicy:
             cands.append(d)
         if self.cfg["policy"]["order"] == "nearest_bin":
             def key(d):
-                b = self.mapping.get(d.color)
-                return np.inf if b is None else np.linalg.norm(d.top[:2] - self.planner.bin_xy(b))
+                b = resolve_bin(self.mapping, d.color)
+                retry = [np.linalg.norm(d.top[:2] - p) for color, p in self.retry_targets if color == d.color]
+                retry_key = min(retry) if retry else (0.0 if d.color in self.retry_colors else np.inf)
+                return (not np.isfinite(retry_key), retry_key,
+                        np.inf if b is None else np.linalg.norm(d.top[:2] - self.planner.bin_xy(b)))
         else:
             def key(d):
                 return -d.n_px
         cands.sort(key=key)
         for d in cands:
+            target_bin = resolve_bin(self.mapping, d.color)
+            if target_bin is None:
+                continue
+            slot = self._next_drop_slot(target_bin)
+            if slot is None:
+                self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
+                continue
             others = [o.top[:2] for o in dets if o is not d]
-            p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, obstacles=others)
+            p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
+                                  drop_slot=slot)
             self.plans.append(p)
             if p.ok:
                 return ("plan", p, len(dets))
             self.failed.append(d.top[:2])
             self.log(f"[classical] skip {d}: {p.reason}")
+        if self.verify_relooks_remaining > 0:
+            self.verify_relooks_remaining -= 1
+            return ("relook", None, len(dets))
         return ("none", None, len(dets))
 
+    def _score_bin(self, det):
+        """Estimated scoring bin from a top-face detection, or None for a stack/rim/counter object."""
+        centre = np.asarray(det.top, float).copy()
+        centre[2] -= 0.5 * self.perception.height
+        return self.scene.bin_of(self.scene.pelvis_to_mat(centre))
+
+    def _nearest_slot(self, bin_name, xy):
+        slots = self.planner.drop_slots(bin_name)
+        return int(np.argmin([np.linalg.norm(np.asarray(xy) - p) for p in slots]))
+
+    def _next_drop_slot(self, bin_name):
+        return next(iter(self._free_drop_slots(bin_name)), None)
+
+    def _free_drop_slots(self, bin_name):
+        blocked = self.used_drop_slots[bin_name] | self.reserved_drop_slots[bin_name]
+        return [i for i in range(len(self.planner.drop_slots(bin_name))) if i not in blocked]
+
+    def _review_bins(self, bin_dets):
+        """Update slot occupancy, verify the last release, and return corrective picks.
+
+        A coloured component on a bin footprint but with its estimated centre
+        above the rim is deliberately treated as unscored and scheduled for a
+        re-pick, just like an object in the wrong bin.
+        """
+        scored = []
+        corrections = []
+        for d, footprint_bin in bin_dets:
+            target_bin = resolve_bin(self.mapping, d.color)
+            score_bin = self._score_bin(d)
+            scored.append((d, footprint_bin, score_bin))
+            if score_bin is not None and score_bin == target_bin:
+                self.used_drop_slots[score_bin].add(self._nearest_slot(score_bin, d.top[:2]))
+            elif target_bin is not None:
+                corrections.append((d, footprint_bin, target_bin))
+
+        pending = self.verification_pending
+        self.last_verification = None
+        if pending is not None:
+            target = pending["target_bin"]
+            slot = pending["drop_slot"]
+            slot_xy = self.planner.drop_slots(target)[slot]
+            radius = float(self.cfg["policy"].get("drop_verify_radius", 0.04))
+            found = any(d.color == pending["color"] and score_bin == target
+                        and np.linalg.norm(d.top[:2] - slot_xy) <= radius
+                        for d, _, score_bin in scored)
+            self.reserved_drop_slots[target].discard(slot)
+            if found:
+                self.used_drop_slots[target].add(slot)
+                self.retry_colors.discard(pending["color"])
+                self.verify_relooks_remaining = 0
+                matching = [i for i, (color, _) in enumerate(self.retry_targets) if color == pending["color"]]
+                if matching:
+                    self.retry_targets.pop(matching[0])
+                self.last_verification = ("ok", pending)
+            else:
+                # Keep the attempted slot unavailable: if the side-bin view was
+                # occluded, a successful object may still be sitting there.
+                self.reserved_drop_slots[target].add(slot)
+                self.retry_colors.add(pending["color"])
+                if pending.get("source_xy") is not None:
+                    self.retry_targets.append((pending["color"], np.asarray(pending["source_xy"], float)))
+                self.verify_relooks_remaining = int(self.cfg["policy"].get("verify_relooks", 1))
+                self.last_verification = ("retry", pending)
+            self.verification_pending = None
+        return corrections
+
     def _after_look(self, res, t):
+        if self.last_verification is not None:
+            status, pending = self.last_verification
+            if status == "ok":
+                self._note(t, f"verified {pending['color']} in {pending['target_bin']} slot {pending['drop_slot']}")
+            else:
+                self._note(t, f"release of {pending['color']} not verified in {pending['target_bin']}; retry")
+            self.last_verification = None
         kind = res[0]
         if kind == "error":
             self._note(t, f"look/plan error {res[1]}: stopping")
+            self.state = "done"
+            return self._hold(done=True)
+        if kind == "relook":
+            self._note(t, "placement unresolved; take one more settled verification frame")
+            self.state = "settle"
+            return self._hold()
+        if kind == "uncorrectable":
+            self._note(t, "known wrong-bin object has no safe corrective or cleanup plan; stopping")
             self.state = "done"
             return self._hold(done=True)
         if kind == "none":
@@ -217,7 +365,7 @@ class ClassicalPolicy:
             self.state = "done"
             return self._hold(done=True)
         plan = res[1]
-        if t + plan.duration > self.time_limit:
+        if not self._has_time(plan, t):
             self._note(t, f"not enough time for {plan.color} ({plan.duration:.0f} s)")
             self.state = "done"
             return self._hold(done=True)
@@ -228,10 +376,21 @@ class ClassicalPolicy:
             return self._hold()
         return self._start(plan, t)
 
+    def _has_time(self, plan, t):
+        reserve = self.cfg["motion"]["settle_s"]
+        if not plan.corrective:
+            reserve += float(self.cfg["policy"].get("correction_reserve_s", 0.0))
+        return t + plan.duration + reserve <= self.time_limit
+
     def _start(self, plan, t):
         xy = plan.waypoints["grasp"][:2]
         self.attempts.append((xy, 1))
         self._enqueue(plan.arm, plan.hand)
+        if plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
+            self.reserved_drop_slots[plan.target_bin].add(plan.drop_slot)
+            self.verification_pending = {"color": plan.color, "target_bin": plan.target_bin,
+                                         "drop_slot": plan.drop_slot, "corrective": plan.corrective,
+                                         "source_xy": plan.waypoints["grasp"][:2].copy()}
         self.state = "executing"
         self._note(t, f"execute {plan.summary()}")
         return self._pop()

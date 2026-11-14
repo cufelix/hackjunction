@@ -22,6 +22,7 @@ import numpy as np
 
 from aaltonomous.interface.safety import JointSpec, SafetyConfig, SafetyFilter
 from aaltonomous.interface.tasks import FIXED_MAPPING
+from aaltonomous.scene.scene import resolve_bin
 
 from .kinematics import ArmKinematics
 
@@ -33,6 +34,9 @@ class Plan:
     color: str = ""
     reason: str = ""
     target_bin: str | None = None
+    source_bin: str | None = None
+    drop_slot: int | None = None
+    corrective: bool = False
     waypoints: dict = field(default_factory=dict)      # name -> grasp point (pelvis)
     ik: dict = field(default_factory=dict)             # name -> (ok, pos_err, tilt_deg)
     arm: np.ndarray | None = None                      # (T, 14)
@@ -122,6 +126,40 @@ class Planner:
         hi2 = np.maximum(np.maximum(a, b) - inset, c)
         return np.clip(np.zeros(2), lo2, hi2)
 
+    def drop_slots(self, name):
+        """Reach-biased release points in the near-inner-wall band of a bin.
+
+        The first point is closest to the robot centre line.  Consecutive
+        points are at least ``drop_slot_spacing`` apart and every object centre
+        keeps ``drop_slot_wall_margin`` from the inner side walls.
+        """
+        g = self.cfg["grasp"]
+        spacing = float(g.get("drop_slot_spacing", 0.06))
+        margin = float(g.get("drop_slot_wall_margin", 0.03))
+        count = max(1, int(g.get("drop_slot_count", 3)))
+        lo, hi = self.scene.bin_inner_box(name)
+        corners = self.scene.mat_to_pelvis(np.array([[x, y, 0.0] for x in (lo[0], hi[0])
+                                                     for y in (lo[1], hi[1])]))
+        xlo, xhi = corners[:, 0].min(), corners[:, 0].max()
+        ylo, yhi = corners[:, 1].min() + margin, corners[:, 1].max() - margin
+        x = min(xhi, xlo + float(g.get("drop_inset") or 0.0))
+        if ylo > yhi:
+            return [self.drop_xy(name)]
+        if ylo <= 0.0 <= yhi:
+            ys = [0.0]
+            for k in range(1, count):
+                step = ((k + 1) // 2) * spacing
+                ys.append(step if k % 2 else -step)
+        else:
+            start = ylo if ylo > 0.0 else yhi
+            direction = 1.0 if ylo > 0.0 else -1.0
+            ys = [start + direction * spacing * k for k in range(count)]
+        out = []
+        for y in ys:
+            if ylo - 1e-9 <= y <= yhi + 1e-9 and all(abs(y - p[1]) >= spacing - 1e-9 for p in out):
+                out.append(np.array([x, np.clip(y, ylo, yhi)]))
+        return out
+
     def _over_counter(self, p):
         pm = self.scene.pelvis_to_mat(p)
         c = self.scene.cfg["counter"]
@@ -143,6 +181,28 @@ class Planner:
             if over.any():
                 out = min(out, float((pts[over, 2] - rim).min()))
         return out
+
+    def hits_bin_wall(self, side, arm_q, hand_q, allowed_inside=None):
+        """Whether sampled hand points enter a bin wall volume.
+
+        For a corrective pick, points may be below the rim only while they are
+        inside the named bin's inner cavity.  Other bins remain fully blocked.
+        """
+        pts = self.kin.hand_points(side, arm_q, hand_q)
+        pm = self.scene.pelvis_to_mat(pts)
+        b = self.scene.cfg["bins"]
+        half = np.asarray(b["outer_size"], float) / 2
+        rim = self.scene.counter_z + float(b["wall_height"])
+        below = pts[:, 2] < rim - 1e-3
+        for name, ctr in b["centers"].items():
+            over = np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1)
+            if name == allowed_inside:
+                lo, hi = self.scene.bin_inner_box(name)
+                cavity = np.all((pm[:, :2] >= lo[:2]) & (pm[:, :2] <= hi[:2]), axis=1)
+                over &= ~cavity
+            if np.any(over & below):
+                return True
+        return False
 
     def clearance(self, side, arm_q, hand_q, fingers_only=False):
         """Lowest height (m) above the counter surface of the hand points that are over the counter (inf if none)."""
@@ -216,7 +276,7 @@ class Planner:
         return None
 
     # ------------------------------------------------------------------ main
-    def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True):
+    def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=0, source_bin=None):
         """Plan for Detection `det` starting from the commanded arm_q/hand_q (14,). Tries the preferred arm (the
         target bin's side; for the centre bin the object's side), then the other one. If neither arm can do the
         whole pick -> bin (cross-body: the arm that reaches the object cannot reach the bin), plans a RELOCATION
@@ -224,7 +284,7 @@ class Planner:
         the next look re-detects the object there. obstacles: (n, 2) pelvis xy of the other detected objects.
         Returns the first Plan that passes every check, else the last failure."""
         g = self.cfg["grasp"]
-        bin_name = bin_name or self.mapping.get(det.color)
+        bin_name = bin_name or resolve_bin(self.mapping, det.color)
         by = self.bin_xy(bin_name)[1] if bin_name is not None else 0.0
         ref = by if abs(by) > 0.1 else det.top[1]
         side0 = "left" if ref > g["y_split"] else "right"
@@ -233,7 +293,8 @@ class Planner:
             return last
         reasons, good = [], []
         for side in (side0, "right" if side0 == "left" else "left"):
-            p = self._plan_side_hints(det, side, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float))
+            p = self._plan_side_hints(det, side, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float),
+                                      drop_slot=drop_slot, source_bin=source_bin)
             if p.ok:
                 if g.get("arm", "best") != "best":
                     return p
@@ -245,7 +306,8 @@ class Planner:
             return min(good, key=lambda p: p.duration)
         last.reason = "; ".join(reasons)
         if relocate and g.get("relocate", {}).get("enabled", True):
-            r = self.plan_relocation(det, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float), obstacles)
+            r = self.plan_relocation(det, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float), obstacles,
+                                     drop_slot=drop_slot)
             if r.ok:
                 return r
             last.reason += f"; relocate: {r.reason}"
@@ -268,7 +330,7 @@ class Planner:
         keep.sort(key=lambda p: np.linalg.norm(p - b))
         return keep[: int(rc.get("max_spots", 6))]
 
-    def plan_relocation(self, det, bin_name, arm_q, hand_q, obstacles=()):
+    def plan_relocation(self, det, bin_name, arm_q, hand_q, obstacles=(), drop_slot=0):
         """Cross-body fallback: pick `det` with an arm that reaches it and put it down at a counter spot from which
         some arm has a full plan to `bin_name` (checked from home). Returns a Plan with target_bin 'counter'."""
         from dataclasses import replace
@@ -278,7 +340,8 @@ class Planner:
             d2 = replace(det, top=np.r_[spot, self.scene.counter_z + H])
             by = self.bin_xy(bin_name)[1]
             fin_side = "left" if (by if abs(by) > 0.1 else spot[1]) > 0 else "right"
-            fin = self._plan_side_hints(d2, fin_side, bin_name, self.home.copy(), self.post["open"].copy())
+            fin = self._plan_side_hints(d2, fin_side, bin_name, self.home.copy(), self.post["open"].copy(),
+                                        drop_slot=drop_slot)
             if not fin.ok:
                 last.reason = f"no {fin_side} plan from spot ({spot[0]:+.2f},{spot[1]:+.2f}): {fin.reason}"
                 continue
@@ -289,6 +352,27 @@ class Planner:
                 return p
             last = p
             last.reason = f"{side} cannot place at ({spot[0]:+.2f},{spot[1]:+.2f}): {p.reason}"
+        return last
+
+    def plan_to_counter(self, det, arm_q, hand_q, source_bin, obstacles=()):
+        """Remove a detected wrong-bin object to a clear counter spot.
+
+        This is the score-safe fallback when no target-bin slot has a valid
+        plan: moving wrong -> counter changes -1 to 0 and a later look can try
+        the intended bin again.
+        """
+        last = Plan(False, color=det.color, source_bin=source_bin, corrective=True,
+                    reason="no safe counter cleanup spot")
+        target_bin = resolve_bin(self.mapping, det.color)
+        for spot in self.relocation_spots(det, target_bin, obstacles):
+            for side in ("left", "right"):
+                p = self._plan_side_hints(det, side, target_bin, np.asarray(arm_q, float), np.asarray(hand_q, float),
+                                          place_xy=spot, source_bin=source_bin)
+                if p.ok:
+                    p.reason = f"remove from wrong {source_bin} bin for retry"
+                    return p
+                last = p
+        last.reason = last.reason or "no safe counter cleanup spot"
         return last
     def _plan_side_hints(self, det, side, bin_name, arm_q, hand_q, **kw):
         """_plan_side with each finger direction of grasp.finger_hints in turn (fingers forward can reach over the
@@ -307,10 +391,12 @@ class Planner:
         finally:
             self.kin.hint = saved
 
-    def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None):
+    def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=0, source_bin=None):
         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
         sc, zc = self.scene, self.scene.counter_z
-        plan = Plan(False, side=side, color=det.color, target_bin=bin_name if place_xy is None else "counter")
+        plan = Plan(False, side=side, color=det.color, target_bin=bin_name if place_xy is None else "counter",
+                    source_bin=source_bin, drop_slot=drop_slot if place_xy is None else None,
+                    corrective=source_bin is not None)
         sl = ArmKinematics.sl(side)
         H, post = self.height, self.post
         hand_pre = hand_q.copy(); hand_pre[sl] = post["preshape"][sl]
@@ -320,7 +406,7 @@ class Planner:
 
         # grasp height: object mid-height, raised until the preshaped fingers clear the counter
         xy = det.top[:2] + np.asarray((g.get("arm_xy_offset") or {}).get(side, [0.0, 0.0]), float)  # per-arm, TUNE
-        z = zc + g["height_frac"] * H
+        z = (det.top[2] - H / 2) if source_bin is not None else (zc + g["height_frac"] * H)
         for _ in range(4):
             qg, ok = self._ik(side, np.r_[xy, z], arm_q, "grasp", plan)
             if not ok:
@@ -333,14 +419,15 @@ class Planner:
         else:
             plan.reason = "fingers hit the counter"
             return plan
-        if z > zc + H - 0.008:
+        if source_bin is None and z > zc + H - 0.008:
             plan.reason = f"grasp point {100 * (z - zc):.1f} cm above counter: above the object top (point_in_palm?)"
             return plan
 
         wall = float(sc.cfg["bins"]["wall_height"])
         z_carry = zc + max(g["carry_height"], wall + H + 0.03)
         z_drop = zc + wall + H / 2 + g["drop_above_rim"]
-        bxy = self.drop_xy(bin_name)
+        slots = self.drop_slots(bin_name)
+        bxy = slots[min(int(drop_slot), len(slots) - 1)]
         if place_xy is not None:  # relocation: put it down on the counter (release just above the grasp height)
             bxy, z_drop = np.asarray(place_xy, float), z + 0.005
         P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry)], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],
@@ -427,12 +514,18 @@ class Planner:
         drop = np.zeros(len(plan.arm), bool)
         for name, s_, e in phases:
             drop[s_:e] |= name in ("open",)
+        source_phases = {"descend", "close", "lift"} if source_bin is not None else set()
         for k in range(0, len(plan.arm), 3):
+            name = next(n for n, s_, e in phases if s_ <= k < e)
             if drop[k]:
+                continue
+            if name in source_phases:
+                if self.hits_bin_wall(side, plan.arm[k], plan.hand[k], allowed_inside=source_bin):
+                    plan.reason = f"hand intersects the {source_bin} bin wall during {name}"
+                    return plan
                 continue
             c = self.bin_clearance(side, plan.arm[k], plan.hand[k])
             if c < 0.003:
-                name = next(n for n, s_, e in phases if s_ <= k < e)
                 plan.reason = f"hand {100 * c:.1f} cm above a bin rim during {name}"
                 return plan
         plan.safety_clips = self.dry_run_safety(arm_q, hand_q, plan.arm, plan.hand)

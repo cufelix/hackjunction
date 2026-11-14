@@ -58,12 +58,19 @@ class Perception:
             out[color] = m
         return out
 
-    def detect(self, rgb, depth, debug=False):
+    def detect(self, rgb, depth, debug=False, include_bins=False):
+        """Detect coloured objects.
+
+        ``include_bins`` keeps pixels over the known bin footprints long enough for
+        :meth:`_reject` to label them ``in_bin:<name>``.  They are still returned
+        only through the rejected half of the ``debug=True`` result, so existing
+        callers cannot accidentally pick an already sorted object.
+        """
         import cv2
         c = self.cfg
         dets, rejected = [], []
         dlo, dhi = c["depth_range_mm"]
-        keep = self._keep_mask(depth)
+        keep = self._keep_mask(depth, exclude_bins=not include_bins)
         for color, m in self.masks(rgb).items():
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
             k = int(c["open_px"])
@@ -94,11 +101,12 @@ class Perception:
                     dets.append(det)
         return (dets, rejected) if debug else dets
 
-    def _keep_mask(self, depth):
+    def _keep_mask(self, depth, exclude_bins=True):
         """uint8 mask of pixels that may belong to an object: no valid depth (unknown), or a 3D point at object
         height over the mat and outside every bin footprint."""
         c, sc = self.cfg, self.scene
-        keep = self._bin_hulls_mask(depth.shape if depth is not None else (480, 640))
+        shape = depth.shape if depth is not None else (480, 640)
+        keep = self._bin_hulls_mask(shape) if exclude_bins else np.full(shape, 255, np.uint8)
         if depth is None:
             return keep
         dlo, dhi = c["depth_range_mm"]
@@ -111,10 +119,15 @@ class Perception:
         P = self.cal.pixel_to_pelvis(self.cam, uu, vv, d[vv, uu])
         h = (P[:, 2] - sc.counter_z) / self.height
         pm = sc.pelvis_to_mat(P)
-        ok = (h >= 0.25) & (h <= c["height_range"][1])
-        half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + c["bin_pixel_margin"]
-        for ctr in sc.cfg["bins"]["centers"].values():
-            ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1)
+        # Verification must also see a same-colour object stacked above the
+        # 6 cm rim.  _reject() will discard elevated blobs outside bin
+        # footprints, while bin blobs remain labelled ``in_bin:*``.
+        upper = c["height_range"][1] if exclude_bins else max(c["height_range"][1], 4.0)
+        ok = (h >= 0.25) & (h <= upper)
+        if exclude_bins:
+            half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + c["bin_pixel_margin"]
+            for ctr in sc.cfg["bins"]["centers"].values():
+                ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1)
         keep[vv[~ok], uu[~ok]] = 0
         return keep
 
@@ -170,10 +183,6 @@ class Perception:
         if det is None or not np.all(np.isfinite(det.top)):
             return "no_3d"
         c, sc = self.cfg, self.scene
-        h = (det.top[2] - sc.counter_z) / self.height
-        lo, hi = c["height_range"]
-        if not lo <= h <= hi:
-            return f"height {h:.2f} sizes"
         pm = sc.pelvis_to_mat(det.top)
         W, D = sc.cfg["counter"]["mat_size"]
         m = c["counter_margin"]
@@ -184,6 +193,10 @@ class Perception:
         for name, ctr in sc.cfg["bins"]["centers"].items():
             if np.all(np.abs(pm[:2] - np.asarray(ctr, float)) <= half):
                 return f"in_bin:{name}"
+        h = (det.top[2] - sc.counter_z) / self.height
+        lo, hi = c["height_range"]
+        if not lo <= h <= hi:
+            return f"height {h:.2f} sizes"
         return None
 
 

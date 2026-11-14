@@ -54,6 +54,9 @@ grasp:
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)
+  drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
+  drop_slot_wall_margin: 0.03 # object-centre margin from the inner side walls in the reachable near-wall band
+  drop_slot_count: 3          # one near-wall row; planner checks every selected slot with IK + safety dry-run
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   release_posture: release     # hand posture for letting go (hand.<name>); back to `open` on the way home
@@ -112,6 +115,9 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 policy:
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   same_object_radius: 0.03
+  drop_verify_radius: 0.04    # released top-face centre must be this close to its assigned slot to count as verified
+  verify_relooks: 1           # one extra settled frame before giving up on an occluded/missed placement
+  correction_reserve_s: 9.0  # do not start a new placement without time for one typical corrective cycle
   order: nearest_bin          # nearest_bin | largest
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
