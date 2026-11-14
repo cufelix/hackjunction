@@ -57,6 +57,18 @@ class TestColourBinClauses(unittest.TestCase):
         for s in ("Put the first cube in the left bin.", "Yellow goes in the third bin."):
             self.assertEqual(normalize(s), s)   # no side word: untouched
 
+    def test_finals_colour_names_and_typos(self):
+        # real objects: purple / yellow / orange (resolver keys blue / yellow / red)
+        cases = {"Sorting: pruple -> right; yellow -> leeft; oange -> centre.": {"blue": "right", "yellow": "left", "red": "center"},
+                 "Put the lavender cubes left, amber ones right and lemon ones in the middle.":
+                     {("blue", "cube"): "left", "red": "right", "yellow": "center"},
+                 "violetti left, oranssit right, keltaiset middle": {"blue": "left", "red": "right", "yellow": "center"},
+                 "fialová vlevo: fialové left, oranžové right, žluté center": {"blue": "left", "red": "right", "yellow": "center"}}
+        for s, want in cases.items():
+            got = resolve(normalize(s), fallback={})
+            self.assertEqual({k: v for k, v in got.items() if k in want}, want, (s, normalize(s), got))
+        self.assertEqual(normalize("That was violent, people."), "That was violent, people.")
+
 
 if __name__ == "__main__":
     unittest.main()
