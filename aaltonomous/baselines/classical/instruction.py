@@ -65,6 +65,9 @@ _COLOR_WORDS = {
     "yellow": "yellow", "yellows": "yellow", "yellowish": "yellow", "gold": "yellow",
     "golden": "yellow", "amber": "yellow",
     "blue": "blue", "blues": "blue", "bluish": "blue", "azure": "blue", "navy": "blue",
+    # Exotic / hyphenated ("cherry-red" tokenises to "cherryred": hyphens are joined). The spaced
+    # forms "cherry red" / "sky blue" already work because the trailing word is the colour.
+    "ruby": "red", "cherryred": "red", "sapphire": "blue", "skyblue": "blue", "mustard": "yellow",
 }
 # Shape words.
 #
@@ -130,6 +133,18 @@ _EXC_FIRST = re.compile(r"(^|[.;!?]\s*)" + _EXC + r"\s+" + _EXC_KEYS + r"\s*,?")
 _APPOS = re.compile(r"\b(?:everything\s+else|anything\s+else|the\s+rest|(?:all\s+)?the\s+others?)\s*[,(]?\s*"
                     r"(?:i\.\s?e\.?|that\s+is|namely|meaning|which\s+is|which\s+means|i\s+mean)[,:]?\s*"
                     r"(?:the\s+)?(?=(?:" + _KW + r")\b)")
+# A bin named by OTHER bins: "between the left and right ones" is the centre, though it contains
+# the words left and right (and the clause splitter would cut it at "and").
+_BIN_W = r"(?:left|right|center|centre|middle)(?:most|hand)?"
+_BIN_N = r"(?:\s+(?:bins?|ones?|box(?:es)?))?"
+_BETWEEN = re.compile(r"\bbetween\s+(?:the\s+)?" + _BIN_W + _BIN_N + r"\s+and\s+(?:the\s+)?" + _BIN_W + _BIN_N)
+# "after the left one" / "before the right one" / "next to the left one": a neighbour of an end bin
+# is the centre; after/before the centre is an end. Anything else is left alone.
+_NEIGHBOUR = re.compile(r"\b(after|before|next\s+to|beside|adjacent\s+to)\s+(?:the\s+)?(left|right|center|centre|middle)"
+                        r"(?:most|hand)?" + _BIN_N + r"\b")
+_NEIGHBOUR_BIN = {"after": {"left": "middle", "center": "right", "centre": "right", "middle": "right"},
+                  "before": {"right": "middle", "center": "left", "centre": "left", "middle": "left"},
+                  "next": {"left": "middle", "right": "middle"}}
 # Phrases whose "left" is NOT the left bin: rewrite them into the elimination vocabulary first.
 _LEFT_NOUN = re.compile(r"\b(whatever|what|(?:the|any)\s+(?:colou?rs?|shapes?|objects?|pieces?))"
                         r"(?:\s+(?:colou?rs?|shapes?|objects?|pieces?|items?))?(?:'s|\s+(?:is|are))\s+left"
@@ -146,6 +161,19 @@ _LEFT_BIN = re.compile(r"\b(bin|box|slot|one)\s+(?:that(?:'s|\s+is)\s+|which\s+i
 _SEG_RE = re.compile(r"[,;:.!?\n]+|\b(?:and|then|also|plus|except|excluding|but|regardless|"
                      r"whereas|while|apart\s+from|other\s+than|rather\s+than)\b")
 _TOKEN_RE = re.compile(r"[a-z]+|\d+")
+# "Don't put red in the left bin" / "red doesn't go centre" / "no red in the right bin" / "but not
+# the blue ones": a clause with a negator, a key and a bin names a bin to AVOID, not to use.
+_NEG = re.compile(r"\b(?:don't|dont|do\s+not|doesn't|doesnt|does\s+not|never|shouldn't|should\s+not|"
+                  r"mustn't|must\s+not|not|no)\b")
+_NEG_SPLIT = re.compile(r"([.;!?]|,?\s*\bbut\b)")
+# "Swap red and blue: red right, blue left." -- the targets are spelled out, the swap is decoration.
+_SWAP = re.compile(r"\bswap\s+(?:the\s+)?(?:" + _KW + r")\s+(?:ones\s+)?(?:and|with)\s+(?:the\s+)?(?:"
+                   + _KW + r")(?:\s+ones)?\s*[:,]")
+# "..., and so do the blue ones": inherits the bin of the clause before it.
+_SO_DO = re.compile(r"\band\s+so\s+(?:do|does|should|would)\s+(?:the\s+)?((?:" + _KW + r")\b(?:\s+ones?)?)")
+# "Left to right: red, yellow, blue." is the bins-first parallel list in disguise.
+_L2R = re.compile(r"\bleft\s*(?:-|to|->)\s*right\s*[:,-]?\s*")
+_R2L = re.compile(r"\bright\s*(?:-|to|->)\s*left\s*[:,-]?\s*")
 
 
 def _tokens(text):
@@ -343,6 +371,9 @@ def resolve(text, fallback=None):
     # Structural pre-pass (see the patterns above). Order matters: appositive first, so the key
     # word survives; all-but second, so the excluded key never reaches clause parsing.
     low = _APPOS.sub("the ", low)
+    low = _BETWEEN.sub("middle", low)  # "the bin between the left and right ones" -> the centre bin
+    low = _NEIGHBOUR.sub(lambda m: _NEIGHBOUR_BIN.get(m.group(1).split()[0] if m.group(1) in ("after", "before", "next to") else "next",
+                                                       {}).get(m.group(2), m.group(0)), low)
     low = _LEFT_NOUN.sub("the remaining objects", low)
     low = _LEFT_BIN.sub(r"remaining \1", low)
     low = _UNUSED_KEY.sub("the remaining objects", low)
@@ -356,6 +387,42 @@ def resolve(text, fallback=None):
         return "all remaining objects "
     low = _ALL_BUT.sub(_exclude, low)
     low = _EXC_FIRST.sub(lambda m: m.group(1) + ("" if _exclude(m) else ""), low)
+    low = re.sub(r"\botherwise\b", "everything else", low)  # "..., otherwise use the right bin" -> catch-all
+    low = _SWAP.sub("", low)
+    low = _L2R.sub("the left, center and right bins take ", low)
+    low = _R2L.sub("the right, center and left bins take ", low)
+
+    def _inherit(m):  # "red goes left, and so do the blue ones" -> "..., and the blue ones go in the left bin"
+        prev = [_BIN_WORDS[t] for t in _tokens(low[: m.start()]) if t in _BIN_WORDS]
+        return f"and the {m.group(1)} go in the {prev[-1]} bin" if prev else m.group(0)
+    low = _SO_DO.sub(_inherit, low)
+
+    # A descriptive opening sentence ("There are red, yellow and blue objects on the table.") names
+    # colours but no bin, and would glue them onto the clause after it. Drop it. Ordinals and digits
+    # are kept: "First bin takes red." is a bin sentence.
+    head, _, tail = low.partition(". ")
+    htoks = _tokens(head)
+    if tail.strip() and not any(k == "bin" for _, k, _ in _mentions(htoks, False)) \
+            and not any(t in _ORDINAL_BINS and t not in ("a", "b", "c") for t in htoks):
+        low = tail
+
+    # Negated clauses are cut out and resolved by elimination after the positive ones (see below).
+    negs, parts, last = {}, _NEG_SPLIT.split(low), []
+    for n in range(0, len(parts), 2):
+        ms = _mentions(_tokens(parts[n]), False)
+        bs = [v for _, k, v in ms if k == "bin" and v != _ELIM]
+        # "..., but not the blue ones": no bin of its own, so it negates the previous clause's bin.
+        if not bs and _NEG.search(parts[n]) and last:
+            bs = last[-1:]
+        last = bs or last
+        if not (_NEG.search(parts[n]) and bs and any(k != "bin" for _, k, _ in ms)):
+            continue
+        if not _keys_from(ms)[0]:
+            continue
+        for key, _ in _keys_from(ms)[0]:
+            negs.setdefault(key, set()).add(bs[0])
+        parts[n] = ""
+    low = "".join(parts)
 
     # Both of these are decided over the WHOLE sentence, because a clause sees too little.
     all_toks = _tokens(low)
@@ -405,6 +472,18 @@ def resolve(text, fallback=None):
             mapping = {k: (free[0] if v == _ELIM else v) for k, v in mapping.items()}
         else:  # ambiguous: drop the key rather than send an object to a guessed bin
             mapping = {k: v for k, v in mapping.items() if v != _ELIM}
+
+    # Negation by elimination: drop the named bin, take the bin nobody claimed, else the key's usual
+    # bin (FIXED_MAPPING) if still allowed, else the first allowed bin -- left, center, right order,
+    # arbitrary but deterministic; any choice is >= 1/2 right against 1/3 blind.
+    for k, no in negs.items():
+        if k in mapping:
+            continue
+        taken = set(mapping.values())
+        allowed = [b for b in BINS if b not in no]
+        pool = [b for b in allowed if b not in taken] or allowed
+        usual = FIXED_MAPPING.get(k[0] if isinstance(k, tuple) else k)
+        mapping[k] = usual if usual in pool else pool[0]
 
     # An explicit catch-all phrase, pointed at the bin nearest it.
     if "default" not in mapping:
