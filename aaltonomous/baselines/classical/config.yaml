@@ -34,6 +34,16 @@ perception:
   object_size: null           # null = scene.yaml objects.size (grasp width)
   y_affine: null              # FLAG (23-grasp-failure §11b/§13). [a, b]: perceived - true y = a*y + b -> y -= a*y + b
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
+  hand_calibration:           # head-camera 6-DOF pose from the robot's own forearms/hands in depth (hand_calib.py)
+    enabled: false            # FLAG (Oliver hand-calib). Once per episode on a still frame; perception uses a corrected copy
+    max_trans_m: 0.03         # reject (keep nominal) when the camera would move more than this ...
+    max_rot_deg: 3.0          # ... or rotate more than this
+    min_inliers: 300
+    min_coverage: 0.6         # visible arm-model surface with matched depth
+    max_residual_m: 0.0025    # inlier RMS point-to-plane
+    max_data_points: 1500     # ICP depth points (runtime)
+    max_tries: 10             # still frames to try before giving up for the episode
+    still_rad: 0.01           # max arm joint change between frames to count as still (depth/encoder sync)
   self_calibration:
     enabled: false            # FLAG (calib, Timi). Once per episode, align depth-only bin walls to their fixed known geometry
     max_offset_m: 0.030       # reject rather than applying a correction outside this Euclidean gate

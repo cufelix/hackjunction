@@ -63,6 +63,7 @@ class Perception:
         self.cfg = cfg["perception"]
         self.scene = scene
         self.cal = calibration
+        self.cal_nominal = calibration   # perception.hand_calibration swaps self.cal for a corrected COPY per episode
         self.cam = self.cfg["camera"]
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
@@ -97,6 +98,13 @@ class Perception:
         """Restore the configured fallback at the start of every episode."""
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
+        self.cal = self.cal_nominal
+
+    def set_camera_pose(self, T):
+        """perception.hand_calibration: use T as this camera's T_pelvis_optical until the next reset, on a copy of the
+        calibration (the shared object stays nominal)."""
+        from .hand_calib import corrected_calibration
+        self.cal = corrected_calibration(self.cal_nominal, self.cam, T)
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""
