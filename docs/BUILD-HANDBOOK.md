@@ -39,21 +39,44 @@ This is the only arithmetic that matters, and every decision below follows from 
 
 ✅ Values read from `scene.yaml:78-82`. ⚠️ Rung 3 is almost certainly **not** evaluated — see §1.3.
 
-### 1.1 83 % of the final is language, and the handed-out code scores zero on it
+### 1.1 83 % of the final is language, and the handed-out code expects to score zero on it
 
 The finals are **three episodes: fixed + language + an unseen-instruction language episode weighted
-×1.5.** With 5 objects that is 5 + 10 + 15 = **30 points, of which 25 — 83 % — come from the two
-language episodes.** (Timi and I reached this independently, from the episode format and the rung
-weights.)
+×1.5.** Per object the rungs pay 1, 2 and 3, so for **any** object count N the maximum is
+1N + 2N + 3N = 6N and the two language episodes are 5N of it — **83 %, independent of N.**
+(Timi and I reached this independently, from the episode format and the rung weights.)
 
-✅ **And the baseline is wired to score zero on all of it.** `policy.py` has
+> ⚠️ **Correction.** This section used to say *"5 + 10 + 15 = 30 points, of which 25"*. That needs
+> N = 5, and **the finals object count is not stated anywhere** — `RULES_AND_SCORING.md:63-68`
+> says the finals settings are deliberately unannounced. The ratio is the robust claim; the
+> absolute numbers are not. Everything below uses 5 only as a worked example.
+
+✅ **And the baseline is wired to fall back to the fixed mapping on all of it.** `policy.py:73` has
 
 ```python
 self.mapping = info.get("mapping") or dict(FIXED_MAPPING)
 ```
 
-and the reset info carries only `{"instruction": ...}` — **the mapping is never sent**, so it
-silently falls back to fixed. The handed-out code sorts 76–82 % on rung 1 and **0 % of the 83 %**.
+and the reset info carries only `{"instruction": ...}` — **the mapping is never sent over the
+wire**, so it silently uses FIXED on a language episode too.
+
+> ⚠️ **Correction, and it matters for how we read our own step-0 numbers.** This used to read
+> *"the baseline scores zero on all of it"*. That is wrong as a deterministic claim. Scoring a
+> language episode at +2 correct / −1 wrong, the baseline scores **+2a − b** where `a` is the
+> objects whose true bin FIXED happens to agree with. Over the 6 permutations of the true mapping:
+>
+> | true mapping vs FIXED | probability | score |
+> |---|---|---|
+> | identical | 1/6 | **+2N** |
+> | one colour right, two swapped | 3/6 | **0** |
+> | a derangement (nothing right) | 2/6 | **−N** |
+>
+> The **expectation** is zero — `(1/6)(2N) + (3/6)(0) + (2/6)(−N) = 0` — but the realised value
+> on one episode is anywhere from −N to +2N. So "the baseline scores 0 on language" is right on
+> average and wrong on any single run, and **a lucky draw at step 0 will look like a working
+> policy.** Measure rung 2 over several seeds or not at all.
+
+The handed-out code sorts 76–82 % on rung 1 and has **no mechanism whatsoever** for the 83 %.
 
 > 🔴 **The instruction is not a feature of this project. It is the project.**
 
@@ -97,10 +120,29 @@ the instruction is the constant `INSERT_INSTRUCTION` with mapping `{}` (✅ `tas
 A chunk can be returned fast enough and still clip on **every seam**, because the last action of
 one chunk and the first of the next may differ by more than 0.033 rad. **Chunk seams must be
 blended, and we need our own rate limiter in front of anything that produces targets** — including
-the classical planner. Zero clips is the gate; 30 ends the episode.
+the classical planner.
 
-⚠️ The 30-clip abort is marked *"spec N, to be decided"* in the source (`safety.py:74`) while the
-rules state it as final. **Build nothing that depends on the exact number.**
+✅ **The gate, exactly, read from `evaluate.py`:**
+
+| check | default | source |
+|---|---|---|
+| `--gate-max-clips` | **0** — *any* clip fails the gate | `evaluate.py` flag |
+| `--gate-min-hz` | **27.0** | `evaluate.py` flag |
+| `policy_hz_rt >= 27` | **undocumented, wall-clock**, `(ticks − holds) / Σ latencies` | `evaluate.py:137-139` |
+
+> 🔴 **The third one is in neither the rules nor the flags.** The published gate is about sim-time
+> command rate; this one is about *our* wall-clock latency, and nothing warns you about it. A
+> policy that holds 27 Hz in sim time while thinking too long per call fails here.
+
+Also in the pass condition: `BAD_ENDS = ("aborted", "watchdog", "safe_stop",
+"policy_connection_lost", "policy_timeout", "crash", "interrupted")` — any of those ends the run.
+
+> ⚠️ **Correction.** This section used to say *"30 ends the episode"*, as though 30 aborts were
+> allowed. There is no such budget. The 30 is `safety.py:74 max_clipped_steps = 30  # abort when
+> exceeded` — the safety layer **aborts the episode when the clipped-step count exceeds 30**,
+> and the gate itself already fails at the *first* clip. It is marked *"spec N, to be decided"*
+> in the source while the rules state it as final, so **build nothing that depends on the exact
+> number** — but build nothing that treats it as a budget either.
 
 ### 2.2 ✅ How the rate is actually computed — and why a slow policy can still pass
 
@@ -365,11 +407,22 @@ The planner's move duration is `ta + S/vmax` with `ta = vmax/amax` (`planner.py:
 - **hand ramps** roughly double (2.5 → 1.2 rad/s)
 
 *(inference, from the published gains and the planner's own formula — every input is a read
-number.)* A pick is 7 arm moves plus a close, an open and a settle, so the fixed floor before any
-joint travel is **≈2.5 s in sim, ≈4.8 s real**, and a 10 s sim pick becomes
-**≈ 4.8 + 7.5×1.94 ≈ 19 s on the robot**.
+number.)* The two terms do not scale alike, so the ratio depends on the move. Putting them
+together for a typical 0.5 rad joint move: sim `0.121 + 0.515 = 0.637 s`, robot
+`0.333 + 1.0 = 1.333 s` — **2.0–2.1× slower end to end**, which is the number to use, not the
+1.94× travel-only figure.
 
-> 🔴 **Five objects at ~19 s is ~97 s of a 120 s budget, with no room for one retry.**
+> ⚠️ **Correction, and it loosens the schedule rather than tightening it.** This section used to
+> put five objects at *"~19 s each, ~97 s of 120 s"*. Recomputing from `ta + S/vmax` over a whole
+> pick-and-place cycle gives **≈31 s for five objects on the fast `sim` profile and ≈61 s on the
+> robot's base gains**, plus policy latency → **≈76 s of the 120 s budget**, not 97 s. Time is
+> still the binding constraint and there is still no room for several retries, but the earlier
+> number overstated it and would have bought panic optimisation we do not need.
+
+> 🔴 **The profile a submitted container actually gets is the FAST one.** `config.yaml:10` is
+> `profile: sim`, `baseline.Dockerfile` sets no `AALTO_PROFILE`, and the runner passes no `-e`.
+> `AALTO_PROFILE=none` is what selects the robot's base gains. So **our sim numbers are on the
+> fast clock unless we deliberately ask for the slow one**, and the stage runs the slow one.
 
 #### 3.4.2 And the sim score itself was measured on a clock the organisers call 1.8× wrong
 
@@ -417,10 +470,18 @@ real: scored at the instant the episode ends
 ```
 `evaluate.py:199-200`, default at `:314`; rules line 25 *"at rest at episode end"*.
 
-**The sim waits up to 3 sim-seconds for objects to settle before scoring. The real robot does not.**
-So an object still rolling at the buzzer **scores 0 on stage and often +1 or +2 in sim** — a bias in
-the exact direction that hurts: **it inflates the number that qualifies us and not the number that
-pays.**
+**The sim waits up to 3 sim-seconds for objects to settle before scoring.**
+
+> ⚠️ **UNVERIFIED, and it was stated as fact here.** *"The real robot does not"* is **not in any
+> code we have read.** `evaluate.py` is the sim path only; there is no real-robot scorer in the
+> repo to check. It is an inference from rules line 25 (*"at rest at episode end"*) plus the
+> absence of any stated grace — reasonable, and still an inference. What would settle it: ask the
+> organisers whether the stage run waits for rest. **Until then plan for no grace, but do not
+> quote this as a measured fact to anyone.**
+
+On that assumption an object still rolling at the buzzer **scores 0 on stage and often +1 or +2 in
+sim** — a bias in the exact direction that hurts: it inflates the number that qualifies us and not
+the number that pays.
 
 > **Rule: finish with every object settled and the hand clear, and re-score our own runs with
 > `--settle 0` to see the real-robot number.** The gap between the two is our rolling-object debt.
@@ -1222,6 +1283,11 @@ listed here, not inline, so the body reads as fact and this reads as history.
 | 9 | *"`minAreaRect` runs on the 2D pixel blob."* | ✅ It runs on **metric top-face points** (`perception.py:149`). The pixel budget never applied to the yaw — only to the 2D shape classifier. **This made the prism fix easier, not harder** | §3.2.2 |
 | 10 | *"The bin-rim false positive is the most concrete bug we found."* | ✅ Overstated. `_reject`'s `in_bin` guard survives the depth path. The real exposure is the outer wall face only | §3.6.4 |
 
+| 12 | *"The finals are 30 points, of which 25 are language."* | ✅ Needs N = 5, and the finals object count is **not stated** — the settings are deliberately unannounced (`RULES_AND_SCORING.md:63-68`). The robust claim is **83 % for any N** | §1.1 |
+| 13 | *"The baseline scores zero on the language episodes."* | ✅ Wrong as a deterministic claim. It always applies FIXED, so it scores **+2a − b**: +2N if the true mapping happens to match (1/6), 0 on a single swap (3/6), −N on a derangement (2/6). **Expectation zero, realised value −N to +2N** — so a lucky step-0 draw can look like a working policy | §1.1 |
+| 14 | *"Zero clips is the gate; 30 ends the episode."* | ✅ There is no 30-abort budget. 30 is `safety.py:74 max_clipped_steps` and **exceeding it aborts**. Also found: an **undocumented wall-clock `policy_hz_rt >= 27`** check at `evaluate.py:137-139`, in neither the rules nor the flags | §2.1 |
+| 15 | *"Five objects at ~19 s each is ~97 s of 120 s."* | ✅ Overstated. Recomputed from `ta + S/vmax`: **≈31 s fast profile, ≈61 s on base gains, ≈76 s with latency.** Still tight, not as tight as claimed. Also found: a submitted container defaults to the **fast** `sim` profile | §3.4.1 |
+| 16 | *"The real robot grants no settle time."* | ⚠️ **UNVERIFIED and was stated as fact.** Not in any code we have read — `evaluate.py` is the sim path only. An inference from rules line 25, not a measurement. Plan for no grace; do not quote it as fact | §3.4.4 |
 | 11 | *"The organisers ship a model of real camera noise harsher than the DR — depth σ 3 mm, 20 % holes on the object."* | ✅ Those are **test-fixture values**. `capture.py:133` `MockSource` is *"Synthetic static scene for offline tests"* and `test_drop1.py:22` injects them so `stats.py` can be checked against them. Caught by Oliver's session. What survives: `train.yaml` has **no object-hole parameter** and `stats.py` **measures one**, so the structural gap is real and the magnitude is unknown | §3.6.5 |
 
 ### A.3 What ran locally on a GPU-less laptop, 14 Nov
