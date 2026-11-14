@@ -356,6 +356,11 @@ class Planner:
         """Bin centre in MAT coords, moved by bin.vote's shift (pelvis x = mat y, pelvis y = mat x) if the bin has one."""
         return self.bin_geometry(name)["centre_mat"]
 
+    def _wall(self, wall):
+        """Bin wall height + planner.bin_wall_extra_m (default 0.0 -> exactly `wall`): the extra rim clearance."""
+        extra = float((self.cfg.get("planner") or {}).get("bin_wall_extra_m", 0.0))
+        return wall + extra if extra else wall
+
     def bin_clearance(self, side, arm_q, hand_q, margin=0.01):
         """Lowest height (m) above the bin rims of the hand points over a bin's outer footprint (+margin), inf if none.
         Bins are static boxes in the sim and on the table: only the drop itself may go below a rim."""
@@ -363,7 +368,7 @@ class Planner:
         pm = self.scene.pelvis_to_mat(pts)
         b = self.scene.cfg["bins"]
         half = np.asarray(b["outer_size"], float) / 2 + margin
-        rim = self.scene.counter_z + float(b["wall_height"])
+        rim = self.scene.counter_z + self._wall(float(b["wall_height"]))
         out = np.inf
         for name, c in b["centers"].items():
             over = np.all(np.abs(pm[:, :2] - self._mat_centre(name, c)) <= half, axis=1)
@@ -381,7 +386,7 @@ class Planner:
         pm = self.scene.pelvis_to_mat(pts)
         b = self.scene.cfg["bins"]
         half = np.asarray(b["outer_size"], float) / 2
-        rim = self.scene.counter_z + float(b["wall_height"])
+        rim = self.scene.counter_z + self._wall(float(b["wall_height"]))
         below = pts[:, 2] < rim - 1e-3
         for name, ctr in b["centers"].items():
             over = np.all(np.abs(pm[:, :2] - self._mat_centre(name, ctr)) <= half, axis=1)
@@ -957,7 +962,7 @@ class Planner:
             plan.reason = f"grasp point {100 * (z - zc):.1f} cm above counter: above the object top (point_in_palm?)"
             return plan
 
-        wall = float(sc.cfg["bins"]["wall_height"])
+        wall = self._wall(float(sc.cfg["bins"]["wall_height"]))   # + planner.bin_wall_extra_m
         z_carry = zc + max(g["carry_height"], wall + H + 0.03)
         z_drop = zc + wall + H / 2 + g["drop_above_rim"]
         if self.drop_extra.get(bin_name):  # bin.vote low-confidence bin: release higher, never above the carry height

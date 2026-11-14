@@ -44,6 +44,8 @@ FLAGS = {
                                  "estimate counter height only after the camera pose is selected; require a MAD-consistent sample set"),
     "calib.refit_per_look": ("finals calibration", False,
                              "freshness-guarded bounded counter-plane update on every look, with a plane-tilt hand-fit cross-check"),
+    "calib.wide_counter_window": ("counter-z", False, "counter-z estimation window nominal -8 .. +22 cm (dominant-layer seed, then the usual +-3 cm plane fit with tilt/inlier gates; estimate outside = nominal), runtime height estimated even without calib.plane.apply_height, mat z follows the runtime counter; see COUNTERZ.md"),
+    "planner.bin_wall_extra_m": ("counter-z", 0.0, "extra bin wall height (m) on the release/carry height and the rim keepout (planner)"),
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
@@ -380,6 +382,8 @@ def check_flag_values(cfg):
         v = _get(cfg, k)
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
             raise ValueError(f"{k} = {v!r}: want null or an int >= 1")
+    if not isinstance(_get(cfg, "calib.wide_counter_window"), bool):
+        raise ValueError("calib.wide_counter_window: want true or false")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
@@ -399,7 +403,7 @@ def check_flag_values(cfg):
     first_scale = _get(cfg, "policy.first_object_speed_scale")
     if first_scale is not None and not 0.0 < float(first_scale) <= 1.0:
         raise ValueError("policy.first_object_speed_scale must be null or in (0, 1]")
-    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m"):
+    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m", "planner.bin_wall_extra_m"):
         v = float(_get(cfg, k))
         if not np.isfinite(v) or v < 0.0:
             raise ValueError(f"{k} must be a finite non-negative distance")
