@@ -1490,13 +1490,17 @@ class Perception:
         `rejected` as (det, "color_gate:<why>"). More than max_cands survivors -> degraded (the policy's DEGRADED tier
         orders them); NOTHING is truncated here, so an unplannable large blob can never hide a real object (Codex C1)."""
         g = self.color_gate_cfg
-        kept = []
+        kept, n_in, reasons = [], 0, {}
         for det in dets:
+            n_in += 1
             why = self._color_gate_why(det, g)
             if why:
                 rejected.append((det, why))
+                reasons[why] = reasons.get(why, 0) + 1
             else:
                 kept.append(det)
+        self.log(f"[color_gate] in={n_in} out={len(kept)} reasons={{"
+                 + ", ".join(f"{k}: {v}" for k, v in sorted(reasons.items())) + "}")   # diagnostics only
         if len(kept) > int(g["max_cands"]):
             self.color_gate_degraded = True
             self.log(f"[color_gate] degraded: {len(kept)} candidates > max_cands {g['max_cands']}; all passed on, "
