@@ -699,6 +699,24 @@ class TestIsolatedFirst(unittest.TestCase):
         pol = make(DUR, [a, b], (), **self.LARGEST, **self.ON)
         self.assertIn(first_color(pol), ("red", "yellow"))
 
+    def test_degraded_tier_centre_first_wins_over_isolated_first(self):
+        def dets():   # yellow = centre bin (fixed mapping), touching red; blue isolated
+            return [det("red", x=0.30, y=0.0, n_px=900), det("yellow", x=0.33, y=0.0, n_px=800),
+                    det("blue", x=0.30, y=0.20, n_px=300)]
+        pol = make(DUR, dets(), (), **self.LARGEST)
+        self.assertEqual(pol._centre_name(), "center")
+        pol.tier = dec.DEGRADED
+        self.assertEqual(_order(pol, dets()), ["yellow", "red", "blue"])           # flag off: centre first
+        pol = make(DUR, dets(), (), **self.LARGEST, **self.ON)
+        pol.tier = dec.DEGRADED
+        self.assertEqual(_order(pol, dets()), ["yellow", "blue", "red"])           # centre first, then side: isolated first
+
+    def test_defer_touching_within_keeps_group_positions(self):
+        t1, t2 = det("red", x=0.0, y=0.0), det("yellow", x=0.03, y=0.0)   # touching pair
+        i1 = det("blue", x=0.5, y=0.0)
+        out = dec.defer_touching_within([t1, t2, i1], [t1, t2, i1], 0.06, key=lambda d: d.color == "yellow")
+        self.assertEqual([id(d) for d in out], [id(i1), id(t2), id(t1)])   # red/blue group swap, yellow keeps slot 1
+
     def test_defer_touching_keeps_relative_order(self):
         t1, t2 = det("red", x=0.0, y=0.0), det("yellow", x=0.03, y=0.0)   # touching pair
         i1, i2 = det("blue", x=0.5, y=0.0), det("red", x=0.9, y=0.9)       # isolated
