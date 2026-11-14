@@ -53,6 +53,11 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(cfg["profile"], "sim")      # applied on top of the sim profile
         self.assertEqual(cfg["motion"]["arm_max_vel"], load_config(overlay="none")["motion"]["arm_max_vel"])
 
+    def test_ab_stagger_is_cand_r16_nopp_plus_one_flag(self):
+        base = load_overlay(OVERLAY_DIR / "cand_r16_nopp.yaml")["flags"]
+        stagger = load_overlay(OVERLAY_DIR / "ab_stagger.yaml")["flags"]
+        self.assertEqual(stagger, {**base, "grasp.staggered_release": True})
+
     def test_ab_overlays_flip_exactly_their_flags(self):
         expect = {"ab_retry": {"policy.retry_pass"}, "ab_maxatt4": {"policy.max_attempts"},
                   "ab_resolver": {"instruction.resolve"}, "ab_verify": {"policy.verify_placement"},
@@ -83,6 +88,7 @@ class TestFlags(unittest.TestCase):
         r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
         expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
+        expect["ab_stagger"] = expect["ab_retry_vary_slots"] | {"grasp.staggered_release"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -132,6 +138,14 @@ class TestFlags(unittest.TestCase):
                     load_config(overlay=str(p))
         self.assertEqual(load_config(overlay="ab_hold12")["motion"]["close_hold_s"], 1.2)
         self.assertEqual(load_config(overlay="none")["motion"]["close_hold_s"], 0.25)   # sim profile
+
+    def test_staggered_release_timing_limits(self):
+        for value in (-0.01, float("nan"), float("inf")):
+            with self.subTest(stagger_delay_s=value), self.assertRaisesRegex(ValueError, "stagger_delay_s"):
+                load_config(overrides={"grasp.staggered_release": True, "grasp.stagger_delay_s": value})
+        for value in (0.39, float("nan"), float("inf")):
+            with self.subTest(release_settle_s=value), self.assertRaisesRegex(ValueError, "release_settle_s"):
+                load_config(overrides={"grasp.staggered_release": True, "grasp.release_settle_s": value})
 
     def test_placeholder_overlay_is_refused(self):
         with tempfile.TemporaryDirectory() as d:

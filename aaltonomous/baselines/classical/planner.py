@@ -114,6 +114,49 @@ def ramp(a, b, vmax, dt):
     return a + (b - a) * (np.arange(1, n + 1) / n)[:, None]
 
 
+def dex3_release_groups(side):
+    """Global hand-vector indices for Dex3 DDS order.
+
+    Left is thumb, middle, index; right is thumb, index, middle.  Returning
+    named groups avoids accidentally applying the left-hand ordering on the
+    right during a staggered release.
+    """
+    if side == "left":
+        return {"thumb": (0, 1, 2), "index": (5, 6), "middle": (3, 4)}
+    if side == "right":
+        return {"thumb": (7, 8, 9), "index": (10, 11), "middle": (12, 13)}
+    raise ValueError(f"unknown hand side {side!r}")
+
+
+def staggered_release(a, b, side, vmax, dt, delay_s, settle_s):
+    """Thumb-first Dex3 release, excluding the initial sample.
+
+    The thumb begins immediately.  Index and middle begin together no earlier
+    than ``delay_s`` later, while the thumb may still be moving.  The final
+    posture is then held for at least ``settle_s``.  Linear interpolation stays
+    between the already validated start and release postures; the plan's normal
+    SafetyFilter dry run remains the final authority on every emitted tick.
+    """
+    a, b = np.asarray(a, float), np.asarray(b, float)
+    groups = dex3_release_groups(side)
+    thumb = np.asarray(groups["thumb"], int)
+    fingers = np.asarray(groups["index"] + groups["middle"], int)
+    thumb_ramp = ramp(a[thumb], b[thumb], vmax, dt)
+    finger_ramp = ramp(a[fingers], b[fingers], vmax, dt)
+    delay_ticks = int(np.ceil(float(delay_s) / dt - 1e-12))
+    settle_ticks = int(np.ceil(float(settle_s) / dt - 1e-12))
+    move_ticks = max(len(thumb_ramp), delay_ticks + len(finger_ramp))
+    h = np.repeat(a[None], move_ticks + settle_ticks, axis=0)
+    if len(thumb_ramp):
+        h[:len(thumb_ramp), thumb] = thumb_ramp
+        h[len(thumb_ramp):, thumb] = b[thumb]
+    if len(finger_ramp):
+        end = delay_ticks + len(finger_ramp)
+        h[delay_ticks:end, fingers] = finger_ramp
+        h[end:, fingers] = b[fingers]
+    return h
+
+
 class Planner:
     def __init__(self, cfg, scene, postures, home, kin: ArmKinematics | None = None, safety: SafetyConfig | None = None,
                  spec: JointSpec | None = None, mapping=None, dt=1.0 / 30.0):
@@ -691,7 +734,15 @@ class Planner:
         cs = min(1.0, float(mo.get("carry_scale", 1.0)))  # motion.carry_scale <= 1: slower lift + carry only
         move("lift", up, scale=cs)
         move("carry", carry + lower, scale=cs)
-        hand("open", hand_rel, mo["open_hold_s"])  # widest posture: `open` alone left the cube wedged in the sim
+        if g.get("staggered_release", False):
+            # Keep the arm fixed through both finger ramps and the post-release settle.  The phase remains `open` so
+            # the existing drop-zone collision exemption and downstream phase consumers keep the same semantics.
+            h = staggered_release(cur_h, hand_rel, side, hv, self.dt, g["stagger_delay_s"],
+                                  g["release_settle_s"])
+            cur_h = hand_rel.copy()
+            add("open", np.repeat(cur_a[None], len(h), 0), h)
+        else:
+            hand("open", hand_rel, mo["open_hold_s"])  # stock path: keep byte-identical when the flag is off
         move("retreat", retreat)
         move("home", [home], hand_to=hand_open)
         plan.arm, plan.hand, plan.phases = np.vstack(arm_parts), np.vstack(hand_parts), phases

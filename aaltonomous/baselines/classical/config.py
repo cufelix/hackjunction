@@ -70,6 +70,8 @@ FLAGS = {
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
     "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
+    "grasp.staggered_release": ("stagger release", False,
+                                  "release thumb first, then index + middle after stagger_delay_s"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
 }
@@ -171,6 +173,14 @@ def check_flag_values(cfg):
             continue
         if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
             raise ValueError(f"{k} = {v!r}: want {n} numbers")
+    g = cfg.get("grasp") or {}
+    if g.get("staggered_release", False):
+        delay = float(g.get("stagger_delay_s", -1.0))
+        settle = float(g.get("release_settle_s", -1.0))
+        if not np.isfinite(delay) or delay < 0.0:
+            raise ValueError("grasp.stagger_delay_s must be finite and >= 0")
+        if not np.isfinite(settle) or settle < 0.4:
+            raise ValueError("grasp.release_settle_s must be finite and >= 0.4")
     # Landmine guard (Oliver a44dd79): mirror_left_to_right flips thumb0's sign, the exact mirror keeps it (right
     # fingertips ~99 mm off for the demo preshape). Until the mirror is fixed, active postures must keep thumb0 = 0.
     h = cfg.get("hand") or {}
