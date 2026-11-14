@@ -130,6 +130,16 @@ perception:
     red:    [[[0, 70, 70], [16, 255, 255]], [[170, 70, 70], [180, 255, 255]]]
     yellow: [[[18, 45, 90], [52, 255, 255]]]
     blue:   [[[100, 70, 50], [145, 255, 255]]]
+  # FLAG (tech lead, hue guard). robust with red H 0-22 and yellow H 24-52; H in (22, 24) is the abstain band
+  # (hue_guard.py). Selected by perception.hsv_set: robust_v2. Other bounds equal hsv_robust.
+  hsv_robust_v2:
+    red:    [[[0, 70, 70], [22, 255, 255]], [[170, 70, 70], [180, 255, 255]]]
+    yellow: [[[24, 45, 90], [52, 255, 255]]]
+    blue:   [[[100, 70, 50], [145, 255, 255]]]
+  hue_guard:                 # FLAG (tech lead). Layer 2: adjacent red|yellow pair closer than min_gap_deg abstains (hue_guard.py)
+    enabled: false
+    min_gap_deg: 6.0
+    red_min_s: 110             # layer 2b: red-labelled candidate with top-face S below this -> abstain (0-255)
   colour_kmeans: false       # FLAG (EV gate). Once per episode, bounded k=3 on robust object-blob HSV pixels;
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:

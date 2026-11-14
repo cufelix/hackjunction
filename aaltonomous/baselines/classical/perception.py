@@ -20,6 +20,7 @@ import numpy as np
 
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
+from .hue_guard import AMBIGUOUS_CONF, Cand, classify_hue, judge, top_face_hsv
 
 
 def colour_confidence(hsv, blob, ranges_by_class, color, min_area_px=120):
@@ -111,6 +112,7 @@ class Detection:
     shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
+    hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
 
     def __repr__(self):
         x, y, z = self.top
@@ -233,9 +235,15 @@ class Perception:
         # no-blob shape (Oliver f857054): no metric top face -> abstain instead of the 2D-blob ratio (default OFF)
         self.no_blob_shape = bool(self.cfg.get("no_blob_shape", False))
         # real colour (hf_perception 2026-11-14): one HSV set for sim + the real head cam; split touching objects
-        self.hsv = self.cfg["hsv_robust"] if self.cfg.get("hsv_set", "stock") == "robust" else self.cfg["hsv"]
+        hs = self.cfg.get("hsv_set", "stock")
+        self.hsv = self.cfg["hsv_robust_v2"] if hs == "robust_v2" else self.cfg["hsv_robust"] if hs == "robust" else self.cfg["hsv"]
         self.split_blobs = bool(self.cfg.get("split_blobs", False))
         self.place_gate = bool((cfg.get("policy") or {}).get("place_gate", False))
+        # perception.hue_guard (default OFF): abstain on orange/yellow hues near the red|yellow boundary (hue_guard.py)
+        hg = self.cfg.get("hue_guard") or {}
+        self.hue_guard = bool(hg.get("enabled", False))
+        self.hue_guard_min_gap_deg = float(hg.get("min_gap_deg", 6.0))
+        self.hue_guard_red_min_s = float(hg.get("red_min_s", 110.0))
         # Per-episode colour k-means always starts/falls back at the measured
         # robust ranges, regardless of the separately selectable stock set.
         self.colour_kmeans = bool(self.cfg.get("colour_kmeans", False))
@@ -980,13 +988,14 @@ class Perception:
                 keep[arm] = 0
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
-        need_hsv = self.place_gate or self.colour_kmeans
+        need_hsv = self.place_gate or self.colour_kmeans or self.hue_guard
         hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None
         if self.colour_kmeans and not self._colour_kmeans_done and arm_clear:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
             self._fit_colour_kmeans(hsv, kkeep)
         masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
-        for color, m in masks.items():
+        items = self._hue_guard_items(masks, hsv) if self.hue_guard else masks.items()
+        for color, m in items:
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
             k = int(c["open_px"])
             if k > 0:
@@ -1000,13 +1009,66 @@ class Perception:
                 if self.split_blobs:
                     for part, p_area, p_cent in self.split_blob(blob, area, cent[i], depth):
                         self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected,
-                                          hsv if self.place_gate else None)
+                                          hsv if (self.place_gate or self.hue_guard) else None)
                     continue
                 self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected,
-                                  hsv if self.place_gate else None)
+                                  hsv if (self.place_gate or self.hue_guard) else None)
+        if self.hue_guard:
+            dets, rejected = self._hue_guard(dets, rejected)
         if self.color_gate:
             dets = self._color_gate(dets, rejected)
         return (dets, rejected) if debug else dets
+
+    def _hue_guard_items(self, masks, hsv):
+        """perception.hue_guard layer 3: red and yellow pixels form one component per object, so an object whose side
+        faces fall in the red range and whose top is yellow is a single candidate. Its colour is the class of the top
+        face hue (brightest ~35 % by V, re-classified on the active set); a hue in the band keeps the majority colour so
+        layer 1 can abstain on it. Blue and the other colours pass through unchanged."""
+        import cv2
+        ry = (masks["red"] | masks["yellow"]).astype(np.uint8)
+        n, lab, _, _ = cv2.connectedComponentsWithStats(ry, connectivity=8)
+        items = []
+        for i in range(1, n):
+            comp = lab == i
+            top = top_face_hsv(hsv[comp])
+            label = classify_hue(top[0], self.hsv)
+            if label is None:
+                label = "red" if (masks["red"][comp] > 0).sum() >= (masks["yellow"][comp] > 0).sum() else "yellow"
+            items.append((label, comp.astype(np.uint8) * 255))
+        return items + [(c, m) for c, m in masks.items() if c not in ("red", "yellow")]
+
+    def _hue_guard(self, dets, rejected):
+        """perception.hue_guard: abstain (or resolve by frame evidence) on orange/yellow hues near the boundary."""
+        idx = [i for i, d in enumerate(dets) if d.hsv_med is not None]
+        cands = [Cand(dets[i].color, *dets[i].hsv_med) for i in idx]
+        try:
+            verdict = judge(cands, self.hsv, self.hue_guard_min_gap_deg, self.hue_guard_red_min_s)
+        except Exception as exc:   # fail closed: nothing hue-judged is placed
+            verdict = [(None, f"error:{type(exc).__name__}")] * len(idx)
+            self.log(f"[hue_guard] error {type(exc).__name__}: {exc}")
+        by_idx = dict(zip(idx, verdict))
+        keep, moved, n_amb, n_relabel, reasons = [], [], 0, 0, {}
+        for i, d in enumerate(dets):
+            if i not in by_idx:
+                keep.append(d)
+                continue
+            label, reason = by_idx[i]
+            if reason is None:
+                if label != d.color:
+                    n_relabel += 1
+                    d = replace(d, color=label)
+                keep.append(d)
+                continue
+            n_amb += 1
+            reasons[reason] = reasons.get(reason, 0) + 1
+            amb = replace(d, color_conf=AMBIGUOUS_CONF)
+            if self.place_gate:   # the place gate (colour_min > 0.3) keeps it off the bins; it stays on the table
+                keep.append(amb)
+            else:
+                moved.append((amb, "hue_guard:low_s_red" if reason == "low_s_red" else "hue_guard:ambiguous"))
+        self.log(f"[hue_guard] cands={len(cands)} ambiguous={n_amb} relabelled={n_relabel} "
+                 f"moved_rejected={len(moved)} reasons={reasons}")
+        return keep, rejected + moved
 
     def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None):
         """One colour blob -> Detection (depth top face, else plane) -> dets or rejected (the stock per-blob body)."""
@@ -1033,7 +1095,9 @@ class Perception:
                     self._apply_generic_fallback(det, conf, blob, depth)
                 if self.shape_diag:
                     det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
-        if det is not None and hsv is not None:
+        if det is not None and hsv is not None and self.hue_guard:
+            det.hsv_med = top_face_hsv(hsv[blob > 0])   # layer 3: colour from the top face, not the whole blob
+        if det is not None and hsv is not None and self.place_gate:
             try:
                 det.color_conf = colour_confidence(hsv, blob, self.hsv, color, c["min_area_px"])
             except Exception as exc:  # never raise into act()
