@@ -320,6 +320,8 @@ class ClassicalPolicy:
         self._brain_abstain = self._resolver_abstains(self._brain_mapping)
         self._brain_reg, self._brain_n, self._last_pick = [], 0, None
         self._novel_store, self._found, self._agent_dirty, self._last_find_items = [], {}, False, []
+        self._novel_brain_candidates = []
+        self._novel_brain_bin = None
         if self.brain is not None:
             self.brain.reset()
         if self.plan_brain is not None:
@@ -1443,9 +1445,9 @@ class ClassicalPolicy:
         return out
 
     def _fk_kw(self, obs):
-        """Measured arm/hand pose for an enabled colour-gate or depth-recovery FK mask."""
         need_fk = ((self.cfg["perception"].get("color_gate") or {}).get("fk_mask", False) or
-                   self.cfg["perception"].get("depth_blob_recover", False))
+                   self.cfg["perception"].get("depth_blob_recover", False) or
+                   self.cfg["perception"].get("novel_objects", False))
         if not need_fk or obs.get("arm_q") is None:
             return {}
         return {"robot_q": (np.asarray(obs["arm_q"], float),
@@ -1463,6 +1465,8 @@ class ClassicalPolicy:
                                           **self._counter_kw(obs))
             if dets is None:
                 return ("still_vote_pending",)
+            if (self.cfg.get("instruction") or {}).get("novel_objects", False):
+                self._match_novel(dets)
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
             self._planner_observe(dets, obs)
@@ -1471,6 +1475,8 @@ class ClassicalPolicy:
                                                    **self._detect_kw(), **self._fk_kw(obs), **self._counter_kw(obs))
         if dets is None:
             return ("still_vote_pending",)
+        if (self.cfg.get("instruction") or {}).get("novel_objects", False):
+            self._match_novel(dets)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -1513,6 +1519,31 @@ class ClassicalPolicy:
             if alt is not None:
                 return alt
         return res
+
+    def _match_novel(self, dets):
+        """Attach a bin only to one deterministic visible novel match.
+
+        Unknown nouns expose a closed visible-novel list to the already
+        bounded asynchronous brain.  With no brain, or on timeout, every such
+        object keeps ``novel_target_bin=None`` and is therefore unpickable.
+        """
+        self._novel_brain_candidates, self._novel_brain_bin = [], None
+        novels = [d for d in dets if getattr(d, "novel", False)]
+        for d in novels:
+            d.novel_target_bin, d.novel_matched = None, False
+        if not novels or not (self.cfg.get("instruction") or {}).get("novel_objects", False):
+            return
+        from .novel_objects import match_instruction
+        match = match_instruction(self._instruction, novels)
+        if match.matched is not None:
+            match.matched.novel_target_bin = match.target_bin
+            match.matched.novel_matched = True
+            self.log(f"[novel] matched {match.matched.color} {match.matched.shape} -> {match.target_bin}")
+        elif match.brain_candidates and self.brain is not None:
+            self._novel_brain_candidates = list(match.brain_candidates)
+            self._novel_brain_bin = match.target_bin
+            self.log(f"[novel] unresolved noun {match.unresolved_noun!r}; offered "
+                     f"{len(match.brain_candidates)} visible novel candidates to brain")
 
     def _plan_corrections(self, corrections, dets):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
@@ -1845,14 +1876,30 @@ class ClassicalPolicy:
                     cands = [d0] + [d for d in cands if d is not d0]
                     forced, planner_forced = (d0, b0, var, table_xy), True
         elif self.brain is not None:
-            sel = self._brain_select(cands, dets, obs)
+            brain_only_novel = bool(self._novel_brain_candidates)
+            offered = [d for d in self._novel_brain_candidates if any(d is x for x in dets)]
+            sel = self._brain_select(offered, offered, obs) if brain_only_novel else self._brain_select(cands, dets, obs)
             if sel is not None:
                 kind, d0, b0, var = sel
-                if kind == "look":
+                if brain_only_novel:
+                    valid = (kind == "pick" and any(d0 is d for d in offered)
+                             and getattr(d0, "novel", False) and b0 == self._novel_brain_bin
+                             and getattr(d0, "graspable", False))
+                    if valid:
+                        d0.novel_target_bin, d0.novel_matched = b0, True
+                    else:
+                        # The novel hook may neither stop the known task nor
+                        # select a known/ungraspable object or another bin.
+                        sel = None
+                if sel is None:
+                    kind = None
+                if kind is None:
+                    pass
+                elif kind == "look":
                     return ("relook", None, len(dets))
-                if kind == "done":
+                elif kind == "done":
                     return ("none", None, len(dets))
-                if kind == "skip":
+                elif kind == "skip":
                     self.failed.append(d0.top[:2])          # the brain gave this object up: no more tries
                     cands = [d for d in cands if d is not d0]
                 elif kind in ("pick", "retry"):
@@ -1883,6 +1930,18 @@ class ClassicalPolicy:
                     n_long += 1
                     continue
             others = [o.top[:2] for o in dets if o is not d]
+            common = {"obstacles": others}
+            if pol.get("novel_obstacles", False):
+                clearance = []
+                for o in dets:
+                    if o is d or not getattr(o, "novel", False):
+                        continue
+                    dims = np.asarray(getattr(o, "footprint_dims", [0.05, 0.05]), float)
+                    radius = 0.5 * float(np.max(dims))
+                    top_z = self.scene.counter_z + float(getattr(o, "height", o.top[2] - self.scene.counter_z))
+                    centre = np.asarray(getattr(o, "obstacle_center", o.top[:2]), float)
+                    clearance.append([centre[0], centre[1], radius, top_z])
+                common["clearance_obstacles"] = clearance
             target_bin = forced[1] if mine else self._bin_of(d)
             table_xy = forced[3] if mine else None
             pfn = self._variant_plan_fn(forced[2]) if mine else None
@@ -1911,7 +1970,7 @@ class ClassicalPolicy:
                     if fp:
                         return planner_fail("no free drop slot")
                     continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
+                p = self._plan_pick(d, dict(bin_name=target_bin, drop_slot=slot, **common), pfn)
             elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
                 free = [i for i in range(len(self.planner.drop_slots(target_bin)))
                         if i not in self.slot_used[target_bin]]
@@ -1921,11 +1980,11 @@ class ClassicalPolicy:
                     if fp:
                         return planner_fail("no free drop slot")
                     continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
+                p = self._plan_pick(d, dict(bin_name=target_bin, drop_slot=slot, **common), pfn)
             elif mine:   # brain override: the classical planner still checks reach
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others), pfn)
+                p = self._plan_pick(d, dict(bin_name=target_bin, **common), pfn)
             else:
-                p = self._plan_pick(d, dict(obstacles=others))
+                p = self._plan_pick(d, common)
             self.plans.append(p)
             if p.ok and not self._object_time_allows(d, p.duration):
                 if fp:

@@ -197,6 +197,7 @@ class CounterHeightSample:
 
 class Perception:
     def __init__(self, cfg, scene, calibration, log=None):
+        self._root_cfg = cfg
         self.cfg = cfg["perception"]
         self.profile = cfg.get("profile", "none")
         self.scene = scene
@@ -353,6 +354,10 @@ class Perception:
             except Exception as exc:
                 self._arm_surface_error = exc
                 self.log(f"[depth_recover] FK mask unavailable ({type(exc).__name__}: {exc}); recovery will abstain")
+        # R22 novel objects.  Keeping the switch here (rather than merely in
+        # the policy) makes the disabled detect() path instruction-for-
+        # instruction identical through the existing return below.
+        self.novel_objects = bool(self.cfg.get("novel_objects", False))
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
@@ -1428,6 +1433,14 @@ class Perception:
             dets = self._still_vote_frame(dets)
             if dets is None:
                 return (None, rejected) if debug else None
+        if self.novel_objects:
+            try:
+                from .novel_objects import augment_detections
+                dets = augment_detections(self, rgb, depth, dets, robot_q=robot_q)
+            except Exception as exc:
+                # Novel perception is optional.  A bad frame/classifier must
+                # retain the known, already safety-gated detections.
+                self.log(f"[novel] perception failed closed: {type(exc).__name__}: {exc}")
         return (dets, rejected) if debug else dets
 
     def _blob_placeholder(self, color, area, centroid):

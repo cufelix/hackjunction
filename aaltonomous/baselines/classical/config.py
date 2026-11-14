@@ -103,6 +103,7 @@ FLAGS = {
     "perception.color_gate.sat_floor_params.blue": ("gate fix", 110, "blue/purple saturation floor variant"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
+    "perception.novel_objects": ("novel R22", False, "depth connected components above the counter -> conservative open-vocabulary object candidates"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
@@ -152,6 +153,7 @@ FLAGS = {
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
     "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
     "grasp.generic_fallback": ("generic grasp", False, "unknown/low-confidence shape: geometry-only top-down grasp, colour-only bin resolution"),
+    "grasp.generic": ("novel R22", False, "URDF-opening-gated top-down/handle grasps for targeted novel detections"),
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
     "grasp.cylinder_no_yaw_vary": ("cyl yaw", False, "retry on a detected cylinder varies the posture only, never the finger yaw (rotationally symmetric)"),
@@ -168,9 +170,11 @@ FLAGS = {
                                  "log cmd-minus-measured during steady holds in the first second (no control change)"),
     "policy.confidence_order": ("D1/D2", False, "order by 2*p/est_time (p_colour*p_bin*p_grasp), never the hardest first"),
     "policy.object_time_cap": ("D2", False, "per-object cap (remaining-15)/left 15..35 s, T-20 s no new object, T-8 s release/retract"),
+    "policy.novel_obstacles": ("novel R22", False, "untargeted novel detections are clearance obstacles for every planned hand trajectory"),
     "policy.speed_tiers": ("D3", False, "1st object 0.7 + 1.5 cm clearance, clean 0.85/0.9, failure 0.6 + centre bin only"),
     "policy.confidence_tiers": ("D4", False, "hold 3-5 s, calibration C -> CONFIDENT / DEGRADED / PRIOR-ONLY"),
     "decision.isolated_first": ("isolated-first", False, "candidates within decision.isolated_min_m of another detection go after the isolated ones"),
+    "instruction.novel_objects": ("novel R22", False, "closed-vocabulary colour/shape-noun matching onto visible novel candidates; unresolved nouns abstain or use the bounded brain"),
 }
 
 
