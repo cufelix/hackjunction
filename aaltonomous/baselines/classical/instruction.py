@@ -406,6 +406,7 @@ def resolve(text, fallback=None):
     low = _aliases(str(text).lower())
     # Structural pre-pass (see the patterns above). Order matters: appositive first, so the key
     # word survives; all-but second, so the excluded key never reaches clause parsing.
+    stays = bool(_LEAVE.search(low) or _NEG.search(low))
     low = _LEAVE.sub(" ", low)  # a key told to stay put is never mentioned again, so nothing completes it
     low = _APPOS.sub("the ", low)
     low = _BETWEEN.sub("middle", low)  # "the bin between the left and right ones" -> the centre bin
@@ -578,6 +579,15 @@ def resolve(text, fallback=None):
             b = free[i] if i < len(free) else FIXED_MAPPING.get(k)
             if b:
                 mapping[k] = b
+
+    # Two colours on two different bins, one bin free, nothing told to stay (or negated: a "but not X"
+    # bin is a guess already): the third colour is
+    # implied and has no bin (0). Same 0 / -1 / +2 bet as completion; two colours sharing one bin
+    # leave two bins free, so a many-to-one sentence can never reach this.
+    if (len(mapping) == 2 and all(k in COLORS for k in mapping) and len(set(mapping.values())) == 2
+            and not stays):
+        free = [b for b in BINS if b not in mapping.values()]
+        mapping[next(c for c in COLORS if c not in mapping)] = free[0]
 
     if not mapping:
         return dict(FIXED_MAPPING if fallback is None else fallback)
