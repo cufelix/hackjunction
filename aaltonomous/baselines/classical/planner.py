@@ -726,11 +726,20 @@ class Planner:
         if bin_name is None:
             return last
         reasons, good = [], []
-        for side in (side0, "right" if side0 == "left" else "left"):
+        order = (side0, "right" if side0 == "left" else "left")
+        pos = False
+        if g.get("prefer_object_side", False):   # grasp.prefer_object_side: object-side arm first (never for the left bin)
+            left_bin = abs(by) > 0.1 and by > g["y_split"]
+            if not left_bin and abs(det.top[1]) > float(g.get("prefer_object_side_margin_m", 0.03)):
+                oside = "left" if det.top[1] > g["y_split"] else "right"
+                order, pos = (oside, "right" if oside == "left" else "left"), True
+        for side in order:
             p = self._plan_side_hints(det, side, bin_name, np.asarray(arm_q, float), np.asarray(hand_q, float),
                                       drop_slot=drop_slot, source_bin=source_bin,
                                       clearance_obstacles=clearance_obstacles)
             if p.ok:
+                if pos and side == order[0]:   # complete pick -> bin plan with the object-side arm
+                    return p
                 if g.get("arm", "best") != "best" or self._lying_reach_on(det):   # lying: default arm first
                     return p
                 good.append(p)
@@ -1344,11 +1353,18 @@ class Planner:
         arm_parts, hand_parts, phases = [], [], []
         cur_a, cur_h = arm_q.copy(), hand_q.copy()
 
-        def move(name, Qs, hand_to=None, scale=1.0):
+        def move(name, Qs, hand_to=None, scale=1.0, tail=None):
             nonlocal cur_a, cur_h
             if self.object_speed_scale is not None:   # <= 1 on top of the (capped) arm_max_vel: never faster
                 scale *= float(self.object_speed_scale)
-            a = time_scale([cur_a] + list(Qs), vmax * scale, amax * scale, self.dt)
+            if tail is not None and len(Qs) > 1:   # tail = (n, s): the last n waypoints at s x the speed (one phase)
+                k = min(len(Qs) - 1, int(tail[0]))
+                Qs = list(Qs)
+                a1 = time_scale([cur_a] + Qs[:-k], vmax * scale, amax * scale, self.dt)
+                a2 = time_scale([Qs[-k - 1]] + Qs[-k:], vmax * scale * tail[1], amax * scale * tail[1], self.dt)
+                a = np.vstack([a1, a2])
+            else:
+                a = time_scale([cur_a] + list(Qs), vmax * scale, amax * scale, self.dt)
             h = np.repeat(cur_h[None], len(a), 0)
             if hand_to is not None:  # hand moves during the arm move (ends no later than the arm)
                 hr = self.hand_ramp(cur_h, hand_to)
@@ -1387,7 +1403,9 @@ class Planner:
                 cur_a = a[-1].copy()
 
         move("to_pregrasp", [q_pre], hand_to=hand_pre)
-        move("descend", down)
+        fas = mo.get("final_approach_scale")   # motion.final_approach_scale (0, 1): only the last final_approach_m of the descend is slower
+        tail = None if fas is None else (max(1, int(np.ceil(float(mo.get("final_approach_m", 0.05)) / float(mo["cart_step"])))), float(fas))
+        move("descend", down, tail=tail)
         ls = mo.get("lift_on_stall") or {}
         close_hold_s = mo["close_hold_s"]
         if ls.get("enabled", False):  # hold up to timeout_s; the policy starts the lift early on a finger stall

@@ -180,6 +180,11 @@ FLAGS = {
     "grasp.drop_lateral_margin_m": ("finals safe", 0.0,
                                       "move the bin release toward the bin centre (y only, footprint-checked); IK failure uses the stock target"),
     "grasp.left_hand_fix.shift_z": ("left hand", 0.0, "left arm + triangle only: add this (m) to the grasp z before the fingertip-clearance raise; 0 = off"),
+    "grasp.arm_xy_offset": ("Timi grip", {"left": [0.0, 0.0], "right": [0.0, 0.0]}, "per-arm grasp xy offset (pelvis frame, m); stock = no offset"),
+    "grasp.prefer_object_side": ("Timi grip", False, "|object y| > margin: try the object-side arm first when a complete pick->bin plan exists (left bin keeps the left arm); else stock order"),
+    "grasp.prefer_object_side_margin_m": ("Timi grip", 0.03, "prefer_object_side: |y| margin (m)"),
+    "motion.final_approach_scale": ("Timi grip", None, "(0,1): arm speed x this for the last final_approach_m of the pregrasp -> grasp descend only; null = off"),
+    "motion.final_approach_m": ("Timi grip", 0.05, "final_approach_scale: length of the slowed final segment (m)"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
     "motion.output_caps": ("M4", None, "null = legacy output; dict = final per-joint arm/hand velocity and acceleration caps, with stateful limiting on every emitted route"),
@@ -359,6 +364,9 @@ def check_flag_values(cfg):
     lhz = _get(cfg, "grasp.left_hand_fix.shift_z")
     if isinstance(lhz, bool) or not isinstance(lhz, (int, float)) or not np.isfinite(lhz) or abs(lhz) > 0.05:
         raise ValueError(f"grasp.left_hand_fix.shift_z = {lhz!r}: want a finite number with |v| <= 0.05 m")
+    fas = _get(cfg, "motion.final_approach_scale")
+    if fas is not None and (isinstance(fas, bool) or not isinstance(fas, (int, float)) or not 0.0 < fas <= 1.0):
+        raise ValueError(f"motion.final_approach_scale = {fas!r}: want null or a number in (0, 1]")
     for k, (lo, hi) in LIMITS.items():
         v = float(_get(cfg, k))
         if not lo < v <= hi:

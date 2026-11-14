@@ -513,7 +513,9 @@ grasp:
     region_margin: 0.02       # spots on a grid over layout.region (+ margin), mat coords
     clearance: 0.07           # spot centre this far from other detected objects
   y_split: 0.0
-  arm_xy_offset: {left: [0.0, 0.0], right: [0.0, 0.0]}   # per-arm grasp xy correction (pelvis frame). TUNE on the robot
+  arm_xy_offset: {left: [0.0, 0.0], right: [0.0, 0.0]}   # FLAG (Timi grip). per-arm grasp xy correction (pelvis frame). TUNE on the robot
+  prefer_object_side: false   # FLAG (Timi grip). |y| > margin: object-side arm first if a complete pick->bin plan exists (never for the left bin)
+  prefer_object_side_margin_m: 0.03   # FLAG (Timi grip). param of prefer_object_side
 
 ik:
   limit_margin: 0.08          # rad inside URDF limits (safety filter clips beyond 0.05)
@@ -597,6 +599,8 @@ motion:
   arm_max_acc: 1.5            # rad/s^2
   arm_vel_cap: null           # FLAG (Timi vel). rad/s cap on arm_max_vel (acc scaled by the same ratio); null = profile
   output_caps: null            # FLAG (M4). {arm_vel, arm_acc, hand_vel, hand_acc}: planner + final stateful per-joint caps
+  final_approach_scale: null  # FLAG (Timi grip). null | (0,1): arm speed x this for the last final_approach_m of the descend only
+  final_approach_m: 0.05      # FLAG (Timi grip). length of that final segment (rounded up to cart_step waypoints)
   carry_scale: 1.0            # FLAG (Felix). <= 1: vmax/amax scale for the lift + carry phases only (slower carry)
   hand_max_vel: 1.2           # rad/s (filter allows 3.0)
   cart_step: 0.02             # Cartesian segments are split into IK waypoints this far apart
