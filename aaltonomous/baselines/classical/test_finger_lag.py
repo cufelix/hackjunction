@@ -16,7 +16,10 @@ from .policy import HZ, ClassicalPolicy
 FINALS = ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_real")
 OVERLAY, TAU, TIME_LIMIT = "finals_r21", 0.35, 45.0
 # the mock never blocks the fingers, so finger_sum reads every close as empty and aborts the carry: use the stall detector
-STALL = {"grasp.held_detector": "stall"}
+STALL = {"grasp.held_detector": "stall",
+         # integ-all: depth-less mock, nominal counter: pin the rc7 real-table prior / height phase / async vote / near-bin hedge
+         "scene.counter_z_prior": None, "calib.plane.apply_height": False, "bin.vote.enabled": False,
+         "perception.color_gate.near_margin_m": 0.0, "motion.output_caps": None}   # M4 limiter lags the plan by a few ticks
 OFF = {"grasp.release_wait_s": None, "grasp.release_confirm": False}
 
 

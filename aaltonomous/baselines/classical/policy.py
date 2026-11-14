@@ -389,7 +389,7 @@ class ClassicalPolicy:
         self._resolve_time_alias()
         calib = self.cfg.get("calib") or {}
         preflight = bool(self.cfg["perception"].get("online_pitch_cal", False)
-                         or self.perception.height_est
+                         or self._height_est()
                          or calib.get("hand_icp_primary", False))
         self.state = "calibrate" if preflight else "init"
         self.queue_a = self.queue_h = None
@@ -639,6 +639,14 @@ class ClassicalPolicy:
             self.pitch_calibration = out
         self._log_pitch(out)
 
+    def _height_est(self):
+        """A runtime counter height is estimated (apply_height or calib.wide_counter_window); test doubles without the
+        attribute fall back to the config flag."""
+        v = getattr(self.perception, "height_est", None)
+        if v is None:
+            v = bool(((self.cfg.get("calib") or {}).get("plane") or {}).get("apply_height", False))
+        return bool(v)
+
     def _preflight_calibration(self, obs, t):
         """Hold measured joints while pitch then N-gated table height calibrate; never performs a fit in act()."""
         if self._calib_phase_t0 is None:
@@ -662,7 +670,7 @@ class ClassicalPolicy:
                 return self._hold()
 
         plane = (self.cfg.get("calib") or {}).get("plane") or {}
-        if self.perception.height_est and not self.perception._ah_done and not calib.get("counter_after_hand", False):
+        if self._height_est() and not self.perception._ah_done and not calib.get("counter_after_hand", False):
             if self._height_phase_t0 is None:
                 self._height_phase_t0 = t
             timeout = float(plane.get("timeout_s", 3.0))
@@ -1215,7 +1223,7 @@ class ClassicalPolicy:
             self._note(t, f"{self._relook_reason}: {self._relook_fresh} fresh frames; re-detect")
             self.state = "look"
         if self.state == "init":
-            if self.perception.height_est:
+            if self._height_est():
                 if "startup_route" not in self._jobs:
                     r = self._bg("startup_route", self.planner.safe_home_route,
                                  self.arm_cmd.copy(), self.hand_cmd.copy(), ("left", "right"), None)

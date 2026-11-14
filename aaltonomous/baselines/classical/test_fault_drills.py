@@ -434,7 +434,7 @@ class Drills:
         run, pol, env = self.go(policy_text=None, mutate=lambda o, i: {**o, "instruction": None}, sim_s=20.0)
         self.assert_safe(run, pol, env)
 
-    @known("submission", "finals_r22_robust", reason="submission has policy.safety_shell OFF: look + plan run synchronously inside act() (p99 150-210 ms CPU, 0.2-1.2 s wall spikes) -> misses 27 Hz; every finals overlay has the shell ON")
+    @known("finals_r22_robust", reason="submission has policy.safety_shell OFF: look + plan run synchronously inside act() (p99 150-210 ms CPU, 0.2-1.2 s wall spikes) -> misses 27 Hz; every finals overlay has the shell ON")
     def test_04f_5000_char_instruction_with_real_sentence_still_safe_and_fast(self):
         text = "Put the red objects in the left bin, the yellow in the center bin and the blue in the right bin. " * 52
         run, pol, env = self.go(policy_text=text[:5000], sim_s=45.0)
