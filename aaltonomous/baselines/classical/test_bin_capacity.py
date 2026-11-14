@@ -64,6 +64,7 @@ class TestSixObjectSlots(unittest.TestCase):
         """Exercise policy slot accounting separately from IK; the next test dry-runs all six through real IK."""
         cfg = load_config(overlay="finals_r19c")
         pol = ClassicalPolicy(config=cfg, log=None)
+        pol.mapping = dict(cfg["policy"]["fixed_mapping"])   # new H1: the fixed mapping applies only on an identified sort_fixed reset
         det = _detection("red")
         target = pol.mapping["red"]
 

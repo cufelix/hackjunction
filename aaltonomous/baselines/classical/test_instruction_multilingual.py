@@ -296,7 +296,7 @@ class TestMultilingualFlag(unittest.TestCase):
                                      "instruction.normalize": False})
         policy = object.__new__(ClassicalPolicy)
         policy.cfg, policy.fixed_mapping, policy.log = cfg, None, lambda _: None
-        self.assertEqual(policy._instruction_mapping({"instruction": text}), resolve(text))
+        self.assertEqual(policy._instruction_mapping({"instruction": text}), resolve(text, fallback={}) or {"default": None})   # new H1: no fixed fallback
         self.assertNotIn("cylinder", policy._instruction_mapping({"instruction": text}))
 
     def test_common_english_collisions_pass_through_byte_identically(self):

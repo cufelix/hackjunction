@@ -242,7 +242,8 @@ class TestColorGateLiveBins(unittest.TestCase):
 
     def _p(self, live=True):
         cfg = load_config(overlay="none", overrides={"perception.color_gate.enabled": True,
-                                                     "perception.color_gate.live_bins": live})
+                                                     "perception.color_gate.live_bins": live,
+                                                     "perception.color_gate.near_margin_m": 0.05})   # mechanism test; finals default is 0.0
         p = Perception(cfg, SC, CAL, log=lambda *_: None)
         return p, p.color_gate_cfg
 
