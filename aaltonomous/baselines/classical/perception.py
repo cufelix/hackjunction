@@ -1486,7 +1486,7 @@ class Perception:
         depth_fk_failed = self.depth_blob_recover and robot_q is not None and arm is None
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
-        need_hsv = (self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor or self.sat_floor_adaptive
+        need_hsv = (self.place_gate or self.colour_kmeans or self.hue_guard or self.hue_guard_yellow_fix or self.sat_floor or self.sat_floor_adaptive
                     or self.depth_blob_recover or self.tape_value_cut or self.split_by_solidity or self.gate_below_bins
                     or self.glare_reject or self.reflection_reject or self.local_bg)
         hsv = early_hsv if early_hsv is not None else (
@@ -1576,7 +1576,7 @@ class Perception:
                         arm_boundary is not None and np.any(arm_boundary[win] & (part[win] > 0)))
                     before = len(dets)
                     self._detect_blob(part_color, part, p_area, p_cent, depth, include_bins, dets, rejected,
-                                      hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None,
+                                      hsv if (self.place_gate or self.hue_guard or self.hue_guard_yellow_fix or self.sat_floor) else None,
                                       tentative=part_tentative)
                     if colour_records is not None and len(dets) > before:
                         colour_records.append((dets[-1], part))
@@ -1598,6 +1598,8 @@ class Perception:
             self.log("[depth_recover] skipped: FK arm/hand mask unavailable; colour-only")
         if self.hue_guard:
             dets, rejected = self._hue_guard(dets, rejected)
+        elif self.hue_guard_yellow_fix:
+            dets = self._yellow_relabel(dets)
         if self.color_gate:
             dets = self._color_gate(dets, rejected)
         if self.reject_log:
@@ -1936,6 +1938,20 @@ class Perception:
                  f"moved_rejected={len(moved)} reasons={reasons}")
         return keep, rejected + moved
 
+    def _yellow_relabel(self, dets):
+        """perception.hue_guard.yellow_fix with hue_guard off: a red-labelled candidate whose own top-face hue is in the
+        yellow range becomes yellow. No abstain layer (that stays in _hue_guard); mixed red|yellow parts keep their label."""
+        out = []
+        for d in dets:
+            if d.color == "red" and d.hsv_med is not None and not d.hue_mixed \
+                    and classify_hue(d.hsv_med[0], self.hsv) == "yellow":
+                new = replace(d, color="yellow")
+                self._copy_tentative(d, new)
+                out.append(new)
+            else:
+                out.append(d)
+        return out
+
     def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None,
                      hue_mixed=False, tentative=False):
         """One colour blob -> Detection (depth top face, else plane) -> dets or rejected (the stock per-blob body)."""
@@ -1971,7 +1987,7 @@ class Perception:
             # The pose estimator is preferred by the planner. This rectangle fallback keeps the feature useful when
             # only a standing triangle label and colour blob survive depth filtering.
             det.vertex_yaw = self._blob_vertex_yaw(blob, float(det.top[2]))
-        if det is not None and hsv is not None and self.hue_guard:
+        if det is not None and hsv is not None and (self.hue_guard or self.hue_guard_yellow_fix):
             det.hsv_med = self._topface_hsv(hsv[blob > 0])   # configured top-face / small-blob hue vote
             det.hue_mixed = bool(hue_mixed)
         if det is not None and hsv is not None and self.sat_floor:
@@ -2631,9 +2647,14 @@ class Perception:
             try:
                 o = self._T()[:3, 3]
                 z_aim = float(det.top[2]) - 0.25 * self.height
-                dz = float(g.get("workspace_assumed_counter_z", 0.15)) - self.scene.nominal_counter_z
+                if self.scene.counter_z_prior is not None:
+                    dz = 0.0   # the plane already rests on scene.counter_z (the live prior): no further shift
+                else:
+                    dz = float(g.get("workspace_assumed_counter_z", 0.15)) - self.scene.nominal_counter_z
                 k = (z_aim + dz - o[2]) / (z_aim - o[2])
                 x, y = float(o[0] + k * (x - o[0])), float(o[1] + k * (y - o[1]))
+                # the bin gate and the planner read det.top: write the reprojected point once, dz on its height
+                det.top = np.array([x, y, float(det.top[2]) + dz], float)
             except Exception:
                 return None   # cannot re-project: fail open
         near_mat_y = min(float(lo[1]) for lo, _ in self._color_gate_boxes(g, hedge=False))
