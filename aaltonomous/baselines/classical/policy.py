@@ -99,6 +99,7 @@ def _lower_thread_priority(nice=10):
 class ClassicalPolicy:
     _LOOK_COMMIT_FIELDS = (
         "last_detections", "last_bin_detections", "scheduled_corrections", "plans", "retry_pass_used",
+        "_xrel_n", "_sweeps_used", "_sweep_xy", "_choose_t",
         "attempts", "attempt_tracks", "retry_allow", "slot_pending", "slot_used", "_bin_misses", "gate_skipped",
         "budget_abandoned", "failed", "too_long", "verification_pending", "last_verification",
         "verify_relooks_remaining", "retry_colors", "retry_targets", "used_drop_slots", "reserved_drop_slots",
@@ -509,6 +510,10 @@ class ClassicalPolicy:
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
+        self._xrel_n = 0            # policy.retry_cross_relocate: relocations started this episode
+        self._sweeps_used = 0       # policy.late_sweep: sweeps this episode
+        self._sweep_xy = []         # policy.late_sweep: object positions a repeat grasp is allowed for
+        self._choose_t = 0.0        # episode time of the look being planned
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
@@ -1910,12 +1915,88 @@ class ClassicalPolicy:
                 self.retry_allow += [(xy, extra) for xy in excl]
                 self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
                 res = self._choose(choose_dets, obs, verify)
+        if res[0] == "none" and dets and pol.get("late_sweep", False):
+            res = self._late_sweep(res, choose_dets, obs, verify)
         max_relooks = int((self.cfg["perception"].get("partial_ok_near_hand_params") or {}).get("max_relooks", 2))
         if res[0] == "none" and tentative and self._partial_relooks < max_relooks:
             return ("partial", None, len(dets))
         if res[0] == "none" and choose_dets and self._landing_on():
             res = self._landing_regrant(res, choose_dets, obs)
         return res
+
+    # ------------------------------------------------------------------ policy.late_sweep
+    def _late_sweep(self, res, dets, obs, verify):
+        """Nothing was planned although objects are still detected: they were excluded by the attempt limit or skipped
+        after a failed retry plan. With >= late_sweep_min_s left give each late_sweep_extra more tries (attempt counts
+        and grasp history are kept: retry_jitter_m / variants continue; an identical grasp is allowed in the sweep).
+        At most late_sweep_max sweeps per episode. Any error keeps `res`."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        try:
+            if self._sweeps_used >= int(pol.get("late_sweep_max", 3)) \
+                    or self.time_limit - t < float(pol.get("late_sweep_min_s", 28.0)):
+                return res
+            rad = self._attempt_radius()
+            same_r = float(pol["same_object_radius"])
+            hit = [d for d in dets if self._attempt_excluded(d.top[:2], d.color)
+                   or any(np.linalg.norm(d.top[:2] - f) < same_r for f in self.failed)]
+            if not hit:
+                return res
+            extra = int(pol.get("late_sweep_extra", 1))
+            self._sweeps_used += 1
+            for d in hit:
+                xy = np.asarray(d.top[:2], float).copy()
+                self.failed = [f for f in self.failed if np.linalg.norm(xy - f) >= same_r]
+                n = self._attempt_count(xy, d.color)
+                self.retry_allow = [(p, e) for p, e in self.retry_allow if np.linalg.norm(xy - p) >= rad]
+                self.retry_allow.append((xy, n + extra))
+                self._sweep_xy.append(xy)
+            self._note(t, f"late sweep {self._sweeps_used}: {len(hit)} object(s) get {extra} more attempt(s), "
+                          f"{self.time_limit - t:.0f} s left")
+            return self._choose(dets, obs, verify)
+        except Exception as e:
+            self.log(f"[late_sweep] error {type(e).__name__}: {e}; keeping the stock result")
+            return res
+
+    def _in_sweep(self, xy):
+        r = float(self.cfg["policy"]["same_object_radius"])
+        return any(np.linalg.norm(np.asarray(xy, float) - s_) < r for s_ in self._sweep_xy)
+
+    # ------------------------------------------------------------------ policy.retry_cross_relocate
+    def _cross_relocate(self, d, hist, kw):
+        """After a LEFT-arm miss on a cross-body object (y < retry_cross_relocate_y) plan a relocation: the right arm
+        (ipsilateral there) picks it and puts it on the counter where the left arm can finish. None = not applicable
+        / infeasible / no time: the stock retry continues."""
+        pol = self.cfg["policy"]
+        try:
+            if not pol.get("retry_cross_relocate", False) or not hist or hist[-1]["side"] != "left":
+                return None
+            y_max = float(pol.get("retry_cross_relocate_y", -0.03))
+            if float(d.top[1]) > y_max or self._xrel_n >= int(pol.get("retry_cross_relocate_max", 2)):
+                return None
+            bin_name = kw.get("bin_name") or self._bin_of(d)
+            if bin_name is None or self.planner.bin_xy(bin_name)[1] < 0.0:
+                return None       # the left arm only finishes left/centre jobs; a right-bin object has no cross-body miss
+            with self._decision_motion() as pl:
+                pl = self._first_object_planner(pl)
+                p = pl.plan_relocation(self._jittered_retry_detection(d), bin_name, self.arm_cmd, self.hand_cmd,
+                                       kw.get("obstacles", ()), drop_slot=kw.get("drop_slot"),
+                                       clearance_obstacles=kw.get("clearance_obstacles", ()))
+            if not p.ok:
+                self.log(f"[retry_xrel] {d.color} no relocation: {p.reason}")
+                return None
+            left = self.time_limit - self._choose_t - float(p.duration)
+            if left < float(pol.get("retry_cross_relocate_min_left_s", 30.0)):
+                self.log(f"[retry_xrel] {d.color} relocation {p.duration:.1f} s leaves {left:.0f} s: skipped")
+                return None
+            p.grasp_key = self._grasp_key(p)
+            self._xrel_n += 1
+            self.log(f"[retry_xrel] {d.color} left miss at y={d.top[1]:+.3f}: {p.side} arm relocates it ({p.reason}), "
+                     f"{self._xrel_n}/{int(pol.get('retry_cross_relocate_max', 2))}")
+            return p
+        except Exception as e:
+            self.log(f"[retry_xrel] error {type(e).__name__}: {e}; stock retry")
+            return None
 
     # ------------------------------------------------------------------ policy.verify_landing
     def _landing_on(self):
@@ -2336,6 +2417,7 @@ class ClassicalPolicy:
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
         pol = self.cfg["policy"]
         t = float(obs.get("t", 0.0))
+        self._choose_t = t
         try:
             stop = self._decision_stop(dets, t)
         except Exception as e:
@@ -3025,6 +3107,10 @@ class ClassicalPolicy:
             if not self._skills_on() or not p.ok:
                 return self._tag_skill_plan(p, d, "stock")
             return self._skill_first_try(d, p, plan)
+        if plan_fn is None:
+            xp = self._cross_relocate(d, hist, kw)
+            if xp is not None:
+                return self._tag_skill_plan(xp, d, "stock")
         for arm, v in self._ordered_skill_variants(d, hist, self._variants(d, hist)):
             self.planner.vary = v
             try:
@@ -3047,7 +3133,8 @@ class ClassicalPolicy:
         p = plan()
         if p.ok:
             p.grasp_key = self._grasp_key(p)
-            if any(self._same_grasp(p.grasp_key, h) for h in hist):
+            if any(self._same_grasp(p.grasp_key, h) for h in hist) \
+                    and not (self.cfg["policy"].get("late_sweep", False) and self._in_sweep(d.top[:2])):
                 return Plan(False, color=d.color, reason="retry_vary: every grasp repeats a tried (point, yaw, posture)")
         return self._tag_skill_plan(p, d, "stock")
 
