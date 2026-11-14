@@ -28,7 +28,7 @@ PROTECTED: frozenset[str] = frozenset(_ins._KNOWN) | _ins._NEAR_REAL | frozenset
 # orange -> red, so their typos are corrected to those words (VOCAB below gives them their alias meaning).
 VOCAB.update({"purple": "blue", "violet": "blue", "orange": "red"})
 FUZZY_TARGETS: tuple[str, ...] = (
-    "left", "right", "center", "centre", "middle", "yellow", "blue", "purple", "violet", "orange", "golden",
+    "left", "right", "center", "centre", "middle", "leftmost", "rightmost", "yellow", "blue", "purple", "violet", "orange", "golden",
     "cube", "cubes", "cylinder", "cylinders", "triangle", "triangles",
     "prism", "prisms", "wedge", "wedges",
 )
@@ -239,10 +239,16 @@ _NOUN_SHAPE = re.compile(
     r"((?:(?:red|orange|yellow|purple|violet|blue|lilac|green|pink|white|black|gold(?:en)?)\s+)?)(can|roll)\b", re.I)
 
 
+_CONJ_NOUN_SHAPE = re.compile(
+    r"(\b(?:and|or|nor|but)\s+)((?:red|orange|yellow|purple|violet|blue|lilac|green|pink|white|black|gold(?:en)?)\s+)"
+    r"(can|roll)\b(?!\s+(?:go|be|get|move|put|stay|sit|belong|land|come|do|not|also|still|then)\b)", re.I)
+
+
 def _noun_shapes(sentence: str) -> str:
     def sub(m: re.Match[str]) -> str:
         return m.group(1) + m.group(2) + ("Cylinder" if m.group(3)[0].isupper() else "cylinder")
-    return _NOUN_SHAPE.sub(sub, sentence)
+    sentence = _NOUN_SHAPE.sub(sub, sentence)
+    return _CONJ_NOUN_SHAPE.sub(sub, sentence)
 
 
 # "square block" / "round block" name the cube / cylinder. A bare "block" stays generic (all three solids).
