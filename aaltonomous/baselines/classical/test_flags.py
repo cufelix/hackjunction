@@ -207,6 +207,8 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_failopen"] = expect["finals_r22"] | {"perception.color_gate.workspace_fail_open",
                                                               "perception.hue_guard.yellow_fix"}   # gate-failopen recall A/B
         expect["finals_r22_rimz"] = expect["finals_r22"] | {"perception.rim_z_from_depth"}   # rim z A/B
+        expect["ab_purple_recall"] = expect["finals_r22"] | {"perception.bin_hull_observed",
+                                                           "perception.bin_hull_observed_params.margin_px"}   # purple recall A/B
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -215,11 +217,11 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
-                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_failopen", "finals_r22_rimz"):
+                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_failopen", "finals_r22_rimz", "ab_purple_recall"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
-        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_failopen", "finals_r22_rimz"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_failopen", "finals_r22_rimz", "ab_purple_recall"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
-        for n in [k for k in expect if k.startswith("finals_")]:
+        for n in [k for k in expect if k.startswith("finals_") or k == "ab_purple_recall"]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
@@ -281,7 +283,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_plane_cgate_live", "ab_plane_cgate_live_fk",
                                       "ab_plane_cgate_live_vote", "ab_plane_inj_p7",
                                       "ab_retry_vary", "ab_retry_vary_slots", "ab_robust_input",
-                                      "ab_safety", "ab_sat_floor", "ab_shape2d", "ab_skills",
+                                      "ab_purple_recall", "ab_safety", "ab_sat_floor", "ab_shape2d", "ab_skills",
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",

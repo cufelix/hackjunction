@@ -292,6 +292,9 @@ class Perception:
         self.gate_below_cfg = dict(self.cfg.get("gate_below_bins_params") or {})
         self._below_bin_row = None
         self._image_bin_gate_active = False
+        self.bin_hull_observed = bool(self.cfg.get("bin_hull_observed", False))
+        self.bin_hull_cfg = dict(self.cfg.get("bin_hull_observed_params") or {})
+        self._obs_hull_row = None
         self.reject_log = bool(self.cfg.get("reject_log", False))
         self.reject_tally = {}
         self.still_vote = bool(self.cfg.get("still_vote", False))
@@ -1359,12 +1362,22 @@ class Perception:
         self.update_rim_z(depth)             # perception.rim_z_from_depth (inert when off)
         self._image_bin_gate_active = False
         self._below_bin_row = None
+        self._obs_hull_row = None
         early_hsv = None
+        if self.bin_hull_observed and not include_bins and not self.gate_below_bins and not self._live_bins_trusted():
+            # perception.bin_hull_observed: the nominal bin hull is dropped from the object mask when the bins are not
+            # live-confirmed; the observed bin / tape mass (gate_below_bins' detector) bounds it instead. The colour
+            # gate's own bin rules stay nominal (unlike gate_below_bins).
+            early_hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+            self._obs_hull_row = self._observed_bin_bottom(early_hsv)
         if self.gate_below_bins and not self._live_bins_trusted():
             early_hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
             self._below_bin_row = self._observed_bin_bottom(early_hsv)
             self._image_bin_gate_active = self._below_bin_row is not None
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
+        if self._obs_hull_row is not None:
+            m_px = float(self.bin_hull_cfg.get("margin_px", 3))
+            keep[~(np.arange(keep.shape[0])[:, None] > self._obs_hull_row[None, :] + m_px)] = 0
         blocked_by_image_gate = None
         keep_before_image_gate = None
         if self._image_bin_gate_active:
@@ -1552,6 +1565,12 @@ class Perception:
         core = (px[:, 1] >= float(p.get("min_s", 140))) & (px[:, 2] >= float(p.get("min_v", 140)))
         weak = float(core.mean()) < float(p.get("min_core_frac", 0.20))
         return bool(thin and weak)
+
+    def _bins_from_image(self):
+        """True when the bin zone comes from the image (gate_below_bins, or bin_hull_observed with gate_follow) and not
+        from the nominal / voted 3D footprint: the colour gate's bin and workspace rules then stand down."""
+        return bool(self._image_bin_gate_active or (self._obs_hull_row is not None and
+                                                    self.bin_hull_cfg.get("gate_follow", True)))
 
     def _live_bins_trusted(self):
         """The image gate is unnecessary only when all live bin positions have trusted evidence."""
@@ -1937,7 +1956,7 @@ class Perception:
         c, sc = self.cfg, self.scene
         shape = depth.shape if depth is not None else (480, 640)
         keep = (self._bin_hulls_mask(shape) if exclude_bins and not self._image_bin_gate_active
-                else np.full(shape, 255, np.uint8))
+                and self._obs_hull_row is None else np.full(shape, 255, np.uint8))
         if depth is None:
             return keep
         dlo, dhi = c["depth_range_mm"]
@@ -1955,7 +1974,7 @@ class Perception:
         # footprints, while bin blobs remain labelled ``in_bin:*``.
         upper = c["height_range"][1] if exclude_bins else max(c["height_range"][1], 4.0)
         ok = (h >= 0.25) & (h <= upper)
-        if exclude_bins and not self._image_bin_gate_active:
+        if exclude_bins and not self._image_bin_gate_active and self._obs_hull_row is None:
             half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + c["bin_pixel_margin"]
             for ctr in self._bin_centres_mat().values():
                 ok &= ~np.all(np.abs(pm[:, :2] - ctr) <= half, axis=1)
@@ -2204,7 +2223,7 @@ class Perception:
             return "off_mat"
         bm = c["bin_exclusion_margin"]
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + bm
-        if not self._image_bin_gate_active:
+        if not self._bins_from_image():
             for name, ctr in self._bin_centres_mat().items():
                 if np.all(np.abs(pm[:2] - ctr) <= half):
                     return f"in_bin:{name}"
@@ -2360,7 +2379,7 @@ class Perception:
         if ws_x is None:
             return None
         x, y = float(det.top[0]), float(det.top[1])
-        if self._image_bin_gate_active:
+        if self._bins_from_image():
             return "color_gate:workspace" if x < ws_x[0] or abs(y) > g["ws_abs_y"] else None
         if g.get("workspace_fail_open") and self.scene.counter_z_runtime is None and det.method == "plane":
             # counter height NOT measured: a plane-method top rests on the nominal counter z, so on the real (higher)
@@ -2391,7 +2410,7 @@ class Perception:
     def _color_gate_bin(self, det, g):
         """Rule 2, 3D in the mat frame (nominal footprint, no margin). Inside a bin -> in_bin. Within edge_m outside
         one -> kept only as a depth top face edge_h above the counter (a bin rim), else bin_edge. Else keep."""
-        if self._image_bin_gate_active:
+        if self._bins_from_image():
             return None
         sc = self.scene
         pm = sc.pelvis_to_mat(det.top)[:2]

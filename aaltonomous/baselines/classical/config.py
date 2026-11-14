@@ -95,6 +95,9 @@ FLAGS = {
     "perception.split_by_solidity": ("gate fix", False, "classify compact blobs as single objects and force-split merged geometry"),
     "perception.tape_value_cut": ("gate fix", False, "reject thin orange candidates without a strong S/V core"),
     "perception.gate_below_bins": ("gate fix", False, "when live bins are untrusted, gate candidates below observed bin mass in image space"),
+    "perception.bin_hull_observed": ("purple recall", False, "untrusted live bins: bound the object mask by the observed bin/tape mass (gate_below_bins detector) instead of the nominal projected bin hull, which hides counter objects in front of the real bins; the colour-gate bin rules stay nominal"),
+    "perception.bin_hull_observed_params.margin_px": ("purple recall", 3, "pixels below the observed bin-mass row that stay masked (bin_hull_observed)"),
+    "perception.bin_hull_observed_params.gate_follow": ("purple recall", True, "bin_hull_observed: the colour gate's in_bin / workspace rules stand down with the observed bin zone (False = they keep the nominal footprint and re-reject the rescued objects)"),
     "perception.reject_log": ("gate fix", False, "log and retain per-colour rejection-stage counts"),
     "perception.still_vote": ("gate fix", False, "non-blocking N-frame vote over policy-declared still frames"),
     "perception.color_gate.fk_silhouette": ("gate fix", False, "fill one projected polygon per FK arm/hand link before dilation"),
@@ -352,9 +355,12 @@ def check_flag_values(cfg):
                 raise ValueError(f"motion.output_caps.{key} = {caps[key]} exceeds finals cap {maximum}")
     p = cfg.get("perception") or {}
     for key in ("sim_center_principal_point", "split_by_solidity", "tape_value_cut", "gate_below_bins",
-                "reject_log", "still_vote"):
+                "reject_log", "still_vote", "bin_hull_observed"):
         if not isinstance(p.get(key), bool):
             raise ValueError(f"perception.{key}: want true or false")
+    hm = (p.get("bin_hull_observed_params") or {}).get("margin_px", 3)
+    if isinstance(hm, bool) or not isinstance(hm, (int, float)) or not np.isfinite(hm) or not 0 <= hm <= 60:
+        raise ValueError(f"perception.bin_hull_observed_params.margin_px = {hm!r}: want a finite number of pixels in [0, 60]")
     aim = p.get("aim_z_frac", 0.25)
     if isinstance(aim, bool) or not isinstance(aim, (int, float)) or not np.isfinite(aim) or not 0.0 <= aim <= 1.0:
         raise ValueError(f"perception.aim_z_frac = {aim!r}: want a finite fraction in [0, 1]")
