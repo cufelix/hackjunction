@@ -8,9 +8,11 @@ finalists, who run on the REAL robot on Sunday. Best real-robot score wins" (Dis
 
 ## 1. The grasp: fix the geometry, not a constant
 
-**What was broken.** Forward kinematics of the Dex3 hand in the baseline's "closed" posture: the thumb tip never
-reaches a 45 mm object. It stops 11.7 to 14.9 mm short of a cube or cylinder, while the index finger pushes 9 mm into
-it (docs/pinch-fk/RESULTS.md, commit a44dd79). The jaw is 46.0 mm wide on a 45 mm object, so centring alone gives no
+**What was broken.** Forward kinematics of the Dex3 hand in the baseline's "closed" posture, with a 45 mm object
+centred on the grasp point: the thumb tip stops 11.7 to 14.9 mm short of a cube or cylinder, while the index finger
+pushes 9 mm into it (docs/pinch-fk/RESULTS.md, commit a44dd79). So a grasp only holds if the index first shoves the
+object toward the thumb. Timi's real-eval data shows exactly that: 57 of 58 held picks were thumb-plus-finger pinches
+(e1fe228e), and the rest closed on nothing. The jaw is 46.0 mm wide on a 45 mm object, so centring alone gives no
 squeeze. The repo's own comment says the opposite ("a gap a bit smaller than the object").
 
 **What the data said.** In 20 sim episodes, 77 of 135 picks closed on nothing. Every one of the 58 held picks reached a
