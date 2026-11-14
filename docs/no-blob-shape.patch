@@ -1,0 +1,392 @@
+diff --git a/aaltonomous/baselines/classical/config.yaml b/aaltonomous/baselines/classical/config.yaml
+index ce2f486..19cce3b 100644
+--- a/aaltonomous/baselines/classical/config.yaml
++++ b/aaltonomous/baselines/classical/config.yaml
+@@ -34,8 +34,9 @@ perception:
+   object_size: null           # null = scene.yaml objects.size (grasp width)
+   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
+   object_height: null         # null = scene.yaml size * height_ratio
+-  classify_shape: false       # set Detection.shape from the 2D blob (prism_pose.classify_blob); single-shape scenes: that shape
++  classify_shape: false       # set Detection.shape from the metric top-face cloud (shape_id); no top face -> None (never the 2D blob)
+   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
++  shape_diag: false           # passive: Detection.shape_diag + one [shape_diag] log line per detection (no action change)
+ 
+ grasp:
+   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
+diff --git a/aaltonomous/baselines/classical/perception.py b/aaltonomous/baselines/classical/perception.py
+index d618fa8..6a4d985 100644
+--- a/aaltonomous/baselines/classical/perception.py
++++ b/aaltonomous/baselines/classical/perception.py
+@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
+ import numpy as np
+ 
+ from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
++from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
+ 
+ 
+ @dataclass
+@@ -31,6 +32,8 @@ class Detection:
+     shape: str | None = None   # "cube" | "cylinder" | "triangle" | None (unknown)
+     apex_yaw: float | None = None  # triangle only: pelvis-frame heading (rad, x fwd, y left) centre -> any one vertex (mod 120 deg)
+     apex_conf: float = 0.0     # confidence of apex_yaw, 0..1 (from perception.triangle_pose)
++    shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
++                                    # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
+ 
+     def __repr__(self):
+         x, y, z = self.top
+@@ -39,7 +42,7 @@ class Detection:
+ 
+ 
+ class Perception:
+-    def __init__(self, cfg, scene, calibration):
++    def __init__(self, cfg, scene, calibration, log=None):
+         self.cfg = cfg["perception"]
+         self.scene = scene
+         self.cal = calibration
+@@ -51,6 +54,9 @@ class Perception:
+         # opt-in shape / triangle pose (all default OFF = stock behaviour)
+         self.classify_shape = bool(self.cfg.get("classify_shape", False))
+         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
++        # passive shape diagnostics: Detection.shape_diag + one log line per detection (default OFF, no action change)
++        self.shape_diag = bool(self.cfg.get("shape_diag", False))
++        self.log = log if log is not None else print
+ 
+     def masks(self, rgb):
+         import cv2
+@@ -96,8 +102,12 @@ class Perception:
+                 if det is None:
+                     det = self._from_plane(color, cent[i], area, int(ok.sum()))
+                     if det is not None:
+-                        det.shape = self._shape_of(None, blob)
++                        det.shape, conf, path = self._shape_conf(None, blob)
++                        if self.shape_diag:
++                            det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
+                 why = self._reject(det)
++                if self.shape_diag and det is not None and det.shape_diag is not None:
++                    self._log_diag(det, why)
+                 if why:
+                     rejected.append((det, why))
+                 else:
+@@ -158,12 +168,43 @@ class Perception:
+     def _shape_of(self, top_xy, blob, near_bin=False):
+         """Shape label, or None (flags off / abstain). Delegates to `classify_top_face` and decides nothing itself;
+         `near_bin` (top face possibly cut by the bin exclusion) only forces an abstain."""
++        return self._shape_conf(top_xy, blob, near_bin)[0]
++
++    def _shape_conf(self, top_xy, blob, near_bin=False):
++        """(label, conf, path): path is "off" / "abstain_near_bin" when decided here, else None (= the seam's)."""
+         if not (self.classify_shape or self.triangle_pose):
+-            return None
++            return None, 0.0, "off"
+         if near_bin:
+-            return None
++            return None, 0.0, "abstain_near_bin"
+         shape = None if blob is None else blob.shape
+-        return classify_top_face(top_xy, blob, shape)[0]
++        label, conf = classify_top_face(top_xy, blob, shape)
++        return label, float(conf), None
++
++    def _diag(self, det, source, top_xy, blob, conf, path, near_bin):
++        """Passive shape diagnostics (perception.shape_diag). Reads only; never changes det's fields."""
++        try:
++            _, _, info = classify_top_face_diag(top_xy, blob, None if blob is None else blob.shape)
++        except Exception as e:   # diagnostics must never break detection
++            info = {"path": f"diag_error:{e!r}", "n_top": 0, "ratio_cloud": None, "ratio_blob": None}
++        if path is None:          # the seam decided: report the default classifier's path
++            path = info["path"]
++            if source == "plane" and path == "abstain_few_points":
++                path = "abstain_plane"
++        top_list = None
++        if top_xy is not None:
++            top_list = np.asarray(top_xy, float).reshape(-1, 2).tolist()
++        return {"source": source, "n_top": int(info["n_top"]), "ratio_cloud": info["ratio_cloud"],
++                "ratio_blob": info["ratio_blob"], "path": path, "label": det.shape, "conf": float(conf),
++                "near_bin": near_bin, "dz_top": float(det.top[2] - self.scene.counter_z), "top_xy": top_list}
++
++    def _log_diag(self, det, why=None):
++        g = det.shape_diag
++
++        def f(x, n=3):
++            return "None" if x is None else f"{x:.{n}f}"
++        self.log(f"[shape_diag] {det.color} src={g['source']} n_top={g['n_top']} r_cloud={f(g['ratio_cloud'])} "
++                 f"r_blob={f(g['ratio_blob'])} path={g['path']} label={g['label']} conf={g['conf']:.2f} "
++                 f"near_bin={g['near_bin']} dz_top={f(g['dz_top'], 4)}" + (f" rej={why}" if why else ""))
+ 
+     def _from_depth(self, color, u, v, d, area, blob=None):
+         P = self.cal.pixel_to_pelvis(self.cam, u, v, d)
+@@ -176,7 +217,7 @@ class Perception:
+         xy = (top[:, :2] * w[:, None]).sum(0) / w.sum()
+         z = float(np.median(top[:, 2]))
+         near_bin = self.classify_shape and self._near_bin(top)   # near-bin guard: abstain on shape only
+-        shape = self._shape_of(top[:, :2], blob, near_bin)
++        shape, conf, path = self._shape_conf(top[:, :2], blob, near_bin)
+         apex_yaw, apex_conf = None, 0.0
+         if shape == "triangle" and self.triangle_pose:
+             from .prism_pose import robust_center, triangle_pose
+@@ -192,6 +233,9 @@ class Perception:
+         det.shape = shape
+         if apex_yaw is not None:
+             det.apex_yaw, det.apex_conf = apex_yaw, apex_conf
++        if self.shape_diag:
++            nb = bool(near_bin) if self.classify_shape else _safe_near_bin(self, top)
++            det.shape_diag = self._diag(det, "depth", top[:, :2], blob, conf, path, nb)
+         return det
+ 
+     def _from_plane(self, color, uv, area, n_depth):
+@@ -232,6 +276,14 @@ class Perception:
+         return None
+ 
+ 
++def _safe_near_bin(perc, top):
++    """Diagnostics only: the near-bin test even when the guard is off (classify_shape false)."""
++    try:
++        return bool(perc._near_bin(top))
++    except Exception:
++        return None
++
++
+ def _yaw(xy):
+     """Principal direction of the top-face points, folded to [-pi/4, pi/4) (square symmetry). Info only."""
+     if len(xy) < 10:
+diff --git a/aaltonomous/baselines/classical/policy.py b/aaltonomous/baselines/classical/policy.py
+index 5c6f94f..c327e74 100644
+--- a/aaltonomous/baselines/classical/policy.py
++++ b/aaltonomous/baselines/classical/policy.py
+@@ -55,7 +55,7 @@ class ClassicalPolicy:
+         self.home = home_arm(self.cfg, self.spec)
+         self.kin = ArmKinematics(self.cfg, self.spec)
+         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
+-        self.perception = Perception(self.cfg, self.scene, self.cal)
++        self.perception = Perception(self.cfg, self.scene, self.cal, log=log or (lambda *a: None))
+         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
+         self.require_confirm = require_confirm
+         self.threaded = threaded
+diff --git a/aaltonomous/baselines/classical/shape_id.py b/aaltonomous/baselines/classical/shape_id.py
+index 2ec07d3..118c7ac 100644
+--- a/aaltonomous/baselines/classical/shape_id.py
++++ b/aaltonomous/baselines/classical/shape_id.py
+@@ -12,8 +12,12 @@ Perception._shape_of is the only caller; nothing else (planner, prism_pose) may
+ classifier (e.g. Felix's), keep this signature and change the single import line in perception.py.
+ 
+ Default implementation: ratio = area / minAreaRect area (cube ~1.0, cylinder ~0.785, triangle ~0.5), measured on the
+-metric top-face cloud (convex hull area) when it has >= SHAPE_MIN_POINTS points, else on the 2D blob (pixels).
++metric top-face cloud (convex hull area) only. Fewer than SHAPE_MIN_POINTS top-face points (or none) -> abstain.
++The 2D blob is NEVER used to decide a shape: the head looks down ~48 deg, so a prism's colour blob includes its side
++faces, which pushes its area ratio from ~0.5 into the cylinder band. `_ratio_blob` is kept for diagnostics only.
+ Border guard: a blob touching the image edge is clipped, so its top face is partial -> abstain.
++
++`classify_top_face_diag` is the same decision plus an info dict (path, n_top, ratio_cloud, ratio_blob) for logging.
+ """
+ from __future__ import annotations
+ 
+@@ -66,20 +70,56 @@ def _ratio_blob(mask):
+     return area / max((w + 1.0) * (h + 1.0), 1e-9)      # +1 px: contour runs through pixel centres
+ 
+ 
+-def classify_top_face(top_xy, blob_mask=None, image_shape=None):
+-    """See module docstring. Returns (label | None, confidence)."""
+-    if blob_mask is not None and _touches_border(blob_mask, image_shape):
+-        return None, 0.0
++def _safe(fn, *a):
++    try:
++        return fn(*a)
++    except Exception:          # diagnostics must never raise into perception
++        return None
++
++
++def _classify(top_xy, blob_mask, image_shape, info=None):
++    """The decision. `info` (a dict, diagnostics only) is filled with path / n_top / ratio_cloud / ratio_blob; the
++    extra ratios are computed only when it is given, so the plain seam does no extra work."""
++    if info is not None:
++        info.update(path=None, n_top=0, ratio_cloud=None, ratio_blob=None)
++        if blob_mask is not None:
++            info["ratio_blob"] = _safe(_ratio_blob, blob_mask)
++    xy = None
+     if top_xy is not None:
+         xy = np.asarray(top_xy, float).reshape(-1, 2)
+         xy = xy[np.all(np.isfinite(xy), axis=1)]
+-        if len(xy) >= SHAPE_MIN_POINTS:
+-            r = _ratio_cloud(xy)
+-            if r is not None:
+-                label, conf = _label(r)
+-                return label, conf * min(1.0, len(xy) / CONF_FULL_POINTS)
+-    if blob_mask is not None:
+-        r = _ratio_blob(blob_mask)
++        if info is not None:
++            info["n_top"] = int(len(xy))
++            if 3 <= len(xy) < SHAPE_MIN_POINTS:
++                info["ratio_cloud"] = _safe(_ratio_cloud, xy)
++    if blob_mask is not None and _touches_border(blob_mask, image_shape):
++        if info is not None:
++            info["path"] = "abstain_border"
++            if xy is not None and len(xy) >= SHAPE_MIN_POINTS:
++                info["ratio_cloud"] = _safe(_ratio_cloud, xy)
++        return None, 0.0
++    if xy is not None and len(xy) >= SHAPE_MIN_POINTS:
++        r = _ratio_cloud(xy)
++        if info is not None:
++            info["ratio_cloud"] = r
+         if r is not None:
+-            return _label(r)
+-    return None, 0.0
++            label, conf = _label(r)
++            if info is not None:
++                info["path"] = "metric"
++            return label, conf * min(1.0, len(xy) / CONF_FULL_POINTS)
++    if info is not None:
++        info["path"] = "abstain_few_points"
++    return None, 0.0           # no metric top face: ABSTAIN, never fall back to the 2D blob
++
++
++def classify_top_face_diag(top_xy, blob_mask=None, image_shape=None):
++    """classify_top_face + info dict {path, n_top, ratio_cloud, ratio_blob} for logging. path is "metric" |
++    "abstain_border" | "abstain_few_points". The blob only feeds the border guard and the diagnostic ratio_blob."""
++    info = {}
++    label, conf = _classify(top_xy, blob_mask, image_shape, info)
++    return label, conf, info
++
++
++def classify_top_face(top_xy, blob_mask=None, image_shape=None):
++    """See module docstring. Returns (label | None, confidence)."""
++    return _classify(top_xy, blob_mask, image_shape)
+diff --git a/aaltonomous/baselines/classical/test_classical.py b/aaltonomous/baselines/classical/test_classical.py
+index 58b48f8..409be1e 100644
+--- a/aaltonomous/baselines/classical/test_classical.py
++++ b/aaltonomous/baselines/classical/test_classical.py
+@@ -69,6 +69,69 @@ class TestPerception(unittest.TestCase):
+         self.assertEqual(self.p.detect(rgb, depth), [])
+ 
+ 
++class TestShapeDiag(unittest.TestCase):
++    """No shape from the 2D blob (plane path abstains) + the passive perception.shape_diag log."""
++    FIELDS = {"source", "n_top", "ratio_cloud", "ratio_blob", "path", "label", "conf", "near_bin", "dz_top", "top_xy"}
++
++    def _perc(self, **flags):
++        import copy
++        cfg = copy.deepcopy(CFG)
++        cfg["perception"].update(flags)
++        self.lines = []
++        return Perception(cfg, SC, CAL, log=self.lines.append)
++
++    def _scene(self, seed=0, depth=True):
++        rng = np.random.default_rng(seed)
++        objs = scene_objects(rng)
++        rgb, d = Renderer(SC, CAL).render(objs, rng, depth_noise_mm=1.0, hole_frac=0.05)
++        return rgb, (d if depth else np.zeros(rgb.shape[:2], np.uint16))
++
++    def test_plane_path_gives_no_shape(self):
++        rgb, depth = self._scene(1, depth=False)
++        p = self._perc(classify_shape=True, triangle_pose=True, shape_diag=True)
++        dets = p.detect(rgb, depth)
++        self.assertEqual(len(dets), 3)
++        for d in dets:
++            self.assertEqual(d.method, "plane")
++            self.assertIsNone(d.shape)
++            self.assertIsNone(d.apex_yaw)
++            self.assertEqual(d.shape_diag["source"], "plane")
++            self.assertIn(d.shape_diag["path"], ("abstain_plane", "abstain_border"))
++            self.assertIsNotNone(d.shape_diag["ratio_blob"])     # measured for the log, never used
++            self.assertIsNone(d.shape_diag["top_xy"])
++
++    def test_diag_has_all_fields_and_one_line_per_detection(self):
++        rgb, depth = self._scene(0)
++        p = self._perc(classify_shape=True, triangle_pose=True, shape_diag=True)
++        dets, rej = p.detect(rgb, depth, debug=True)
++        self.assertEqual(len(dets), 3)
++        self.assertEqual(len(self.lines), len(dets) + sum(d is not None for d, _ in rej))
++        self.assertTrue(all(l.startswith("[shape_diag]") for l in self.lines))
++        for d in dets:
++            g = d.shape_diag
++            self.assertEqual(set(g), self.FIELDS)
++            self.assertEqual(g["source"], "depth")
++            self.assertEqual(g["label"], d.shape)
++            self.assertEqual(len(g["top_xy"]), g["n_top"])
++            self.assertIn(g["path"], ("metric", "abstain_few_points", "abstain_border", "abstain_near_bin"))
++            self.assertAlmostEqual(g["dz_top"], d.top[2] - SC.counter_z)
++            self.assertIsInstance(g["near_bin"], bool)
++
++    def test_diag_off_by_default_and_passive(self):
++        self.assertFalse(CFG["perception"]["shape_diag"])
++        rgb, depth = self._scene(0)
++        for flags in ({}, {"classify_shape": True, "triangle_pose": True}):
++            off = self._perc(**flags).detect(rgb, depth)
++            self.assertEqual(self.lines, [])
++            self.assertTrue(all(d.shape_diag is None for d in off))
++            on = self._perc(shape_diag=True, **flags).detect(rgb, depth)
++            self.assertEqual(len(self.lines), len(on))
++            self.assertEqual([repr(d) for d in off], [repr(d) for d in on])
++            for a, b in zip(off, on):
++                self.assertEqual((a.shape, a.apex_yaw, a.apex_conf, a.yaw), (b.shape, b.apex_yaw, b.apex_conf, b.yaw))
++                np.testing.assert_array_equal(a.top, b.top)
++
++
+ class TestPostures(unittest.TestCase):
+     def test_mirror_and_limits(self):
+         post = hand_postures(CFG)  # raises if outside joint_spec limits
+diff --git a/aaltonomous/baselines/classical/test_shape_id.py b/aaltonomous/baselines/classical/test_shape_id.py
+index e0e57b1..4abeb51 100644
+--- a/aaltonomous/baselines/classical/test_shape_id.py
++++ b/aaltonomous/baselines/classical/test_shape_id.py
+@@ -3,7 +3,7 @@
+ import cv2
+ import numpy as np
+ 
+-from .shape_id import SHAPE_MIN_POINTS, classify_top_face
++from .shape_id import SHAPE_MIN_POINTS, _ratio_blob, classify_top_face, classify_top_face_diag
+ 
+ KINDS = ("cube", "cylinder", "triangle")
+ 
+@@ -54,17 +54,25 @@ def test_cloud_path_wins_over_wrong_blob():
+     assert lab == "triangle"
+ 
+ 
+-def test_blob_path_all_shapes():
++def test_blob_alone_never_decides():
++    """No metric top face -> abstain, however clear the 2D blob (side faces make it lie: prism -> 'cylinder')."""
+     for kind in KINDS:
+         for size in (30, 40, 60):
+             for rot in (0.0, 0.3, 0.785):
+-                lab, conf = classify_top_face(None, _blob(kind, size, rot=rot), (120, 160))
+-                assert lab == kind and conf > 0.3, (kind, size, rot, lab, conf)
++                assert classify_top_face(None, _blob(kind, size, rot=rot), (120, 160)) == (None, 0.0), (kind, size)
+ 
+ 
+-def test_few_points_fall_back_to_blob_or_abstain():
++def test_blob_ratio_helper_still_measures_shapes():
++    """_ratio_blob stays as a diagnostic: it still separates clean synthetic blobs."""
++    for kind, (lo, hi) in {"cube": (0.88, 1.1), "cylinder": (0.66, 0.88), "triangle": (0.3, 0.66)}.items():
++        r = _ratio_blob(_blob(kind, 40))
++        assert lo <= r < hi, (kind, r)
++
++
++def test_few_points_abstain_even_with_a_clear_triangle_blob():
+     few = _cloud("triangle", n=SHAPE_MIN_POINTS - 1)
+-    assert classify_top_face(few, _blob("cube", 40), (120, 160))[0] == "cube"      # blob decides
++    assert classify_top_face(few, _blob("triangle", 40), (120, 160)) == (None, 0.0)
++    assert classify_top_face(few, _blob("cube", 40), (120, 160)) == (None, 0.0)
+     assert classify_top_face(few) == (None, 0.0)                                   # nothing to decide with
+     assert classify_top_face(None) == (None, 0.0)
+     assert classify_top_face(np.full((100, 2), np.nan)) == (None, 0.0)
+@@ -89,3 +97,22 @@ def test_confidence_low_near_a_threshold():
+     q = p[(p[:, 0] + p[:, 1]) < (p[:, 0] + p[:, 1]).max() - 0.012]
+     lab, conf = classify_top_face(q)
+     assert conf < classify_top_face(p)[1]
++
++
++def test_diag_matches_seam_and_reports_path():
++    m = _blob("triangle", 40)
++    few = _cloud("triangle", n=SHAPE_MIN_POINTS - 1)
++    cases = [((_cloud("triangle"), m, (120, 160)), "metric"),
++             ((few, m, (120, 160)), "abstain_few_points"),
++             ((None, m, (120, 160)), "abstain_few_points"),
++             ((_cloud("cube"), _blob("cube", 40, shift=(70, 0)), (120, 160)), "abstain_border")]
++    for args, path in cases:
++        lab, conf, info = classify_top_face_diag(*args)
++        assert (lab, conf) == classify_top_face(*args)
++        assert set(info) == {"path", "n_top", "ratio_cloud", "ratio_blob"}
++        assert info["path"] == path, (path, info)
++    _, _, info = classify_top_face_diag(few, m, (120, 160))
++    assert info["n_top"] == SHAPE_MIN_POINTS - 1 and info["ratio_cloud"] is not None
++    assert 0.3 < info["ratio_blob"] < 0.66                       # measured, but not used
++    _, _, info = classify_top_face_diag(None)
++    assert info == {"path": "abstain_few_points", "n_top": 0, "ratio_cloud": None, "ratio_blob": None}
