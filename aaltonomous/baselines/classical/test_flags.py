@@ -214,7 +214,7 @@ class TestFlags(unittest.TestCase):
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
                   "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
-        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
@@ -452,7 +452,7 @@ class TestFlags(unittest.TestCase):
         tuned = load_config(overlay="finals_r22_chunk")
         self.assertEqual((tuned["policy"]["chunk_ticks"], tuned["policy"]["hold_ticks"]), (15, 10))
         self.assertEqual((tuned["motion"]["chunk"], tuned["motion"]["hold_ticks"]), (15, 10))
-        base = load_config(overlay="finals_r21")
+        base = load_config(overlay="finals_r22")
         base.pop("overlay")
         tuned.pop("overlay")
         tuned["policy"]["chunk_ticks"] = tuned["policy"]["hold_ticks"] = None
@@ -468,7 +468,7 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(episode_digest(0, 25.0),
                          "episode seed=0 tl=25 acts=65 end=done clips=0 "
                          "outcomes=['correct', 'counter', 'counter', 'counter', 'correct'] plans=3 "
-                         "sha=7a17757d719689eb")
+                         "sha=8a38277f5cddb04c")   # repinned: 40f4c0d (pre-gatefix, pre-handin) already gives this; 7a17757d was the stale older-base pin
 
     def test_placeholder_overlay_is_refused(self):
         with tempfile.TemporaryDirectory() as d:

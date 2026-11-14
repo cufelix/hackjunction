@@ -1,4 +1,4 @@
-# finals_r22_chunk: # finals_r22_chunk: finals_r22 plus larger reply chunks for slow-sim command-rate margin (handin A/B).
+# finals_r22_chunk: finals_r22 plus larger reply chunks for slow-sim command-rate margin (handin A/B).
 name: finals_r22_chunk
 flags:
   hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)

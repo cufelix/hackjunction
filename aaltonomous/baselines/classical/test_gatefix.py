@@ -130,6 +130,7 @@ class TestGeometryAndVoting(unittest.TestCase):
         # The mock table sits at the nominal height; finals overlays carry the real-robot no-depth prior (0.15 m),
         # which a single look (apply_height not yet committed) would use and so mask every object out.
         # near_margin_m 0.10 (r21/r22 New H2/M1) drops the x=0.31 row on the mock bins; isolated like test_recall.
+        self.addCleanup(setattr, SC, "counter_z_prior", SC.counter_z_prior)   # restore the shared Scene
         SC.counter_z_prior = None
         cfg = load_config(overlay="finals_r22_gate", overrides={
             "perception.still_vote": False, "perception.gate_below_bins": False,

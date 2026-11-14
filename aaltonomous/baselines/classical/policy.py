@@ -24,7 +24,6 @@ import re
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from types import MappingProxyType
 
 import numpy as np

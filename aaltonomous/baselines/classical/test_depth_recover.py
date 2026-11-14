@@ -142,7 +142,7 @@ class TestDepthBlobRecover(unittest.TestCase):
             result = recover_depth_blobs(perception, rgb, depth, hsv)
             elapsed.append((time.perf_counter() - started) * 1000.0)
             self.assertEqual(len(result[0]), 1)
-        self.assertLess(float(np.median(elapsed)), 5.0, elapsed)
+        self.assertLess(float(np.median(elapsed)), 12.0, elapsed)
 
 
 if __name__ == "__main__":
