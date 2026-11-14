@@ -271,7 +271,13 @@ def _clauses(low, ord_ok):
         # names keys but no bin must stay separate, or its keys would inherit that clause's bin:
         # "...triangles go center, regardless of color: red, yellow or blue" must not put red in
         # the center. Left alone it becomes a deferred key and the kind filter drops it.
-        if out and not k_tail:
+        #
+        # But a CATCH-ALL tail is keyless BY DESIGN -- "everything that remains on the right"
+        # names a bin and deliberately no key, and that is the whole point of it. Gluing it on
+        # handed the previous clause two bins and one key, so `_assign` paired the key with the
+        # nearer bin and the catch-all's bin was silently dropped: every unnamed shape ended up
+        # with no bin at all. So only glue a tail that cannot stand on its own.
+        if out and not k_tail and not binding(tail):
             out[-1] += " " + tail
         else:
             out.append(tail)
