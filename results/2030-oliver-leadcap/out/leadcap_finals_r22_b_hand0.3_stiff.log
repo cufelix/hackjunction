@@ -1,0 +1,7 @@
+{"seed": 0, "picks": 5, "placed": 5, "wrong": 0, "n_obj": 5, "clipped": 0, "would_abort": false, "by_reason": {}, "joints": {}, "bad_drops": 0, "end": "done", "t": 71.6}
+{"seed": 1, "picks": 3, "placed": 3, "wrong": 0, "n_obj": 4, "clipped": 0, "would_abort": false, "by_reason": {}, "joints": {}, "bad_drops": 0, "end": "done", "t": 46.2}
+{"seed": 2, "picks": 5, "placed": 5, "wrong": 0, "n_obj": 5, "clipped": 0, "would_abort": false, "by_reason": {}, "joints": {}, "bad_drops": 0, "end": "done", "t": 70.6}
+{"seed": 3, "picks": 5, "placed": 5, "wrong": 0, "n_obj": 5, "clipped": 0, "would_abort": false, "by_reason": {}, "joints": {}, "bad_drops": 0, "end": "done", "t": 78.4}
+{"seed": 4, "picks": 5, "placed": 5, "wrong": 0, "n_obj": 5, "clipped": 0, "would_abort": false, "by_reason": {}, "joints": {}, "bad_drops": 0, "end": "done", "t": 70.6}
+{"seed": 5, "picks": 5, "placed": 5, "wrong": 0, "n_obj": 5, "clipped": 0, "would_abort": false, "by_reason": {}, "joints": {}, "bad_drops": 0, "end": "done", "t": 71.6}
+SUMMARY {"cfg": "b_hand0.3", "mode": "stiff", "overlay": "finals_r22", "picks": 28, "placed": 28, "objs": 29, "clips": 0, "aborts": 0, "bad_drops": 0}

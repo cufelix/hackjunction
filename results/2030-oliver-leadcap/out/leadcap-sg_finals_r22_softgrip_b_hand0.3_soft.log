@@ -1,0 +1,31 @@
+safety clip t=5.467 step=165 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.500 step=166 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.533 step=167 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.567 step=168 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+{"seed": 0, "picks": 12, "placed": 0, "wrong": 0, "n_obj": 5, "clipped": 4, "would_abort": false, "by_reason": {"hand_position": 1}, "joints": {}, "bad_drops": 8, "end": "done", "t": 91.5}
+safety clip t=5.400 step=163 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.433 step=164 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.467 step=165 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.500 step=166 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+{"seed": 1, "picks": 9, "placed": 0, "wrong": 0, "n_obj": 4, "clipped": 4, "would_abort": false, "by_reason": {"hand_position": 1}, "joints": {}, "bad_drops": 6, "end": "done", "t": 71.1}
+safety clip t=5.467 step=165 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.500 step=166 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.533 step=167 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.567 step=168 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+{"seed": 2, "picks": 14, "placed": 0, "wrong": 0, "n_obj": 5, "clipped": 4, "would_abort": false, "by_reason": {"hand_position": 1}, "joints": {}, "bad_drops": 9, "end": "done", "t": 100.3}
+safety clip t=5.467 step=165 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.500 step=166 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.533 step=167 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.567 step=168 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+{"seed": 3, "picks": 12, "placed": 0, "wrong": 0, "n_obj": 5, "clipped": 4, "would_abort": false, "by_reason": {"hand_position": 1}, "joints": {}, "bad_drops": 7, "end": "done", "t": 80.9}
+safety clip t=5.400 step=163 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.433 step=164 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.467 step=165 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.500 step=166 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+{"seed": 4, "picks": 14, "placed": 0, "wrong": 0, "n_obj": 5, "clipped": 4, "would_abort": false, "by_reason": {"hand_position": 1}, "joints": {}, "bad_drops": 9, "end": "done", "t": 100.7}
+safety clip t=5.467 step=165 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.500 step=166 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.533 step=167 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+safety clip t=5.567 step=168 ['hand_position'] {'hand_position': ['left_hand_middle_0_joint', 'left_hand_index_0_joint', 'right_hand_index_0_joint', 'right_hand_middle_0_joint']}
+{"seed": 5, "picks": 12, "placed": 0, "wrong": 0, "n_obj": 5, "clipped": 4, "would_abort": false, "by_reason": {"hand_position": 1}, "joints": {}, "bad_drops": 8, "end": "done", "t": 91.5}
+SUMMARY {"cfg": "b_hand0.3", "mode": "soft", "overlay": "finals_r22_softgrip", "picks": 73, "placed": 0, "objs": 29, "clips": 24, "aborts": 0, "bad_drops": 47}
