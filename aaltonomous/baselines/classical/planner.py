@@ -19,6 +19,8 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 
+import time
+
 import numpy as np
 
 from aaltonomous.interface.safety import JointSpec, SafetyConfig, SafetyFilter
@@ -244,6 +246,10 @@ class Planner:
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
         self.drop_extra = {}   # bin.vote: bin name -> extra release height (m) when the bin position is low-confidence
+        self.log = None          # perception.neutral_obstacles: one-line fail-open log (policy sets it when the flag is on)
+        self._neutral_deadline = None   # plan(): monotonic time after which the obstacle-constrained search stops
+        self._neutral_fallback = None   # plan(): first complete plan that only failed the obstacle check
+        self.neutral_src = None  # perception.neutral_obstacles: object with .neutral_obstacles (set by the policy); None = off
         self.bin_conf = {}     # bin.vote: bin name -> confidence in bin_shift (1.0 agree, 0.5 prior only, 0.3 disagree)
         self.generic_hand_opening = None
         if cfg["grasp"].get("generic", False):
@@ -412,6 +418,33 @@ class Planner:
             if np.any(over & below):
                 return True
         return False
+
+    def neutral_boxes(self):
+        """perception.neutral_obstacles: [(xy_lo, xy_hi, z_top)] of the latest frame's obstacles that have a 3D
+        footprint (image-only ones never count). [] when the flag is off."""
+        src = self.neutral_src
+        if src is None:
+            return []
+        return [(o.xy_lo, o.xy_hi, o.z_top) for o in getattr(src, "neutral_obstacles", ()) if o.has_footprint]
+
+    def neutral_clearance(self, side, arm_q, hand_q, boxes=None):
+        """Smallest horizontal gap (m, negative = inside) between a hand point that is not above an obstacle's top
+        and the obstacle's xy footprint; inf with no obstacle. Points higher than z_top + margin clear it."""
+        boxes = self.neutral_boxes() if boxes is None else boxes
+        if not boxes:
+            return np.inf
+        pts = self.kin.hand_points(side, arm_q, hand_q)
+        margin = float((self.cfg["perception"].get("neutral_params") or {}).get("margin_m", 0.02))
+        out = np.inf
+        for lo, hi, z_top in boxes:
+            low = pts[pts[:, 2] <= z_top + margin]
+            if len(low) == 0:
+                continue
+            d = np.maximum(np.maximum(lo - low[:, :2], low[:, :2] - hi), 0.0)
+            gap = np.hypot(d[:, 0], d[:, 1])
+            inside = np.all((low[:, :2] >= lo) & (low[:, :2] <= hi), axis=1)
+            out = min(out, -1.0 if inside.any() else float(gap.min()))
+        return out
 
     def clearance(self, side, arm_q, hand_q, fingers_only=False):
         """Lowest height (m) above the counter surface of the hand points that are over the counter (inf if none)."""
@@ -617,6 +650,28 @@ class Planner:
     # ------------------------------------------------------------------ main
     def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=None, source_bin=None,
              clearance_obstacles=()):
+        """perception.neutral_obstacles: the obstacle-constrained search is bounded by neutral_params.plan_timeout_s. If no
+        plan passes the obstacle check in that time, fail OPEN: return the first complete plan that only violated the
+        obstacle check (the stock plan) and log one line. No footprint obstacle (or flag off): exactly _plan_core."""
+        if not self.neutral_boxes():
+            return self._plan_core(det, arm_q, hand_q, bin_name, obstacles, relocate, drop_slot, source_bin,
+                                   clearance_obstacles)
+        budget = float((self.cfg["perception"].get("neutral_params") or {}).get("plan_timeout_s", 1.0))
+        self._neutral_deadline, self._neutral_fallback = time.monotonic() + budget, None
+        try:
+            r = self._plan_core(det, arm_q, hand_q, bin_name, obstacles, relocate, drop_slot, source_bin,
+                                clearance_obstacles)
+            fb = self._neutral_fallback
+        finally:
+            self._neutral_deadline, self._neutral_fallback = None, None
+        if not r.ok and fb is not None:
+            (self.log or print)(f"[neutral] no plan clears the neutral obstacles within {budget:.1f}s: fail open, stock plan "
+                                f"for {det.color} ({fb.side})")
+            return fb
+        return r
+
+    def _plan_core(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=None, source_bin=None,
+                   clearance_obstacles=()):
         """Plan for Detection `det` starting from the commanded arm_q/hand_q (14,). Tries the preferred arm (the
         target bin's side; for the centre bin the object's side), then the other one. If neither arm can do the
         whole pick -> bin (cross-body: the arm that reaches the object cannot reach the bin), plans a RELOCATION
@@ -1126,6 +1181,10 @@ class Planner:
         plan = Plan(False, side=side, color=det.color, target_bin=bin_name if place_xy is None else "counter",
                     source_bin=source_bin, drop_slot=drop_slot if place_xy is None else None,
                     corrective=source_bin is not None)
+        if self._neutral_deadline is not None and self._neutral_fallback is not None \
+                and time.monotonic() > self._neutral_deadline:
+            plan.reason = "neutral obstacle search budget exhausted"
+            return plan
         sl = ArmKinematics.sl(side)
         H, post = self._object_height(det), self.post
         hfrac = g["height_frac"]
@@ -1359,6 +1418,19 @@ class Planner:
             if c < 0.003:
                 plan.reason = f"hand {100 * c:.1f} cm above a bin rim during {name}"
                 return plan
+        nboxes = self.neutral_boxes()   # perception.neutral_obstacles: [] when off, no work
+        if nboxes:
+            nmargin = float((cfg["perception"].get("neutral_params") or {}).get("margin_m", 0.02))
+            for k in range(0, len(plan.arm), 3):
+                gap = self.neutral_clearance(side, plan.arm[k], plan.hand[k], nboxes)
+                if gap < nmargin:
+                    name = next(n for n, s_, e in phases if s_ <= k < e)
+                    plan.reason = f"hand {100 * gap:.1f} cm from a neutral obstacle during {name} (need {100 * nmargin:.1f})"
+                    if self._neutral_deadline is not None and self._neutral_fallback is None \
+                            and not self.dry_run_safety(arm_q, hand_q, plan.arm, plan.hand):
+                        self._neutral_fallback = copy.copy(plan)   # complete stock plan, kept for fail-open
+                        self._neutral_fallback.ok, self._neutral_fallback.reason = True, ""
+                    return plan
         plan.safety_clips = self.dry_run_safety(arm_q, hand_q, plan.arm, plan.hand)
         if plan.safety_clips:
             plan.reason = f"{plan.safety_clips} safety clips in dry run"

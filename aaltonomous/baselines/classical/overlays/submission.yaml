@@ -84,6 +84,7 @@ flags:
   perception.split_by_solidity: false          # compact-single test and forced split for merged geometry
   perception.tape_value_cut: false             # S/V plus thin-geometry tape rejection
   perception.gate_below_bins: false            # image-space bin-mass gate when live geometry is untrusted
+  perception.bins_from_image: false            # bin masks from the taped rims found in the image (no nominal projection)
   perception.reject_log: false                 # per-colour rejection-stage diagnostics
   perception.still_vote: false                 # non-blocking vote across still frames
   perception.prism_orientation: false           # prism orient standing vs lying prism (default off)
@@ -166,3 +167,4 @@ flags:
   safety.nan_guard: false                       # fuzz fix   non-finite arm_q/hand_q -> hold last action, no planner tick
   calib.wide_counter_window: false              # counter-z   nominal -8..+22 cm estimation window (finals_r22_counter turns it on)
   planner.bin_wall_extra_m: 0.0                 # counter-z   extra bin wall height on release/carry and rim keepout (finals_r22_counter: 0.01)
+  perception.neutral_obstacles: false           # Oliver neutral  dark/grey non-target blobs: never detections, planner obstacles (OFF)

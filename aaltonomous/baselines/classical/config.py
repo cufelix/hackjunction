@@ -112,6 +112,7 @@ FLAGS = {
     "perception.relook_before_done": ("recall P0", False, "before nothing-left, retract to home, wait for fresh frames, and run one final relaxed detection"),
     "perception.split_by_solidity": ("gate fix", False, "classify compact blobs as single objects and force-split merged geometry"),
     "perception.tape_value_cut": ("gate fix", False, "reject thin orange candidates without a strong S/V core"),
+    "perception.bins_from_image": ("gate fix", False, "bin masks from the taped rims found in the image (no depth / untrusted bin poses)"),
     "perception.gate_below_bins": ("gate fix", False, "when live bins are untrusted, gate candidates below observed bin mass in image space"),
     "perception.reject_log": ("gate fix", False, "log and retain per-colour rejection-stage counts"),
     "perception.still_vote": ("gate fix", False, "non-blocking N-frame vote over policy-declared still frames"),
@@ -119,6 +120,7 @@ FLAGS = {
     "perception.color_gate.sat_floor_params.blue": ("gate fix", 110, "blue/purple saturation floor variant"),
     "perception.color_gate.workspace_fail_open": ("recall", False, "workspace rule (2b) fails open on the nominal-counter-z bias: while the counter height is unmeasured (no depth / plane fit fallback) a plane-method top is re-projected along its ray to workspace_assumed_counter_z before the test; measured / depth tops: unchanged"),
     "perception.hue_guard.yellow_fix": ("recall", False, "hue_guard: a red-labelled candidate whose own top-face hue is in the yellow range is re-labelled yellow before the low_s_red floor"),
+    "perception.neutral_obstacles": ("Oliver neutral", False, "dark / grey / colourless non-target blobs (median V < neutral_params.v_dark 55, or S < s_grey 30; sizeable >= min_area_px 300; above the counter when depth exists) are never detections; they become Perception.neutral_obstacles (3D footprint from depth when present, else image-only and ignored) and the planner rejects hand points within margin_m 0.02 of a footprint (any phase); search budget plan_timeout_s 1.0 then fail open to the stock plan. No new colour class"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
     "perception.novel_objects": ("novel R22", False, "depth connected components above the counter -> conservative open-vocabulary object candidates"),
@@ -391,7 +393,7 @@ def check_flag_values(cfg):
                 raise ValueError(f"motion.output_caps.{key} = {caps[key]} exceeds finals cap {maximum}")
     p = cfg.get("perception") or {}
     for key in ("sim_center_principal_point", "split_by_solidity", "tape_value_cut", "gate_below_bins",
-                "reject_log", "still_vote"):
+                "bins_from_image", "reject_log", "still_vote"):
         if not isinstance(p.get(key), bool):
             raise ValueError(f"perception.{key}: want true or false")
     aim = p.get("aim_z_frac", 0.25)
@@ -448,6 +450,12 @@ def check_flag_values(cfg):
         raise ValueError(f"planner.per_target_cooldown_s = {cooldown!r}: want finite seconds > 0")
     if not isinstance(_get(cfg, "calib.wide_counter_window"), bool):
         raise ValueError("calib.wide_counter_window: want true or false")
+    bp = p.get("bins_from_image_params") or {}
+    if not isinstance(bp.get("hint", False), bool) or not isinstance(bp.get("with_depth", True), bool):
+        raise ValueError("perception.bins_from_image_params hint / with_depth: want true or false")
+    for key in ("hint_max_m", "hint_max_resid_px", "crosscheck_px", "rim_z_m"):
+        if key in bp and (isinstance(bp[key], bool) or not np.isfinite(float(bp[key]))):
+            raise ValueError(f"perception.bins_from_image_params.{key}: want a finite number")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
