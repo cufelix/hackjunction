@@ -1,0 +1,47 @@
+# syntax=docker/dockerfile:1.7
+
+# CUDA 12.8 is the first CUDA release with Blackwell / sm_120 support. Keep the
+# builder and runtime on the same exact CUDA release.
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential cmake ninja-build ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Supply a pinned, tested llama.cpp source tree in tools/brain/llama.cpp.
+# Nothing is cloned or downloaded by this Dockerfile.
+WORKDIR /src/llama.cpp
+COPY llama.cpp/ ./
+RUN cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_ARCHITECTURES=120 \
+      -DGGML_CUDA=ON \
+      -DGGML_NATIVE=OFF \
+      -DLLAMA_CURL=OFF \
+      -DBUILD_SHARED_LIBS=OFF \
+ && cmake --build build --target llama-server --parallel "$(nproc)" \
+ && strip build/bin/llama-server
+
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /src/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+COPY models/Qwen3VL-8B-Instruct-Q8_0.gguf /models/Qwen3VL-8B-Instruct-Q8_0.gguf
+COPY models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf /models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
+
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --start-period=120s --retries=12 \
+  CMD curl --fail --silent --show-error http://127.0.0.1:8080/health >/dev/null || exit 1
+
+# 8k is ample for the compact world/choice prompts and leaves headroom for
+# image tokens if brain.image is enabled later.
+ENTRYPOINT ["/usr/local/bin/llama-server", \
+  "-m", "/models/Qwen3VL-8B-Instruct-Q8_0.gguf", \
+  "--mmproj", "/models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf", \
+  "--host", "0.0.0.0", "--port", "8080", \
+  "-ngl", "99", "-c", "8192"]

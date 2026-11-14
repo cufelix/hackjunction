@@ -1,0 +1,34 @@
+name: aaltonomous-finals
+
+services:
+  policy:
+    image: hackjunction/policy:finals
+    build:
+      context: ../..
+      dockerfile: tools/submission.Dockerfile
+      args:
+        # Empty by default in submission.Dockerfile; this finals build selects
+        # the sidecar by Compose DNS without changing policy code.
+        BRAIN_URL: http://brain:8080/completion
+    environment:
+      AALTO_OVERLAY: brain_llm
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  brain:
+    image: hackjunction/brain:qwen3vl8b-q8
+    build:
+      context: .
+      dockerfile: Dockerfile.brain
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+# Deliberately no policy -> brain depends_on: policy starts immediately and
+# its bounded async backend falls back if brain is missing, loading, or down.
