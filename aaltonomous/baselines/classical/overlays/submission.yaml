@@ -86,6 +86,7 @@ flags:
   grasp.staggered_release: false                # finals grasp two-stage release; off = simultaneous release
   grasp.staggered_release_delay_s: 0.30         # delay before DDS slots 5/6 begin opening
   policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
+  policy.verify_landing: false                  # r22        post-release landing classification (independent of verify_placement)
   policy.place_gate: false                      # EV gate    confidence-gated placement (off in shipped submission)
   policy.place_gate_colour_min: 0.6             # EV gate    minimum HSV/blob colour confidence
   policy.place_gate_bin_min: 0.5                # EV gate    minimum self-calibration/bin confidence
