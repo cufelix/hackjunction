@@ -898,6 +898,12 @@ class ClassicalPolicy:
 
         a, h = self.output_limiter.limit(
             a, h, start("arm_q", a[0]), start("hand_q", h[0]), float(obs.get("t", 0.0)))
+        # integ-all (M4 x soft_squeeze): the stateful accel limiter can overshoot a target that sits inside the soft limit
+        # margin (observed 0.03 rad past the URDF hand limit); never emit outside the joint limits.
+        if len(a) and a.shape[-1] == len(self.spec.arm_lower):
+            a = np.clip(a, self.spec.arm_lower, self.spec.arm_upper)
+        if len(h) and h.shape[-1] == len(self.spec.hand_lower):
+            h = np.clip(h, self.spec.hand_lower, self.spec.hand_upper)
         out = {**action, "arm_q_target": a, "hand_q_target": h}
         if len(a):
             self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()

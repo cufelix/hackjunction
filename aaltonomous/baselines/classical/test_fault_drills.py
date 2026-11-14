@@ -33,7 +33,7 @@ from .mock_world import make_mock_env
 from .policy import HZ, ClassicalPolicy
 
 DT = 1.0 / HZ
-OVERLAYS = ("submission", "finals_r21", "finals_r22_robust")
+OVERLAYS = ("submission", "finals_r21", "finals_r22_robust", "finals_r23_all")
 LIMIT_S = 1.0 / 27.0
 SPEC = JointSpec()
 UNKNOWN_TEXTS = {
@@ -103,7 +103,11 @@ MOCK_FIXTURE = {"scene.counter_z_prior": None, "calib.plane.apply_height": False
 def _fixture(overlay, overrides):
     if overlay == "submission" or overlay.startswith("cand") or overlay == "none":
         return overrides
-    return {**MOCK_FIXTURE, **(overrides or {})}
+    fx = dict(MOCK_FIXTURE)
+    if overlay == "finals_r23_all":   # the calibration group needs a real arm/depth view (Isaac), see test_integration_all
+        fx.update({"calib.hand_icp_primary": False, "calib.counter_after_hand": False, "calib.refit_per_look": False,
+                   "calib.wide_counter_window": False})
+    return {**fx, **(overrides or {})}
 
 
 def drive(overlay, *, objects=None, instruction=None, sim_s=40.0, max_acts=900, mutate=None, hook=None, pace=0.003,
@@ -370,7 +374,7 @@ class Drills:
            reason="residual: whole hand_q NaN on the very FIRST tick has no last action and no earlier reading, so nan_guard "
                   "falls back to the open posture = a 1.5 rad hand jump the SafetyFilter clips for 7 ticks (safe, but not 0 clips); "
                   "submission has no nan_guard at all (ValueError). Not fixable without a pose to hold.")
-    @known("finals_r21", "finals_r22_robust", reason="fixh1h7 M2: with safety.nan_guard the policy returns an EMPTY (0-row) action until it has seen one complete finite encoder sample. act() no longer raises (integ-all guards the output limiter and the index/middle mirror against empty actions) but the mock env.step (aaltonomous/interface, frozen) crashes on a 0-row action. Whether the real runner accepts a 0-row action must be confirmed.")
+    @known("finals_r21", "finals_r22_robust", "finals_r23_all", reason="fixh1h7 M2: with safety.nan_guard the policy returns an EMPTY (0-row) action until it has seen one complete finite encoder sample. act() no longer raises (integ-all guards the output limiter and the index/middle mirror against empty actions) but the mock env.step (aaltonomous/interface, frozen) crashes on a 0-row action. Whether the real runner accepts a 0-row action must be confirmed.")
     def test_02b_nan_whole_hand_on_the_first_tick(self):
         def mut(o, i):
             if i == 0:
