@@ -122,7 +122,7 @@ class TestProfileForce(unittest.TestCase):
             c = load_config(profile="none", overlay=ov)
             self.assertIsNone(c["profile_auto"]["force"])
             self.assertFalse(c["profile_auto"]["require_rgb_cue"])
-            self.assertEqual(c["grasp"]["left_hand_fix"]["shift_z"], 0.01)   # A102 decision
+            self.assertEqual(c["grasp"]["left_hand_fix"]["shift_z"], 0.0)   # real; sim +0.01 via sim_overrides
             self.assertEqual(c["scene"]["counter_z_prior"], 0.03)   # real FK, drop_3
             self.assertEqual(c["grasp"]["arm_xy_offset"], {"left": [0.0, 0.0], "right": [0.0, 0.0]})
             for k in ("retry_cross_relocate", "late_sweep", "retry_repeat_ok", "late_regrant", "frozen_rgb_guard"):
@@ -141,7 +141,7 @@ class TestProfileForce(unittest.TestCase):
 class TestRealDemoValues(unittest.TestCase):
     """drop_3 real-demo values: ON in the real profile only; sim (via profile_auto.sim_overrides) keeps r23 values."""
     OLD = {"grasp.point_in_palm": [0.0862, -0.0864, 0.0143], "hand.closed_tight": [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6],
-           "grasp.close_posture_by_shape": True, "grasp.drop_height_extra_m": 0.0, "grasp.approach_slow_mps": 0.0}
+           "grasp.close_posture_by_shape": True, "grasp.drop_height_extra_m": 0.0, "grasp.approach_slow_mps": 0.0, "grasp.left_hand_fix.shift_z": 0.01}
 
     def _g(self, cfg, k):
         for kk in k.split("."):
