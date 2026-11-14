@@ -55,7 +55,7 @@ flags:
   safety.nan_guard: true                        # r19 fuzz   non-finite arm_q/hand_q -> hold last emitted action
   instruction.strict: true                      # r19 Felix  never guess a bin: abstain (0) instead of FIXED/inferred (-1); Timi OK
   policy.safety_shell: true                     # r19b P0 Hz
-  bin.vote.enabled: true                        # r20 R2  per-bin position vote (depth rim, tape, prior)
+  bin.vote.enabled: false                        # r20 R2  per-bin position vote (depth rim, tape, prior)   # OFF: Codex C3 rim vote mirrors the shift (nominal - delta)
   bin.geometry_runtime: true                    # r20 R2  every bin consumer follows the voted shift
   grasp.held_detector: finger_sum               # r20     bias-corrected held; empty close aborted early
   calib.plane.apply_height: true                # r20 R9  runtime counter_z from the depth plane (real table +5..14 cm), clamp 0.20, nominal fallback
