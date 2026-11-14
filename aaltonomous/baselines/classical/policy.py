@@ -35,7 +35,7 @@ from aaltonomous.scene.scene import Scene
 
 from . import decision as dec
 from .bin_vote import vote_bins
-from .config import hand_postures, home_arm, load_config
+from .config import equalize_index_middle, hand_postures, home_arm, load_config
 from .held import HeldDetector
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
@@ -98,6 +98,7 @@ class ClassicalPolicy:
         self.cal = calibration if isinstance(calibration, Calibration) else Calibration.load(calibration)
         self.spec = JointSpec()
         self.post = hand_postures(self.cfg, self.spec)
+        self._mirror_im = bool(self.cfg["hand"].get("mirror_index_middle", False))
         self.home = home_arm(self.cfg, self.spec)
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
@@ -184,7 +185,9 @@ class ClassicalPolicy:
         """
         strict = bool((self.cfg.get("instruction") or {}).get("strict", False))
         try:                                        # the WHOLE body, not just the resolve call
-            if not (self.cfg.get("instruction") or {}).get("resolve", False):
+            instruction_cfg = self.cfg.get("instruction") or {}
+            strict = instruction_cfg.get("strict", False)
+            if not instruction_cfg.get("resolve", False):
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
             if not str(text).strip():               # fixed mapping is reserved for an identified sort_fixed task
@@ -508,6 +511,14 @@ class ClassicalPolicy:
         self._decision = "stop"
 
     def act(self, obs):
+        res = self._act_entry(obs)
+        if self._mirror_im:   # hand.mirror_index_middle (R42a): last stop before the runner, every return path
+            h = np.asarray(res["hand_q_target"], float)
+            res = dict(res, hand_q_target=np.stack([equalize_index_middle(r, closed=False) for r in h])
+                       if h.ndim == 2 else equalize_index_middle(h, closed=False))
+        return res
+
+    def _act_entry(self, obs):
         ng = bool((self.cfg.get("safety") or {}).get("nan_guard", False))
         if ng:
             obs, hold = self._nan_guard(obs)
