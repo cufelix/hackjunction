@@ -53,7 +53,9 @@ Language episodes carry about 83 % of the final points, and the unseen-sentence 
 - **Measured blind.** The person writing the parser never saw the test sentences. Three sealed sets were written
   independently: v1 (151 sentences), many-to-one (30) and v2 (60, a fresh set never described to the parser's author).
   They are scored by behaviour on all 9 colour × shape object types, using the organisers' own `resolve_bin`. File
-  hashes were posted before scoring (cd37a05a, 1735df02, b844e235).
+  hashes were posted before scoring (cd37a05a, 1735df02, b844e235). A sentence counts as correct only if all 9
+  types land in the right bin. The stricter exact-dict match gives v1 0.914 for the same resolver; we quote the
+  behaviour score because it is what the robot does.
 
 | resolver | v1 | many-to-one | v2 (honest unseen proxy) |
 |---|---|---|---|
@@ -102,7 +104,8 @@ Sources: blind results posted in the room after each hash, e.g. the 05242eae run
   regression is a process claim worth more than a fourth accuracy number.
 - Process claim a judge can re-run: before the leave-tail fix we predicted it would change NOTHING on the sealed
   sets; comparing the raw resolver output for all 241 sentences (not the scores), 0 changed. Identical scores alone
-  would prove much less, since offsetting errors look the same.
+  would prove much less, since offsetting errors look the same. The same prediction held a second time for the lab
+  colour aliases (purple -> blue, orange -> red; 7399c025): 0 of 241 outputs changed (8baee1bc).
 
 - All grasp numbers are sim. Real-robot friction is unmeasured (organiser answer).
 - Triangles stay the weakest shape (20 of 29 with pinch_v1). The organisers' own oracle also missed mainly on
