@@ -77,5 +77,22 @@ class TestMergeSplit(unittest.TestCase):
         self.assertGreaterEqual(len(on.split_blob(blob, area, cen, None)), 2)
 
 
+
+class TestRealPerc3(unittest.TestCase):
+    KEYS = ["perception.real_merge_split", "perception.prism_speckle_floor", "perception.color_gate.fk_silhouette"]
+
+    def test_realperc3_on_for_real_off_in_sim(self):
+        real = load_config(overlay="finals_r23_realperc3")
+        so = real["profile_auto"]["sim_overrides"]
+        for k in self.KEYS:
+            self.assertTrue(_get(real, k), k)
+            self.assertIs(so.get(k), False, k)
+        self.assertFalse(_get(real, "perception.real_border_partial"))
+        self.assertFalse(_get(real, "perception.split_by_solidity"))
+        sim = load_config(overlay="finals_r23_realperc3", overrides=dict(so))
+        for k in self.KEYS:
+            self.assertFalse(_get(sim, k), k)
+
+
 if __name__ == "__main__":
     unittest.main()
