@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
 import os
 import re
 import sys
@@ -32,6 +33,7 @@ from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene
 
 from . import decision as dec
+from . import landing
 from .bin_vote import vote_bins
 from .config import hand_postures, home_arm, load_config
 from .held import HeldDetector
@@ -276,6 +278,13 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+        self._landing = None        # policy.verify_landing: the release whose outcome the next look classifies
+        self._occ_prev = None       # verify_landing: {bin: occupancy} of the previous look
+        self.landing_events = []    # verify_landing: (kind, colour, bin) per classified release
+        self.landing_regrants = 0
+        self.landing_refunds = 0
+        self.bounce_count = {}
+        self._landing_excl_logged = set()
         self._skill_pending = None  # skills.memory: the started pick whose outcome is not settled yet
         self._joint_offset_t0 = None                      # debug.log_joint_offset: start of the first-second window
         self._last_policy_arm_cmd = self._last_policy_hand_cmd = None
@@ -812,6 +821,10 @@ class ClassicalPolicy:
             dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs))
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
+            if self._landing_on():   # policy.verify_landing: classify the last release, never target an in-bin object
+                relook, dets = self._landing_review(obs, dets)
+                if relook is not None:
+                    return relook
             return self._choose_retry(dets, obs, verify=False)
         dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
                                                    **self._detect_kw(), **self._fk_kw(obs))
@@ -922,7 +935,119 @@ class ClassicalPolicy:
                 self.retry_allow += [(xy, extra) for xy in excl]
                 self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
                 res = self._choose(dets, obs, verify)
+        if res[0] == "none" and dets and self._landing_on():
+            res = self._landing_regrant(res, dets, obs)
         return res
+
+    # ------------------------------------------------------------------ policy.verify_landing
+    def _landing_on(self):
+        """verify_landing is the observe-only verifier; the old verify_placement (#6) keeps its own machinery."""
+        return bool(self.cfg["policy"].get("verify_landing", False)) and not self._verify_on()
+
+    def _landing_review(self, obs, dets):
+        """-> (relook result | None, dets). Never raises: any error keeps the stock detections."""
+        try:
+            return self._landing_review_inner(obs, dets)
+        except Exception as exc:
+            self.log(f"[landing] disabled for this look: {type(exc).__name__}: {exc}")
+            return None, dets
+
+    def _landing_review_inner(self, obs, dets):
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        occ = landing.bin_occupancy(self.perception, obs.get("head_depth"))
+        pend = self._landing
+        if pend is not None:
+            min_delta = float(pol.get("landing_min_delta", 0.5))
+            kind, info = landing.classify_landing(pend, self._occ_prev, occ, dets, min_delta)
+            if kind in ("lost", "unknown"):
+                cb = self._landing_colour_bin(obs, pend["color"])
+                if cb is not None:
+                    kind, info = landing.classify_landing(pend, self._occ_prev, occ, dets, min_delta, colour_bin=cb)
+            if kind in ("lost", "unknown") and pend.get("relooks", int(pol.get("landing_relooks", 1))) > 0:
+                pend["relooks"] = pend.get("relooks", int(pol.get("landing_relooks", 1))) - 1
+                return ("relook", None, len(dets)), dets   # a bounce may still roll: one more settled frame
+            self._landing = None
+            self.landing_events.append((kind, pend["color"], pend["bin"]))
+            dtxt = {k: round(v, 2) for k, v in info["delta"].items()}
+            self.log(f"[landing] t={t:.1f} {pend['color']}->{pend['bin']}: {kind} delta={dtxt}")
+            if kind == "wrong_bin":
+                self.log(f"[landing] {pend['color']} landed in {info['bin']} (wrong bin, -1): logged, not corrected")
+            elif kind == "bounce":
+                dets = self._landing_requeue(pend, info["det"], dets)
+        self._occ_prev = occ
+        margin = float(pol.get("landing_in_bin_margin_m", 0.01))
+        keep = []
+        for d in dets:
+            b = landing.inside_bin(self.perception, d.top[:2], margin)
+            if b is None:
+                keep.append(d)
+            elif (d.color, b) not in self._landing_excl_logged:
+                self._landing_excl_logged.add((d.color, b))
+                self.log(f"[landing] {d.color} inside the {b} bin footprint: never a pick target")
+        self.last_detections = keep
+        return None, keep
+
+    def _landing_colour_bin(self, obs, color):
+        """Bin name of a same-colour blob inside a bin footprint (colour fallback when depth is inconclusive)."""
+        try:
+            _, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
+                                                 **self._detect_kw(), **self._fk_kw(obs))
+        except Exception:
+            return None
+        for d, why in rejected:
+            if d is not None and d.color == color and why.startswith("in_bin:"):
+                return why.split(":", 1)[1]
+        return None
+
+    def _landing_requeue(self, pend, det, dets):
+        """A bounced object is a normal counter target again: refund the attempt, forget the old give-ups, jitter the grasp."""
+        pol = self.cfg["policy"]
+        src = np.asarray(pend["src_xy"], float)
+        if self.landing_refunds < int(pol.get("landing_max_refunds", 4)):
+            self.landing_refunds += 1
+            rad = self._attempt_radius()
+            for i in range(len(self.attempts) - 1, -1, -1):
+                if np.linalg.norm(np.asarray(self.attempts[i][0], float) - src) < rad:
+                    self.attempts.pop(i)
+                    break
+            near = [tr for tr in self.attempt_tracks
+                    if tr["color"] == pend["color"] and np.linalg.norm(src - tr["xy"]) < rad]
+            if near:
+                tr = min(near, key=lambda item: np.linalg.norm(src - item["xy"]))
+                tr["count"] = max(0, tr["count"] - 1)
+        rad = float(pol["same_object_radius"])
+        self.failed = [f for f in self.failed if np.linalg.norm(det.top[:2] - f) >= rad
+                       and np.linalg.norm(src - f) >= rad]
+        n = self.bounce_count.get(pend["color"], 0)
+        self.bounce_count[pend["color"]] = n + 1
+        jit = landing.jitter(n, float(pol.get("landing_jitter_m", 0.01)), det.top[:2])
+        moved = dataclasses.replace(det, top=det.top + np.r_[jit, 0.0])
+        self.log(f"[landing] {pend['color']} bounced back to the counter at ({det.top[0]:+.3f},{det.top[1]:+.3f}): "
+                 f"re-queued, jitter ({jit[0] * 100:+.1f},{jit[1] * 100:+.1f}) cm")
+        return [moved if d is det else d for d in dets]
+
+    def _landing_regrant(self, res, dets, obs):
+        """Nothing pickable but objects were skipped for max_attempts only: with a full pick+place cycle of time left
+        they get one fresh attempt (vary_hist keeps the retry from repeating a grasp). At most landing_regrants_max."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        if (self.landing_regrants >= int(pol.get("landing_regrants_max", 2))
+                or self.time_limit - t < float(pol.get("landing_regrant_min_s", 14.0))):
+            return res
+        rad = self._attempt_radius()
+        excluded = [(d.color, d.top[:2]) for d in dets if self._attempt_excluded(d.top[:2], d.color)]
+        if not excluded:
+            return res
+        self.landing_regrants += 1
+        self.attempts = [(p, c) for p, c in self.attempts
+                         if not any(np.linalg.norm(xy - p) < rad for _, xy in excluded)]
+        self.attempt_tracks = [tr for tr in self.attempt_tracks
+                               if not any(tr["color"] == color and np.linalg.norm(xy - tr["xy"]) < rad
+                                          for color, xy in excluded)]
+        self.retry_allow += [(xy, 1) for _, xy in excluded]
+        self._note(t, f"landing regrant {self.landing_regrants}: {len(excluded)} object(s) get one more attempt")
+        return self._choose(dets, obs, False)
 
     def _bin_of(self, d):
         """lookup_bin for a counter candidate; a miss (None / abstain) is logged once per object per episode."""
@@ -2157,6 +2282,10 @@ class ClassicalPolicy:
             self._exec = {"plan": plan, "n": len(plan.arm), "cut": 0, "t8": False}
         if plan.corrective:
             self.n_corrections += 1
+        if self._landing_on() and not plan.corrective and plan.target_bin in self.scene.bin_names:
+            self._landing = {"color": plan.color, "bin": plan.target_bin, "src_xy": np.asarray(xy, float).copy(),
+                             "pre_xy": [d.top[:2].copy() for d in self.last_detections if d.color == plan.color],
+                             "t": float(t)}
         if plan.posture is not None and self.cfg["policy"].get("grasp_diag_log", False):
             nm, label, conf, path = plan.posture[:4]
             gate = ""
