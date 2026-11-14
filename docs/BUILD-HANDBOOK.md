@@ -1195,8 +1195,17 @@ object is **0**.
 > and `train.yaml` noise; it does **not** model HSV segmentation error on the mask boundary,
 > object–object occlusion, or renderer artifacts. The 61 → 100 gap is far too large to be an
 > artifact of those, and the *direction* is arithmetic from `T_pelvis_optical` — but **the absolute
-> 100 % is not verified** until it runs against `mock_world.Renderer` (which ✅ the organisers ship
-> and `test_classical.py:56` already drives with depth noise and 15 % holes) or a real render.
+> 100 % is not verified** until it runs against a real render.
+
+> 🔴 **And `mock_world` cannot do that verification.** Originally Oliver's finding, relayed by
+> Timi: **`mock_world` draws the triangular prism as a box.** So the obvious cheap check —
+> `mock_world.Renderer`, which the organisers ship and `test_classical.py:56` already drives with
+> depth noise and 15 % holes — would report a clean pass on cube and cylinder and tell us **nothing
+> about the one shape the classifier most needs to get right.** Worse, a box-shaped "triangle"
+> would score ratio ≈ 0.97 and be labelled a cube, so a naive mock test would look like a *failure*
+> of a correct classifier. **Verify on an Isaac render only.** Timi can supply frames from box A
+> with `aalto.sh snap` now the cameras are fixed — that is the cheapest real check and it is the
+> next thing this item needs.
 
 ### 8. Stretch
 
