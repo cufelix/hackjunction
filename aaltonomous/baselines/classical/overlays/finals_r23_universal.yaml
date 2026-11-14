@@ -1,7 +1,5 @@
-# finals_r23_universal = finals_r22 (hue_guard OFF, bisect: main regression) + ALL universal layers ON (see UNIVERSAL.md).
-# Classical stack stays the always-on safety/fallback layer: brain unreachable = finals_r22 behaviour.
-# base finals_r22: finals_r21 + fixvote (C3/H4/H5 vote ON) + multilingual ON; bisect rc1->r19c: hue_guard OFF, hsv_set robust, safety_shell OFF (Timi 15:20).
-# finals_r21 (R29): finals_r20 flags on rc6 code = gate fk_dilate 0 / near_margin 0, footprint->colour fallback, first-look wait, bin_vote pitch_T, sat_floor, fixed_mapping.
+# finals_r23_universal: finals_r23 (profile_auto + sim_overrides unchanged) + the universal brain/open-vocab layer ON
+# finals_r23: finals_r22 + profile_auto (sim/real from first frames) + gate_below_bins + instruction.structured + hazard_guard; sim_overrides restores rc1 values in sim only
 name: finals_r23_universal
 flags:
   hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
@@ -77,20 +75,31 @@ flags:
   perception.color_gate.near_margin_m: 0.10    # New H2/M1  prior/disagree union through full bin.vote.max_shift_m
   policy.generation_workers: true               # H7: reset invalidates look workers immediately; stale generations never publish
   grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort
-  perception.novel_objects: true                # universal  depth blobs above the counter -> open-vocabulary candidates (never override known)
-  grasp.generic: true                           # universal  depth-geometry pinch/handle grasp for unknown shapes (width gate from URDF)
-  instruction.novel_objects: true               # universal  deterministic colour/shape synonym match of a novel object to the named bin
-  policy.novel_obstacles: true                  # universal  every other novel footprint is a 3-D keep-out for the hand path
-  brain.enabled: true                           # universal  closed-set brain (maps objects->bins ONLY when the parser abstains / names unknown things)
-  brain.backend: llamacpp                       # universal  bounded async HTTP + GBNF, llama-server inside the SAME container
-  brain.url: http://127.0.0.1:8080/completion   # universal  127.0.0.1 only; unreachable = classical finals_r22
-  brain.planner: true                           # universal  whole-instruction plan, validated (bins, ids, graspable, bin-authority)
-  brain.find: true                              # universal  VLM open-vocabulary grounding of named objects
-  brain.find_to_detection: true                 # universal  find() point without a detection -> novel Detection (deduplicated by 3D position)
-  brain.closed_loop: true                       # universal  async re-plan after each outcome; retry/abandon decided in code
-  brain.image_max_side_px: 448                  # brainspeed downscale head RGB for find/decide
-  brain.find_n_predict: 128                     # brainspeed find() output cap
-  brain.ev_gate: true                           # universal  per-object EV gate: low-confidence brain bin -> leave the object (0 beats -1)
-  brain.grounded_picks: true                    # universal  open-vocabulary instruction: only find()-located ids may be picked (real eval: blind plan hallucinated fruit)
-  brain.call_timeout_s: 4.0                     # universal  real 8B plan call p50 ~1.5 s on a busy GPU: 1.0 s timed out 61% of calls (async, act() unaffected)
-  brain.plan_timeout_s: 4.0                     # universal  initial plan deadline (async)
+  profile_auto.auto_detect: true
+  policy.fixed_instruction_first: true   # sort_fixed: instruction beats the venue map only when it maps every colour
+  policy.safety_shell: true   # real only: hold-last watchdog + 20 % velocity reserve (sim restores false)
+  perception.gate_below_bins: true   # r23 candidate
+  instruction.structured: true   # r23 candidate
+  instruction.hazard_guard: true   # r23 candidate
+  instruction.venue_colour_aliases: true   # real-only: venue colour words EN/FI/CS (orange->red, purple->blue)
+  planner.lift_from_contact: true   # real-only: table-resting start: vertical lift first, never go_to through the table
+  bin.vote.max_shift_m: 0.18   # real-only: real bins +8..+15 cm vs nominal (Oliver drop_2)
+  profile_auto.sim_overrides: {bin.geometry_runtime: false, bin.vote.async_extract: false, bin.vote.enabled: false, bin.vote.frame_transform_snapshot: false, bin.vote.max_shift_m: 0.1, bin.vote.signed_rim_fit: false, calib.plane.apply_height: false, grasp.drop_slot_grid: false, grasp.held_calibration.enabled: false, grasp.held_detector: stall, grasp.release_confirm: false, grasp.release_wait_s: null, hand.mirror_index_middle: false, instruction.max_chars: 0, instruction.multilingual: false, instruction.strict: false, instruction.venue_colour_aliases: false, motion.arm_vel_cap: null, motion.output_caps: null, perception.color_gate.enabled: false, perception.color_gate.fk_dilate_px: 0, perception.color_gate.fk_mask: false, perception.color_gate.live_bins: false, perception.color_gate.near_margin_m: 0.0, perception.color_gate.sat_floor: false, perception.gate_below_bins: false, perception.online_pitch_cal: false, planner.lift_from_contact: false, policy.fixed_instruction_first: false, policy.fixed_mapping: null, policy.generation_workers: false, policy.safety_shell: false, safety.nan_guard: false, scene.counter_z_prior: null}  # sim only: ALL 28 rc1-vs-r22 keys at rc1 values + gate_below_bins/fixed_instruction_first/safety_shell off -> sim = rc1 + lang (X8 A43); real robot keeps r23
+  brain.backend: llamacpp
+  brain.call_timeout_s: 4.0
+  brain.closed_loop: true
+  brain.enabled: true
+  brain.ev_gate: true
+  brain.find_n_predict: 128
+  brain.find_to_detection: true
+  brain.find: true
+  brain.grounded_picks: true
+  brain.image_max_side_px: 448
+  brain.planner: true
+  brain.plan_timeout_s: 4.0
+  brain.url: http://127.0.0.1:8080/completion
+  grasp.generic: true
+  instruction.novel_objects: true
+  perception.novel_objects: true
+  policy.novel_obstacles: true
+  perception.novel.max_area_px: 60000

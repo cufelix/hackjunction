@@ -157,6 +157,7 @@ flags:
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
   perception.novel_objects: false               # R22 novel depth candidates (off in shipped submission)
+  perception.novel.max_area_px: 30000
   grasp.generic: false                          # R22 novel geometry grasp (off in shipped submission)
   instruction.novel_objects: false              # R22 novel instruction grounding (off in shipped submission)
   policy.novel_obstacles: false                 # R22 novel collision keep-outs (off in shipped submission)

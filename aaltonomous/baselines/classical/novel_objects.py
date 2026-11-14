@@ -231,10 +231,8 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         # supersedes a known-family cube/cylinder/triangle, which stays with the existing detector.
         if any(d.color in _KNOWN_FAMILY and d.shape in _KNOWN_SHAPES and d.color != colour for d in nearby):
             continue
-        # universal: a colour detection coincides with a blob that is NOT larger than a known object (a known cube clipped
-        # by the bin / robot mask looks like a thin sliver).  Only a clearly larger/elongated component may supersede it.
-        # Gated on an explicit cfg supersede_min_ratio (theirs defaulted it to 1.15 unflagged; ours must stay exact by default).
-        if cfg.get("supersede_min_ratio") is not None and nearby and dims[0] <= known_hi * float(cfg["supersede_min_ratio"]):
+        # only a clearly larger component may supersede a coincident colour detection.
+        if nearby and dims[0] <= known_hi * float(cfg.get("supersede_min_ratio", 1.15)):
             continue
 
         label, handle_mask, image_axis, circularity = _shape(blob, dims, cfg)
