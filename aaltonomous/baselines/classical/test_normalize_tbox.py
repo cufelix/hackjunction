@@ -31,6 +31,32 @@ class TestColourBinClauses(unittest.TestCase):
                   "blue boxes go to the left"):
             self.assertEqual(drop_colour_bin_clauses(s), s, s)
 
+    def test_position_word_keeps_a_colour_named_bin_clause(self):
+        # the real bins ARE orange: "the orange box on the left" is a position, not a colour-named bin
+        cases = {"Put the purple cubes in the orange box on the left.": {("blue", "cube"): "left"},
+                 "Purple objects go in the orange box on the right, yellow ones in the orange box on the left "
+                 "and orange ones in the middle orange box.": {"blue": "right", "yellow": "left", "red": "center"}}
+        for s, want in cases.items():
+            self.assertEqual(resolve(normalize(s), fallback={}), want, s)
+
+    def test_everything_dropped_returns_the_original_sentence(self):
+        # an emptied sentence = the resolver's FIXED fallback guess; the raw sentence is never worse than raw
+        s = "Put the red cubes in the orange bin."
+        self.assertEqual(drop_colour_bin_clauses(s), s)
+        self.assertTrue(normalize(s).strip())
+
+    def test_ordinal_bins_counted_from_a_side(self):
+        cases = {"Lilac pieces must be placed in the third bin (left to right).": {"blue": "right"},
+                 "Put the yellow things in the third box from the left.": {"yellow": "right"},
+                 "Orange ones go in the first bin from the right.": {"red": "right"},
+                 "Purple goes into the second one from the left.": {"blue": "center"},
+                 "Put yellow in the first bin, counting from the left.": {"yellow": "left"}}
+        for s, want in cases.items():
+            got = resolve(normalize(s), fallback={})
+            self.assertEqual({k: v for k, v in got.items() if k in want}, want, (s, normalize(s), got))
+        for s in ("Put the first cube in the left bin.", "Yellow goes in the third bin."):
+            self.assertEqual(normalize(s), s)   # no side word: untouched
+
 
 if __name__ == "__main__":
     unittest.main()
