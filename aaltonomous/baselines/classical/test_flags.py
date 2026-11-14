@@ -147,7 +147,8 @@ class TestFlags(unittest.TestCase):
                                                                               "perception.color_gate.live_bins", "perception.color_gate.fk_mask"}
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.geometry_runtime", "grasp.held_detector",
                                                           "calib.plane.apply_height", "grasp.drop_slot_grid"}
-        expect["finals_r21"] = expect["finals_r20"]   # R29: same flags, rc6 code
+        expect["finals_r21"] = expect["finals_r20"] | {"perception.color_gate.fk_dilate_px",
+                                                         "perception.color_gate.near_margin_m"}   # R29 + fixfk
         expect["finals_r22"] = (expect["finals_r21"] | {"bin.vote.enabled", "bin.vote.signed_rim_fit", "bin.vote.async_extract",
                                                        "bin.vote.frame_transform_snapshot", "instruction.multilingual"}) \
             - {"perception.hue_guard.enabled", "policy.safety_shell"}   # r22: fixvote ON, bisect rc1->r19c

@@ -68,8 +68,10 @@ FLAGS = {
     "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),
     "perception.principal_point": ("Oliver lane 3", "file", "file | center: Isaac renders cx,cy at the image centre"),
     "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
-    "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = the policy's current bin estimate (bin.vote shift / calibrate_bins); none -> nominal + near_margin_m towards the robot"),
+    "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = tight confident per-bin vote; prior/disagree/missing confidence -> nominal-to-near-margin union"),
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
+    "perception.color_gate.fk_dilate_px": ("New H2", 0, "FK arm/hand per-link silhouette dilation in pixels; 0 = stock sparse-mask tuning"),
+    "perception.color_gate.near_margin_m": ("New H2/M1", 0.0, "low-confidence live-bin hedge towards the robot; finals uses bin.vote.max_shift_m"),
     "perception.color_gate.sat_floor": ("Felix gate", False, "reject blue (purple) blobs with median HSV S < sat_floor_params.blue and yellow < .yellow (shadow / sheen); red and orange unchanged"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
@@ -346,6 +348,9 @@ def _check_color_gate(cfg):
             raise ValueError(f"perception.color_gate.{k} = {v!r}: want a finite number >= {lo}")
     for k in ("area_frac", "min_px_no_z", "edge_m", "near_margin_m"):
         num(k)
+    dilate = g.get("fk_dilate_px")
+    if isinstance(dilate, bool) or not isinstance(dilate, int) or dilate < 0:
+        raise ValueError(f"perception.color_gate.fk_dilate_px = {dilate!r}: want an int >= 0")
     for k in ("max_area_frac", "max_px_no_z", "ws_abs_y", "ws_edge_m"):
         num(k, opt=True)
     num("max_cands", lo=1)

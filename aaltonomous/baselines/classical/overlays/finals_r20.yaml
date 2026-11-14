@@ -49,8 +49,8 @@ flags:
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
   perception.color_gate.enabled: true          # Felix gate   A/B arm: cand_r17 + the color_gate post-filter
   perception.online_pitch_cal: table            # Timi pitch per-episode camera pitch from the counter plane
-  perception.color_gate.live_bins: true        # Felix gate  footprint = live bin estimate, else nominal + 10 cm near
-  perception.color_gate.fk_mask: true          # Felix gate  FK arm/hand mask (dilated 15 px)
+  perception.color_gate.live_bins: true        # Felix gate  confidence-aware, but base near_margin_m is 0 in r20
+  perception.color_gate.fk_mask: true          # Felix gate  sparse FK samples: base fk_dilate_px is 0 in r20
   motion.arm_vel_cap: 0.90                       # Timi vel   rad/s cap (sim profile 0.97)
   instruction.normalize: true                   # Felix lang   rc1 language layer (Modal 106/117, 0 wrong)
   perception.hue_guard.enabled: true            # r19 Felix  cross-label hue gap + top-face hue + red_min_s: orange/yellow abstain, never swap
