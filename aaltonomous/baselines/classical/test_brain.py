@@ -462,8 +462,7 @@ OPEN_VOCAB = "The object farthest from the robot goes in the right bin."
 
 
 class TestResolverAbstain(unittest.TestCase):
-    """resolve() never abstains by itself (unparsed -> FIXED_MAPPING). The brain guard asks with fallback={}: {} = the
-    resolver has no answer, so the model may decide; the classical path keeps the plain resolve()."""
+    """The finalized parser mapping is shared by the classical planner and brain guard; None lets the model decide."""
     CL = {"tool": "pick_place", "args": {"obj_id": "o0", "bin": "left"}}     # the planner's FIXED default
     RIGHT = {"choice": idx("pick_place", obj_id="o0", bin="right"), "confidence": 0.99}
 
@@ -485,6 +484,7 @@ class TestResolverAbstain(unittest.TestCase):
         pol.mapping = dict(FIXED_MAPPING)
         mapping, source = pol._resolver_mapping({"task": "sort_fixed", "instruction": ""})
         self.assertEqual((mapping, source), (dict(FIXED_MAPPING), "fixed"))
+        pol.mapping = {"red": "right"}       # reset() finalizes an explicit mapping before building the brain guard
         mapping, source = pol._resolver_mapping({"instruction": OPEN_VOCAB, "mapping": {"red": "right"}})
         self.assertEqual((mapping, source), ({"red": "right"}, "explicit"))
 
@@ -519,7 +519,8 @@ class TestResolverAbstain(unittest.TestCase):
 
         env = make_mock_env(seed=0)
         pol = ClassicalPolicy(log=None, safety=env.filter.cfg, time_limit=120.0,
-                              overrides={"brain.enabled": True, "brain.debug_wait": True, "brain.prefetch": False})
+                              overrides={"brain.enabled": True, "brain.debug_wait": True, "brain.prefetch": False,
+                                         "instruction.resolve": True})
         pol.brain = BrainLayer(pol.cfg["brain"], backend=Right())
         obs = env.reset()
         pol.reset({"instruction": OPEN_VOCAB, "time_limit": 120.0})
@@ -584,7 +585,7 @@ class TestFind(unittest.TestCase):
         env = make_mock_env(seed=0)
         pol = ClassicalPolicy(log=None, safety=env.filter.cfg, time_limit=120.0,
                               overrides={"brain.enabled": True, "brain.debug_wait": True, "brain.prefetch": False,
-                                         "brain.find": True})
+                                         "brain.find": True, "instruction.resolve": True})
         pol.brain = BrainLayer(pol.cfg["brain"], backend=FindThenRight())
         calls = []
         pol._brain_find_fn = lambda rgb, q: (calls.append(q), [pol.last_detections[-1].uv if pol.last_detections else (0, 0)])[1]

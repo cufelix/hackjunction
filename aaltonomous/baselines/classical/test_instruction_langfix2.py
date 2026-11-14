@@ -269,7 +269,9 @@ class TestWiringAndSpeed(unittest.TestCase):
 
     def test_flag_on_goes_through_the_new_rules_flag_off_does_not(self):
         text = "Žluté dejte doleva, fialové doprostřed a oranžové doprava."
-        on = self._mapping(load_config(overlay="ab_langzip"), text)
+        # Exercise the pass-2 Czech token rewrites themselves; the full-finals multilingual grammar is a separate path.
+        on = self._mapping(load_config(overlay="finals_r22_langzip",
+                                       overrides={"instruction.multilingual": False}), text)
         self.assertEqual((on.get("yellow"), on.get("blue"), on.get("red")), ("left", "center", "right"))
         off = self._mapping(load_config(overlay="finals_r21"), text)
         self.assertNotEqual((off.get("yellow"), off.get("blue"), off.get("red")), ("left", "center", "right"))

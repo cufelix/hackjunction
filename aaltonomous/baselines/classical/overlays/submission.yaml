@@ -23,6 +23,7 @@ flags:
   instruction.multilingual: false               # FI/CZ       conservative Finnish/Czech instruction canonicalizer
   instruction.strict: false                     # Felix strict never guess (rc1_strict overlay turns it on)
   instruction.structured: false                 # langzip deterministic parallel lists (finals_r22_langzip overlay turns it on)
+  instruction.hazard_guard: false               # bugsweep conservative parser hazards (finals_r22_langzip turns it on)
   instruction.venue_colour_aliases: false       # T10 venue colour words EN/FI/CS, amber = orange (finals_r22_coloralias turns it on)
   brain.backend: stub
   brain.url: http://127.0.0.1:8080/completion

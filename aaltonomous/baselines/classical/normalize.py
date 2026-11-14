@@ -190,6 +190,17 @@ def rewrite_ordinal_bins(sentence: str) -> str:
     return _BARE_ORD.sub(lambda m: m.group(1) + _bin_for(m.group(2), sides[0]), out)
 
 
+def _rewrite_ordinal_bins_guarded(sentence: str) -> str:
+    """Rewrite every explicitly anchored ordinal. Conflicting anchors disable only bare-ordinal propagation."""
+    sides = [(m.group(2) or m.group(3)).lower() for m in _ORD_RE.finditer(sentence)]
+    if not sides:
+        return sentence
+    out = _ORD_RE.sub(_ord_sub, sentence)
+    if len(set(sides)) > 1:
+        return out
+    return _BARE_ORD.sub(lambda m: m.group(1) + _bin_for(m.group(2), sides[0]), out)
+
+
 # Colour names for the real finals objects (purple / yellow / orange) the resolver does not know, incl. Finnish and
 # Czech (any inflection, with or without diacritics). Applied before the token pass; "amber" is ORANGE here (the
 # resolver alone reads it as yellow) because the real objects have no amber-yellow, only yellow and orange.
@@ -1337,12 +1348,14 @@ def _s_typos(sentence: str) -> str:
     return "".join(out) + sentence[last:]
 
 
-def structured_normalize(text: str) -> str:
+def structured_normalize(text: str, hazard_guard: bool = False) -> str:
     """normalize() plus the structured-pass rewrites above. Never raises; on an error falls back to normalize()."""
     if text is None:
         return ""
     try:
         s = str(text)
+        if hazard_guard:
+            s = _rewrite_ordinal_bins_guarded(s)
         s = _S_AMBER.sub(_S_AMBER_TOKEN, s)
         # "the right in the middle bin" = the middle bin ("right" intensifies); "... in the middle of the table" is unclear
         s = _S_INTENSIFIER.sub(lambda m: m.group(0) if m.group(1) and re.match(r"\s+of\b", s[m.end():]) else m.group(3), s)
@@ -1361,6 +1374,11 @@ _S_REST = re.compile(
     r"\b(?:for\s+)?(?:the\s+|all\s+(?:the\s+)?)?(?:(?:remaining|other|leftover)\s+(?:shapes?|objects?|items?|pieces?|"
     r"colou?rs?|ones|things)|rest(?:\s+of\s+(?:the\s+)?(?:shapes?|objects?|items?|pieces?))?|everything\s+else|"
     r"anything\s+else|others)\b\s*[,:]?", re.I)
+_S_INSTANCE_SELECTOR = re.compile(
+    rf"\b(?:(?:a|an|the|one|single|first|second|third)\s+(?:{_S_COLOURS}\s+)?"
+    r"(?:object|item|piece|thing|one|cube|cylinder|triangle|prism|block)"
+    rf"|(?:two|three|four|five|\d+)\s+(?:{_S_COLOURS}\s+)?"
+    r"(?:objects?|items?|pieces?|things?|ones?|cubes?|cylinders?|triangles?|prisms?|blocks?))\b", re.I)
 
 
 def _s_core(text: str):
@@ -1376,7 +1394,7 @@ def _s_lookup(mapping: dict, colour: str, shape: str):
     return False, None
 
 
-def _s_complement(text: str):
+def _s_complement(text: str, hazard_guard: bool = False):
     """"<named part>. For the remaining shapes, <rules>": rules apply only to the objects the first part did not name.
     None if the sentence has no such split or either half is not understood (the unchanged path then decides)."""
     ms = list(_S_REST.finditer(text))
@@ -1384,9 +1402,17 @@ def _s_complement(text: str):
         return None
     m = ms[0]
     first, second = text[:m.start()], text[m.end():]
+    if hazard_guard and _S_INSTANCE_SELECTOR.search(first):
+        return {"default": None}           # a type mapping cannot distinguish one instance from the rest of its type
     k1, k2 = _strict_keys(first), _strict_keys(second)
     if not (k1[0] or k1[1]) or not (k2[0] or k2[1]) or not _bins_in(first) or not _bins_in(second):
         return None                         # a plain "the rest go left" is the catch-all path, not this one
+    rest_words = m.group(0).lower()
+    scope = ("shape" if re.search(r"\bshapes?\b", rest_words)
+             else "colour" if re.search(r"\bcolou?rs?\b", rest_words)
+             else "object")
+    if hazard_guard and ((scope == "shape" and not k1[1]) or (scope == "colour" and not k1[0])):
+        return {"default": None}           # the named complement dimension has no established prior category
     m1, m2 = _s_core(first.rstrip(" ,;:.-")), _s_core(second.lstrip(" ,;:.-"))
     m1 = {k: v for k, v in m1.items() if k != "default"}
     m2 = {k: v for k, v in m2.items() if k != "default"}
@@ -1397,6 +1423,8 @@ def _s_complement(text: str):
     for c, sh in _S_ALL_OBJECTS:
         if _s_lookup(m1, c, sh)[0]:
             continue                        # already named by the first part
+        if hazard_guard and ((scope == "shape" and sh in k1[1]) or (scope == "colour" and c in k1[0])):
+            continue                        # "remaining shapes/colours" excludes the whole prior category
         out[(c, sh)] = _s_lookup(m2, c, sh)[1]
     out["default"] = None
     return out
@@ -1470,15 +1498,126 @@ def _s_mask_false_colour(text: str, mapping: dict) -> dict:
     return out
 
 
-def structured_final(text: str) -> dict:
+_S_UNSUPPORTED_CONDITIONAL = re.compile(
+    r"\b(?:when|provided(?:\s+that)?|as\s+long\s+as|in\s+the\s+event(?:\s+that)?)\b", re.I)
+_S_POLITE_WHEN = re.compile(r"^\s*when\s+you\s+can\s*,\s*", re.I)
+_S_CONTROL_TYPO = re.compile(
+    r"\b(?:exept|exluding|shouldnt|mustnt|isnt|arent|cant|wont|dont)\b", re.I)
+_S_OR = re.compile(r"\b(?:or|either)\b", re.I)
+
+
+def _s_selector_cells(cols: set[str], shps: set[str]) -> set[tuple[str, str]]:
+    """Expand a text selector to the closed 3x3 ontology used by resolve_bin."""
+    return {(c, sh) for c in (cols or set(_ins.COLORS)) for sh in (shps or set(_ins.SHAPES))}
+
+
+def _s_sentence_segments(text: str) -> list[str]:
+    return [part for part in re.split(r"[.;!?\n]+", text) if part.strip()]
+
+
+def _s_complement_scopes(text: str) -> tuple[str, ...]:
+    """Rule scopes that must not conflict across an explicit rest/remaining boundary."""
+    rest = list(_S_REST.finditer(text))
+    return (text[:rest[0].start()], text[rest[0].end():]) if len(rest) == 1 else (text,)
+
+
+def _s_scope_opinions(text: str) -> dict[tuple[str, str], set[str]]:
+    """Explicit, untriggered destinations per grid cell inside one rule scope."""
+    assigned: dict[tuple[str, str], set[str]] = {}
+    for (cols, shps), stated_bins, catch_all, triggered in _pieces(text):
+        if triggered or catch_all or len(stated_bins) != 1 or not (cols or shps):
+            continue
+        bin_name = next(iter(stated_bins))
+        for cell in _s_selector_cells(cols, shps):
+            assigned.setdefault(cell, set()).add(bin_name)
+    return assigned
+
+
+def _s_rule_opinions(text: str) -> dict[tuple[str, str], set[str]]:
+    """Explicit destinations per grid cell, with a complement applying only outside its established scope."""
+    rest = list(_S_REST.finditer(text))
+    if len(rest) != 1:
+        return _s_scope_opinions(text)
+    m = rest[0]
+    first, second = text[:m.start()], text[m.end():]
+    out, later = _s_scope_opinions(first), _s_scope_opinions(second)
+    cols, shps = _strict_keys(first)
+    words = m.group(0).lower()
+    scope = ("shape" if re.search(r"\bshapes?\b", words)
+             else "colour" if re.search(r"\bcolou?rs?\b", words)
+             else "object")
+    for cell, bins in later.items():
+        if ((scope == "shape" and cell[1] in shps) or (scope == "colour" and cell[0] in cols)
+                or (scope == "object" and cell in out)):
+            continue
+        out.setdefault(cell, set()).update(bins)
+    return out
+
+
+def _s_hazard_cells(text: str) -> set[tuple[str, str]]:
+    """Cells whose stated rule is unsafe. This only removes opinions; it never manufactures a destination."""
+    hazards: set[tuple[str, str]] = set()
+    structured = structured_mapping(text)
+    one_to_one = isinstance(structured, dict) and any(value in _ins.BINS for value in structured.values())
+    conditional_text = _S_POLITE_WHEN.sub("", text)
+    for scope_text in _s_complement_scopes(conditional_text):
+        for segment in _s_sentence_segments(scope_text):
+            cols, shps = _strict_keys(segment)
+            cells = _s_selector_cells(cols, shps)
+            if _S_UNSUPPORTED_CONDITIONAL.search(segment) or _S_CONTROL_TYPO.search(segment):
+                hazards |= cells
+                continue
+            stated_bins = _bins_in(segment, _ins._ordinals_ok(_ins._tokens(segment)))
+            selector_count = (len(cols) * len(shps) if cols and shps else len(cols) or len(shps))
+            if not one_to_one and _S_OR.search(segment) and (cols or shps):
+                hazards |= cells
+            elif not one_to_one and selector_count == 1 and len(stated_bins) > 1:
+                hazards |= cells
+
+    # Compare ordinary rules on the expanded grid. A colour rule and a shape rule are both broad, but overlap at one
+    # cell just as a broad and compound rule do. Complement phrases establish scope, so compare each side separately.
+    for scope_text in _s_complement_scopes(text):
+        assigned = _s_scope_opinions(scope_text)
+        hazards |= {cell for cell, opinions in assigned.items() if len(opinions) > 1}
+    return hazards
+
+
+def _s_hazard_filter(text: str, mapping: dict) -> dict:
+    out = dict(mapping)
+    hazards = _s_hazard_cells(text)
+    opinions = _s_rule_opinions(text)
+    # Shape=None detections cannot select a tuple. Once any cell of a colour is hazardous, preserve safe known-shape
+    # cells explicitly and mask the bare colour/default fallback so an unknown shape cannot leak into a wrong bin.
+    for colour in {c for c, _ in hazards}:
+        for shape in _ins.SHAPES:
+            cell = (colour, shape)
+            if cell in hazards:
+                continue
+            stated = opinions.get(cell, set())
+            if len(stated) == 1:
+                bin_name = next(iter(stated))
+            else:
+                present, bin_name = _s_lookup(out, colour, shape)
+                if not present:
+                    bin_name = out.get("default")
+            if bin_name is not None:
+                out[cell] = bin_name
+        out[colour] = None
+    for cell in hazards:
+        out[cell] = None
+    return out or {"default": None}
+
+
+def structured_final(text: str, hazard_guard: bool = False) -> dict:
     """The instruction.structured mapping for already structured_normalize()d text. Never raises."""
     try:
-        out = _s_complement(text)
+        out = _s_complement(text, hazard_guard=hazard_guard)
         if out is None:
             out = _s_block_scope(text, _s_core(text))
         if _S_AMBER_TOKEN in text.lower():
             out = _s_amber(text, out)
-        return _s_mask_false_colour(text, out)
+        out = _s_mask_false_colour(text, out)
+        return _s_hazard_filter(text, out) if hazard_guard else out
     except Exception:
         return {"default": None}
 

@@ -465,6 +465,7 @@ instruction:
   multilingual: false         # FLAG. cached FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK -> English; needs resolve
   strict: false               # FLAG (Felix strict). never guess: abstain instead of FIXED / inferred keys; needs resolve
   structured: false           # FLAG (langzip). deterministic complete list/conditional rules before strict; needs resolve + strict
+  hazard_guard: false         # FLAG (bugsweep). fail closed on parser hazards; needs structured
   venue_colour_aliases: false # FLAG (T10). venue colour words in EN/FI/CS incl. inflections, before normalize; amber = orange; needs resolve
   max_chars: 0                # FLAG (fuzz). >0: cap the text at this many chars, cut at the last sentence/clause boundary
                               # (. ; ! ? newline) else the last space; the resolver is quadratic (50k chars = 19 s). 0 = off

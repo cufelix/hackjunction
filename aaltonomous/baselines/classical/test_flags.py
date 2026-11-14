@@ -204,7 +204,8 @@ class TestFlags(unittest.TestCase):
             "perception.color_gate.fk_silhouette", "perception.sim_center_principal_point", "perception.aim_z_frac",
             "perception.still_vote"}   # gatefix A/B
         expect["finals_r22_chunk"] = expect["finals_r22"] | {"policy.chunk_ticks", "policy.hold_ticks"}   # handin rate A/B
-        expect["finals_r22_langzip"] = expect["finals_r22"] | {"instruction.structured"}   # langzip A/B
+        expect["finals_r22_langzip"] = expect["finals_r22"] | {
+            "instruction.structured", "instruction.hazard_guard"}   # langzip + conservative parser hazards A/B
         expect["finals_r22_counter"] = expect["finals_r22"] | {"calib.wide_counter_window", "planner.bin_wall_extra_m"}   # counter-z A/B
         expect["finals_r22_coloralias"] = expect["finals_r22"] | {"instruction.venue_colour_aliases"}   # T10 colour aliases A/B
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \

@@ -75,3 +75,4 @@ flags:
   policy.generation_workers: true               # H7: reset invalidates look workers immediately; stale generations never publish
   grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort
   instruction.structured: true   # langzip: complete deterministic lists before strict; needs resolve + strict
+  instruction.hazard_guard: true # bugsweep: abstain on contradictory/conditional/scoped parser hazards
