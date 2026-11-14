@@ -2,6 +2,7 @@
     python -m unittest aaltonomous.baselines.classical.test_hand_calib -v
 Synthetic depth = the shipped arm surface model posed by FK, rendered from a KNOWN perturbed camera + the counter plane.
 """
+import time
 import unittest
 
 import numpy as np
@@ -111,6 +112,15 @@ class TestSolver(unittest.TestCase):
         self.assertTrue(np.array_equal(r.T, T0))
 
 
+def settle(pol, o, n=400):
+    """act() until the async hand calibration is decided (worker thread), like successive policy ticks."""
+    for _ in range(n):
+        pol.act(o)
+        if pol._hc_done:
+            return
+        time.sleep(0.005)
+
+
 class TestPolicyFlag(unittest.TestCase):
     def obs(self, T_true):
         return {"head_rgb": np.zeros((480, 640, 3), np.uint8), "head_depth": scene_depth(T_true), "arm_q": HOME.copy(),
@@ -129,8 +139,7 @@ class TestPolicyFlag(unittest.TestCase):
         from .policy import ClassicalPolicy
         pol = ClassicalPolicy(log=None, overrides={"perception.hand_calibration.enabled": True})
         T_true = hc.perturb(T0, [0.008, -0.006, 0.004], [0.6, -0.5, 0.4])
-        for _ in range(3):
-            pol.act(self.obs(T_true))
+        settle(pol, self.obs(T_true))
         self.assertTrue(pol.hand_calibration.success, pol.hand_calibration.summary())
         self.assertIsNot(pol.perception.cal, pol.cal)
         self.assertTrue(np.array_equal(pol.cal.cams["head"].T_pelvis_optical, T0))       # shared object nominal
@@ -147,8 +156,7 @@ class TestPolicyFlag(unittest.TestCase):
         T_a = hc.perturb(T0, [0.0, 0.0, 0.0], [-6.0, 0.0, 0.0])           # "A" corrected pitch (6 deg > the 3 deg cap)
         pol.perception.pitch_T = T_a.copy()
         T_true = hc.perturb(T_a, [0.005, -0.004, 0.003], [0.5, -0.4, 0.3])
-        for _ in range(3):
-            pol.act(self.obs(T_true))
+        settle(pol, self.obs(T_true))
         self.assertTrue(pol.hand_calibration.success, pol.hand_calibration.summary())
         self.assertLess(np.linalg.norm(pol.perception.pitch_T[:3, 3] - T_true[:3, 3]), 0.003)
         self.assertLess(hc._rot_deg(T_true[:3, :3].T @ pol.perception.current_T()[:3, :3]), 0.3)
@@ -159,11 +167,45 @@ class TestPolicyFlag(unittest.TestCase):
                                                    "perception.hand_calibration.max_tries": 2})
         o = self.obs(T0)
         o["head_depth"] = np.zeros((480, 640), np.uint16)
-        for _ in range(4):
-            pol.act(o)
+        settle(pol, o)
         self.assertIs(pol.perception.cal, pol.cal)
         self.assertFalse(pol.hand_calibration.success)
         self.assertTrue(any("hand calibration fallback" in m for _, m in pol.events))
+
+    def test_act_does_not_block_on_a_slow_solve(self):
+        """A 0.6 s solve runs on a worker: the per-tick hook stays fast, the result lands afterwards."""
+        from .policy import ClassicalPolicy
+        pol = ClassicalPolicy(log=None, overrides={"perception.hand_calibration.enabled": True})
+        real = pol.hand_calib.solve
+
+        def slow(*a, **k):
+            time.sleep(0.6)
+            return real(*a, **k)
+
+        pol.hand_calib.solve = slow
+        T_true = hc.perturb(T0, [0.005, -0.004, 0.003], [0.5, -0.4, 0.3])
+        o = self.obs(T_true)
+        pol._hand_calibrate(o, 0.0)                                  # first tick only records arm_q
+        worst, t0 = 0.0, time.perf_counter()
+        while not pol._hc_done and time.perf_counter() - t0 < 5:
+            a = time.perf_counter()
+            pol._hand_calibrate(o, 0.0)       # exactly what act() adds per tick (the policy's own first look is ~190 ms)
+            worst = max(worst, time.perf_counter() - a)
+            time.sleep(0.005)
+        self.assertGreater(time.perf_counter() - t0, 0.4)          # the solve really was in flight across ticks
+        self.assertLess(worst, 0.030, f"_hand_calibrate took {worst * 1000:.1f} ms while the solve ran")
+        self.assertTrue(pol.hand_calibration.success, pol.hand_calibration.summary())
+
+    def test_stuck_solve_times_out_to_nominal(self):
+        from .policy import ClassicalPolicy
+        pol = ClassicalPolicy(log=None, overrides={"perception.hand_calibration.enabled": True,
+                                                   "perception.hand_calibration.job_timeout_s": 0.2})
+        pol.hand_calib.solve = lambda *a, **k: time.sleep(1.0)
+        o = self.obs(T0)
+        settle(pol, o, 200)
+        self.assertTrue(pol._hc_done)
+        self.assertIs(pol.perception.cal, pol.cal)
+        self.assertTrue(any("timed out" in m for _, m in pol.events))
 
 
 if __name__ == "__main__":

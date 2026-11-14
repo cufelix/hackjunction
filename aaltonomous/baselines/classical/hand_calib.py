@@ -56,6 +56,7 @@ DEFAULTS = dict(
     huber_m=0.003,
     depth_range_mm=[150, 1500],
     max_tries=10,             # policy: give up after this many still frames without a valid result
+    job_timeout_s=1.5,        # policy: abandon a worker solve older than this
     still_rad=0.01,           # policy: max arm joint change between two frames to count as still
 )
 
