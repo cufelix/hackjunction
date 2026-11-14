@@ -1,8 +1,8 @@
 diff --git a/aaltonomous/baselines/classical/config.yaml b/aaltonomous/baselines/classical/config.yaml
-index dc5bc66..436a9fe 100644
+index dc5bc66..7f30f10 100644
 --- a/aaltonomous/baselines/classical/config.yaml
 +++ b/aaltonomous/baselines/classical/config.yaml
-@@ -112,7 +112,18 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
+@@ -112,7 +112,22 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
  policy:
    max_attempts: 2             # same object re-detected after this many tries -> skip it
    same_object_radius: 0.03
@@ -18,25 +18,31 @@ index dc5bc66..436a9fe 100644
 +  triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority
 +  shape_cost: {cube: 0, cylinder: 1, triangle: 2}
 +  time_margin_s: 0.0          # a plan must end this long before time_limit (applies with and without triage)
++  # Retry pass (default off): once per episode, when nothing is left but objects excluded by max_attempts are still
++  # detected, they get retry_extra_attempts more tries (failed/IK-skipped objects stay excluded). Normal time check.
++  retry_pass: false
++  retry_extra_attempts: 2
  
  # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
  # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.
 diff --git a/aaltonomous/baselines/classical/policy.py b/aaltonomous/baselines/classical/policy.py
-index 5c6f94f..01c7b69 100644
+index 5c6f94f..4d12146 100644
 --- a/aaltonomous/baselines/classical/policy.py
 +++ b/aaltonomous/baselines/classical/policy.py
-@@ -86,6 +86,10 @@ class ClassicalPolicy:
+@@ -86,6 +86,12 @@ class ClassicalPolicy:
          self._job = None
          self._decision = None
          self.last_detections = []
 +        self.mapping_conf = dict(info.get("mapping_conf") or {})   # colour -> confidence (default 1.0), triage tie-break
 +        self.too_long = []          # (position, plan duration) of feasible plans that did not fit the time left
 +        self.n_started = 0          # executed plans started this episode, whatever object they were for
++        self.retry_allow = []       # (position, extra attempts) granted by the retry pass; replaces max_attempts there
++        self.retry_pass_used = False
 +        self._summary_logged = False
  
      def confirm(self):
          self._decision = "go"
-@@ -137,6 +141,11 @@ class ClassicalPolicy:
+@@ -137,6 +143,11 @@ class ClassicalPolicy:
              self.state = "look"
              return self._pop()
          if self.state == "look":
@@ -48,7 +54,56 @@ index 5c6f94f..01c7b69 100644
              if self.threaded:
                  if self._job is None:
                      self._job = {"obs": obs, "result": None}
-@@ -195,17 +204,45 @@ class ClassicalPolicy:
+@@ -179,13 +190,47 @@ class ClassicalPolicy:
+     def _look(self, obs):
+         dets = self.perception.detect(obs["head_rgb"], obs["head_depth"])
+         self.last_detections = dets
++        res = self._pick(obs, dets)
++        pol = self.cfg["policy"]
++        if res[0] == "none" and dets and pol.get("retry_pass", False) and not self.retry_pass_used:
++            # Retry pass (once per episode): objects excluded only by max_attempts get retry_extra_attempts more
++            # tries. `failed` (IK failure / operator skip) stays excluded. The time check is the normal one on the
++            # real plan duration: triage skips misfits, without triage _after_look refuses a plan that does not fit.
++            rad = pol["same_object_radius"]
++            excl = [d.top[:2] for d in dets if self._attempt_excluded(d.top[:2])]
++            if excl:
++                self.retry_pass_used = True
++                extra = int(pol.get("retry_extra_attempts", 2))
++                self.attempts = [(p, c) for p, c in self.attempts
++                                 if not any(np.linalg.norm(xy - p) < rad for xy in excl)]
++                self.retry_allow += [(xy, extra) for xy in excl]
++                self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
++                res = self._pick(obs, dets)
++        return res
++
++    def _attempt_excluded(self, xy):
++        """True when the object at xy is skipped for its attempt count only (not in `failed`)."""
++        rad = self.cfg["policy"]["same_object_radius"]
++        if any(np.linalg.norm(xy - f) < rad for f in self.failed):
++            return False
++        n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < rad)
++        return n >= self._attempt_limit(xy)
++
++    def _attempt_limit(self, xy):
++        rad = self.cfg["policy"]["same_object_radius"]
++        for p, extra in self.retry_allow:
++            if np.linalg.norm(xy - p) < rad:
++                return extra
++        return self.cfg["policy"]["max_attempts"]
++
++    def _pick(self, obs, dets):
+         cands = []
+         for d in dets:
+             xy = d.top[:2]
+             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
+                 continue
+             n = sum(c for p, c in self.attempts if np.linalg.norm(xy - p) < self.cfg["policy"]["same_object_radius"])
+-            if n >= self.cfg["policy"]["max_attempts"]:
++            if n >= self._attempt_limit(xy):
+                 continue
+             cands.append(d)
+         if self.cfg["policy"]["order"] == "nearest_bin":
+@@ -195,17 +240,45 @@ class ClassicalPolicy:
          else:
              def key(d):
                  return -d.n_px
@@ -95,7 +150,7 @@ index 5c6f94f..01c7b69 100644
      def _after_look(self, res, t):
          kind = res[0]
          if kind == "error":
-@@ -216,8 +253,13 @@ class ClassicalPolicy:
+@@ -216,8 +289,13 @@ class ClassicalPolicy:
              self._note(t, f"nothing left to sort ({res[2]} detections)")
              self.state = "done"
              return self._hold(done=True)
@@ -110,7 +165,7 @@ index 5c6f94f..01c7b69 100644
              self._note(t, f"not enough time for {plan.color} ({plan.duration:.0f} s)")
              self.state = "done"
              return self._hold(done=True)
-@@ -231,6 +273,7 @@ class ClassicalPolicy:
+@@ -231,6 +309,7 @@ class ClassicalPolicy:
      def _start(self, plan, t):
          xy = plan.waypoints["grasp"][:2]
          self.attempts.append((xy, 1))
@@ -118,23 +173,24 @@ index 5c6f94f..01c7b69 100644
          self._enqueue(plan.arm, plan.hand)
          self.state = "executing"
          self._note(t, f"execute {plan.summary()}")
-@@ -254,6 +297,10 @@ class ClassicalPolicy:
+@@ -254,6 +333,11 @@ class ClassicalPolicy:
          remote runner needs one request per hold chunk instead of one per tick: the command rate stays at 30 Hz
          even when the planner thread and other processes (sims) load the CPU."""
          k = 1 if done else max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
 +        if done and not self._summary_logged:   # passive end-of-episode summary (log only, once)
 +            self._summary_logged = True
 +            self.log(f"[classical] episode end: attempts={len(self.attempts)} failed={len(self.failed)} "
-+                     f"too_long={len(getattr(self, 'too_long', []))} started={self.n_started}")
++                     f"too_long={len(getattr(self, 'too_long', []))} started={self.n_started} "
++                     f"retry_pass_used={int(self.retry_pass_used)}")
          return {"arm_q_target": np.repeat(self.arm_cmd[None], k, 0), "hand_q_target": np.repeat(self.hand_cmd[None], k, 0),
                  "done": bool(done)}
  
 diff --git a/aaltonomous/baselines/classical/test_time_triage.py b/aaltonomous/baselines/classical/test_time_triage.py
 new file mode 100644
-index 0000000..45944c1
+index 0000000..83d211b
 --- /dev/null
 +++ b/aaltonomous/baselines/classical/test_time_triage.py
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,279 @@
 +"""CPU tests of policy.time_triage with a scripted perception + planner (no IK, no sim). Run from outside the repo:
 +    PYTHONPATH=<repo> python -m pytest <repo>/aaltonomous/baselines/classical/test_time_triage.py -q
 +"""
@@ -299,6 +355,8 @@ index 0000000..45944c1
 +        self.assertEqual(p["triage_order"], "duration")
 +        self.assertEqual(p["time_margin_s"], 0.0)
 +        self.assertIsNone(p["max_total_attempts"])
++        self.assertFalse(p["retry_pass"])
++        self.assertEqual(p["retry_extra_attempts"], 2)
 +
 +
 +def run_rolling(cap, n_looks=6, logs=None):
@@ -334,7 +392,80 @@ index 0000000..45944c1
 +        pol, _ = run_rolling(2, logs=logs)
 +        pol.act(obs(99.0))                                     # further done ticks do not repeat the summary
 +        lines = [m for m in logs if "episode end" in m]
-+        self.assertEqual(lines, ["[classical] episode end: attempts=2 failed=0 too_long=0 started=2"])
++        self.assertEqual(lines, ["[classical] episode end: attempts=2 failed=0 too_long=0 started=2 retry_pass_used=0"])
++
++
++def run_stuck(n_looks=8, dt=10.0, dur=5.0, logs=None, **policy):
++    """An object whose grasp always fails: it stays put, so every look re-detects it at the same spot.
++    Returns (policy, index of the look that ended done or None)."""
++    pol = make({"red": dur}, [det("red", 0.30)], time_limit=policy.pop("time_limit", 1000.0), **policy)
++    if logs is not None:
++        pol.log = logs.append
++    for i in range(n_looks):
++        pol.state, pol.queue_a, pol.queue_h = "look", None, None
++        if pol.act(obs(dt * i))["done"]:
++            return pol, i
++    return pol, None
++
++
++class TestRetryPass(unittest.TestCase):
++    def test_off_ends_after_max_attempts(self):
++        pol, done_at = run_stuck()
++        self.assertEqual((done_at, pol.n_started), (2, 2))
++        self.assertFalse(pol.retry_pass_used)
++        self.assertIn("nothing left to sort (1 detections)", pol.events[-1][1])
++
++    def test_on_retries_two_more_then_ends(self):
++        logs = []
++        pol, done_at = run_stuck(retry_pass=True, logs=logs)
++        self.assertEqual((done_at, pol.n_started), (4, 4))     # 2 normal + 2 extra, then excluded again
++        self.assertTrue(pol.retry_pass_used)
++        self.assertEqual(sum("retry pass" in m for _, m in pol.events), 1)
++        self.assertIn("nothing left to sort", pol.events[-1][1])
++        self.assertIn("retry_pass_used=1", [m for m in logs if "episode end" in m][0])
++
++    def test_extra_attempts_configurable(self):
++        pol, done_at = run_stuck(retry_pass=True, retry_extra_attempts=1)
++        self.assertEqual((done_at, pol.n_started), (3, 3))
++
++    def test_pass_only_once(self):
++        pol, done_at = run_stuck(retry_pass=True)
++        self.assertEqual(done_at, 4)
++        for i in range(3):                                     # further looks: no second pass
++            pol.state, pol.queue_a, pol.queue_h = "look", None, None
++            self.assertTrue(pol.act(obs(100.0 + i))["done"])
++        self.assertEqual(pol.n_started, 4)
++        self.assertEqual(sum("retry pass" in m for _, m in pol.events), 1)
++
++    def test_no_retry_start_when_plan_does_not_fit(self):
++        # look 2 at t=20 with a 5 s plan and a 24 s limit: the retry plan does not fit, nothing is started
++        for triage in (False, True):
++            pol, done_at = run_stuck(retry_pass=True, time_limit=24.0, time_triage=triage)
++            self.assertEqual((done_at, pol.n_started), (2, 2), f"triage={triage}")
++            self.assertIn("not enough time" if not triage else "no candidate fits", pol.events[-1][1])
++        # exactly fits (20 + 5 = 25): the retry attempt runs
++        pol, _ = run_stuck(retry_pass=True, time_limit=25.0, n_looks=3)
++        self.assertEqual(pol.n_started, 3)
++
++    def test_respects_max_total_attempts(self):
++        pol, done_at = run_stuck(retry_pass=True, max_total_attempts=3)
++        self.assertEqual((done_at, pol.n_started), (3, 3))
++        self.assertIn("attempt cap reached", pol.events[-1][1])
++        pol, done_at = run_stuck(retry_pass=True, max_total_attempts=2)   # cap hit first: no pass at all
++        self.assertEqual((done_at, pol.n_started), (2, 2))
++        self.assertFalse(pol.retry_pass_used)
++
++    def test_failed_objects_stay_excluded(self):
++        pol2 = make({"red": None}, [det("red", 0.30)], retry_pass=True)
++        self.assertTrue(pol2.act(obs(0.0))["done"])            # IK failure -> failed, not retried by the pass
++        self.assertFalse(pol2.retry_pass_used)
++        self.assertEqual(pol2.planner.calls, ["red"])
++
++    def test_reset_clears_flag(self):
++        pol, _ = run_stuck(retry_pass=True)
++        pol.reset()
++        self.assertFalse(pol.retry_pass_used)
++        self.assertEqual(pol.retry_allow, [])
 +
 +
 +if __name__ == "__main__":
