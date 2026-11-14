@@ -201,6 +201,8 @@ class Perception:
         # what reset_calibration() restores: AFTER every construction step above (principal_point copy), so a reset never
         # reverts perception to the file K. perception.hand_calibration swaps self.cal for a corrected COPY per episode.
         self.cal_nominal = self.cal
+        self.ah = (cfg.get("calib") or {}).get("plane") or {}   # calib.plane.apply_height (FLAG, default OFF)
+        self._ah_est, self._ah_tries = [], 0
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
@@ -267,6 +269,8 @@ class Perception:
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
+        self.scene.counter_z_runtime = None
+        self._ah_est, self._ah_tries = [], 0
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
         self.pitch_calibration = None
@@ -745,7 +749,7 @@ class Perception:
                                           float(elapsed_ms), str(reason))
         return self.calibration
 
-    def _counter_plane(self, depth, c):
+    def _counter_plane(self, depth, c, z0=None):
         """Pelvis points of `depth` (stride-subsampled) and the counter plane z = ax + by + c fitted to them.
         (P, coef, None) or (None, None, reason). Shared by calibrate_bins and the bin.vote rim vote."""
         dlo, dhi = self.cfg["depth_range_mm"]
@@ -764,13 +768,13 @@ class Perception:
         mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
         counter = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) &
                    (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03) &
-                   (np.abs(P[:, 2] - sc.counter_z) < float(c.get("plane_z_window", 0.06))))
+                   (np.abs(P[:, 2] - (sc.counter_z if z0 is None else z0)) < float(c.get("plane_z_window", 0.06))))
         plane_points = P[counter]
         if len(plane_points) < int(c.get("min_plane_points", 500)):
             return (None, None, "counter plane not visible")
         A = np.c_[plane_points[:, :2], np.ones(len(plane_points))]
         keep = np.ones(len(A), bool)
-        coef = np.array([0.0, 0.0, sc.counter_z])
+        coef = np.array([0.0, 0.0, sc.counter_z if z0 is None else z0])
         plane_tol = float(c.get("plane_inlier_m", 0.006))
         for _ in range(3):
             if keep.sum() < int(c.get("min_plane_points", 500)):
@@ -782,6 +786,52 @@ class Perception:
         if keep.sum() < int(c.get("min_plane_points", 500)):
             return (None, None, "counter plane fit rejected")
         return P, coef, None
+
+    def _plane_height(self, depth, a):
+        """(z at the mat centre, tilt deg, n inliers, None) from the existing counter-plane fit, or (nan, tilt, n, why)."""
+        nan = float("nan")
+        if depth is None or np.ndim(depth) != 2 or np.size(depth) == 0:
+            return nan, nan, 0, "no depth"
+        depth = np.nan_to_num(np.asarray(depth, float), nan=0.0, posinf=0.0, neginf=0.0)
+        nom, sc = self.scene.nominal_counter_z, self.scene
+        c = {"plane_z_window": float(a.get("window_m", 0.40)), "min_plane_points": int(a.get("min_inliers", 500))}
+        xy = sc.mat_to_pelvis([*(np.asarray(sc.cfg["counter"]["mat_size"], float) / 2), 0.0])[:2]
+        z = nom
+        for _ in range(2):          # pass 1 coarse (wide window), pass 2 tight around pass 1's plane
+            P, coef, why = self._counter_plane(depth, c, z0=z)
+            if why:
+                return nan, nan, 0, why
+            z = float(coef @ np.r_[xy, 1.0])
+            c["plane_z_window"] = 0.03
+        tilt = float(np.degrees(np.arctan(np.hypot(coef[0], coef[1]))))
+        n = int((np.abs(P[:, 2] - np.c_[P[:, :2], np.ones(len(P))] @ coef) <= 0.006).sum())
+        if n < int(a.get("min_inliers", 500)):
+            return nan, tilt, n, f"few inliers {n}"
+        if tilt > float(a.get("max_tilt_deg", 8.0)):
+            return z, tilt, n, f"tilt {tilt:.1f} deg"
+        return z, tilt, n, None
+
+    def update_counter_height(self, depth):
+        """calib.plane.apply_height: one look -> scene.counter_z_runtime = median of the first N valid estimates, clamped.
+        Inert (no state touched) when the flag is off."""
+        a = self.ah
+        n_looks = int(a.get("looks", 3))
+        if not a.get("apply_height") or len(self._ah_est) >= n_looks or self._ah_tries >= 3 * n_looks:
+            return
+        self._ah_tries += 1
+        nom = self.scene.nominal_counter_z
+        try:
+            z, tilt, n, why = self._plane_height(depth, a)
+        except Exception as exc:
+            z, tilt, n, why = float("nan"), float("nan"), 0, f"{type(exc).__name__}"
+        if why is None and np.isfinite(z):
+            self._ah_est.append(z)
+        est = float(np.median(self._ah_est)) if self._ah_est else float("nan")
+        lim = float(a.get("max_dz_m", 0.20))
+        applied = float(np.clip(est, nom - lim, nom + lim)) if self._ah_est else nom
+        self.scene.counter_z_runtime = applied if self._ah_est else None
+        self.log(f"[apply_height] est={est:.4f} applied={applied:.4f} n={len(self._ah_est)} tilt_deg={tilt:.2f} "
+                 f"fallback={why or ('clamped' if applied != est else 'none')}")
 
     def calibrate_bins(self, depth):
         """Estimate a single XY correction by aligning elevated depth points to the fixed bin walls.
@@ -981,6 +1031,7 @@ class Perception:
         c = self.cfg
         dets, rejected = [], []
         self.color_gate_degraded = False
+        self.update_counter_height(depth)    # calib.plane.apply_height (inert when off)
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
         if self.fk_mask and robot_q is not None:   # the robot's own arms / hands are never objects
             arm = self._fk_arm_mask(keep.shape, *robot_q)
