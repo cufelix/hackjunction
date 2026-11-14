@@ -35,6 +35,7 @@ FLAGS = {
     "brain.url": ("brain", "http://127.0.0.1:8080/completion", "llama.cpp server for brain.backend=llamacpp"),
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
+    "calib.plane.apply_height": ("P0 table", False, "runtime counter_z from the head-depth counter-plane fit (median of the first calib.plane.looks looks, clamped to +-max_dz_m, nominal on bad depth / tilt > max_tilt_deg); every consumer reads scene.counter_z"),
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),

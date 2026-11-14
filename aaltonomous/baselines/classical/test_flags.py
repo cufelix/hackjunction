@@ -127,6 +127,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_hue_v2"] = nopp   # hsv_set robust_v2 is a value change of a flag already on in cand_r17
         expect["ab_hue_guard"] = nopp | {"perception.hue_guard.enabled"}
         expect["ab_generic_fallback"] = nopp | {"grasp.generic_fallback"}   # rebased on cand_r17
+        expect["ab_apply_height"] = nopp | {"calib.plane.apply_height"}
         expect["ab_fk_xcheck"] = nopp | {"calib.fk_xcheck"}   # rebased on cand_r17: log-only B2 arm
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
         expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
@@ -175,9 +176,9 @@ class TestFlags(unittest.TestCase):
     def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
-        self.assertEqual(set(retry), {"ab_b1_inj_p7", "ab_bingeo", "ab_binvote", "ab_cgate",
-                                      "ab_cgate_fk", "ab_cgate_live", "ab_colour_kmeans",
-                                      "ab_decision", "ab_drop_height_extra_m",
+        self.assertEqual(set(retry), {"ab_apply_height", "ab_b1_inj_p7", "ab_bingeo", "ab_binvote",
+                                      "ab_cgate", "ab_cgate_fk", "ab_cgate_live",
+                                      "ab_colour_kmeans", "ab_decision", "ab_drop_height_extra_m",
                                       "ab_drop_lateral_margin_m", "ab_first_object_speed_scale",
                                       "ab_fk_xcheck", "ab_generic_fallback", "ab_hand_calib",
                                       "ab_held_detector", "ab_hue_guard", "ab_hue_v2", "ab_inj_p4",

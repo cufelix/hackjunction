@@ -53,6 +53,8 @@ def resolve_bin(mapping, color, shape=None):
 class Scene:
     cfg: dict
 
+    counter_z_runtime = None   # calib.plane.apply_height: runtime table height (pelvis frame); None = the nominal scene value
+
     def __post_init__(self):
         c = self.cfg
         if "objects" not in c and "cube" in c:      # old scene files (scene_v1_proposal.yaml): single cube section
@@ -81,9 +83,15 @@ class Scene:
         return np.stack([d[..., 1], d[..., 0], d[..., 2]], axis=-1)
 
     @property
-    def counter_z(self):
-        """Counter (mat) surface height in the pelvis frame."""
+    def nominal_counter_z(self):
         return float(self.origin[2])
+
+    @property
+    def counter_z(self):
+        """Counter (mat) surface height in the pelvis frame: the ONE value every consumer reads (the nominal scene
+        height unless calib.plane.apply_height set a runtime estimate)."""
+        z = self.counter_z_runtime
+        return float(self.origin[2]) if z is None else float(z)
 
     # ------------------------------------------------------------ geometry
     @property
