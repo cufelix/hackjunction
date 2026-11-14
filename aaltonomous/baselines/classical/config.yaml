@@ -338,8 +338,6 @@ perception:
                               # object <= 1.35, two touching >= 1.48)
     max_parts: 3
 
-planner:
-  bin_wall_extra_m: 0.0      # FLAG (counter-z): extra bin wall height (m) added to the release/carry height and the rim keepout; finals 0.01
 
 bin:
   geometry_runtime: false     # FLAG (bin geo). perception follows planner.bin_shift for every bin consumer (needs bin.vote.enabled for a shift)
@@ -566,6 +564,7 @@ motion:
   counter_clearance: 0.03     # hand points above the counter footprint stay this high during transit
 
 planner:
+  bin_wall_extra_m: 0.0      # FLAG (counter-z): extra bin wall height (m) added to the release/carry height and the rim keepout; finals 0.01
   per_target_guard: false     # FLAG (finals done). A failed/raising target cannot stop planning for other detections
   per_target_cooldown_s: 2.0  # after a target fails planning, wait this long before offering it again
 
