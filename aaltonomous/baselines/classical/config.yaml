@@ -544,6 +544,18 @@ policy:
   verify_yellow_unknown: false   # FLAG (Felix #6 review). A yellow in-bin detection = unknown, never a mismatch
   max_corrections_per_episode: null   # FLAG (Felix #6 review). Cap on corrective picks; set = counter picks first,
                                       # an unplannable correction no longer ends the episode (null = stock #6)
+  verify_landing: false       # FLAG (r22). After every release look 1-2 frames (head depth occupancy of the runtime bin
+                              # interiors, colour fallback): ok | wrong bin (log) | bounced to the counter (re-queue with
+                              # jitter, attempt refunded) | lost. Observe + re-queue only: never stops the episode, no
+                              # slots, no corrections. Also never re-picks an object inside a bin footprint, and regrants
+                              # attempts to counter objects that hit max_attempts while time is left (landing_regrants_max)
+  landing_min_delta: 0.5      # verify_landing: min gain of summed occupied height (m x px, stride 2) = one object ~ 1.4
+  landing_jitter_m: 0.01      # verify_landing: grasp-point jitter of a re-queued bounced object
+  landing_max_refunds: 4      # verify_landing: attempt refunds per episode (a bounce is not a failed grasp)
+  landing_in_bin_margin_m: 0.01   # verify_landing: counter detections within this of a runtime bin footprint are never targets
+  landing_regrants_max: 2     # verify_landing: attempt regrants per episode (once nothing is pickable and time is left)
+  landing_regrant_min_s: 14.0 # verify_landing: regrant only with at least this long left (one pick + place cycle)
+  landing_relooks: 1          # verify_landing: extra settled frames when the outcome is lost/unknown (a bounce may still roll)
   order: nearest_bin          # nearest_bin | largest
   bin_lookup: colour          # FLAG (round 8). colour = stock mapping[colour] | resolve_bin = scene.resolve_bin
                               # ((colour, shape) -> colour -> shape -> default; None/abstain -> stays on the counter)
