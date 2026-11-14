@@ -1601,7 +1601,8 @@ class ClassicalPolicy:
         degs = pol.get("retry_yaw_deg") or {}
         dy = np.radians(float(degs.get(label if label is not None else "none", degs.get("default", 90.0))))
         yaws = []
-        if prev["yaw"] is not None:
+        no_yaw = label == "cylinder" and bool(g.get("cylinder_no_yaw_vary", False))   # rotationally symmetric
+        if prev["yaw"] is not None and not no_yaw:
             ref = np.radians(-25.0 if prev["side"] == "left" else 25.0)   # natural finger heading of that arm
             ys = [prev["yaw"] + dy, prev["yaw"] - dy]
             ys.sort(key=lambda a: abs((a - ref + np.pi) % (2 * np.pi) - np.pi))
