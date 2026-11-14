@@ -36,6 +36,8 @@ FLAGS = {
     "perception.no_blob_shape": ("Oliver #5/#7", False, "no metric top face -> shape None, never the 2D blob ratio"),
     "perception.shape_diag": ("Oliver #5/#7", False, "passive [shape_diag] log line per detection (no action change)"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
+    "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
+    "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
     "policy.time_triage": ("Oliver #3", False, "skip plans that do not fit the time left, try the next object"),
     "policy.max_total_attempts": ("Oliver #3", None, "global per-episode cap on started picks"),
     "policy.max_attempts": ("stock param", 2, "tries per object before it is skipped (stock 2)"),

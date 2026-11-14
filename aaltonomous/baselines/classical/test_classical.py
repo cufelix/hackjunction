@@ -638,7 +638,7 @@ class TestRound3Flags(unittest.TestCase):
 
     def test_pinch_overlays_dry_run_zero_clips(self):
         """ab_pinch_v1 / ab_pinch_demo (Oliver FK a44dd79): planner safety dry-run + SafetyFilter in mock episodes."""
-        for name in ("ab_pinch_v1", "ab_pinch_demo"):
+        for name in ("ab_pinch_v1", "ab_pinch_demo", "ab_pinch_demo_yaw"):
             cfg = load_config(overlay=name)
             for seed in (0, 1, 2):
                 env = make_mock_env(seed=seed, cfg=cfg)
@@ -653,6 +653,24 @@ class TestRound3Flags(unittest.TestCase):
                 ok = [p for p in pol.plans if p.ok]
                 self.assertTrue(ok, (name, seed))
                 self.assertTrue(all(p.safety_clips == 0 for p in ok), (name, seed))
+
+    def test_pinch_demo_yaw_triangle_plans_zero_clips(self):
+        """ab_pinch_demo_yaw: yaw-aligned triangle plans (phi 53, no tri shift) pass the planner safety dry-run."""
+        from .perception import Detection
+        cfg = load_config(overlay="ab_pinch_demo_yaw")
+        post, home = hand_postures(cfg), home_arm(cfg)
+        pl = Planner(cfg, SC, post, home)
+        n_yaw = 0
+        for y in (0.10, -0.10):
+            top = np.array([0.30, y, SC.counter_z + SC.object_height()])
+            for apex in np.radians(np.arange(0, 120, 20)):
+                d = Detection("red" if y > 0 else "blue", top, 1000, 1000, "depth")
+                d.shape, d.apex_yaw, d.apex_conf = "triangle", float(apex), 1.0
+                p = pl.plan(d, home, post["open"], relocate=False)
+                if p.ok:
+                    self.assertEqual(p.safety_clips, 0, (y, apex))
+                    n_yaw += "yaw-aligned" in (p.reason or "")
+        self.assertGreater(n_yaw, 0)
 
 
 if __name__ == "__main__":

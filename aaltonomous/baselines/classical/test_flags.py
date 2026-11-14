@@ -61,7 +61,8 @@ class TestFlags(unittest.TestCase):
             cfg = load_config(overlay=str(f))
             hand_postures(cfg)                            # raises outside joint_spec (URDF) limits
             home_arm(cfg)
-        for name, pip in (("ab_pinch_v1", [0.0862, -0.0864, 0.0143]), ("ab_pinch_demo", [0.1094, -0.0694, 0.0142])):
+        for name, pip in (("ab_pinch_v1", [0.0862, -0.0864, 0.0143]), ("ab_pinch_demo", [0.1094, -0.0694, 0.0142]),
+                          ("ab_pinch_demo_yaw", [0.1094, -0.0694, 0.0142])):
             cfg = load_config(overlay=name)
             self.assertEqual(cfg["grasp"]["close_posture"], "closed_tight")
             kin = ArmKinematics(cfg)
