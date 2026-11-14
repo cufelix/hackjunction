@@ -78,6 +78,7 @@ FLAGS = {
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
     "grasp.drop_slot_overflow": ("Felix #6 rev", "counter", "slots used up: counter (leave it) | stack (slot 0)"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
+    "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),
     "motion.lift_on_stall.timeout_s": ("round 9", STOCK, "lift_on_stall: longest close hold (stock 1.2 s)"),
@@ -171,7 +172,22 @@ def load_config(path=None, overrides=None, profile=None, overlay=None):
     for k, v in (overrides or {}).items():
         _set(cfg, k, v)
     check_flag_values(cfg)
+    _apply_arm_vel_cap(cfg)
     return cfg
+
+
+def _apply_arm_vel_cap(cfg):
+    """motion.arm_vel_cap: arm_max_vel = min(profile value, cap), arm_max_acc x the same ratio. Never faster."""
+    mo = cfg.get("motion") or {}
+    cap = mo.get("arm_vel_cap")
+    if cap is None:
+        return
+    cap = float(cap)
+    if not 0.0 < cap <= 1.0:
+        raise ValueError(f"motion.arm_vel_cap = {cap} outside (0, 1] rad/s")
+    v = float(mo["arm_max_vel"])
+    if cap < v:
+        mo["arm_max_vel"], mo["arm_max_acc"] = cap, float(mo["arm_max_acc"]) * cap / v
 
 
 def check_flag_values(cfg):
