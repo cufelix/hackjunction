@@ -102,6 +102,7 @@ class TestFlags(unittest.TestCase):
                                             "policy.max_total_attempts"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
         nopp = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r17")) if is_on}
+        expect["ab_shape2d"] = nopp | {"perception.shape_2d_v2"}
         expect["ab_place_gate"] = nopp | {"policy.place_gate"}
         expect["ab_object_time_budget_s"] = nopp | {"policy.object_time_budget_s"}
         expect["ab_colour_kmeans"] = nopp | {"perception.colour_kmeans"}
@@ -195,11 +196,11 @@ class TestFlags(unittest.TestCase):
                                       "ab_plane_cgate_live", "ab_plane_cgate_live_fk",
                                       "ab_plane_cgate_live_vote", "ab_plane_inj_p7",
                                       "ab_retry_vary", "ab_retry_vary_slots", "ab_robust_input",
-                                      "ab_safety", "ab_sat_floor", "ab_vel80", "ab_vel85",
-                                      "ab_vel90", "brain_llm", "cand_r16", "cand_r16_nopp",
-                                      "cand_r17", "cand_r18", "finals_r18", "finals_r19",
-                                      "finals_r19b", "finals_r19c", "finals_r20", "finals_real",
-                                      "rc1", "rc1_strict", "safe_profile"})
+                                      "ab_safety", "ab_sat_floor", "ab_shape2d", "ab_vel80",
+                                      "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
+                                      "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
+                                      "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
+                                      "finals_real", "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 

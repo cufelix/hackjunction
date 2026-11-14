@@ -58,6 +58,7 @@ FLAGS = {
     "perception.near_bin_guard": ("Oliver #7", False, "classify_shape abstains next to a bin (cut top face)"),
     "perception.no_blob_shape": ("Oliver #5/#7", False, "no metric top face -> shape None, never the 2D blob ratio"),
     "perception.shape_diag": ("Oliver #5/#7", False, "passive [shape_diag] log line per detection (no action change)"),
+    "perception.shape_2d_v2": ("r17", False, "yellow: 2D cube/cylinder from the blob top edge (quad_rms + n_vert) where the shape would be None / the blob fallback"),
     "perception.hsv_set": ("real colour", "stock", "stock | robust: one HSV set for sim + the real head cam (hsv_robust) | robust_v2: robust with red H 0-22, yellow H 24-52 (hsv_robust_v2)"),
     "perception.hue_guard.enabled": ("hue guard", False, "robust_v2 band 22-24 + per-frame: adjacent red|yellow pair closer than min_gap_deg -> abstain (color_conf 0.3, off the bins)"),
     "perception.colour_kmeans": ("EV gate", False, "per-episode k=3 HSV object-pixel clusters re-centre robust hue ranges"),

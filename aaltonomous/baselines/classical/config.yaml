@@ -145,6 +145,13 @@ perception:
   shape_diag: false           # FLAG (Oliver). Passive: Detection.shape_diag + one [shape_diag] log line per detection
   no_blob_shape: false        # FLAG (Oliver, f857054). With classify_shape: no metric top face -> abstain (None) instead of
                               # the 2D-blob ratio (blob includes side faces: prism -> 'cylinder'). Off = blob fallback
+  shape_2d_v2: false          # FLAG (r17). Yellow only: 2D cube/cylinder from the blob's top edge where classify_shape gives None / the blob
+                              # fallback (a metric top face is kept; disagreements are logged). One [shape2d] log line per yellow detection
+  shape_2d_v2_params:         # thresholds measured on real frames (95 % leave-one-episode-out, 0 false positives)
+    quad_rms_max: 1.77        # cylinder iff quad_rms < this AND n_vert >= n_vert_min; cube iff quad_rms >= this AND n_vert <= cube_n_vert_max
+    n_vert_min: 8
+    cube_n_vert_max: 6
+    approx_eps_frac: 0.02     # approxPolyDP epsilon = this * contour perimeter
   hsv_set: stock              # FLAG (real colour, Timi). stock = `hsv` above | robust = `hsv_robust` below
   # One set for sim AND the real head cam (no AALTO_PROFILE needed). Measured (hf_perception, 2026-11-14):
   #   sim DR objects  red H 0-7/170-179 S>=75 | yellow H 23-31 S>=81 | blue H 100-116 S>=73 (V >= 122 everywhere)
