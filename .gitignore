@@ -8,3 +8,7 @@ node_modules/
 /.claude/settings.local.json
 /.serena/
 CLAUDE.md
+
+# python bytecode (embeds absolute local paths)
+__pycache__/
+*.py[cod]
