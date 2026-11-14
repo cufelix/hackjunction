@@ -108,6 +108,7 @@ FLAGS = {
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
     "debug.log_joint_offset": ("finals diag", False,
                                  "log cmd-minus-measured during steady holds in the first second (no control change)"),
+    "policy.learned_order": ("learned_p", False, "order candidates by the learned pick-success score (models/learned_p.json); ORDER ONLY: no bin change, no skip"),
     "policy.confidence_order": ("D1/D2", False, "order by 2*p/est_time (p_colour*p_bin*p_grasp), never the hardest first"),
     "policy.object_time_cap": ("D2", False, "per-object cap (remaining-15)/left 15..35 s, T-20 s no new object, T-8 s release/retract"),
     "policy.speed_tiers": ("D3", False, "1st object 0.7 + 1.5 cm clearance, clean 0.85/0.9, failure 0.6 + centre bin only"),

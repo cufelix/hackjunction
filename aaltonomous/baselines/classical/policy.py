@@ -37,6 +37,7 @@ from .config import hand_postures, home_arm, load_config
 from .held import HeldDetector
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
+from .learned_p import LearnedSuccessModel
 from .perception import Perception
 from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
 from .safety_shell import reserve_pair, reserve_plan
@@ -119,6 +120,8 @@ class ClassicalPolicy:
         self.log = log or (lambda *a: None)
         bc = self.cfg.get("brain") or {}
         self.brain = BrainLayer(bc, log=self.log) if bc.get("enabled", False) else None   # FLAG brain.enabled
+        # policy.learned_order (FLAG, default OFF): learned pick-success score as the candidate ORDER key (_ordered_cands)
+        self.learned = LearnedSuccessModel(warn=self.log) if self.cfg["policy"].get("learned_order", False) else None
         self.reset()
 
     # ------------------------------------------------------------------ API
@@ -1004,6 +1007,8 @@ class ClassicalPolicy:
             except Exception as e:
                 self._dec_fail("_conf_rank", e)
                 cands.sort(key=base)
+        elif self.learned is not None:   # policy.learned_order: learned score first, stock key as tie-break (ORDER ONLY)
+            self._learned_order(cands, dets, obs, retry_prefix, base)
         elif triage and pol.get("triage_order", "duration") == "priority":
             eps = float(pol.get("triage_tie_m", 0.02))   # candidates with ~equal cheap estimate: cheaper shape first
             cands.sort(key=lambda d: retry_prefix(d) + (round(base(d) / eps), self._priority(d)))
@@ -1024,6 +1029,41 @@ class ClassicalPolicy:
             extra.sort(key=base)
             cands += extra
         return cands, extra
+
+    # ------------------------------------------------------------------ policy.learned_order (learned_p.py)
+    def _learned_order(self, cands, dets, obs, retry_prefix, base):
+        """Sort cands in place: higher learned success first, the stock key breaks ties. Never drops or re-bins a
+        candidate. A model failure (one warning, see LearnedSuccessModel) falls back to the stock sort."""
+        scores = {}
+        try:
+            if self.learned.model is not None:
+                for d in cands:
+                    target = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
+                    scores[id(d)] = self.learned.predict(self._learned_features(d, obs, target, dets))
+        except Exception as exc:   # feature extraction is not fail-open by itself: one log line, then stock for good
+            self.log(f"[learned_order] feature extraction failed ({exc!r}); stock pick order")
+            self.learned.model = None
+        if self.learned.model is None or any(s is None for s in scores.values()):
+            cands.sort(key=lambda d: retry_prefix(d) + (base(d),))
+            return
+        cands.sort(key=lambda d: retry_prefix(d) + (-scores[id(d)], base(d)))
+
+    def _learned_features(self, d, obs, target_bin, dets=None):
+        """Cheap features known before planning (the same names as models/learned_p.json). `hand` is the planner's
+        deterministic preferred-side proxy."""
+        xy = np.asarray(d.top[:2], float)
+        nn = None
+        if dets is not None:
+            ds = [float(np.linalg.norm(xy - np.asarray(o.top[:2], float))) for o in dets if o is not d]
+            nn = min(ds) if ds else None
+        bin_y = float(self.planner.bin_xy(target_bin)[1]) if target_bin is not None else 0.0
+        ref_y = bin_y if abs(bin_y) > 0.1 else float(xy[1])
+        hand = "left" if ref_y > float(self.cfg["grasp"]["y_split"]) else "right"
+        return {"shape": getattr(d, "shape", None) or "unknown", "colour": d.color,
+                "hand": hand, "target_bin": target_bin or "unknown",
+                "attempt_index": self._attempt_count(xy, d.color) + 1, "pelvis_x": float(xy[0]),
+                "pelvis_y": float(xy[1]), "distance": float(np.hypot(xy[0], xy[1])),
+                "nearest_neighbor_distance": nn, "time_remaining": max(0.0, self.time_limit - float(obs.get("t", 0.0)))}
 
     def _choose(self, dets, obs, verify):
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
