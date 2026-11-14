@@ -2380,6 +2380,9 @@ class ClassicalPolicy:
                     valid = (kind == "pick" and any(d0 is d for d in offered)
                              and getattr(d0, "novel", False) and b0 == self._novel_brain_bin
                              and getattr(d0, "graspable", False))
+                    if valid and not self._novel_grounded(d0):
+                        valid = False
+                        self.log(f"[novel] brain pick not grounded: {getattr(d0, 'label', '') or getattr(d0, 'color', '?')}")
                     if valid:
                         d0.novel_target_bin, d0.novel_matched = b0, True
                     else:
@@ -3275,6 +3278,13 @@ class ClassicalPolicy:
         if self._found:
             world["found"] = dict(self._found)
         return world
+
+    def _novel_grounded(self, d):
+        """brain.grounded_picks: a novel object may receive a bin from the brain only when the flag is on AND the last
+        find() point lies on it (match_found, same 40 px radius as the find mapping)."""
+        if not (self.cfg.get("brain") or {}).get("grounded_picks", False):
+            return False
+        return bool(match_found([it["point"] for it in self.__dict__.get("_last_find_items", [])], [d]))
 
     def _ground_flag(self, world):
         """brain.grounded_picks (universal): for an open-vocabulary instruction (parser abstains / unknown nouns) a blind plan
