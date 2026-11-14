@@ -48,7 +48,9 @@ class TestFlags(unittest.TestCase):
                        ("grasp", "posture_apex_gate")):                     # final = cand_r14 (r14: 32/38, 28/36)
             sub[sec][k] = stock[sec][k]
         self.assertEqual(sub, stock)
-        self.assertEqual(set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"]), set(FLAGS))
+        # The frozen submission is unchanged; only the newly registered, default-off overrides may be absent.
+        sub_keys = set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"])
+        self.assertEqual(set(FLAGS) - sub_keys, {"policy.chunk_ticks", "policy.hold_ticks"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):
@@ -148,6 +150,7 @@ class TestFlags(unittest.TestCase):
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.geometry_runtime", "grasp.held_detector",
                                                           "calib.plane.apply_height"}
         expect["finals_r21"] = expect["finals_r20"]   # R29: same flags, rc6 code
+        expect["finals_r22_chunk"] = expect["finals_r21"] | {"policy.chunk_ticks", "policy.hold_ticks"}
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -155,7 +158,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
-        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21"):
+        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21",
+                  "finals_r22_chunk"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
@@ -207,7 +211,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_real", "rc1", "rc1_strict",
+                                      "finals_r21", "finals_r22_chunk", "finals_real", "rc1", "rc1_strict",
                                       "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
@@ -337,6 +341,31 @@ class TestFlags(unittest.TestCase):
                            ("policy.object_time_budget_s", 0.0), ("policy.object_time_budget_s", float("inf"))):
             with self.assertRaises(ValueError, msg=f"{key}={value}"):
                 load_config(overrides={key: value})
+
+    def test_chunk_tick_flags_override_motion_only_when_enabled(self):
+        stock = load_config(overlay="none")
+        self.assertEqual((stock["policy"]["chunk_ticks"], stock["policy"]["hold_ticks"]), (None, None))
+        self.assertEqual((stock["motion"]["chunk"], stock["motion"]["hold_ticks"]), (10, 6))
+        tuned = load_config(overlay="finals_r22_chunk")
+        self.assertEqual((tuned["policy"]["chunk_ticks"], tuned["policy"]["hold_ticks"]), (15, 10))
+        self.assertEqual((tuned["motion"]["chunk"], tuned["motion"]["hold_ticks"]), (15, 10))
+        base = load_config(overlay="finals_r21")
+        base.pop("overlay")
+        tuned.pop("overlay")
+        tuned["policy"]["chunk_ticks"] = tuned["policy"]["hold_ticks"] = None
+        tuned["motion"]["chunk"], tuned["motion"]["hold_ticks"] = 10, 6
+        self.assertEqual(tuned, base)   # the new overlay changes only the two reply-size flags
+        for key in ("policy.chunk_ticks", "policy.hold_ticks"):
+            for bad in (0, -1, 1.5, True):
+                with self.assertRaises(ValueError, msg=f"{key}={bad!r}"):
+                    load_config(overrides={key: bad})
+
+    def test_chunk_flags_off_preserve_pre_change_action_bytes(self):
+        from tools.equivalence_check import episode_digest
+        self.assertEqual(episode_digest(0, 25.0),
+                         "episode seed=0 tl=25 acts=65 end=done clips=0 "
+                         "outcomes=['correct', 'counter', 'counter', 'counter', 'correct'] plans=3 "
+                         "sha=7a17757d719689eb")
 
     def test_placeholder_overlay_is_refused(self):
         with tempfile.TemporaryDirectory() as d:

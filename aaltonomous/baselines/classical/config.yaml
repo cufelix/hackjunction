@@ -403,6 +403,8 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)
   safety_shell_vel_reserve: 0.0  # with safety_shell: >0 slows every plan to <= (1 - this) x the SafetyFilter velocity limit (e.g. 0.2); 0 = plans untouched
+  chunk_ticks: null          # FLAG. null = motion.chunk; int >= 1 overrides trajectory ticks returned per act()
+  hold_ticks: null           # FLAG. null = motion.hold_ticks; int >= 1 overrides waiting/settled hold reply ticks
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   fixed_mapping: null         # FLAG (organisers P0). colour->bin when the instruction is empty/missing; null = sim FIXED_MAPPING
   insert_guard: false         # FLAG (insert). insert_shapes (task id or 'hole ... lid' sentence): abstain on every

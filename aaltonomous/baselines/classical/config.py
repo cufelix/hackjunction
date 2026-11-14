@@ -45,6 +45,8 @@ FLAGS = {
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
+    "policy.chunk_ticks": ("finals rate", None, "override motion.chunk; null keeps the profile value"),
+    "policy.hold_ticks": ("finals rate", None, "override motion.hold_ticks; null keeps the profile value"),
     "policy.fixed_mapping": ("organisers P0", None, "colour->bin fallback when the instruction is empty/missing (null = sim FIXED_MAPPING; real robot: yellow left, blue center, red right)"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
@@ -203,8 +205,18 @@ def load_config(path=None, overrides=None, profile=None, overlay=None):
     for k, v in (overrides or {}).items():
         _set(cfg, k, v)
     check_flag_values(cfg)
+    _apply_chunk_ticks(cfg)
     _apply_arm_vel_cap(cfg)
     return cfg
+
+
+def _apply_chunk_ticks(cfg):
+    """Apply opt-in reply-size overrides. Null leaves both legacy motion values untouched."""
+    pol, motion = cfg["policy"], cfg["motion"]
+    if pol.get("chunk_ticks") is not None:
+        motion["chunk"] = pol["chunk_ticks"]
+    if pol.get("hold_ticks") is not None:
+        motion["hold_ticks"] = pol["hold_ticks"]
 
 
 def _apply_arm_vel_cap(cfg):
@@ -247,6 +259,10 @@ def check_flag_values(cfg):
         raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")
     if not isinstance(_get(cfg, "safety.nan_guard"), bool):
         raise ValueError("safety.nan_guard: want true or false")
+    for k in ("policy.chunk_ticks", "policy.hold_ticks"):
+        v = _get(cfg, k)
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
+            raise ValueError(f"{k} = {v!r}: want null or an int >= 1")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:
