@@ -1,0 +1,10 @@
+# A/B overlay: per-episode counter plane from the head depth (Oliver counter). Real sessions put the counter 1-5 cm
+# off scene.yaml; once per episode (first valid depth frame) the policy logs
+# "counter plane accepted|fallback: z=..., dz=... mm, tilt=... deg, inliers=..., rms=..., time=... ms (reason)".
+# Accepted -> measured counter z for perception height filters, the plane fallback and the planner (grasp z, rims).
+# In sim the counter is at nominal, so expect dz ~ 0 and no score change (the A/B is a no-regression check).
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_counter_plane <image>.
+name: ab_counter_plane
+flags:
+  perception.counter_plane.enabled: true
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes

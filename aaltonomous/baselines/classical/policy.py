@@ -143,6 +143,8 @@ class ClassicalPolicy:
         self.retry_pass_used = False
         self._summary_logged = False
         self.perception.reset_calibration()
+        self.planner.scene = self.perception.scene   # nominal again (counter_plane swaps it per episode)
+        self._counter_done = False
         self.calibration = None
         self._calibration_done = False
         self.last_bin_detections = []
@@ -154,6 +156,24 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+
+    def _estimate_counter(self, obs, t):
+        """perception.counter_plane: once per episode (first valid depth frame); the planner shares the result."""
+        try:
+            cp = self.perception.estimate_counter_plane(obs.get("head_depth"), obs.get("head_rgb"))
+        except Exception as exc:  # optional: never let it terminate the control loop
+            self.perception.reset_calibration()
+            self._counter_done = True
+            self._note(t, f"counter plane fallback: {type(exc).__name__}: {exc}")
+            return
+        if not cp.valid_frame:
+            return
+        self._counter_done = True
+        self.planner.scene = self.perception.scene
+        state = "accepted" if cp.success else "fallback"
+        self._note(t, f"counter plane {state}: z={cp.z:+.4f} m (dz={cp.dz * 1000:+.1f} mm), tilt={cp.tilt_deg:.2f} deg, "
+                      f"inliers={cp.n_inliers} ({cp.inlier_frac:.2f}), rms={cp.residual_m * 1000:.1f} mm, "
+                      f"time={cp.elapsed_ms:.1f} ms ({cp.reason})")
 
     def confirm(self):
         self._decision = "go"
@@ -172,6 +192,8 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        if (self.cfg["perception"].get("counter_plane") or {}).get("enabled", False) and not getattr(self, "_counter_done", False):
+            self._estimate_counter(obs, t)
         if not self._calibration_done and (self.cfg["perception"].get("self_calibration") or {}).get("enabled", False):
             started = time.perf_counter()
             try:

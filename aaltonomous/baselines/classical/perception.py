@@ -58,10 +58,38 @@ class BinCalibration:
     reason: str
 
 
+@dataclass
+class CounterPlane:
+    """Result of one episode's counter-plane fit (perception.counter_plane). z is the counter height used from now on:
+    the fitted plane at the object layout centre when accepted, else the nominal scene.yaml height."""
+    success: bool
+    valid_frame: bool
+    z: float                   # counter z (pelvis) in use
+    dz: float                  # fitted - nominal at the layout centre (m), also reported on rejection
+    tilt_deg: float            # plane tilt vs pelvis horizontal (report only)
+    coef: np.ndarray           # z = a x + b y + c (pelvis)
+    n_inliers: int
+    inlier_frac: float
+    residual_m: float          # RMS inlier residual
+    elapsed_ms: float
+    reason: str
+
+
+def scene_with_counter_z(scene, z):
+    """Copy of `scene` whose counter surface (mat origin z) is at pelvis z; xy geometry unchanged."""
+    cfg = dict(scene.cfg)
+    cfg["counter"] = dict(cfg["counter"])
+    o = list(cfg["counter"]["mat_origin_in_pelvis"])
+    cfg["counter"]["mat_origin_in_pelvis"] = [o[0], o[1], float(z)]
+    return type(scene)(cfg)
+
+
 class Perception:
     def __init__(self, cfg, scene, calibration, log=None):
         self.cfg = cfg["perception"]
         self.scene = scene
+        self.nominal_scene = scene  # perception.counter_plane may swap self.scene for a per-episode measured copy
+        self.counter_plane = None
         self.cal = calibration
         self.cam = self.cfg["camera"]
         # perception.principal_point (Oliver lane 3): "file" = calibration.yaml K (stock, right for the real D435i);
@@ -133,6 +161,117 @@ class Perception:
         """Restore the configured fallback at the start of every episode."""
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
+        self.scene = self.nominal_scene
+        self.counter_plane = None
+
+    def estimate_counter_plane(self, depth, rgb=None):
+        """perception.counter_plane: RANSAC plane through the head depth over the mat (bins and coloured blobs
+        excluded). Accepted -> self.scene becomes a copy with the measured counter z, so every counter-height use
+        (height filters, plane fallback, and the planner if it shares this scene) follows. Rejected -> nominal."""
+        started = time.perf_counter()
+        c = self.cfg.get("counter_plane") or {}
+        sc = self.nominal_scene
+        z0 = sc.counter_z
+        L = sc.cfg.get("layout") or {}
+        ref_mat = [float(np.mean(L.get("region_x", [0.45]))), float(np.mean(L.get("region_y", [0.25]))), 0.0]
+        ref = sc.mat_to_pelvis(ref_mat)[:2]
+
+        def result(success, valid, coef=None, n=0, frac=0.0, rms=np.inf, reason=""):
+            coef = np.array([0.0, 0.0, z0]) if coef is None else np.asarray(coef, float)
+            zf = float(coef[0] * ref[0] + coef[1] * ref[1] + coef[2])
+            tilt = float(np.degrees(np.arctan(np.hypot(coef[0], coef[1]))))
+            if success:
+                self.scene = scene_with_counter_z(sc, zf)
+            else:
+                self.scene = sc
+            out = CounterPlane(success, valid, self.scene.counter_z, zf - z0, tilt, coef, int(n), float(frac),
+                               float(rms), (time.perf_counter() - started) * 1000.0, reason)
+            self.counter_plane = out
+            return out
+
+        if not c.get("enabled", False):
+            return result(False, True, reason="disabled")
+        if depth is None or np.ndim(depth) != 2:
+            return result(False, False, reason="no depth frame")
+        dlo, dhi = self.cfg["depth_range_mm"]
+        stride = max(1, int(c.get("pixel_stride", 4)))
+        d = depth[::stride, ::stride]
+        valid = (d >= dlo) & (d <= dhi)
+        if valid.mean() < float(c.get("min_valid_frac", self.cfg["min_valid_frac"])):
+            return result(False, False, reason="insufficient valid depth")
+        if rgb is not None:  # coloured objects (and same-coloured bins) are not counter
+            import cv2
+            blob = np.zeros(depth.shape, np.uint8)
+            for m in self.masks(rgb).values():
+                blob |= m
+            blob = cv2.dilate(blob, np.ones((9, 9), np.uint8))
+            valid &= blob[::stride, ::stride] == 0
+        vv, uu = np.nonzero(valid)
+        P = self.cal.pixel_to_pelvis(self.cam, uu * stride, vv * stride, d[vv, uu].astype(float))
+        pm = sc.pelvis_to_mat(P)
+        mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
+        inset = float(c.get("mat_inset_m", 0.02))
+        cand = (np.all((pm[:, :2] >= inset) & (pm[:, :2] <= mat - inset), axis=1) &
+                (np.abs(P[:, 2] - z0) <= float(c.get("z_window_m", 0.12))))
+        half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + float(c.get("bin_margin_m", 0.04))
+        for ctr in sc.cfg["bins"]["centers"].values():
+            cand &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= half, axis=1)
+        Q = P[cand]
+        min_inliers = int(c.get("min_inliers", 400))
+        if len(Q) < min_inliers:
+            return result(False, True, n=len(Q), reason=f"counter not visible ({len(Q)} points)")
+        max_points = int(c.get("max_points", 3000))
+        if len(Q) > max_points:
+            Q = Q[np.linspace(0, len(Q) - 1, max_points).astype(int)]
+
+        # RANSAC (deterministic seed): plane hypotheses from point triples, scored by inlier count
+        tol = float(c.get("inlier_m", 0.004))
+        max_tilt = np.radians(float(c.get("max_tilt_deg", 4.0)))
+        rng = np.random.default_rng(0)
+        idx = rng.integers(0, len(Q), size=(int(c.get("ransac_iters", 64)), 3))
+        a, b, e = Q[idx[:, 0]], Q[idx[:, 1]], Q[idx[:, 2]]
+        n = np.cross(b - a, e - a)
+        norm = np.linalg.norm(n, axis=1)
+        ok = norm > 1e-9
+        n = n[ok] / norm[ok, None]
+        a = a[ok]
+        n *= np.sign(n[:, 2:3] + 1e-12)
+        ok = n[:, 2] >= np.cos(max_tilt)
+        if not ok.any():
+            return result(False, True, n=0, reason="no near-horizontal plane hypothesis")
+        n, a = n[ok], a[ok]
+        dist = np.abs((Q[None, :, :] - a[:, None, :]) @ n[..., None])[..., 0]  # (hyp, N)
+        best = int(np.argmax((dist <= tol).sum(1)))
+        keep = dist[best] <= tol
+        coef = None
+        for _ in range(2):  # least-squares refit on the inliers: z = a x + b y + c
+            if keep.sum() < 3:
+                break
+            A = np.c_[Q[keep, :2], np.ones(int(keep.sum()))]
+            coef = np.linalg.lstsq(A, Q[keep, 2], rcond=None)[0]
+            keep = np.abs(Q[:, 2] - np.c_[Q[:, :2], np.ones(len(Q))] @ coef) <= tol
+        n_in, frac = int(keep.sum()), float(keep.mean())
+        if coef is None or n_in < 3:
+            return result(False, True, n=n_in, frac=frac, reason="plane fit failed")
+        rms = float(np.sqrt(np.mean((Q[keep, 2] - np.c_[Q[keep, :2], np.ones(n_in)] @ coef) ** 2)))
+        zf = float(coef[0] * ref[0] + coef[1] * ref[1] + coef[2])
+        tilt = float(np.degrees(np.arctan(np.hypot(coef[0], coef[1]))))
+        why = []
+        if n_in < min_inliers:
+            why.append(f"inliers {n_in} < {min_inliers}")
+        if frac < float(c.get("min_inlier_frac", 0.6)):
+            why.append(f"inlier fraction {frac:.2f}")
+        if rms > float(c.get("max_rms_m", 0.003)):
+            why.append(f"rms {rms * 1000:.1f} mm")
+        if tilt > np.degrees(max_tilt):
+            why.append(f"tilt {tilt:.1f} deg")
+        if abs(zf - z0) > float(c.get("max_dz_m", 0.08)):
+            why.append(f"dz {100 * (zf - z0):+.1f} cm")
+        if why:
+            out = result(False, True, n=n_in, frac=frac, rms=rms, reason="rejected: " + ", ".join(why))
+            out.dz, out.tilt_deg, out.coef = zf - z0, tilt, np.asarray(coef, float)   # report what was rejected
+            return out
+        return result(True, True, coef, n_in, frac, rms, "accepted")
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""

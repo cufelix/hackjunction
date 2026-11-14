@@ -55,6 +55,22 @@ perception:
     min_inlier_ratio: 0.35
     min_axis_points: 35
     min_confidence: 0.30
+  counter_plane:
+    enabled: false            # FLAG (Oliver counter). Once per episode, RANSAC-fit the counter plane in the head depth;
+                              # accepted -> measured counter z for height filters, plane fallback and grasp z
+    pixel_stride: 4
+    min_valid_frac: 0.20
+    mat_inset_m: 0.02         # candidate points: inside the mat by this much, outside the bin footprints (+ margin)
+    bin_margin_m: 0.04
+    z_window_m: 0.12          # candidates within this of the nominal counter z
+    max_points: 3000
+    ransac_iters: 64
+    inlier_m: 0.004
+    min_inliers: 400          # fail-safe gates: any miss -> nominal scene.yaml counter, reason logged
+    min_inlier_frac: 0.60
+    max_rms_m: 0.003
+    max_tilt_deg: 4.0
+    max_dz_m: 0.08
   object_height: null         # null = scene.yaml size * height_ratio
   classify_shape: false       # set Detection.shape from the metric top-face cloud (shape_id); no top face -> 2D blob, or None with no_blob_shape
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
