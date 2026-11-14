@@ -105,6 +105,7 @@ def check(overlay=None, out=print):
     server = ClassicalServerPolicy(profile="none", overlay=overlay)
     cfg = server.config_snapshot
     on = {key for key, _, enabled, _, _ in effective_flags(cfg) if enabled}
+    on.discard("profile_auto.force")   # PROFILE_MODE image marker (null | sim | none); behaviour covered by test_profile_force
     exp = expected_flags(str(cfg.get("overlay", "none")))
     unexpected, missing = sorted(on - exp), sorted(exp - on)
     if unexpected:
