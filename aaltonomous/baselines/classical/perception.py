@@ -63,6 +63,7 @@ class Perception:
         self.cfg = cfg["perception"]
         self.scene = scene
         self.cal = calibration
+        self.cal_nominal = calibration   # perception.hand_calibration swaps self.cal for a corrected COPY per episode
         self.cam = self.cfg["camera"]
         # perception.principal_point (Oliver lane 3): "file" = calibration.yaml K (stock, right for the real D435i);
         # "center" = cx, cy at the image centre and fx = fy = mean, which is what Isaac renders: IsaacLab drops
@@ -113,6 +114,15 @@ class Perception:
         """Restore the configured fallback at the start of every episode."""
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
+        self.cal = self.cal_nominal
+
+    def set_camera_pose(self, T):
+        """perception.hand_calibration: use T as this camera's T_pelvis_optical until the next reset, on a copy of the
+        calibration (the shared object stays nominal). The solve starts from self.cal, i.e. whatever pose perception
+        uses now (nominal, or the one perception.online_pitch_cal set earlier in the episode): hand calibration is
+        chained AFTER the table-plane pitch calibration."""
+        from .hand_calib import corrected_calibration
+        self.cal = corrected_calibration(self.cal, self.cam, T)
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""
