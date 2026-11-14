@@ -302,6 +302,7 @@ class Perception:
         self.hue_guard_red_min_s = float(hg.get("red_min_s", 110.0))
         self.topface_mode = self.cfg.get("topface_mode", "top35")
         self.topface_min_px = int(self.cfg.get("topface_min_px", 1024))
+        self.hue_guard_yellow_fix = bool(hg.get("yellow_fix", False))   # perception.hue_guard.yellow_fix (FLAG)
         # Per-episode colour k-means always starts/falls back at the measured
         # robust ranges, regardless of the separately selectable stock set.
         self.colour_kmeans = bool(self.cfg.get("colour_kmeans", False))
@@ -1641,7 +1642,8 @@ class Perception:
         idx = [i for i, d in enumerate(dets) if d.hsv_med is not None]
         cands = [Cand(dets[i].color, *dets[i].hsv_med) for i in idx]
         try:
-            verdict = judge(cands, self.hsv, self.hue_guard_min_gap_deg, self.hue_guard_red_min_s)
+            verdict = judge(cands, self.hsv, self.hue_guard_min_gap_deg, self.hue_guard_red_min_s,
+                            yellow_fix=self.hue_guard_yellow_fix)
         except Exception as exc:   # fail closed: nothing hue-judged is placed
             verdict = [(None, f"error:{type(exc).__name__}")] * len(idx)
             self.log(f"[hue_guard] error {type(exc).__name__}: {exc}")
@@ -2291,6 +2293,18 @@ class Perception:
         x, y = float(det.top[0]), float(det.top[1])
         if self._image_bin_gate_active:
             return "color_gate:workspace" if x < ws_x[0] or abs(y) > g["ws_abs_y"] else None
+        if g.get("workspace_fail_open") and self.scene.counter_z_runtime is None and det.method == "plane":
+            # counter height NOT measured: a plane-method top rests on the nominal counter z, so on the real (higher)
+            # counter its ray lands too far out and the rule rejected real objects. Fail open on that bias: re-evaluate
+            # the point along the same camera ray at the assumed real counter z (bin walls / tape still land past the edge).
+            try:
+                o = self._T()[:3, 3]
+                z_aim = float(det.top[2]) - 0.25 * self.height
+                dz = float(g.get("workspace_assumed_counter_z", 0.15)) - self.scene.nominal_counter_z
+                k = (z_aim + dz - o[2]) / (z_aim - o[2])
+                x, y = float(o[0] + k * (x - o[0])), float(o[1] + k * (y - o[1]))
+            except Exception:
+                return None   # cannot re-project: fail open
         near_mat_y = min(float(lo[1]) for lo, _ in self._color_gate_boxes(g, hedge=False))
         near_x = float(self.scene.mat_to_pelvis(np.array([0.0, near_mat_y]))[0])
         if not (ws_x[0] <= x <= min(ws_x[1], near_x - float(g.get("ws_edge_m", 0.01)))) or abs(y) > g["ws_abs_y"]:

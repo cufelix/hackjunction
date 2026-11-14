@@ -9,7 +9,7 @@ same label never abstain each other, and the threshold labels are otherwise kept
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -32,7 +32,7 @@ def boundaries(ranges):
     return max(red_his), min(int(lo[0]) for lo, _ in yel), max(int(hi[0]) for _, hi in yel)
 
 
-def judge(cands, ranges, min_gap_deg=6.0, red_min_s=0.0):
+def judge(cands, ranges, min_gap_deg=6.0, red_min_s=0.0, yellow_fix=False):
     """Return a list of (label | None, reason | None), aligned with cands. reason None = accepted as label.
 
     band: a red/yellow candidate with band_lo < H < band_hi -> ambiguous.
@@ -40,8 +40,15 @@ def judge(cands, ranges, min_gap_deg=6.0, red_min_s=0.0):
         S 144-200, sim red 217; a yellow top drifting to H 20 at S 73 is labelled red and must not pass).
     gap: in the red..yellow window (H in [0, yellow_hi]) sorted by hue, two neighbours with different labels that are
         less than min_gap_deg apart -> both ambiguous. Same-label neighbours never abstain each other.
+    yellow_fix (FLAG): a red-labelled candidate whose own hue classifies as yellow is re-labelled yellow first.
     """
     band_lo, band_hi, yellow_hi = boundaries(ranges)
+    if yellow_fix:
+        # yellow_fix: the label is set per red|yellow COMPONENT (union mask) but the Cand is the later split / keep-masked
+        # blob, so a real yellow cube can carry "red" with its own top-face hue in the yellow range (H 38-44, S ~80) and
+        # then dies on the low_s_red floor (real orange S 144-200 never sits at a yellow hue). Re-label by own hue.
+        cands = [replace(c, label=YELLOW) if c.label == RED and classify_hue(c.hue, ranges) == YELLOW else c
+                 for c in cands]
     out = [(c.label, None) for c in cands]
     win = sorted((i for i, c in enumerate(cands) if c.label in (RED, YELLOW) and 0.0 <= c.hue <= yellow_hi),
                  key=lambda i: cands[i].hue)

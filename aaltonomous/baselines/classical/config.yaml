@@ -228,6 +228,7 @@ perception:
     enabled: false
     min_gap_deg: 6.0
     red_min_s: 110             # layer 2b: red-labelled candidate with top-face S below this -> abstain (0-255)
+    yellow_fix: false          # FLAG: red-labelled cand with own hue in the yellow range -> yellow before layer 2b
   topface_mode: top35          # FLAG (recall P0). whole_blob falls back from brightest 35% when that subset is too small
   topface_min_px: 1024         # whole_blob fallback threshold for the brightest-35% subset (far cylinder ~850 px)
   sat_floor_adaptive: false    # FLAG (recall P0). Per-frame blue/purple S floor relative to counter background
@@ -263,7 +264,7 @@ perception:
                live_bins: false, near_margin_m: 0.0, area_frac: 0.4, min_px_no_z: 1000,
                max_area_frac: 3.0, max_px_no_z: 6000, ws_x: [0.12, 0.45], ws_abs_y: 0.40, ws_edge_m: 0.01,
                edge_m: 0.02, edge_h: [0.03, 0.055], max_cands: 6,
-               sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}}   # sat_floor: median S (0-255) over the blob
+               sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}, workspace_fail_open: false, workspace_assumed_counter_z: 0.15}   # sat_floor: median S (0-255) over the blob
   depth_blob_recover: false   # FLAG (P0 perception): known-colour depth blobs missed by HSV; unknown colours abstain
   depth_blob_recover_params:
     stride: 6                 # 480x640 -> 80x107 height map; one bounded pass per perception update

@@ -98,6 +98,8 @@ FLAGS = {
     "perception.still_vote": ("gate fix", False, "non-blocking N-frame vote over policy-declared still frames"),
     "perception.color_gate.fk_silhouette": ("gate fix", False, "fill one projected polygon per FK arm/hand link before dilation"),
     "perception.color_gate.sat_floor_params.blue": ("gate fix", 110, "blue/purple saturation floor variant"),
+    "perception.color_gate.workspace_fail_open": ("recall", False, "workspace rule (2b) fails open on the nominal-counter-z bias: while the counter height is unmeasured (no depth / plane fit fallback) a plane-method top is re-projected along its ray to workspace_assumed_counter_z before the test; measured / depth tops: unchanged"),
+    "perception.hue_guard.yellow_fix": ("recall", False, "hue_guard: a red-labelled candidate whose own top-face hue is in the yellow range is re-labelled yellow before the low_s_red floor"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
