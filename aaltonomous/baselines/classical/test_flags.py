@@ -60,6 +60,14 @@ class TestFlags(unittest.TestCase):
                   "ab_hold06": {"motion.close_hold_s"}, "ab_hold12": {"motion.close_hold_s"},
                   "ab_slots": {"grasp.drop_slots"}, "ab_hold12_slots": {"motion.close_hold_s", "grasp.drop_slots"},
                   "ab_carry05": {"motion.carry_scale"}, "ab_calib": {"perception.self_calibration.enabled"},
+                  "ab_pitch_cal": {"perception.online_pitch_cal"},
+                  "ab_pitch_cal_table": {"instruction.resolve", "policy.insert_guard", "policy.bin_lookup",
+                                           "perception.online_pitch_cal", "perception.classify_shape",
+                                           "perception.hsv_set", "perception.split_blobs",
+                                           "policy.max_total_attempts", "grasp.drop_slots",
+                                           "grasp.close_posture", "hand.closed_tight", "grasp.point_in_palm",
+                                           "motion.close_hold_s", "grasp.close_posture_by_shape",
+                                           "grasp.posture_apex_gate"},
                   "ab_yaff": {"perception.y_affine"},
                   "ab_pinch_hybrid": {"grasp.close_posture", "hand.closed_tight", "grasp.point_in_palm",
                                       "motion.close_hold_s", "perception.classify_shape",
@@ -80,9 +88,6 @@ class TestFlags(unittest.TestCase):
                   "ab_realcolour": {"instruction.resolve", "policy.bin_lookup", "grasp.point_in_palm",
                                     "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
                                     "perception.hsv_set", "perception.split_blobs"}}
-        r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary"}
-        expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -91,6 +96,7 @@ class TestFlags(unittest.TestCase):
             self.assertEqual(on, keys, name)
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
+        self.assertEqual(load_config(overlay="ab_pitch_cal_table")["perception"]["online_pitch_cal"], "table")
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm
@@ -126,7 +132,8 @@ class TestFlags(unittest.TestCase):
                            "motion.lift_on_stall.timeout_s")])
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
-            for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile"):
+            for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",
+                        "perception.online_pitch_cal: bins"):
                 p.write_text("flags:\n  " + bad + "\n")
                 with self.assertRaises(ValueError, msg=bad):
                     load_config(overlay=str(p))

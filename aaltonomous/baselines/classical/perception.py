@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import time
 
+import cv2
 import numpy as np
 
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
@@ -58,34 +59,39 @@ class BinCalibration:
     reason: str
 
 
+@dataclass
+class PitchCalibration:
+    """Result of one episode's optional camera-tilt calibration."""
+    success: bool
+    valid_frame: bool
+    pitch_deg: float
+    n_points: int
+    residual_m: float
+    elapsed_ms: float
+    reason: str
+    mode: str = "bin_rim"
+    roll_deg: float = 0.0
+    camera_height_m: float = np.nan
+    plane_height_m: float = np.nan
+    n_inliers: int = 0
+
+
 class Perception:
     def __init__(self, cfg, scene, calibration, log=None):
         self.cfg = cfg["perception"]
         self.scene = scene
         self.cal = calibration
         self.cam = self.cfg["camera"]
-        # perception.principal_point (Oliver lane 3): "file" = calibration.yaml K (stock, right for the real D435i);
-        # "center" = cx, cy at the image centre and fx = fy = mean, which is what Isaac renders: IsaacLab drops
-        # aperture offsets ("c_x and c_y will be half of width and height", utils/sensors.py).
-        # Perception gets its own shallow copy of the calibration, so every path (pixel_to_pelvis, project, the ray
-        # fallbacks) uses the same K and nothing outside perception changes.
-        if self.cfg.get("principal_point", "file") == "center":
-            import copy
-            import dataclasses
-            cam = calibration.cams[self.cam]
-            K = np.array(cam.K, float).copy()
-            f = 0.5 * (K[0, 0] + K[1, 1])
-            K[0, 0] = K[1, 1] = f
-            K[0, 2], K[1, 2] = cam.width / 2.0, cam.height / 2.0
-            self.cal = copy.copy(calibration)
-            self.cal.cams = dict(calibration.cams)
-            self.cal.cams[self.cam] = dataclasses.replace(cam, K=K)
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
         self.base_xy_offset = np.asarray(self.cfg.get("xy_offset") or [0.0, 0.0], float)
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
+        # false = off, true = the original bin-rim fit, "table" = assumption-free counter-plane fit.
+        self.online_pitch_cal = self.cfg.get("online_pitch_cal", False)
+        self.pitch_calibration = None
+        self.pitch_T = None
         # opt-in shape / triangle pose (all default OFF = stock behaviour)
         self.classify_shape = bool(self.cfg.get("classify_shape", False))
         self.want_path = bool(cfg.get("grasp", {}).get("close_posture_by_shape", False))  # shape_id path for the posture gate
@@ -113,6 +119,406 @@ class Perception:
         """Restore the configured fallback at the start of every episode."""
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
+        self.pitch_calibration = None
+        self.pitch_T = None
+
+    def _T(self):
+        """Episode-corrected camera pose, or the untouched nominal calibration."""
+        return self.pitch_T if self.pitch_T is not None else self.cal._T(self.cam)
+
+    def _pixel_to_pelvis(self, u, v, depth_mm):
+        # Keep the disabled/fallback path byte-for-byte identical to Calibration.pixel_to_pelvis.
+        if self.pitch_T is None:
+            return self.cal.pixel_to_pelvis(self.cam, u, v, depth_mm)
+        p = self.cal.deproject(self.cam, u, v, depth_mm)
+        T = self.pitch_T
+        return p @ T[:3, :3].T + T[:3, 3]
+
+    def _project(self, p_pelvis):
+        # Keep the disabled/fallback path byte-for-byte identical to Calibration.project.
+        if self.pitch_T is None:
+            return self.cal.project(self.cam, p_pelvis)
+        T = self.pitch_T
+        p = (np.asarray(p_pelvis, float) - T[:3, 3]) @ T[:3, :3]
+        K = self.cal.cams[self.cam].K
+        z = p[..., 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = K[0, 0] * p[..., 0] / z + K[0, 2]
+            v = K[1, 1] * p[..., 1] / z + K[1, 2]
+        return np.stack([u, v, z], axis=-1)
+
+    @staticmethod
+    def _optical_rx(deg):
+        a = np.radians(float(deg))
+        c, s = np.cos(a), np.sin(a)
+        return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
+
+    @staticmethod
+    def _optical_rz(deg):
+        a = np.radians(float(deg))
+        c, s = np.cos(a), np.sin(a)
+        return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+    def _pitch_mode(self):
+        return "table" if self.online_pitch_cal == "table" else "bin_rim"
+
+    def pitch_calibration_failure(self, reason, elapsed_ms=0.0):
+        """Latch the nominal extrinsic after an unexpected optional-calibration error."""
+        self.pitch_T = None
+        self.pitch_calibration = PitchCalibration(False, True, 0.0, 0, np.inf, float(elapsed_ms), str(reason),
+                                                  mode=self._pitch_mode())
+        return self.pitch_calibration
+
+    def calibrate_pitch(self, rgb, depth):
+        """Dispatch the configured per-episode camera calibration mode."""
+        if self.online_pitch_cal == "table":
+            return self._calibrate_table(rgb, depth)
+        return self._calibrate_bin_rims(rgb, depth)
+
+    def _calibrate_bin_rims(self, rgb, depth):
+        """Fit ``T_nominal @ Rx(dtheta)`` from the orange bins' far top rim.
+
+        The top-most orange pixel in each image column is a far-rim candidate. Rays through the dominant horizontal
+        edge are intersected with the known rim plane, then a bounded 1-D search minimizes a trimmed RMS distance to
+        the three nominal far-rim segments. The fit uses RGB geometry; valid depth is required only to avoid latching
+        on an incomplete startup frame.
+        """
+        started = time.perf_counter()
+        c = self.cfg.get("pitch_calibration") or {}
+
+        def result(success, valid, pitch, n_points, residual, reason, T=None):
+            self.pitch_T = None if not success else np.asarray(T, float).copy()
+            out = PitchCalibration(bool(success), bool(valid), float(pitch), int(n_points), float(residual),
+                                   (time.perf_counter() - started) * 1000.0, str(reason), mode="bin_rim",
+                                   n_inliers=int(n_points))
+            self.pitch_calibration = out
+            return out
+
+        if not self.online_pitch_cal:
+            return result(False, True, 0.0, 0, np.inf, "disabled")
+        if depth is None or np.ndim(depth) != 2:
+            return result(False, False, 0.0, 0, np.inf, "no depth frame")
+        dlo, dhi = self.cfg["depth_range_mm"]
+        valid_depth = (depth >= dlo) & (depth <= dhi)
+        if valid_depth.mean() < float(c.get("min_valid_frac", self.cfg["min_valid_frac"])):
+            return result(False, False, 0.0, 0, np.inf, "insufficient valid depth")
+        if rgb is None or np.ndim(rgb) != 3 or rgb.shape[:2] != depth.shape or rgb.shape[2] < 3:
+            return result(False, False, 0.0, 0, np.inf, "invalid RGB frame")
+
+        nominal = np.asarray(self.cal._T(self.cam), float)
+        K = self.cal.cams[self.cam].K
+        b = self.scene.cfg["bins"]
+        half = np.asarray(b["outer_size"], float) / 2.0
+        rim_z = self.scene.counter_z + float(b["wall_height"])
+        rims = []
+        for center in b["centers"].values():
+            center = np.asarray(center, float)
+            # +mat-y is farther from the pelvis; mat-x spans each rim left-to-right.
+            rims.append(self.scene.mat_to_pelvis(
+                [[center[0] - half[0], center[1] + half[1], float(b["wall_height"])],
+                 [center[0] + half[0], center[1] + half[1], float(b["wall_height"])]]))
+        rims = np.asarray(rims, float)
+
+        lo_deg, hi_deg = (float(x) for x in c.get("search_deg", [-12.0, 12.0]))
+        coarse_step = float(c.get("coarse_step_deg", 0.25))
+        coarse = np.arange(lo_deg, hi_deg + 0.5 * coarse_step, coarse_step)
+
+        def pose(deg):
+            T = nominal.copy()
+            T[:3, :3] = nominal[:3, :3] @ self._optical_rx(deg)
+            return T
+
+        def project_with(T, points):
+            q = (np.asarray(points, float) - T[:3, 3]) @ T[:3, :3]
+            z = q[..., 2]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                u = K[0, 0] * q[..., 0] / z + K[0, 2]
+                v = K[1, 1] * q[..., 1] / z + K[1, 2]
+            return np.stack([u, v, z], axis=-1)
+
+        # Restrict orange-edge extraction to the image envelope swept by the possible far rims.
+        height, width = depth.shape
+        allowed_u = np.zeros(width, bool)
+        bin_allowed_u = np.zeros((len(rims), width), bool)
+        v_limits = []
+        for deg in coarse:
+            uvz = project_with(pose(deg), rims)
+            for bin_i, seg in enumerate(uvz):
+                if np.all(seg[:, 2] > 0):
+                    ua, ub = sorted(seg[:, 0])
+                    ia, ib = max(0, int(np.floor(ua)) - 2), min(width, int(np.ceil(ub)) + 3)
+                    if ia < ib:
+                        allowed_u[ia:ib] = True
+                        bin_allowed_u[bin_i, ia:ib] = True
+                    v_limits.extend(seg[:, 1].tolist())
+        finite_v = np.asarray(v_limits, float)
+        finite_v = finite_v[np.isfinite(finite_v)]
+        if not allowed_u.any() or not len(finite_v):
+            return result(False, True, 0.0, 0, np.inf, "nominal rims outside image")
+        pad = int(c.get("roi_pad_px", 8))
+        va = max(0, int(np.floor(finite_v.min())) - pad)
+        vb = min(height, int(np.ceil(finite_v.max())) + pad + 1)
+
+        pix = np.asarray(rgb[..., :3], float)
+        r, g, blue = pix[..., 0], pix[..., 1], pix[..., 2]
+        eps = 1.0
+        orange = ((r >= float(c.get("orange_min_r", 55.0))) &
+                  (r >= float(c.get("orange_rg_ratio", 1.15)) * (g + eps)) &
+                  (g >= float(c.get("orange_gb_ratio", 1.10)) * (blue + eps)) &
+                  (g / (r + eps) >= float(c.get("orange_g_over_r_min", 0.20))) &
+                  (g / (r + eps) <= float(c.get("orange_g_over_r_max", 0.82))) &
+                  (blue / (r + eps) <= float(c.get("orange_b_over_r_max", 0.60))))
+        roi = np.zeros_like(orange)
+        roi[va:vb, allowed_u] = True
+        orange &= roi
+        has = orange.any(axis=0)
+        columns = np.flatnonzero(has)
+        if len(columns):
+            rows = np.argmax(orange[:, columns], axis=0)
+            # Three coplanar far rims form the dominant near-horizontal top edge. Reject isolated orange objects.
+            hist = np.bincount(rows, minlength=height)
+            band = max(0, int(c.get("edge_band_px", 3)))
+            smooth = np.convolve(hist, np.ones(2 * band + 1, int), mode="same")
+            peak = int(np.argmax(smooth))
+            edge = np.abs(rows - peak) <= band
+            columns, rows = columns[edge], rows[edge]
+        min_points = int(c.get("min_rim_points", 80))
+        if len(columns) < min_points:
+            return result(False, True, 0.0, len(columns), np.inf, "too few far-rim points")
+        # A single orange object or a subset of the boxes can otherwise produce a deceptively good 1-D fit.
+        # The known bin spans are disjoint in this view, so require edge support in every swept span before fitting.
+        bin_support = np.sum(bin_allowed_u[:, columns], axis=1)
+        min_bin_points = int(c.get("min_bin_rim_points", 20))
+        if np.any(bin_support < min_bin_points):
+            return result(False, True, 0.0, len(columns), np.inf,
+                          f"not all bins found; support={bin_support.tolist()}")
+        max_points = int(c.get("max_rim_points", 640))
+        if len(columns) > max_points:
+            take = np.linspace(0, len(columns) - 1, max_points).astype(int)
+            columns, rows = columns[take], rows[take]
+
+        rays_opt = np.stack([(columns - K[0, 2]) / K[0, 0],
+                             (rows - K[1, 2]) / K[1, 1], np.ones(len(columns))], axis=1)
+        seg_a, seg_b = rims[:, 0, :2], rims[:, 1, :2]
+        seg_d = seg_b - seg_a
+        seg_d2 = np.sum(seg_d * seg_d, axis=1)
+        trim_fraction = float(np.clip(c.get("trim_fraction", 0.75), 0.1, 1.0))
+        trim_n = max(min_points, int(np.ceil(trim_fraction * len(columns))))
+        trim_n = min(trim_n, len(columns))
+
+        def rim_distances(deg):
+            T = pose(deg)
+            rays = rays_opt @ T[:3, :3].T
+            good = rays[:, 2] < -1e-8
+            scale = np.full(len(rays), np.nan)
+            scale[good] = (rim_z - T[2, 3]) / rays[good, 2]
+            good &= np.isfinite(scale) & (scale > 0.0)
+            if good.sum() < trim_n:
+                return None
+            points = T[:2, 3] + scale[good, None] * rays[good, :2]
+            delta = points[:, None, :] - seg_a[None, :, :]
+            along = np.clip(np.sum(delta * seg_d[None, :, :], axis=2) / seg_d2[None, :], 0.0, 1.0)
+            closest = seg_a[None, :, :] + along[..., None] * seg_d[None, :, :]
+            return np.sqrt(np.sum((points[:, None, :] - closest) ** 2, axis=2))
+
+        def score(deg):
+            distance_matrix = rim_distances(deg)
+            if distance_matrix is None:
+                return np.inf
+            distances = np.min(distance_matrix, axis=1)
+            kept = np.partition(distances, trim_n - 1)[:trim_n]
+            return float(np.sqrt(np.mean(kept * kept)))
+
+        scores = np.asarray([score(deg) for deg in coarse])
+        if not np.isfinite(scores).any():
+            return result(False, True, 0.0, len(columns), np.inf, "no forward rim intersections")
+        estimate = float(coarse[int(np.nanargmin(scores))])
+        fine_step = float(c.get("fine_step_deg", 0.02))
+        fine = np.arange(max(lo_deg, estimate - coarse_step), min(hi_deg, estimate + coarse_step) +
+                         0.5 * fine_step, fine_step)
+        fine_scores = np.asarray([score(deg) for deg in fine])
+        best = int(np.nanargmin(fine_scores))
+        estimate, residual = float(fine[best]), float(fine_scores[best])
+        max_residual = float(c.get("max_residual_m", 0.05))
+        if not np.isfinite(residual) or residual > max_residual:
+            return result(False, True, 0.0, len(columns), residual,
+                          f"high residual; rejected {estimate:+.2f} deg")
+        distance_matrix = rim_distances(estimate)
+        nearest = np.argmin(distance_matrix, axis=1)
+        nearest_distance = distance_matrix[np.arange(len(distance_matrix)), nearest]
+        fit_support = np.bincount(nearest[nearest_distance <= max_residual], minlength=len(rims))
+        if np.any(fit_support < min_bin_points):
+            return result(False, True, 0.0, len(columns), residual,
+                          f"not all bins fit; support={fit_support.tolist()}; rejected {estimate:+.2f} deg")
+        max_abs_pitch = float(c.get("max_abs_pitch_deg", 20.0))
+        if abs(estimate) > max_abs_pitch:
+            return result(False, True, 0.0, len(columns), residual,
+                          f"pitch outside guard; rejected {estimate:+.2f} deg")
+        corrected = pose(estimate)
+        return result(True, True, estimate, len(columns), residual,
+                      f"accepted; support={fit_support.tolist()}", corrected)
+
+    def _calibrate_table(self, rgb, depth):
+        """Fit the counter plane without using the nominal positions of the bins.
+
+        Candidate pixels are the central lower image (the side and bottom bands where the hands enter are omitted),
+        with every configured coloured-object blob removed. RANSAC rejects remaining object/hand depth before a
+        total-least-squares refit on counter inliers. The optical-frame plane determines pitch, roll, and camera
+        height above the known counter plane.
+        """
+        started = time.perf_counter()
+        c = self.cfg.get("table_pitch_calibration") or {}
+
+        def result(success, valid, pitch, roll, camera_height, n_points, n_inliers, residual, reason, T=None):
+            self.pitch_T = None if not success else np.asarray(T, float).copy()
+            out = PitchCalibration(bool(success), bool(valid), float(pitch), int(n_points), float(residual),
+                                   (time.perf_counter() - started) * 1000.0, str(reason), mode="table",
+                                   roll_deg=float(roll), camera_height_m=float(camera_height),
+                                   plane_height_m=float(self.scene.counter_z) if success else np.nan,
+                                   n_inliers=int(n_inliers))
+            self.pitch_calibration = out
+            return out
+
+        if self.online_pitch_cal != "table":
+            return result(False, True, 0.0, 0.0, np.nan, 0, 0, np.inf, "disabled")
+        if depth is None or np.ndim(depth) != 2:
+            return result(False, False, 0.0, 0.0, np.nan, 0, 0, np.inf, "no depth frame")
+        if rgb is None or np.ndim(rgb) != 3 or rgb.shape[:2] != depth.shape or rgb.shape[2] < 3:
+            return result(False, False, 0.0, 0.0, np.nan, 0, 0, np.inf, "invalid RGB frame")
+
+        dlo, dhi = self.cfg["depth_range_mm"]
+        valid_depth = (depth >= dlo) & (depth <= dhi)
+        if valid_depth.mean() < float(c.get("min_valid_frac", self.cfg["min_valid_frac"])):
+            return result(False, False, 0.0, 0.0, np.nan, 0, 0, np.inf, "insufficient valid depth")
+
+        height, width = depth.shape
+        # This central lower crop is independent of scene/bin geometry.  Besides selecting the exposed mat/counter,
+        # the side and bottom exclusions conservatively keep the robot's hands out of the candidate cloud.
+        roi = np.zeros((height, width), bool)
+        u0 = int(np.clip(float(c.get("roi_left_frac", 0.12)) * width, 0, width))
+        u1 = int(np.clip(float(c.get("roi_right_frac", 0.88)) * width, 0, width))
+        v0 = int(np.clip(float(c.get("roi_top_frac", 0.55)) * height, 0, height))
+        v1 = int(np.clip(float(c.get("roi_bottom_frac", 0.92)) * height, 0, height))
+        if u0 >= u1 or v0 >= v1:
+            return result(False, True, 0.0, 0.0, np.nan, 0, 0, np.inf, "empty table ROI")
+        roi[v0:v1, u0:u1] = True
+
+        # Remove all known coloured blobs before subsampling.  Dilation also removes their mixed-depth edge pixels.
+        coloured = np.zeros((height, width), np.uint8)
+        for mask in self.masks(rgb).values():
+            coloured |= mask
+        pad = max(0, int(c.get("object_mask_pad_px", 5)))
+        if pad:
+            coloured = cv2.dilate(coloured, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8))
+        candidate = valid_depth & roi & (coloured == 0)
+
+        stride = max(1, int(c.get("pixel_stride", 3)))
+        vv, uu = np.nonzero(candidate[::stride, ::stride])
+        vv, uu = vv * stride, uu * stride
+        n_points = len(uu)
+        min_inliers = int(c.get("min_inliers", 800))
+        if n_points < min_inliers:
+            return result(False, True, 0.0, 0.0, np.nan, n_points, 0, np.inf, "too few table points")
+        # Evenly retain a fixed-size, image-wide sample. This bounds every RANSAC iteration independently of image
+        # resolution and preserves the spatial distribution better than taking the first raster-order pixels.
+        max_points = max(min_inliers, int(c.get("max_points", 6000)))
+        if n_points > max_points:
+            keep = np.linspace(0, n_points - 1, max_points).astype(int)
+            vv, uu = vv[keep], uu[keep]
+            n_points = len(uu)
+        points = self.cal.deproject(self.cam, uu, vv, depth[vv, uu].astype(float))
+
+        threshold = float(c.get("ransac_inlier_m", 0.008))
+        rng = np.random.default_rng(int(c.get("ransac_seed", 0)))
+        best = None
+        for _ in range(max(1, int(c.get("ransac_iterations", 96)))):
+            sample = points[rng.choice(n_points, 3, replace=False)]
+            normal = np.cross(sample[1] - sample[0], sample[2] - sample[0])
+            norm = float(np.linalg.norm(normal))
+            if norm < 1e-9:
+                continue
+            normal /= norm
+            offset = -float(normal @ sample[0])
+            distance = np.abs(points @ normal + offset)
+            inliers = distance <= threshold
+            count = int(inliers.sum())
+            rms = float(np.sqrt(np.mean(distance[inliers] ** 2))) if count else np.inf
+            if best is None or count > best[0] or (count == best[0] and rms < best[1]):
+                best = (count, rms, inliers)
+        if best is None or best[0] < min_inliers:
+            count = 0 if best is None else best[0]
+            return result(False, True, 0.0, 0.0, np.nan, n_points, count, np.inf,
+                          f"too few plane inliers ({count} < {min_inliers})")
+
+        # Total least squares, with one reclassification/refit pass to remove RANSAC sample bias.
+        inliers = best[2]
+        expected = np.asarray(self.cal._T(self.cam), float)[:3, :3].T @ np.array([0.0, 0.0, 1.0])
+        for _ in range(2):
+            q = points[inliers]
+            center = q.mean(axis=0)
+            _, vectors = np.linalg.eigh((q - center).T @ (q - center))
+            normal = vectors[:, 0]
+            if normal @ expected < 0.0:
+                normal = -normal
+            offset = -float(normal @ center)
+            distance = np.abs(points @ normal + offset)
+            inliers = distance <= threshold
+            if int(inliers.sum()) < min_inliers:
+                break
+        n_inliers = int(inliers.sum())
+        if n_inliers < min_inliers:
+            return result(False, True, 0.0, 0.0, np.nan, n_points, n_inliers, np.inf,
+                          f"too few refined inliers ({n_inliers} < {min_inliers})")
+        inlier_ratio = n_inliers / float(n_points)
+        if inlier_ratio < float(c.get("min_inlier_ratio", 0.60)):
+            return result(False, True, 0.0, 0.0, np.nan, n_points, n_inliers, np.inf,
+                          f"low plane inlier ratio ({inlier_ratio:.2f})")
+        residual = float(np.sqrt(np.mean((points[inliers] @ normal + offset) ** 2)))
+
+        # Solve Q = Rz(droll) Rx(dpitch), Q n_measured = n_expected.  The small-magnitude pitch branch is unique
+        # inside the safety gate; roll is then the signed angle between the two normals in optical xy.
+        yz = float(np.hypot(normal[1], normal[2]))
+        if yz < 1e-9:
+            return result(False, True, 0.0, 0.0, np.nan, n_points, n_inliers, residual,
+                          "degenerate plane normal")
+        phi = float(np.arctan2(normal[1], normal[2]))
+        alpha = float(np.arccos(np.clip(expected[2] / yz, -1.0, 1.0)))
+
+        def wrap(angle):
+            return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+        pitch_rad = min((wrap(phi + alpha), wrap(phi - alpha)), key=abs)
+        pitched = self._optical_rx(np.degrees(pitch_rad)) @ normal
+        roll_rad = wrap(float(np.arctan2(expected[1], expected[0]) - np.arctan2(pitched[1], pitched[0])))
+        pitch, roll = float(np.degrees(pitch_rad)), float(np.degrees(roll_rad))
+        correction = self._optical_rz(roll) @ self._optical_rx(pitch)
+        nominal = np.asarray(self.cal._T(self.cam), float)
+        corrected = nominal.copy()
+        corrected[:3, :3] = nominal[:3, :3] @ correction
+        # With an upward unit normal, the fitted plane offset is the optical-origin distance to the counter. The
+        # plane cannot observe camera x/y, so retain those nominal translations and correct only pelvis z.
+        camera_height = float(offset)
+        corrected[2, 3] = float(self.scene.counter_z) + camera_height
+        nominal_height = float(nominal[2, 3]) - float(self.scene.counter_z)
+        height_delta = camera_height - nominal_height
+
+        max_rms = float(c.get("max_rms_m", 0.005))
+        max_pitch = float(c.get("max_abs_pitch_deg", 15.0))
+        max_roll = float(c.get("max_abs_roll_deg", 5.0))
+        if not np.isfinite(residual) or residual > max_rms:
+            return result(False, True, pitch, roll, camera_height, n_points, n_inliers, residual,
+                          f"high plane RMS; height delta={height_delta * 1000.0:+.1f} mm")
+        if abs(pitch) > max_pitch:
+            return result(False, True, pitch, roll, camera_height, n_points, n_inliers, residual,
+                          f"pitch outside guard; height delta={height_delta * 1000.0:+.1f} mm")
+        if abs(roll) > max_roll:
+            return result(False, True, pitch, roll, camera_height, n_points, n_inliers, residual,
+                          f"roll outside guard; height delta={height_delta * 1000.0:+.1f} mm")
+        if not np.isfinite(camera_height) or camera_height <= 0.0:
+            return result(False, True, pitch, roll, camera_height, n_points, n_inliers, residual,
+                          "invalid camera height")
+        return result(True, True, pitch, roll, camera_height, n_points, n_inliers, residual,
+                      f"accepted; height delta={height_delta * 1000.0:+.1f} mm", corrected)
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""
@@ -149,7 +555,7 @@ class Perception:
         stride = max(1, int(c.get("pixel_stride", 3)))
         vv, uu = np.nonzero(valid[::stride, ::stride])
         vv, uu = vv * stride, uu * stride
-        P = self.cal.pixel_to_pelvis(self.cam, uu, vv, depth[vv, uu].astype(float))
+        P = self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float))
         sc = self.scene
 
         # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.
@@ -380,7 +786,7 @@ class Perception:
                 z = float(np.median(d)) / (1.0 / float(getattr(self.cal.cams[self.cam], "depth_scale", 0.001)))   # mm -> m via calibration depth_scale (0.001 -> /1000.0 exactly)
         if z is None:
             try:
-                T = self.cal._T(self.cam)
+                T = self._T()
                 ray = T[:3, :3] @ np.array([(centroid[0] - K[0, 2]) / K[0, 0], (centroid[1] - K[1, 2]) / K[1, 1], 1.0])
                 if ray[2] < -1e-6:
                     z = float((self.scene.counter_z + self.height - T[2, 3]) / ray[2])   # optical z (ray_opt z = 1)
@@ -474,7 +880,7 @@ class Perception:
             return keep  # (almost) no depth stream: only the projected bin hulls can be removed
         keep[:] = 255    # with depth: holes stay "unknown" (kept); valid pixels are judged in 3D
         vv, uu = np.nonzero(valid)
-        P = self.cal.pixel_to_pelvis(self.cam, uu, vv, d[vv, uu])
+        P = self._pixel_to_pelvis(uu, vv, d[vv, uu])
         h = (P[:, 2] - sc.counter_z) / self.height
         pm = sc.pelvis_to_mat(P)
         # Verification must also see a same-colour object stacked above the
@@ -499,7 +905,7 @@ class Perception:
         for cx, cy in b["centers"].values():
             corners = np.array([[cx + sx * half[0], cy + sy * half[1], z] for sx in (-1, 1) for sy in (-1, 1)
                                 for z in (0.0, float(b["wall_height"]))])
-            uvz = self.cal.project(self.cam, sc.mat_to_pelvis(corners))
+            uvz = self._project(sc.mat_to_pelvis(corners))
             if np.any(uvz[:, 2] <= 0):
                 continue
             hull = cv2.convexHull(np.round(uvz[:, :2]).astype(np.int32))
@@ -573,7 +979,7 @@ class Perception:
                  f"near_bin={g['near_bin']} dz_top={f(g['dz_top'], 4)}" + (f" rej={why}" if why else ""))
 
     def _from_depth(self, color, u, v, d, area, blob=None):
-        P = self.cal.pixel_to_pelvis(self.cam, u, v, d)
+        P = self._pixel_to_pelvis(u, v, d)
         z_top = np.percentile(P[:, 2], self.cfg["top_percentile"])
         top = P[P[:, 2] >= z_top - self.cfg["top_band"]]
         if len(top) < 5:
@@ -613,7 +1019,7 @@ class Perception:
 
     def _from_plane(self, color, uv, area, n_depth):
         """Centroid ray of the blob intersected with the horizontal plane at the object's top."""
-        T = self.cal._T(self.cam)
+        T = self._T()
         K = self.cal.cams[self.cam].K
         ray_opt = np.array([(uv[0] - K[0, 2]) / K[0, 0], (uv[1] - K[1, 2]) / K[1, 1], 1.0])
         ray = T[:3, :3] @ ray_opt

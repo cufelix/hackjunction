@@ -32,7 +32,6 @@ perception:
   min_valid_frac: 0.2         # below this fraction of valid depth pixels the frame counts as 'no depth'
   bin_pixel_margin: 0.004     # pixels whose 3D point is inside a bin footprint (+ margin) are dropped before grouping
   object_size: null           # null = scene.yaml objects.size (grasp width)
-  principal_point: file      # FLAG (Oliver lane 3): file | center (sim renders cx,cy at the image centre)
   y_affine: null              # FLAG (23-grasp-failure §11b/§13). [a, b]: perceived - true y = a*y + b -> y -= a*y + b
   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
   self_calibration:
@@ -55,6 +54,43 @@ perception:
     min_inlier_ratio: 0.35
     min_axis_points: 35
     min_confidence: 0.30
+  online_pitch_cal: false      # FLAG (Timi pitch). false=off | true=orange far rims | table=counter plane (no bin positions)
+  pitch_calibration:
+    search_deg: [-12.0, 12.0]
+    coarse_step_deg: 0.25
+    fine_step_deg: 0.02
+    min_valid_frac: 0.20       # retry startup frames until aligned depth is live
+    min_rim_points: 80
+    min_bin_rim_points: 20     # reject unless every one of the three known bins contributes its far top edge
+    max_rim_points: 640
+    edge_band_px: 3            # dominant horizontal orange top edge
+    roi_pad_px: 8
+    trim_fraction: 0.75
+    max_residual_m: 0.05       # reject and retain nominal T above this trimmed far-rim RMS
+    max_abs_pitch_deg: 20.0    # hard safety guard (the configured search is deliberately tighter at +/-12 deg)
+    orange_min_r: 55
+    orange_rg_ratio: 1.15
+    orange_gb_ratio: 1.10
+    orange_g_over_r_min: 0.20
+    orange_g_over_r_max: 0.82
+    orange_b_over_r_max: 0.60
+  table_pitch_calibration:
+    min_valid_frac: 0.20       # retry startup frames until aligned depth is live
+    roi_left_frac: 0.12        # central lower-image counter crop; side/bottom bands exclude the robot hands
+    roi_right_frac: 0.88
+    roi_top_frac: 0.55         # below the bins, independent of their nominal positions
+    roi_bottom_frac: 0.92
+    object_mask_pad_px: 5      # exclude coloured pieces plus mixed-depth boundary pixels
+    pixel_stride: 3
+    max_points: 6000           # fixed work bound: calibration must not stall the 30 Hz control loop
+    ransac_iterations: 96
+    ransac_seed: 0             # deterministic per episode/test
+    ransac_inlier_m: 0.008
+    min_inliers: 800
+    min_inlier_ratio: 0.60
+    max_rms_m: 0.005
+    max_abs_pitch_deg: 15.0
+    max_abs_roll_deg: 5.0
   object_height: null         # null = scene.yaml size * height_ratio
   classify_shape: false       # set Detection.shape from the metric top-face cloud (shape_id); no top face -> 2D blob, or None with no_blob_shape
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
@@ -145,8 +181,6 @@ grasp:
                               # in a bin gets the next slot instead of the one fixed drop_xy (STEP 0: 6/30 stacked)
   drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
   drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
-  border_posture: false       # FLAG (retry-vary). Label None from abstain_border (blob cut by the image border, near
-                              # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   close_posture: closed       # FLAG (pinch fix): hand posture for the grasp, closed | closed_tight (hand.closed_tight)
@@ -253,18 +287,6 @@ policy:
   retry_pass: false           # FLAG (#3, Oliver 40fb22a)
   retry_extra_attempts: 2
   episode_summary_log: false  # FLAG (#3, Oliver). One passive log line per episode end (attempts/failed/too_long/started)
-  # Retry with a different grasp (r14 failure analysis: 5 misses repeated the identical posture/yaw/point).
-  retry_vary_grasp: false     # FLAG (retry-vary, Timi). After a pick that did not hold the object (held=no / unknown):
-                              # the next try at it changes the grasp (posture v1<->demo for triangle / label None, finger
-                              # heading +-retry_yaw_deg), never repeats a tried (point, heading, posture); held=no right
-                              # after the close -> skip the carry, lift + straight home (plan.abort, same speed limits)
-  max_attempts_vary: null     # FLAG (retry-vary). With retry_vary_grasp: tries per object up to this (e.g. 3); the extra
-                              # tries come after every other candidate and only if the plan fits the time left (_has_time)
-  retry_yaw_deg: {triangle: 60, cube: 90, cylinder: 90, none: 90, default: 90}   # heading change per label
-  retry_same_xy_m: 0.01       # two grasps closer than this, same posture and heading within retry_same_yaw_deg = identical
-  retry_same_yaw_deg: 20.0
-  retry_assoc_radius: 0.06    # an earlier miss belongs to an object of the same colour within this (pushed objects)
-  retry_max_variants: 3       # grasp variants planned per retry (each costs one plan() call)
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.
