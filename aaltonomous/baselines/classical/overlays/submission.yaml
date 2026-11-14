@@ -9,7 +9,7 @@ name: submission
 flags:
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
-  policy.bin_lookup: colour                     # round 8    colour | resolve_bin (shape / pair / default keys)
+  policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
   perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
   perception.classify_shape: false              # Oliver #5/#7 shape from the top face

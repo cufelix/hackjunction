@@ -24,8 +24,9 @@ class TestFlags(unittest.TestCase):
         sub = load_config(overlay="submission")
         self.assertEqual(sub.pop("overlay"), "submission")
         on = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        self.assertEqual(on, {"instruction.resolve"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
+        self.assertEqual(on, {"instruction.resolve", "policy.bin_lookup"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
         sub["instruction"]["resolve"] = False
+        sub["policy"]["bin_lookup"] = "colour"
         self.assertEqual(sub, stock)
         self.assertEqual(set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"]), set(FLAGS))
 

@@ -903,5 +903,32 @@ class TestLiftOnStall(unittest.TestCase):
         self.assertFalse((CFG["motion"].get("lift_on_stall") or {}).get("enabled"))
 
 
+class TestBinLookupColourEquivalence(unittest.TestCase):
+    def test_colour_only_mapping_same_bins(self):
+        from aaltonomous.scene.scene import resolve_bin
+        mp = {"red": "left", "yellow": "center", "blue": "right"}
+        for c in mp:
+            for sh in (None, "cube", "cylinder", "triangle"):
+                self.assertEqual(resolve_bin(mp, c, sh), mp[c])
+
+    def test_episode_identical_with_resolve_bin(self):
+        res = []
+        for ov in ({}, {"policy.bin_lookup": "resolve_bin"}):
+            cfg = load_config(overrides={"instruction.resolve": True, **ov})
+            env = make_mock_env(seed=2, cfg=cfg)
+            pol = ClassicalPolicy(config=cfg, log=None, safety=env.filter.cfg)
+            obs = env.reset()
+            pol.reset({"instruction": obs["instruction"]})
+            acts = []
+            while True:
+                a = pol.act(obs)
+                acts.append(np.asarray(a["arm_q_target"]).tobytes())
+                obs, info = env.step(a)
+                if info["episode_over"]:
+                    break
+            res.append((acts, pol.n_started, dict(pol.mapping)))
+        self.assertEqual(res[0], res[1])
+
+
 if __name__ == "__main__":
     unittest.main()
