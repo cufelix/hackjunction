@@ -1,0 +1,10 @@
+# A/B overlay: head-camera xy self-calibration from the bin walls (calib, Timi). Real data: consistent +3.8 mm pelvis
+# +y bias grasp target vs true object (23-grasp-failure.md §11). Once per episode (first valid depth frame after reset)
+# the policy logs "head calibration accepted|fallback: xy=(dx,dy) mm, confidence=..., residual=..." (container log).
+# Convention: xy_offset is ADDED to every detection (= the camera translation error, test_recovers_known_camera_
+# translation). Detections that sit +3.8 mm in +y of the truth -> expect xy ~ (.., -3.8) mm.
+# GPU only, never baked: docker run ... -e AALTO_OVERLAY=ab_calib <image>.
+name: ab_calib
+flags:
+  perception.self_calibration.enabled: true
+  policy.grasp_diag_log: true                 # passive: every A/B run measures empty closes
