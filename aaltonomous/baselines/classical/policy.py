@@ -2189,8 +2189,9 @@ class ClassicalPolicy:
         return float(np.clip(ps, 0, 1)), pw, max(tc, 1.0), side, b
 
     def _score_order(self, cands, obs):
-        """EV per second: ps * (2 (1 - pw) - pw) / t_cost. EV <= 0 is never picked; a pick must finish before
-        time_limit - reserve - score_safety_s; in the last score_endgame_s only the quickest certain object."""
+        """EV per second: ps * (2 (1 - pw) - pw) / t_cost. EV <= 0 goes last (pickable when time allows); pw >= 0.8
+        is dropped. A pick must finish before time_limit - reserve - score_safety_s; in the last score_endgame_s
+        only the quickest certain object."""
         pol = self.cfg["policy"]
         t = float(obs.get("t", 0.0))
         left = self.time_limit - t - self._time_reserve(corrective=False) - float(pol.get("score_safety_s", 3.0))
@@ -2203,12 +2204,14 @@ class ClassicalPolicy:
         out, notes = [], []
         for r in rows:
             why = "ok"
-            if r[1] <= 0.0:
-                why = "ev<=0"
+            if r[3] >= 0.8:
+                why = "pw>=0.8"
+            elif r[1] <= 0.0:
+                why = "ev<=0 (last)"
             elif r[4] > left:
                 why = "no time"
             notes.append((r, why))
-            if why == "ok":
+            if why in ("ok", "ev<=0 (last)"):   # rows are sorted by EV/s, so EV <= 0 rows already sit after the rest
                 out.append(r)
         if out and left < float(pol.get("score_endgame_s", 25.0)):
             certain = [r for r in out if r[3] <= float(pol.get("score_certain_pw", 0.1))]

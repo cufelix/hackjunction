@@ -41,8 +41,14 @@ class TestScoreOrder(unittest.TestCase):
         self.assertIn(id(c[0]), (id(dets[0]), id(dets[1])))          # certain near cubes lead
         self.assertLess(ids.index(id(dets[0])), ids.index(id(dets[3])))
 
-    def test_ev_nonpositive_never_picked(self):
-        bad = det("red", 0.30, 0.0, cc=0.2)               # p_wrong 0.8 -> EV < 0
+    def test_ev_nonpositive_last_not_dropped(self):
+        mid = det("red", 0.30, 0.0, cc=0.3)              # p_wrong 0.7 -> EV < 0, pw < 0.8: kept, but last
+        good = det("blue", 0.3, 0.1)
+        self.assertEqual([id(d) for d in order(mk([mid, good]))], [id(good), id(mid)])
+        self.assertEqual([id(d) for d in order(mk([mid]))], [id(mid)])
+
+    def test_pw_at_least_0_8_is_dropped(self):
+        bad = det("red", 0.30, 0.0, cc=0.2)               # p_wrong 0.8 -> dropped
         pol = mk([bad, det("blue", 0.3, 0.1)])
         c = order(pol)
         self.assertNotIn(id(bad), [id(d) for d in c])
