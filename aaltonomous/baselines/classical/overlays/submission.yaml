@@ -18,6 +18,8 @@ flags:
   perception.look_timeout_s: null
   planner.per_target_guard: false
   planner.lift_from_contact: false              # real-only   startup lift from a table-resting hand (OFF until its real A/B)
+  planner.carry_corridor: false                 # real-only   carry via the front of the bin row when it would clip a foreign bin
+  planner.carry_corridor_margin_m: 0.03
   bin.vote.max_shift_m: 0.10
   calib.plane.apply_height: false               # P0 table   runtime counter_z from head depth (ab_apply_height overlay turns it on)
   scene.counter_z_prior: null                   # prior      no-depth table height (finals_* overlays: 0.15)
