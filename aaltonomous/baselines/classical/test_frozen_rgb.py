@@ -65,19 +65,30 @@ class TestFrozenRgb(unittest.TestCase):
         self.assertFalse(_look(p, _obs(_rgb(2))))
         self.assertEqual(p._frozen_looks, 0)
 
-    def test_d_n_consecutive_frozen_looks_stop_the_episode(self):
-        p = _policy(**{"policy.frozen_rgb_max_consecutive": 3})
+    def test_d_frozen_never_stops_the_episode(self):
+        """Timi condition 3: wait and re-look, never abort or skip."""
+        p = _policy()
         rgb = _rgb(1)
         _look(p, _obs(rgb))
         _pick(p)
-        for i in range(2):
+        for i in range(10):
             self.assertTrue(_look(p, _obs(rgb)))
             self.assertNotEqual(p.state, "done")
-        p.state = "look"
-        p._look = lambda *a, **k: self.fail("must not look")
-        act = p._act(_obs(rgb))
-        self.assertEqual(p.state, "done")
-        self.assertTrue(act["done"])
+            self.assertEqual(p.state, "settle")
+        self.assertEqual(p._frozen_looks, 10)
+        self.assertFalse(_look(p, _obs(_rgb(4))))   # stream recovers -> normal look
+        self.assertEqual(p._frozen_looks, 0)
+
+    def test_d1_sensor_noise_is_not_frozen(self):
+        """Timi condition 2: byte-identical only; out-and-back with 1-LSB sensor noise is a live frame."""
+        p = _policy()
+        rgb = _rgb(1)
+        self.assertFalse(_look(p, _obs(rgb)))
+        _pick(p)
+        noisy = rgb.copy()
+        noisy[0, 0, 0] ^= 1
+        self.assertFalse(_look(p, _obs(noisy)))
+        self.assertFalse(any("[frozen_rgb]" in l for l in p.logs))
 
     def test_d2_fresh_look_resets_the_streak(self):
         p = _policy()

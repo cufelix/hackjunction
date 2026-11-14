@@ -54,10 +54,12 @@ class TestSimOverrides(unittest.TestCase):
         self.assertFalse(cfg["grasp"]["release_confirm"])
         self.assertFalse(cfg["perception"]["gate_below_bins"])   # listed since 3b58455: sim = rc1
         self.assertTrue(cfg["instruction"]["structured"])   # not listed: overlay value kept
+        self.assertFalse(cfg["policy"]["frozen_rgb_guard"])   # deterministic sim frames would false-trigger
 
     def test_auto_none_keeps_finals_values(self):
         cfg = self._decide("none")
         self.assertEqual(cfg["policy"]["fixed_mapping"], {"yellow": "left", "blue": "center", "red": "right"})
+        self.assertTrue(cfg["policy"]["frozen_rgb_guard"])    # real robot: guard on
         self.assertEqual(cfg["scene"]["counter_z_prior"], 0.15)
         self.assertTrue(cfg["grasp"]["release_confirm"])
 

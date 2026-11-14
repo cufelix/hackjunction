@@ -1490,8 +1490,8 @@ class ClassicalPolicy:
             if ref is not None and ref[0] == h and ref[1] != self._scene_epoch:
                 self._frozen_looks += 1
                 self._note(t, f"[frozen_rgb] head RGB identical to the previous look after "
-                              f"{self._scene_epoch - ref[1]} pick/reset event(s); look {self._frozen_looks}/"
-                              f"{int(pol.get('frozen_rgb_max_consecutive', 3))} discarded")
+                              f"{self._scene_epoch - ref[1]} pick/reset event(s); look discarded, waiting + re-look "
+                              f"(frozen streak {self._frozen_looks})")
                 return True
             self._frozen_looks = 0
             self._rgb_ref = (h, self._scene_epoch)
@@ -1504,11 +1504,9 @@ class ClassicalPolicy:
             return False
 
     def _frozen_rgb_action(self, t):
-        if self._frozen_looks >= int(self.cfg["policy"].get("frozen_rgb_max_consecutive", 3)):
-            self._note(t, "[frozen_rgb] head RGB stream frozen: stop picking (0 pts)")
-            self.state = "done"
-            return self._hold(done=True)
-        return self._after_look(("error", "frozen_rgb"), t)   # the existing failed-look path: home, settle, retry
+        # Never abort, never skip: a frozen frame is a failed look -> home, settle (wait), re-look until the stream
+        # recovers or the episode time limit ends it (retry_failed below).
+        return self._after_look(("error", "frozen_rgb"), t)
 
     def _look_snapshot(self):
         """Fast copy-on-launch transaction for one look/plan worker."""
