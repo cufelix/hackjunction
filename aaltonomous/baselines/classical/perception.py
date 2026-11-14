@@ -131,6 +131,7 @@ class Detection:
     footprint: tuple | None = None  # novel only: (major, minor) extents of the blob in m
     height_m: float | None = None  # novel only: top height above the counter plane in m
     ungraspable: bool = False  # novel only: too wide / flat / unsupported -> the policy skips it
+    ungraspable_reason: str | None = None  # novel only: why (handle too short/occluded, wider than the hand, no handle)
     prism_orientation: str | None = None  # perception.prism_orientation only: "standing" | "lying" | None (unsure)
     ridge_yaw: float | None = None  # lying prism: pelvis-frame heading (rad, mod pi) of the ridge = long axis
     prism_xy: tuple | None = None   # lying prism: ridge-strip centre (pelvis xy, = footprint centroid by symmetry)

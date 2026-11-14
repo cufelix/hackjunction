@@ -290,15 +290,17 @@ class Planner:
     def bin_xy(self, name):
         return self.bin_geometry(name)["centre_pelvis"]
 
-    def drop_xy(self, name):
-        c = self._drop_xy0(name)
+    def drop_xy(self, name, inset="cfg"):
+        c = self._drop_xy0(name, inset)
         sh = self.bin_geometry(name)["shift"]
         return c + sh if sh is not None else c
 
-    def _drop_xy0(self, name):
+    def _drop_xy0(self, name, inset="cfg"):
         """Release point (pelvis xy) in bin `name`: the point of the inner footprint nearest the pelvis, `grasp.drop_inset`
-        inside the inner walls (the published box row puts the box centres past the arm's reach). None -> centre."""
-        inset = self.cfg["grasp"].get("drop_inset")
+        inside the inner walls (the published box row puts the box centres past the arm's reach). None -> centre.
+        `inset` other than "cfg" overrides grasp.drop_inset (the novel near-rim retry uses 0.0)."""
+        if inset == "cfg":
+            inset = self.cfg["grasp"].get("drop_inset")
         c = self._bin_xy0(name)
         if inset is None:
             return c
@@ -1069,6 +1071,10 @@ class Planner:
             self._lying = False
         return None
 
+    def _near_rim_retry_on(self, det, place_xy, bin_name):
+        return (bool(self.cfg["grasp"].get("novel_near_rim_retry", False)) and place_xy is None and bin_name is not None
+                and (getattr(det, "novel", False) or self._generic_on(det)))
+
     def _generic_on(self, det):
         enabled = ((bool(self.cfg["grasp"].get("generic", False))
                     or bool((self.cfg.get("brain") or {}).get("find_to_detection", False))) if getattr(det, "novel", False)
@@ -1384,6 +1390,23 @@ class Planner:
             P["retreat"] = np.r_[stock_bxy, stock_z_drop + g["retreat_up"]]
             adjusted = False
             carry, lower, retreat = drop_leg(P)
+        if not retreat and self._near_rim_retry_on(det, place_xy, bin_name):
+            # novel/generic: the drop leg failed -> release once at the bin's near rim (no inset); clearances unchanged
+            first = plan.reason or f"IK failed on {[k for k, v in plan.ik.items() if not v[0]]} ({side})"
+            for key in ("carry", "carry_mid", "lower", "retreat"):
+                plan.ik.pop(key, None)
+                plan.waypoints.pop(key, None)
+            plan.reason = ""
+            near = self.drop_xy(bin_name, inset=0.0)
+            P["above_bin"] = np.r_[near, z_carry]
+            P["drop"] = np.r_[near, stock_z_drop]
+            P["retreat"] = np.r_[near, stock_z_drop + g["retreat_up"]]
+            carry, lower, retreat = drop_leg(P)
+            if retreat:
+                plan.waypoints["drop_near_rim"] = P["drop"].copy()
+            else:
+                second = plan.reason or f"IK failed on {[k for k, v in plan.ik.items() if not v[0]]} ({side})"
+                plan.reason = f"{first} | near-rim retry: {second}"
         if drop_adjustment_on:
             plan.waypoints["drop_adjusted" if adjusted else "drop_fallback"] = P["drop"].copy()
         if not retreat:

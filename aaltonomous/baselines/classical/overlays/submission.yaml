@@ -22,6 +22,7 @@ flags:
   planner.carry_corridor: false                 # real-only   carry via the front of the bin row when it would clip a foreign bin
   planner.carry_corridor_margin_m: 0.03
   bin.vote.max_shift_m: 0.10
+  grasp.novel_near_rim_retry: false             # novel R22 near-rim drop retry for novel/generic objects (OFF until its A/B)
   calib.plane.apply_height: false               # P0 table   runtime counter_z from head depth (ab_apply_height overlay turns it on)
   scene.counter_z_prior: null                   # prior      no-depth table height (finals_* overlays: 0.15)
   calib.fk_xcheck: false                        # B2         passive RGB/FK head-pose cross-check (log-only)
@@ -162,6 +163,8 @@ flags:
   grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
   perception.novel_objects: false               # R22 novel depth candidates (off in shipped submission)
   perception.novel.max_area_px: 30000
+  perception.novel.handle_rim_margin_m: 0.04
+  perception.novel.fp_filter: true
   grasp.generic: false                          # R22 novel geometry grasp (off in shipped submission)
   instruction.novel_objects: false              # R22 novel instruction grounding (off in shipped submission)
   policy.novel_obstacles: false                 # R22 novel collision keep-outs (off in shipped submission)

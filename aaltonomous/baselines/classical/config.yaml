@@ -340,6 +340,8 @@ perception:
     height_m: [0.01, 0.25]
     min_area_px: 45
     max_area_px: 30000
+    handle_rim_margin_m: 0.04
+    fp_filter: true
     pixel_stride: 3             # 640x480 -> 214x160; keeps the optional path below the 8 ms frame budget
     morph_px: 1               # applied after pixel_stride; depth/height gates already remove counter speckle
     known_match_px: 45
@@ -484,6 +486,7 @@ grasp:
   approach_extra_m: 0.0       # added to the pregrasp height (policy.speed_tiers sets 0.015 for the first object only)
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)
+  novel_near_rim_retry: false # FLAG (R22). Novel/generic: a failed drop leg retries once at the bin's near rim (no inset).
   drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
   drop_slot_wall_margin: 0.03 # object-centre margin from the inner side walls in the reachable near-wall band
   drop_slot_count: 3          # legacy count / grid slots per row; planner checks each selected slot with IK + safety

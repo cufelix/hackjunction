@@ -143,6 +143,8 @@ FLAGS = {
     "perception.depth_blob_recover": ("P0 perception", False, "recover colour-path misses from above-counter depth blobs; relaxed-HSV known colours only, unknowns abstain"),
     "perception.novel_objects": ("novel R22", False, "depth connected components above the counter -> conservative open-vocabulary object candidates"),
     "perception.novel.max_area_px": ("novel R22", 30000, "upper connected-component area (full-res px) for novel blobs; a 20 cm pan is 35-41k px"),
+    "perception.novel.handle_rim_margin_m": ("novel R22", 0.04, "handle grasp centre at least this far (m) beyond the body rim (max body projection, handle band excluded)"),
+    "perception.novel.fp_filter": ("novel R22", True, "drop false novel blobs (FK robot silhouette, bin band, image border, flat/thin, same-colour near a known det)"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
     "perception.prism_orientation": ("prism orient", False, "Detection.prism_orientation standing|lying from the footprint fill + top-band strip (+ height when it differs); lying -> shape triangle, ridge_yaw, prism_xy"),
@@ -220,6 +222,7 @@ FLAGS = {
     "grasp.cylinder_no_yaw_vary": ("cyl yaw", False, "retry on a detected cylinder varies the posture only, never the finger yaw (rotationally symmetric)"),
     "grasp.staggered_release": ("finals grasp", False, "release thumb and first finger before DDS slots 5/6"),
     "grasp.staggered_release_delay_s": ("finals grasp", 0.30, "delay before DDS slots 5/6 begin opening when staggered_release is on"),
+    "grasp.novel_near_rim_retry": ("novel R22", False, "novel/generic objects: when the drop leg fails, retry once releasing at the target bin's near rim (no inset); clearances unchanged"),
     "bin.geometry_runtime": ("bin geo", False, "every bin consumer (perception masks/hulls/near_bin/in_bin/gate, planner drop/slots/collision) follows bin_geometry(): nominal + the voted shift"),
     "bin.vote.max_shift_m": ("bin vote", 0.10, "a bin vote result further than this from the prior is discarded (prior kept); real venue bins measure +8..+15 cm vs nominal"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),

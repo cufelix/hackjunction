@@ -21,14 +21,14 @@ SHAPE_WORDS = {
     "round": ("ball", "sphere", "orb", "round"),
     "elongated": ("marker", "pen", "pencil", "rod", "stick", "wand", "spoon", "spatula", "bar"),
     "with-handle": ("pan", "cup", "mug", "handled", "handle", "skillet", "saucepan", "pot", "jug", "kettle", "ladle"),
-    "box-like": ("box", "carton", "packet"),
+    "box-like": ("carton", "packet"),
 }
 _GENERIC_NOUNS = {"object", "item", "thing", "piece", "one", "ones", "objects", "items", "things", "pieces",
                   "blocks", "block", "shapes", "shape", "stuff", "cube", "cubes", "cylinder", "cylinders",
                   "triangle", "triangles", "prism", "prisms"}
 _KNOWN_FAMILY = ("red", "orange", "yellow", "blue", "purple")   # known-task colours the existing detector owns
 _KNOWN_SHAPES = ("cube", "cylinder", "triangle")
-_BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+bin)?\b", re.I)
+_BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+(?:bins?|box(?:es)?|crates?|buckets?|baskets?|containers?|trays?|bowls?))?\b", re.I)
 _BIN_ALIAS = {"centre": "center", "middle": "center", "mid": "center", "central": "center"}
 _WORDS = re.compile(r"[a-z]+", re.I)
 # One filler/reserved vocabulary for match_instruction and unknown_words.
@@ -37,16 +37,20 @@ _FILLER = frozenset(set(PALETTE) | _GENERIC_NOUNS | {
     "in", "into", "to", "on", "bin", "left", "right", "center", "centre", "middle", "mid", "central", "hand",
     "please", "up", "and", "small", "little", "large", "big", "toy", "cube", "cylinder", "prism",
     "can", "could", "would", "you", "kindly", "it", "of", "with", "onto", "inside", "over", "there", "that",
-    "this", "now", "then", "go", "should", "frying", "sauce", "metal", "wooden", "plastic", "kitchen", "my", "its"})
+    "this", "now", "then", "go", "should", "frying", "sauce", "metal", "wooden", "plastic", "kitchen", "my", "its",
+    "goes", "belongs", "belong", "end", "ends", "must", "need", "needs", "want", "wants", "set", "toss", "throw",
+    "deliver", "transfer", "carry", "bring", "all", "every", "each", "any", "them", "those", "these", "from",
+    "where", "is", "are", "be", "get", "gets", "let", "has", "have", "which", "what", "there", "their", "s", "i",
+    "me", "we", "side", "bucket", "basket", "container", "tray",
+    "box", "boxes", "crate", "crates", "buckets", "baskets", "containers", "trays", "bowl", "bowls", "bins"})
 _RESERVED = _FILLER | frozenset(w for ws in SHAPE_WORDS.values() for w in ws)
 
 
 def novel_noun_named(text):
-    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) or an unknown word."""
+    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) from SHAPE_WORDS only."""
     low = str(text or "").lower().replace("gray", "grey")
     words = set(_WORDS.findall(low))
-    named = any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
-    return named or bool(_unknown(words))
+    return any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
 
 
 def _unknown(words):
@@ -295,15 +299,35 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         width = float(dims[1])
         grasp_kind = "pinch"
         handle_axis = None
+        ungraspable_reason = None
         if label == "with-handle" and handle_mask is not None:
             huse = handle_mask & valid
             HP = points[huse]
             if len(HP) >= 10:
                 _, hmajor, hminor, hdims = _axes_and_footprint(HP[:, :2])
-                centre_xy, width = np.median(HP[:, :2], axis=0), float(hdims[1])
+                # body centre (handle pixels excluded): the handle axis points outward from it; grasp >= rim + handle_rim_margin_m (4 cm)
+                BP = points[blob & valid & ~handle_mask]
+                body_c = np.median(BP[:, :2], axis=0) if len(BP) >= 10 else object_centre_xy
+                u = hmajor if float((np.median(HP[:, :2], axis=0) - body_c) @ hmajor) >= 0 else -hmajor
+                w = np.array([-u[1], u[0]])
+                rel = HP[:, :2] - body_c
+                DP = BP[:, :2] - body_c
+                # disc pixels only: handle pixels the handle mask missed sit in the handle band and would push the rim out to the tip
+                DP = DP[np.abs(DP @ w - float(np.median(rel @ w))) > float(hdims[1]) / 2 + 0.01]
+                rim = max(float(np.percentile(DP @ u, 100.0)), float(_axes_and_footprint(DP)[3][0]) / 2) if len(DP) >= 10 else float(dims[0]) / 2
+                s_min = rim + float(cfg.get("handle_rim_margin_m", 0.04))
+                if float((rel @ u).max()) < s_min + 0.01:
+                    ungraspable_reason = "handle too short/occluded"
+                else:
+                    s = max(float(np.median(rel @ u)), s_min)
+                    centre_xy = body_c + s * u + float(np.median(rel @ w)) * w
+                    width = float(hdims[1])
                 handle_axis = hmajor
                 yaw = _fold_yaw(np.arctan2(hmajor[1], hmajor[0]))
                 grasp_kind = "handle"
+        hand_open = getattr(perception, "hand_opening_m", None)
+        if grasp_kind == "pinch" and hand_open is not None and width > float(hand_open):
+            ungraspable_reason = "wider than the hand, no handle"
         top_z = float(np.percentile(P[:, 2], 95.0))
         height = float(np.percentile(P[:, 2], 98.0) - perception.scene.counter_z)
         support = min(1.0, len(P) / 200.0)
@@ -326,9 +350,10 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         det.generic_required = True
         det.generic_width = width
         det.generic_confidence = confidence
-        det.graspable = confidence >= float(perception.cfg.get("novel_grasp_min_confidence",
-                                                               perception._root_cfg["grasp"].get("generic_min_confidence", 0.5)))
+        det.graspable = ungraspable_reason is None and confidence >= float(perception.cfg.get(
+            "novel_grasp_min_confidence", perception._root_cfg["grasp"].get("generic_min_confidence", 0.5)))
         det.ungraspable = not det.graspable
+        det.ungraspable_reason = ungraspable_reason
         det.novel_target_bin = None
         det.novel_matched = False
         novels.append(det)
