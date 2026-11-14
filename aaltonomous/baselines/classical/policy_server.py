@@ -36,6 +36,9 @@ class ClassicalServerPolicy(Policy):
         av = arm_vel or os.environ.get("AALTO_ARM_VEL")
         if av:
             ov["motion.arm_max_vel"] = float(av)
+        fd = os.environ.get("AALTO_FRAME_DUMP_DIR")  # debug only (see framedump.py); unset = byte-identical
+        if fd:
+            ov["debug.frame_dump_dir"] = fd
         self.pol = ClassicalPolicy(threaded=True, require_confirm=False, time_limit=tl, overrides=ov,
                                    log=lambda m: log.info(m), **kw)
         self.action_horizon = int(self.pol.cfg["motion"]["chunk"])
@@ -62,4 +65,8 @@ if __name__ == "__main__":
     t0 = time.monotonic()
     pol = ClassicalServerPolicy()
     log.info("classical baseline loaded in %.1f s", time.monotonic() - t0)
+    from .config import effective_flags  # integration: which opt-in features this image runs (container log)
+    on = [f"{k}={v!r}" for k, v, is_on, _, _ in effective_flags(pol.pol.cfg) if is_on]
+    log.info("profile=%s overlay=%s flags on: %s", pol.pol.cfg.get("profile"), pol.pol.cfg.get("overlay", "none"),
+             ", ".join(on) or "none (stock baseline)")
     serve(pol, port=int(os.environ.get("PORT", 8000)))
