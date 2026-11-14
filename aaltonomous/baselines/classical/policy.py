@@ -84,6 +84,7 @@ class _LookResult:
     perception_state: tuple
     counter_z_runtime: object
     logs: tuple
+    rim_z_runtime: object = None   # perception.rim_z_from_depth: the worker's scene.rim_z_runtime, committed with the look
 
 
 def _lower_thread_priority(nice=10):
@@ -104,7 +105,7 @@ class ClassicalPolicy:
         "_brain_reg", "_brain_n", "_last_pick", "_brain_looks", "_brain_finds", "tiers", "tier", "C",
     )
     _LOOK_PERCEPTION_FIELDS = ("_ah_est", "_ah_tries", "hsv", "_colour_kmeans_done", "_colour_kmeans_tries",
-                               "colour_kmeans_info", "color_gate_degraded", "fk_mask_px")
+                               "colour_kmeans_info", "color_gate_degraded", "fk_mask_px", "_rz_est", "_rz_tries")
     _LOOK_DEEP_FIELDS = {"attempt_tracks", "gate_skipped", "slot_used", "verification_pending", "last_verification",
                          "used_drop_slots", "reserved_drop_slots", "_skill_pending", "_pend_out", "tiers"}
     @staticmethod
@@ -1480,6 +1481,7 @@ class ClassicalPolicy:
         for name, value in result.perception_state:
             setattr(self.perception, name, value)
         self.scene.counter_z_runtime = result.counter_z_runtime
+        self.scene.rim_z_runtime = result.rim_z_runtime
         for message in result.logs:
             self.log(message)
 
@@ -1501,14 +1503,16 @@ class ClassicalPolicy:
                                      for name in self._LOOK_PERCEPTION_FIELDS if hasattr(worker.perception, name))
             if job["generation"] == self._look_generation:
                 job["result"] = _LookResult(job["generation"], outcome, state, perception_state,
-                                             worker.scene.counter_z_runtime, tuple(logs))
+                                             worker.scene.counter_z_runtime, tuple(logs),
+                                             getattr(worker.scene, "rim_z_runtime", None))
         except Exception as e:  # never kill the control loop
             if worker is None:
                 job["result"] = ("error", repr(e))
             else:
                 if job["generation"] == self._look_generation:
                     job["result"] = _LookResult(job["generation"], ("error", repr(e)), (), (),
-                                                 worker.scene.counter_z_runtime, tuple(logs))
+                                                 worker.scene.counter_z_runtime, tuple(logs),
+                                                 getattr(worker.scene, "rim_z_runtime", None))
 
     def _copy_bin_vote_frame(self, obs):
         """Copy camera buffers before returning to the runner; the worker never observes reused frame storage."""

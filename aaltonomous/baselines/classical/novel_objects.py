@@ -24,6 +24,8 @@ SHAPE_WORDS = {
     "box-like": ("box", "carton", "packet", "block"),
 }
 _GENERIC_NOUNS = {"object", "item", "thing", "piece", "one"}
+_KNOWN_FAMILY = ("red", "orange", "yellow", "blue", "purple")   # known-task colours the existing detector owns
+_KNOWN_SHAPES = ("cube", "cylinder", "triangle")
 _BIN = re.compile(r"\b(left|centre|center|right)(?:\s+(?:hand\s+)?bin)?\b", re.I)
 _WORDS = re.compile(r"[a-z]+", re.I)
 
@@ -219,11 +221,15 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         nearby = [d for d in known if np.hypot(float(d.uv[0]) - cu, float(d.uv[1]) - cv) <= match_px]
         known_geometry = known_lo <= dims[0] <= known_hi and known_lo <= dims[1] <= known_hi
         colour = dominant_colour(rgb_small, blob)
-        known_family = colour in ("red", "orange", "yellow", "blue", "purple")
+        known_family = colour in _KNOWN_FAMILY
         # Never use the novel path to bypass a rejected/ambiguous known-task
         # colour.  Known-size family-colour geometry belongs exclusively to
         # the existing detector, even when that detector prudently abstains.
         if known_geometry and (nearby or known_family):
+            continue
+        # Only a duplicate of the same object may supersede a known detection: a novel blob of another colour never
+        # supersedes a known-family cube/cylinder/triangle, which stays with the existing detector.
+        if any(d.color in _KNOWN_FAMILY and d.shape in _KNOWN_SHAPES and d.color != colour for d in nearby):
             continue
 
         label, handle_mask, image_axis, circularity = _shape(blob, dims, cfg)
@@ -274,6 +280,19 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
     return [d for d in known if id(d) not in superseded] + novels
 
 
+def _target_bin(low, colour):
+    """Bin for one object: the first bin named after that colour in the sentence, else the first bin named at all."""
+    bins = [(m.start(), "center" if m.group(1) in ("center", "centre") else m.group(1)) for m in _BIN.finditer(low)]
+    if not bins:
+        return None
+    anchor = re.search(rf"\b{re.escape(colour)}\b", low) if colour else None
+    if anchor is not None:
+        after = [target for pos, target in bins if pos > anchor.start()]
+        if after:
+            return after[0]
+    return bins[0][1]
+
+
 def match_instruction(text, candidates):
     """Ground a terse instruction onto exactly one visible novel candidate.
 
@@ -282,8 +301,7 @@ def match_instruction(text, candidates):
     The latter returns only the visible novel set for an optional async brain.
     """
     low = str(text or "").lower()
-    bm = _BIN.search(low)
-    target = None if bm is None else ("center" if bm.group(1) in ("center", "centre") else bm.group(1))
+    target = _target_bin(low, None)
     colours = [c for c in PALETTE if re.search(rf"\b{re.escape(c)}\b", low)]
     shapes = [shape for shape, words in SHAPE_WORDS.items() if any(re.search(rf"\b{w}\b", low) for w in words)]
     words = set(_WORDS.findall(low))
@@ -297,7 +315,7 @@ def match_instruction(text, candidates):
     matches = [d for d in pool if (not colours or d.color in colours) and (not shapes or d.shape in shapes)]
     deterministic = target is not None and (colours or shapes) and not unknown and len(matches) == 1
     if deterministic:
-        return NovelMatch(matches[0], target, (), None)
+        return NovelMatch(matches[0], _target_bin(low, matches[0].color), (), None)
     unresolved = unknown[0] if unknown else None
     return NovelMatch(None, target, tuple(pool) if unresolved and target is not None else (), unresolved)
 
