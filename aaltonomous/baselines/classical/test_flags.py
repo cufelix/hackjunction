@@ -66,6 +66,14 @@ class TestFlags(unittest.TestCase):
         base["held"]["soft_detector"] = True
         self.assertEqual(got, base)
 
+    def test_no_finals_overlay_combines_cage_mode_with_softgrip(self):
+        names = sorted(f.stem for f in OVERLAY_DIR.glob("finals_r2[23]*.yaml"))
+        self.assertTrue(names)
+        for name in names:
+            cfg = load_config(overlay=name)
+            both = cfg["grasp"]["cage_mode"] and cfg["grasp"]["soft_squeeze"]
+            self.assertFalse(both, f"{name}: grasp.cage_mode and grasp.soft_squeeze are both ON")
+
     def test_soft_flags_default_off_and_need_finger_sum(self):
         cfg = load_config(overlay="none")
         self.assertEqual((cfg["grasp"]["soft_squeeze"], cfg["grasp"]["soft_hand"], cfg["held"]["soft_detector"]),

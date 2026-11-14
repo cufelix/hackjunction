@@ -218,7 +218,7 @@ class TestOvershootLimits(unittest.TestCase):
 
 class TestPlannerPhases(unittest.TestCase):
     @classmethod
-    def plan_for(cls, overrides):
+    def plan_for(cls, overrides, **det_attrs):
         from aaltonomous.scene.scene import Scene
         from .config import home_arm
         from .perception import Detection
@@ -230,8 +230,10 @@ class TestPlannerPhases(unittest.TestCase):
         layout = scene.cfg["layout"]
         top = scene.mat_to_pelvis([np.mean(layout["region_x"]) + 0.08, np.mean(layout["region_y"]),
                                    scene.object_height()])
-        plan = Planner(cfg, scene, post, home).plan(Detection("yellow", top, 0, 0, "depth"), home,
-                                                    post["open"].copy())
+        det = Detection("yellow", top, 0, 0, "depth")
+        for k, v in det_attrs.items():
+            setattr(det, k, v)
+        plan = Planner(cfg, scene, post, home).plan(det, home, post["open"].copy())
         assert plan.ok, plan.reason
         return cfg, post, plan
 
@@ -242,6 +244,28 @@ class TestPlannerPhases(unittest.TestCase):
         np.testing.assert_array_equal(off.arm, not_soft.arm)
         np.testing.assert_array_equal(off.hand, not_soft.hand)
         self.assertNotIn("lift_check", [n for n, _, _ in off.phases])
+
+    def close_target(self, plan):
+        sl = slice(0, 7) if plan.side == "left" else slice(7, 14)
+        return plan.hand[plan.close_hold[1] - 1][sl]
+
+    def test_cage_posture_is_not_overclosed_by_softgrip(self):
+        cage = {"grasp.cage_mode": True}
+        soft = {"grasp.soft_squeeze": True, "grasp.soft_hand": True}
+        det = dict(shape="cylinder", shape_conf=0.9, shape_path="metric", apex_gate=(0.9, 60.0))
+        _, _, off = self.plan_for(cage, **det)
+        _, _, on = self.plan_for({**cage, **soft}, **det)
+        self.assertEqual(on.posture[0], "cage_cylinder")
+        np.testing.assert_array_equal(self.close_target(on), self.close_target(off))
+
+    def test_generic_posture_is_not_overclosed_by_softgrip(self):
+        gen = {"grasp.generic_fallback": True}
+        soft = {"grasp.soft_squeeze": True, "grasp.soft_hand": True}
+        det = dict(generic_required=True, generic_width=0.03, yaw=0.0)
+        _, _, off = self.plan_for(gen, **det)
+        _, _, on = self.plan_for({**gen, **soft}, **det)
+        self.assertTrue(on.reason.startswith("generic"), on.reason)
+        np.testing.assert_array_equal(self.close_target(on), self.close_target(off))
 
     def test_soft_plan_overcloses_holds_for_the_lag_and_lifts_slowly_after(self):
         _, post, off = self.plan_for({})

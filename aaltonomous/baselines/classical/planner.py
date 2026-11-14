@@ -1133,7 +1133,7 @@ class Planner:
         posture_name = self._posture or g.get("close_posture", "closed")
         soft = soft_hand_active(cfg)   # grasp.soft_squeeze on a soft hand: over-closed target, long hold, slow lift_check
         target = post[posture_name][sl]
-        if soft:
+        if soft and not posture_name.startswith("cage_") and not self._generic_on(det):   # stock close postures only
             target = soft_overclose(cfg, self.spec, post[posture_name], post["preshape"])[sl]
         if posture_name.startswith("cage_"):  # generated targets are clipped once more at the command seam
             target = np.clip(target, self.spec.hand_lower[sl], self.spec.hand_upper[sl])
