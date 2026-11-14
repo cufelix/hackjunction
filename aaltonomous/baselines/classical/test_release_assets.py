@@ -14,7 +14,7 @@ JOIN = re.compile(r'\b(?:HERE|ASSET\w*)((?:\s*/\s*"[^"]+")+)')
 
 
 def copy_lines():
-    text = DOCKERFILE.read_text().replace("\\\n", " ")
+    text = DOCKERFILE.read_text().replace("\\\n", " ").replace("${OVERLAY}", "submission")   # ARG default
     for line in text.splitlines():
         if line.startswith("COPY "):
             tokens = shlex.split(line)[1:]

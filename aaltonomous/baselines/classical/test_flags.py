@@ -358,7 +358,7 @@ class TestFlags(unittest.TestCase):
     def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
-        self.assertEqual(set(retry) - {"ab_grasp_xrel", "ab_grasp_sweep", "ab_grasp_both"}, {"ab_apply_height", "ab_b1_inj_p7", "ab_bingeo", "ab_binvote",
+        self.assertEqual(set(retry) - {"ab_grasp_xrel", "ab_grasp_sweep", "ab_grasp_both", "ab_lang_repeat", "ab_lang_regrant", "ab_lang_both"}, {"ab_apply_height", "ab_b1_inj_p7", "ab_bingeo", "ab_binvote",
                                       "ab_cgate", "ab_cgate_fk", "ab_cgate_live",
                                       "ab_colour_kmeans", "ab_cylinder", "ab_decision",
                                       "ab_drop_height_extra_m", "ab_drop_lateral_margin_m",
