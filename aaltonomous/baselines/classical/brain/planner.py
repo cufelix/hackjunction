@@ -105,6 +105,9 @@ def plan_prompt(req):
         "pick_place(obj_id,bin), place_at(obj_id,table_xy), find(description), skip(obj_id), wait, done. "
         "Never invent ids/bins, never output joints, poses, code, or extra keys. table_xy is pelvis-frame metres. "
         "Prefer skip/wait when uncertain. done is legal only after the instruction is satisfied.\n"
+        + ("This instruction names things you cannot see in Scene: call find(description) first, wait, and pick_place ONLY "
+           "ids returned by find (Scene.found); if find returns nothing, pick nothing.\n"
+           if req["world"].get("grounded_only") else "") +
         f"Schema: {json.dumps(plan_json_schema(), separators=(',', ':'))}\n{shots}\n"
         f"Scene: {scene}\nInstruction: {req['world'].get('instruction', '')}{retry}\nPlan:"
     )
@@ -306,6 +309,10 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
                 ok, why, _ = _result(reach_fn(oid, bin_name))
                 if not ok:
                     err.append(f"unreachable pick_place: {why}")
+        if tool == "pick_place" and oid in objects and (world or {}).get("grounded_only"):
+            grounded = {g for ids in ((world or {}).get("found") or {}).values() for g in (ids or [])}
+            if oid not in grounded:
+                err.append(f"{oid} was not located by find(): an open-vocabulary pick must be visually grounded")
         if tool in ("pick_place", "place_at") and oid in objects and objects[oid].get("graspable") is False:
             err.append(f"{oid} is ungraspable (too wide / flat): left on the counter")
         if tool in ("pick_place", "place_at") and oid in protected:

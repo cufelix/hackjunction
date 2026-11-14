@@ -298,6 +298,10 @@ class ClassicalPolicy:
                 return {"default": None}
             mc = int(instruction_cfg.get("max_chars", 0) or 0)
             limit = mc if mc > 0 else FALLBACK_INSTRUCTION_CHARS   # DoS bound; stock never sees >20k instructions
+            bcfg = self.cfg.get("brain") or {}
+            if bcfg.get("enabled", False) or bcfg.get("planner", False):
+                from .brain.planner import MAX_INSTRUCTION_CHARS   # brain on only: tighter 2000-char cap (bounded brain reset)
+                limit = min(limit, MAX_INSTRUCTION_CHARS)
             if len(str(text)) > limit:               # bounded reset() watchdog (1.0 s)
                 self.log(f"instruction resolve skipped ({len(str(text))} chars): no fixed fallback")
                 return None
@@ -419,6 +423,15 @@ class ClassicalPolicy:
         self._novel_brain_candidates = []
         self._novel_brain_bin = None
         self._novel_store, self._found, self._agent_dirty, self._last_find_items = [], {}, False, []
+        self._parser_unreachable = 0
+        self._open_vocab = False
+        if (self.cfg.get("brain") or {}).get("grounded_picks", False):
+            try:
+                from .novel_objects import unknown_words
+                self._open_vocab = bool(self._brain_abstain) or bool(unknown_words(self._instruction))
+            except Exception:
+                self._open_vocab = bool(self._brain_abstain)
+        self._parser_verdicts = {}          # universal: VLM cross-check verdicts of shape-noun parser matches (per episode)
         if self.brain is not None:
             self.brain.reset()
         if self.plan_brain is not None:
@@ -1665,7 +1678,7 @@ class ClassicalPolicy:
             if dets is None:
                 return ("still_vote_pending",)
             if (self.cfg.get("instruction") or {}).get("novel_objects", False):
-                self._match_novel(dets)
+                self._match_novel(dets, obs)
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
             self._planner_observe(dets, obs)
@@ -1681,7 +1694,7 @@ class ClassicalPolicy:
         if dets is None:
             return ("still_vote_pending",)
         if (self.cfg.get("instruction") or {}).get("novel_objects", False):
-            self._match_novel(dets)
+            self._match_novel(dets, obs)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -1734,7 +1747,7 @@ class ClassicalPolicy:
                 return ("relook", None, len(dets))
         return res
 
-    def _match_novel(self, dets):
+    def _match_novel(self, dets, obs=None):
         """Attach a bin only to one deterministic visible novel match.
 
         Unknown nouns expose a closed visible-novel list to the already
@@ -1753,11 +1766,54 @@ class ClassicalPolicy:
             match.matched.novel_target_bin = match.target_bin
             match.matched.novel_matched = True
             self.log(f"[novel] matched {match.matched.color} {match.matched.shape} -> {match.target_bin}")
+            if not self._parser_match_confirmed(match.matched, obs):
+                match.matched.novel_target_bin, match.matched.novel_matched = None, False
         elif match.brain_candidates and self.brain is not None:
             self._novel_brain_candidates = list(match.brain_candidates)
             self._novel_brain_bin = match.target_bin
             self.log(f"[novel] unresolved noun {match.unresolved_noun!r}; offered "
                      f"{len(match.brain_candidates)} visible novel candidates to brain")
+
+    def _parser_match_confirmed(self, d, obs):
+        """universal (brain.ev_gate + brain.find): VLM cross-check of a deterministic SHAPE-NOUN-ONLY match ("the ball" ->
+        the only round blob).  A synonym is a heuristic: a round pan body is not a ball.  find(noun) must put a point on this
+        candidate; points elsewhere or none = contradicted -> the object is left (0 beats -1) and marked ungraspable so the
+        brain planner cannot pick it either.  VLM unavailable / error / colour named = the parser stands (classical fallback)."""
+        bc = self.cfg.get("brain") or {}
+        if obs is None or not bc.get("ev_gate", False) or not bc.get("find", False) or self.brain is None:
+            return True
+        from .novel_objects import named_noun
+        noun, coloured = named_noun(self._instruction)
+        if noun is None or coloured:
+            return True
+        key = (noun, round(float(d.top[0]), 2), round(float(d.top[1]), 2))
+        cache = self.__dict__.setdefault("_parser_verdicts", {})
+        if key not in cache and self.__dict__.get("_parser_unreachable", 0) >= 2:
+            return True                # the server failed twice this episode: stop spending look time on it
+        if key not in cache:
+            try:
+                fn = self._brain_find_fn
+                if fn is None:
+                    self._brain_find(noun, obs, [])        # lazily builds the FindClient; the result is not used
+                    fn = self._brain_find_fn
+                if hasattr(fn, "detect_checked"):
+                    raw, reachable = fn.detect_checked(obs["head_rgb"], noun)
+                else:
+                    raw, reachable = (fn.detect(obs["head_rgb"], noun) if hasattr(fn, "detect") else fn(obs["head_rgb"], noun)), True
+                if not reachable:
+                    raise ConnectionError("brain server unreachable")
+                pts = [tuple(map(float, (it["point"] if isinstance(it, dict) else it))) for it in raw]
+                cache[key] = bool(match_found(pts, [d]))
+                self.log(f"[universal] VLM find({noun!r}) {'confirms' if cache[key] else 'CONTRADICTS'} the parser match "
+                         f"({len(pts)} points)")
+            except Exception as e:
+                self.log(f"[universal] VLM cross-check unavailable ({type(e).__name__}); the parser match stands")
+                self._parser_unreachable = self.__dict__.get("_parser_unreachable", 0) + 1
+                return True            # not cached: the next look asks again (at most twice per episode)
+        if not cache[key]:
+            d.ungraspable = d.graspable = False
+            self.failed.append(np.asarray(d.top[:2], float).copy())
+        return cache[key]
 
     def _plan_corrections(self, corrections, dets, t=0.0):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
@@ -2293,7 +2349,13 @@ class ClassicalPolicy:
         triage = bool(pol.get("time_triage", False))
         forced = None   # (det, bin, variant, table_xy) from the brain or the whole-plan planner
         planner_forced = False
-        if self._planner_needed:   # brain.planner (default off): a whole-instruction plan replaces the brain override
+        # universal: the deterministic parser/synonym match (instruction.novel_objects) is consulted FIRST; when it names a
+        # visible novel object and its bin, the classical loop acts on it and the brain is not asked at all.
+        parser_first = bool((self.cfg.get("instruction") or {}).get("novel_objects", False)) and \
+            any(getattr(d, "novel_matched", False) for d in dets)
+        if parser_first:
+            pass
+        elif self._planner_needed:   # brain.planner (default off): a whole-instruction plan replaces the brain override
             sel = self._planner_select(cands, dets, obs)
             if sel is None and self.plan_brain.steps is None and self.plan_brain.req.status == "pending":
                 return ("planner_pending", dets, verify)
@@ -2381,6 +2443,10 @@ class ClassicalPolicy:
             pfn = self._variant_plan_fn(forced[2]) if mine else None
             if target_bin is None and table_xy is None:
                 continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
+            if table_xy is None and self._ev_leave(d, target_bin, mine):
+                if fp:
+                    return planner_fail("EV gate")
+                continue
             if table_xy is None and not self._place_gate_allows(d, target_bin):
                 if fp:
                     return planner_fail("placement gate")
@@ -3077,6 +3143,7 @@ class ClassicalPolicy:
                 o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
             world["table_region"] = self._planner_table_region()
             world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            self._ground_flag(world)
             if self._found:
                 world["found"] = dict(self._found)
             classical_has_work = any(self._lookup(d) is not None for d in cands)
@@ -3204,15 +3271,44 @@ class ClassicalPolicy:
             o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
         world["table_region"] = self._planner_table_region()
         world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+        self._ground_flag(world)
         if self._found:
             world["found"] = dict(self._found)
         return world
+
+    def _ground_flag(self, world):
+        """brain.grounded_picks (universal): for an open-vocabulary instruction (parser abstains / unknown nouns) a blind plan
+        may only pick objects the VLM located with find() -- a text-only 8B planner happily "finds" fruit among cubes."""
+        if (self.cfg.get("brain") or {}).get("grounded_picks", False) and self.__dict__.get("_open_vocab", False):
+            world["grounded_only"] = True
+
+    def _ev_leave(self, d, target_bin, brain_chosen):
+        """brain.ev_gate (universal): per-object expected-value gate for a NOVEL object.  Score is +2 correct, -1 wrong
+        bin, 0 left, a failed grasp scores 0 -> EV = p_grasp * (3 p_bin - 1).  p_grasp = the depth-geometry grasp confidence,
+        p_bin = 1 for a deterministic parser/synonym match, else the confidence of the brain's bin (token probability when the
+        backend reports it, otherwise brain.ev_default_conf).  EV below brain.ev_min -> leave the object (0 beats -1)."""
+        bc = self.cfg.get("brain") or {}
+        if not bc.get("ev_gate", False) or not getattr(d, "novel", False) or target_bin is None:
+            return False
+        p_grasp = float(getattr(d, "generic_confidence", 1.0) or 0.0)
+        if getattr(d, "novel_matched", False) and not brain_chosen:
+            p_bin = 1.0
+        else:
+            conf = getattr(getattr(getattr(self, "plan_brain", None), "backend", None), "last_plan_conf", None)
+            p_bin = float(conf) if conf is not None else float(bc.get("ev_default_conf", 0.7))
+        ev = p_grasp * (3.0 * p_bin - 1.0)
+        if ev >= float(bc.get("ev_min", 0.5)):
+            return False
+        self.log(f"[ev] leave {getattr(d, 'label', d.color)!r}: EV {ev:.2f} < {float(bc.get('ev_min', 0.5)):.2f} "
+                 f"(p_grasp {p_grasp:.2f}, p_bin {p_bin:.2f}) -> counter, 0 points")
+        self.failed.append(np.asarray(d.top[:2], float).copy())
+        return True
 
     def _with_novel(self, dets, obs):
         """Known detections + the novel ones, each re-grown from the CURRENT depth at its remembered pixel (gone = placed
         or moved away -> dropped; the colour detector sees it now -> dropped). An ungraspable one is skipped once."""
         from .brain.novel import novel_detection
-        known = [d for d in dets if not getattr(d, "novel", False)]
+        known = list(dets)    # classical + depth-blob novel (perception.novel_objects): a VLM find never duplicates either
         keep, out, bc = [], [], self.cfg["brain"]
         for ent in self._novel_store:
             try:
@@ -3221,8 +3317,8 @@ class ClassicalPolicy:
             except Exception as e:
                 self.log(f"[novel] re-grow failed ({e!r})")
                 d = None
-            if d is None or any(np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04 for k in known):
-                continue
+            if d is None or any(np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04 for k in known + out):
+                continue          # universal: deduplicated by 3D position against every detection and the other finds
             ent["uv"] = d.uv
             keep.append(ent)
             out.append(d)
@@ -3296,6 +3392,7 @@ class ClassicalPolicy:
                 o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
             world["table_region"] = self._planner_table_region()
             world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            self._ground_flag(world)
             self.plan_brain.replan(world, call, reason)   # one async retry, 0.5 s deadline
         except Exception as e:
             self.log(f"[planner] replan failed ({e!r})")

@@ -1,4 +1,6 @@
-# finals_r22_agent: finals_r22 + AI brain agent (planner, find, find_to_detection, closed_loop) on llama.cpp in the SAME container; brain.timeout_s 1.0 / request_timeout_s 1.0; brain OFF in r22 and submission
+# finals_r22_agent = finals_r22 + the adaptive brain (planner + find + find_to_detection + closed_loop) on a LOCAL llama.cpp
+# server (Qwen3-VL-8B Q8, same container: tools/brain/Dockerfile.policy_brain). Brain unreachable = classical finals_r22.
+# Brain-only A/B arm; finals_r23_universal adds the novel-object perception/grasp layers on top.
 name: finals_r22_agent
 flags:
   hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
@@ -74,14 +76,14 @@ flags:
   perception.color_gate.near_margin_m: 0.10    # New H2/M1  prior/disagree union through full bin.vote.max_shift_m
   policy.generation_workers: true               # H7: reset invalidates look workers immediately; stale generations never publish
   grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort
-  brain.enabled: true   # brain  closed-set tool choice at look decisions (EV-gated, known bins protected)
-  brain.backend: llamacpp   # brain  bounded async HTTP + GBNF
-  brain.url: http://127.0.0.1:8080/completion   # brain  single-container finals: the LLM runs inside the policy image
+  brain.enabled: true                           # r22 agent  closed-set brain layer (decides only where the resolver abstains)
+  brain.backend: llamacpp                       # r22 agent  bounded async HTTP + GBNF
+  brain.url: http://127.0.0.1:8080/completion   # r22 agent  llama-server inside the SAME container (finals run one container)
+  brain.planner: true                           # r22 agent  whole-instruction closed-set plan (relations / abstentions)
+  brain.find: true                              # r22 agent  VLM grounding tool (Qwen3-VL boxes -> our detections)
+  brain.find_to_detection: true                 # r22 agent  find() point without a detection -> novel Detection from the depth blob
+  brain.closed_loop: true                       # r22 agent  async re-plan after each outcome, capped, retry/abandon in code
   brain.timeout_s: 1.0   # brain  decision deadline (s)
   brain.request_timeout_s: 1.0   # brain  llama.cpp HTTP deadline (s)
-  brain.planner: true   # agent  whole-instruction closed-set plan (relations / abstentions)
-  brain.find: true   # agent  VLM grounding tool (Qwen3-VL boxes -> our detections)
-  brain.find_to_detection: true   # agent  find() point without a detection -> novel Detection from the depth blob
-  brain.closed_loop: true   # agent  async re-plan after each outcome, capped, retry/abandon in code
   brain.image_max_side_px: 448                  # r22 speed   downscale the head RGB for find/decide (boxes scaled back to original px); BRAINSPEED.md
   brain.find_n_predict: 128                     # r22 speed   find() output cap (64 clips multi-box answers, 400 was the old cap)

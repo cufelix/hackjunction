@@ -181,7 +181,9 @@ class TestFlags(unittest.TestCase):
                                      "policy.max_corrections_per_episode"},
                   "ab_realcolour": {"instruction.resolve", "policy.bin_lookup", "grasp.point_in_palm",
                                     "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
-                                    "perception.hsv_set", "perception.split_blobs"}}
+                                    "perception.hsv_set", "perception.split_blobs"},
+                  "ab_langzip": {"instruction.resolve", "instruction.normalize", "instruction.strict",
+                                 "instruction.structured", "instruction.max_chars", "policy.bin_lookup"}}
         r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r14")) if is_on}
         expect["ab_retry_vary"] = r14 | {"policy.insert_guard", "policy.retry_vary_grasp",
                                          "policy.max_attempts_vary", "policy.max_total_attempts"}
@@ -274,6 +276,11 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_neutral"] = expect["finals_r22"] | {"perception.neutral_obstacles"}   # Oliver neutral A/B
         expect["finals_r22_bins"] = expect["finals_r22"] | {"perception.bins_from_image"}   # rim-mask A/B
         expect["finals_r23_candidate"] = expect["finals_r22"] | {"perception.gate_below_bins", "instruction.structured", "instruction.hazard_guard"}   # r23 candidate: r22 + gate_below_bins + structured + hazard_guard
+        expect["finals_r23_universal"] = expect["finals_r22"] | {
+            "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles",
+            "brain.enabled", "brain.backend", "brain.planner", "brain.find", "brain.find_to_detection",
+            "brain.closed_loop", "brain.image_max_side_px", "brain.find_n_predict", "brain.ev_gate",
+            "brain.grounded_picks", "brain.call_timeout_s", "brain.plan_timeout_s"}   # UNIVERSAL.md
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -288,12 +295,12 @@ class TestFlags(unittest.TestCase):
                   "finals_r22_novel", "finals_r22_verify", "finals_r22_cage", "finals_r22_order", "finals_r22_done",
                   "finals_r22_langzip", "finals_r22_counter", "finals_r22_bare", "finals_r22_coloralias",
                   "finals_r22_lyingprism", "finals_r22_lyingarm", "finals_r22_softgrip", "finals_r22_failopen", "finals_r22_rimz",
-                  "finals_r22_brain", "finals_r22_agent", "finals_r22_neutral", "finals_r22_bins", "finals_r23_candidate"):
+                  "finals_r22_brain", "finals_r22_agent", "finals_r22_neutral", "finals_r22_bins", "finals_r23_candidate", "finals_r23_universal"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_cage", "finals_r22_novel", "finals_r22_verify", "finals_r22_counter", "finals_r22_coloralias",
                   "finals_r22_order", "finals_r22_done", "finals_r22_softgrip", "finals_r22_langzip", "finals_r22_bare", "finals_r22_lyingprism",
                   "finals_r22_lyingarm", "finals_r22_failopen", "finals_r22_rimz",
-                  "finals_r22_brain", "finals_r22_agent", "finals_r22_neutral", "finals_r22_bins", "finals_r23_candidate"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+                  "finals_r22_brain", "finals_r22_agent", "finals_r22_neutral", "finals_r22_bins", "finals_r23_candidate", "finals_r23_universal"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
@@ -374,8 +381,8 @@ class TestFlags(unittest.TestCase):
                                       "finals_r22_lyingprism", "finals_r22_neutral",
                                       "finals_r22_novel", "finals_r22_order", "finals_r22_recall",
                                       "finals_r22_rimz", "finals_r22_softgrip", "finals_r22_verify",
-                                      "finals_r23", "finals_r23_candidate", "finals_real", "rc1",
-                                      "rc1_strict", "safe_profile"})
+                                      "finals_r23", "finals_r23_candidate", "finals_r23_universal",
+                                      "finals_real", "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 

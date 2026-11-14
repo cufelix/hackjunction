@@ -3,54 +3,61 @@
 # so llama-server, Qwen3-VL-8B-Instruct Q8_0 and its mmproj live INSIDE the image and the overlay points at loopback.
 # The default policy image (tools/submission.Dockerfile) stays brain-free; this file is a separate variant.
 #
+# Built FROM the reviewed release image (POLICY_IMAGE), so the policy layers are reused, not re-declared. This file adds
+# llama-server, the model and the agent overlay. Brain stays OFF unless --build-arg BRAIN_ENABLED=1.
+#
 # Staged (never downloaded here) under tools/brain/ before the build, from the repo root:
 #   tools/brain/llama.cpp/                          pinned llama.cpp source tree (Qwen3-VL support, CUDA 12.8, sm_120)
 #   tools/brain/models/Qwen3VL-8B-Instruct-Q8_0.gguf
 #   tools/brain/models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
-#   docker build -f tools/brain/Dockerfile.policy_brain -t hackjunction/policy:finals-agent .
+#   docker build -f tools/brain/Dockerfile.policy_brain --build-arg POLICY_IMAGE=hackjunction/policy:<release-tag> \
+#       --build-arg BRAIN_ENABLED=1 -t hackjunction/policy:finals-agent .
 # Record the llama.cpp commit and both GGUF sha256 next to the image. Not built in this branch.
+ARG POLICY_IMAGE=hackjunction/policy:latest
+ARG BRAIN_ENABLED=0
+
 FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS llama
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends cmake build-essential git ca-certificates libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY tools/brain/llama.cpp /src/llama.cpp
-RUN cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DLLAMA_CURL=OFF \
-        -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release \
+# Any cmake, build or copy failure fails the build (no `|| true`). GGML_NATIVE=OFF: no tuning to the build host CPU.
+RUN cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
+        -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA_NCCL=OFF \
  && cmake --build /src/build --target llama-server -j"$(nproc)" \
- && mkdir -p /out/bin /out/lib && cp /src/build/bin/llama-server /out/bin/ && cp /src/build/bin/*.so* /out/lib/ 2>/dev/null || true
+ && mkdir -p /out/bin /out/lib && cp /src/build/bin/llama-server /out/bin/ && cp /src/build/bin/*.so* /out/lib/
 
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
-ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 libcublas-12-8 \
+FROM ${POLICY_IMAGE} AS brain
+ARG BRAIN_ENABLED
+ARG BRAIN_OVERLAY=finals_r23_universal
+ENV BRAIN_ENABLED=${BRAIN_ENABLED}
+WORKDIR /app
+
+# cuBLAS (+ NCCL: libggml-cuda links libnccl.so.2 when the build host has it; without it llama-server dies at load and the
+# brain is silently OFF) for llama-server: the release base ships cudart only. Keep the 12.8 line matching the build stage.
+RUN apt-get update && apt-get install -y --no-install-recommends libcublas-12-8 libnccl2 \
     && rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir numpy==2.2.6 scipy==1.15.2 opencv-python-headless==4.10.0.84 pyyaml \
-        msgpack "websockets>=12" pin==3.3.1
 
 # ---- brain: server + models (inside the image; no volume at finals)
 COPY --from=llama /out/ /opt/brain/
 COPY tools/brain/models/ /opt/brain/models/
 COPY tools/brain/entrypoint.policy_brain.sh /opt/brain/entrypoint.sh
 
-# ---- policy: identical file list to tools/submission.Dockerfile
-WORKDIR /app
-COPY third_party/xr_teleoperate/assets/g1/g1_body29_hand14.urdf third_party/xr_teleoperate/assets/g1/
-COPY aaltonomous/__init__.py aaltonomous/
-COPY aaltonomous/deploy/__init__.py aaltonomous/deploy/protocol.py aaltonomous/deploy/policy_server.py aaltonomous/deploy/
-COPY aaltonomous/interface/__init__.py aaltonomous/interface/safety.py aaltonomous/interface/calibration.py \
-     aaltonomous/interface/tasks.py \
-     aaltonomous/interface/joint_spec.yaml aaltonomous/interface/calibration.yaml aaltonomous/interface/
-COPY aaltonomous/scene/__init__.py aaltonomous/scene/scene.py aaltonomous/scene/scene.yaml aaltonomous/scene/
-COPY aaltonomous/baselines/__init__.py aaltonomous/baselines/
-COPY aaltonomous/baselines/classical/*.py aaltonomous/baselines/classical/config.yaml aaltonomous/baselines/classical/
-COPY aaltonomous/baselines/classical/brain/ aaltonomous/baselines/classical/brain/
-COPY aaltonomous/baselines/classical/overlays/ aaltonomous/baselines/classical/overlays/
-# THE flag switch: the agent overlay (brain.url = http://127.0.0.1:8080/completion), baked in as overlay.yaml.
-COPY aaltonomous/baselines/classical/overlays/finals_r22_agent.yaml aaltonomous/baselines/classical/overlay.yaml
-COPY tools/flags.py tools/
-RUN python3 -c "from aaltonomous.baselines.classical.policy_server import ClassicalServerPolicy; ClassicalServerPolicy()" \
+# ---- overlay: the release image bakes submission.yaml as overlay.yaml. Replace it with the agent overlay, then set the
+# two brain keys from BRAIN_ENABLED (1 = on, anything else = off), and run the release checks against the result.
+COPY aaltonomous/baselines/classical/overlays/${BRAIN_OVERLAY}.yaml aaltonomous/baselines/classical/overlay.yaml
+RUN python3 -c "import os, yaml; \
+p='aaltonomous/baselines/classical/overlay.yaml'; d=yaml.safe_load(open(p)); f=d['flags']; \
+f['brain.enabled']=os.environ['BRAIN_ENABLED']=='1'; f['brain.url']='http://127.0.0.1:8080/completion'; \
+yaml.safe_dump(d, open(p, 'w'), sort_keys=False)" \
+ && python3 -c "from aaltonomous.baselines.classical.policy_server import ClassicalServerPolicy; ClassicalServerPolicy()" \
  && python3 tools/flags.py \
+ && python3 -c "import os, sys; from aaltonomous.baselines.classical.config import _get, load_config; \
+c=load_config(); want=os.environ['BRAIN_ENABLED']=='1'; \
+sys.exit(0 if _get(c, 'brain.enabled')==want and _get(c, 'brain.url')=='http://127.0.0.1:8080/completion' else 'brain.enabled/brain.url not as BRAIN_ENABLED')" \
  && python3 -c "import sys; from aaltonomous.baselines.classical.config import BAKED_OVERLAY, resolve_overlay; \
 sys.exit(0 if resolve_overlay() == BAKED_OVERLAY else 'baked overlay not picked up')"
 
 EXPOSE 8000
 ENTRYPOINT ["/opt/brain/entrypoint.sh"]
+CMD ["python3", "-m", "aaltonomous.baselines.classical.policy_server"]

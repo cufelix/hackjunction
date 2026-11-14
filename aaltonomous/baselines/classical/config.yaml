@@ -575,6 +575,10 @@ brain:
   novel_min_grasp_height_m: 0.02  # a blob lower than this is found but ungraspable -> skip
   novel_max_width_m: 0.06     # wider than the hand opening = ungraspable -> skip
   novel_max_objects: 3        # novel detections kept per episode
+  grounded_picks: false       # FLAG (universal). open-vocabulary instruction: pick_place only ids that find() located
+  ev_gate: false              # FLAG (universal). novel object with EV = p_grasp*(3*p_bin-1) < ev_min is left on the counter
+  ev_min: 0.5                 # universal: p_bin >= 0.5 at p_grasp 1 (break-even is 1/3; the margin absorbs mis-calibration)
+  ev_default_conf: 0.7        # universal: p_bin of a brain-chosen bin when the backend reports no confidence
   closed_loop: false          # FLAG. agent loop (brain/agent.py): async re-plan after every outcome; needs planner
   closed_loop_max_replans: 6  # re-plans per episode (the initial plan is not counted)
   call_timeout_s: 1.0         # closed loop: deadline per planner call; later = dropped, last plan / classical resolver goes on
