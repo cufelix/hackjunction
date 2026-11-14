@@ -111,7 +111,7 @@ def main():
             fill = float(cv2.contourArea(cv2.convexHull(xy.astype(np.float32)))) / (3.0 * np.sqrt(3.0) * r * r)
         ang = None
         if len(xy) >= 5:
-            _, tri = cv2.minEnclosingTriangle(xy.astype(np.float32).reshape(-1, 1, 2))
+            _, tri = cv2.minEnclosingTriangle((xy * 1000.0).astype(np.float32).reshape(-1, 1, 2))  # mm: OpenCV 4.13 fails on metre-scale float32
             t = tri.reshape(3, 2).astype(float)
             angs = []
             for k in range(3):
