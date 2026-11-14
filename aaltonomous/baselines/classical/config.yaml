@@ -332,6 +332,7 @@ perception:
     height_m: [0.01, 0.25]
     min_area_px: 45
     max_area_px: 30000
+    handle_rim_margin_m: 0.06
     pixel_stride: 3             # 640x480 -> 214x160; keeps the optional path below the 8 ms frame budget
     morph_px: 1               # applied after pixel_stride; depth/height gates already remove counter speckle
     known_match_px: 45
