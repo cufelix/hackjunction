@@ -487,5 +487,138 @@ class TestPlacementVerification(unittest.TestCase):
         self.assertGreaterEqual(np.linalg.norm(slots[1] - slots[0]), CFG["grasp"]["drop_slot_spacing"] - 1e-9)
 
 
+class TestRound3Flags(unittest.TestCase):
+    """Integration round 3: standalone drop slots, carry_scale, #6 review sub-flags (all default OFF)."""
+
+    def _pol(self, **ov):
+        pol = ClassicalPolicy(config=load_config(overrides=ov), log=None)
+        pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
+        self.renderer = Renderer(SC, CAL)
+        return pol
+
+    @staticmethod
+    def _object(color, mat_xy):
+        return dict(color=color, shape="cube", yaw=0.0, size=SC.size, height=SC.object_height(),
+                    pos=SC.mat_to_pelvis([mat_xy[0], mat_xy[1], SC.object_height() / 2]))
+
+    def _obs(self, objects):
+        rgb, depth = self.renderer.render(objects)
+        return {"head_rgb": rgb, "head_depth": depth, "t": 5.0}
+
+    def test_right_slot_outside_fov_is_excluded(self):
+        pl = Planner(CFG, SC, hand_postures(CFG), home_arm(CFG))
+        right = [np.round(p, 3).tolist() for p in pl.drop_slots("right")]
+        self.assertNotIn([0.453, -0.308], right)
+        self.assertIn([0.453, 0.308], [np.round(p, 3).tolist() for p in pl.drop_slots("left")])
+
+    def test_standalone_slots_next_object_next_slot_and_failed_pick_frees_it(self):
+        pol = self._pol(**{"grasp.drop_slots": True})
+        a, b = self._object("red", (0.40, 0.15)), self._object("red", (0.48, 0.16))
+        res = pol._look(self._obs([a, b]))
+        self.assertEqual(res[0], "plan")
+        self.assertEqual((res[1].target_bin, res[1].drop_slot), ("left", 0))
+        np.testing.assert_allclose(res[1].waypoints["drop"][:2], pol.planner.drop_slots("left")[0], atol=1e-9)
+        first = res[1]
+        pol._start(first, 5.0)
+        picked = a if np.linalg.norm(first.waypoints["grasp"][:2] - a["pos"][:2]) < 0.03 else b
+        other = b if picked is a else a
+        res2 = pol._look(self._obs([other]))              # picked object gone -> slot 0 stays used
+        self.assertEqual(res2[1].drop_slot, 1)
+        pol2 = self._pol(**{"grasp.drop_slots": True})
+        r = pol2._look(self._obs([a, b]))
+        pol2._start(r[1], 5.0)
+        r2 = pol2._look(self._obs([a, b]))                # hand closed on nothing: both still there -> slot 0 again
+        self.assertEqual(r2[1].drop_slot, 0)
+
+    def test_standalone_slots_off_by_default(self):
+        pol = self._pol()
+        res = pol._look(self._obs([self._object("red", (0.40, 0.15))]))
+        self.assertIsNone(res[1].drop_slot)
+        np.testing.assert_allclose(res[1].waypoints["drop"][:2], pol.planner.drop_xy("left"), atol=1e-9)
+
+    def test_carry_scale_slows_only_lift_and_carry(self):
+        from .perception import Detection
+        post, home = hand_postures(CFG), home_arm(CFG)
+        L = SC.cfg["layout"]
+        top = SC.mat_to_pelvis([np.mean(L["region_x"]), np.mean(L["region_y"]), SC.object_height()])
+        det = Detection("red", top, 1000, 1000, "depth")
+        plans = {}
+        for cs in (1.0, 0.5):
+            cfg = load_config(overrides={"motion.carry_scale": cs})
+            plans[cs] = Planner(cfg, SC, post, home).plan(det, home, post["open"], relocate=False)
+            self.assertTrue(plans[cs].ok, plans[cs].reason)
+        n = {cs: {name: e - s for name, s, e in p.phases} for cs, p in plans.items()}
+        for name in n[1.0]:
+            if name in ("lift", "carry"):
+                self.assertGreater(n[0.5][name], n[1.0][name], name)
+            elif name in ("to_pregrasp", "descend", "close", "open"):
+                self.assertEqual(n[0.5][name], n[1.0][name], name)
+        dq = np.abs(np.diff(plans[0.5].arm, axis=0)).max(axis=1)
+        self.assertLessEqual(dq.max(), CFG["motion"]["arm_max_vel"] / 30 + 1e-9)
+
+    def _bin_object(self, pol, color, bin_name, slot):
+        xy = pol.planner.drop_slots(bin_name)[slot]
+        lo, _ = SC.bin_inner_box(bin_name)
+        return dict(color=color, shape="cube", yaw=0.0, size=SC.size, height=SC.object_height(),
+                    pos=np.r_[xy, SC.counter_z + lo[2] + SC.object_height() / 2])
+
+    def test_yellow_in_bin_is_unknown_not_a_mismatch(self):
+        on = self._pol(**{**VERIFY_ON, "policy.verify_yellow_unknown": True})
+        yellow_wrong = self._bin_object(on, "yellow", "left", 0)
+        on._look(self._obs([yellow_wrong]))
+        self.assertEqual(on.scheduled_corrections, [])
+        off = self._pol(**VERIFY_ON)
+        off._look(self._obs([yellow_wrong]))
+        self.assertEqual(len(off.scheduled_corrections), 1)
+
+    def test_correction_cap_lets_counter_pick_go_first(self):
+        ov = {**VERIFY_ON, "policy.max_corrections_per_episode": 1}
+        pol = self._pol(**ov)
+        wrong = self._bin_object(pol, "red", "center", 0)
+        counter = self._object("blue", (0.40, 0.15))
+        res = pol._look(self._obs([wrong, counter]))
+        self.assertEqual(res[0], "plan")
+        self.assertFalse(res[1].corrective)
+        self.assertEqual(res[1].color, "blue")
+        res = pol._look(self._obs([wrong]))                 # counter empty -> the correction (cap 1)
+        self.assertTrue(res[1].corrective)
+        pol._start(res[1], 6.0)
+        self.assertEqual(pol.n_corrections, 1)
+        pol.verification_pending = None
+        res = pol._look(self._obs([wrong]))                 # cap reached: no second correction, no stop
+        self.assertEqual(res[0], "none")
+
+    def test_overflow_stack_reuses_a_slot(self):
+        pol = self._pol(**{**VERIFY_ON, "grasp.drop_slot_overflow": "stack"})
+        pol.used_drop_slots["left"].update(range(3))
+        res = pol._look(self._obs([self._object("red", (0.40, 0.15))]))
+        self.assertEqual((res[0], res[1].drop_slot), ("plan", 0))
+        pol = self._pol(**VERIFY_ON)                          # stock counter overflow: leave it
+        pol.used_drop_slots["left"].update(range(3))
+        self.assertEqual(pol._look(self._obs([self._object("red", (0.40, 0.15))]))[0], "none")
+
+    def test_grasp_diag_is_passive_one_line_per_pick(self):
+        runs = {}
+        for on in (False, True):
+            logs = []
+            env = make_mock_env(seed=1)
+            pol = ClassicalPolicy(config=load_config(overrides={"policy.grasp_diag_log": on}),
+                                  log=logs.append, safety=env.filter.cfg)
+            obs = env.reset()
+            pol.reset({"instruction": obs["instruction"]})
+            acts = []
+            while True:
+                a = pol.act(obs)
+                acts.append((np.asarray(a["arm_q_target"]).tobytes(), np.asarray(a["hand_q_target"]).tobytes()))
+                obs, info = env.step(a)
+                if info["episode_over"]:
+                    break
+            runs[on] = (acts, [m for m in logs if m.startswith("[grasp_diag]")], pol.n_started)
+        self.assertEqual(runs[False][0], runs[True][0])          # identical commands
+        self.assertEqual(runs[False][1], [])
+        self.assertEqual(len(runs[True][1]), runs[True][2])      # one line per started pick
+        self.assertTrue(all("held=" in m and "stall_vs_closed=" in m for m in runs[True][1]), runs[True][1][:1])
+
+
 if __name__ == "__main__":
     unittest.main()

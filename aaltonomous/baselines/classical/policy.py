@@ -110,6 +110,10 @@ class ClassicalPolicy:
         self.too_long = []          # (position, plan duration) of feasible plans that did not fit the time left
         self.n_started = 0          # executed plans started this episode, whatever object they were for
         self.retry_allow = []       # (position, extra attempts) granted by the retry pass; replaces max_attempts there
+        self.n_corrections = 0      # #6 corrective plans started (policy.max_corrections_per_episode)
+        self.slot_used = {name: set() for name in self.scene.bin_names}   # grasp.drop_slots standalone
+        self.slot_pending = None    # (bin, slot, grasp xy, colour) of the last standalone-slot placement
+        self._gdiag = None          # policy.grasp_diag_log: the pick being watched
         self.retry_pass_used = False
         self._summary_logged = False
         self.perception.reset_calibration()
@@ -158,6 +162,8 @@ class ClassicalPolicy:
                 self._note(t, f"head calibration {state}: xy=({off[0]:+.1f},{off[1]:+.1f}) mm, "
                               f"confidence={cal.confidence:.2f}, residual={cal.residual_m * 1000.0:.1f} mm, "
                               f"points={cal.n_points}, time={cal.elapsed_ms:.1f} ms ({cal.reason})")
+        if self._gdiag is not None:
+            self._grasp_diag(obs)
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":
@@ -255,22 +261,14 @@ class ClassicalPolicy:
         # touching a new counter object.  The fresh detection is planned directly;
         # stale corrective targets are never retained between camera frames.
         self.scheduled_corrections = corrections
-        for d, source_bin, target_bin in corrections:
-            for slot in self._free_drop_slots(target_bin):
-                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, relocate=False,
-                                      drop_slot=slot, source_bin=source_bin)
-                self.plans.append(p)
-                if p.ok:
-                    return ("plan", p, len(dets))
-                self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
-            p = self.planner.plan_to_counter(d, self.arm_cmd, self.hand_cmd, source_bin,
-                                             obstacles=[o.top[:2] for o in dets])
-            self.plans.append(p)
-            if p.ok:
-                return ("plan", p, len(dets))
-            self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
-        if corrections:
-            return ("uncorrectable", corrections, len(dets))
+        cap = self.cfg["policy"].get("max_corrections_per_episode")
+        if cap is None:  # stock #6: corrections first; none plannable -> stop
+            if corrections:
+                res = self._plan_corrections(corrections, dets)
+                return res if res is not None else ("uncorrectable", corrections, len(dets))
+        # max_corrections_per_episode set (Felix review): a correction never blocks a new pick while a pickable
+        # object is on the counter -> counter picks first, corrections (within the cap) only when nothing else is
+        # left; an unplannable correction no longer ends the episode.
 
         fresh_retry = self.last_verification is not None and self.last_verification[0] == "retry"
         pending_retry = self.last_verification[1] if fresh_retry else None
@@ -286,10 +284,41 @@ class ClassicalPolicy:
             elif self.verify_relooks_remaining > 0:
                 self.verify_relooks_remaining -= 1
                 return ("relook", None, len(dets))
-        return self._choose_retry(dets, obs, verify=True)
+        res = self._choose_retry(dets, obs, verify=True)
+        if cap is not None and corrections and res[0] in ("none", "notime") and self.n_corrections < int(cap):
+            alt = self._plan_corrections(corrections, dets)
+            if alt is not None:
+                return alt
+        return res
+
+    def _plan_corrections(self, corrections, dets):
+        """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
+        for d, source_bin, target_bin in corrections:
+            for slot in self._free_drop_slots(target_bin) or self._overflow_slots(target_bin):
+                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, relocate=False,
+                                      drop_slot=slot, source_bin=source_bin)
+                self.plans.append(p)
+                if p.ok:
+                    return ("plan", p, len(dets))
+                self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
+            p = self.planner.plan_to_counter(d, self.arm_cmd, self.hand_cmd, source_bin,
+                                             obstacles=[o.top[:2] for o in dets])
+            self.plans.append(p)
+            if p.ok:
+                return ("plan", p, len(dets))
+            self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
+        return None
+
+    def _overflow_slots(self, bin_name):
+        """grasp.drop_slot_overflow: counter (stock #6) = no slot; stack = every slot again (drop onto the pile)."""
+        if self.cfg["grasp"].get("drop_slot_overflow", "counter") != "stack":
+            return []
+        return list(range(len(self.planner.drop_slots(bin_name))))
 
     def _choose_retry(self, dets, obs, verify):
         """_choose + #3 retry pass (Oliver 40fb22a, policy.retry_pass, default off)."""
+        if not verify and self._slots_on():
+            self._settle_slot(dets)
         res = self._choose(dets, obs, verify)
         pol = self.cfg["policy"]
         if res[0] == "none" and dets and pol.get("retry_pass", False) and not self.retry_pass_used:
@@ -307,6 +336,21 @@ class ClassicalPolicy:
                 self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
                 res = self._choose(dets, obs, verify)
         return res
+
+    def _slots_on(self):
+        """grasp.drop_slots (standalone, default off). With verify_placement on, #6 manages the slots itself."""
+        return bool(self.cfg["grasp"].get("drop_slots", False)) and not self._verify_on()
+
+    def _settle_slot(self, dets):
+        """Standalone slots: the slot of the last placement is freed again when the object is still on the counter
+        where we tried to grasp it (the hand closed on nothing), so failed picks do not use up the slots."""
+        if self.slot_pending is None:
+            return
+        bin_name, slot, xy, color = self.slot_pending
+        self.slot_pending = None
+        rad = 2 * self.cfg["policy"]["same_object_radius"]
+        if any(d.color == color and np.linalg.norm(d.top[:2] - xy) < rad for d in dets):
+            self.slot_used[bin_name].discard(slot)
 
     def _attempt_excluded(self, xy):
         """True when the object at xy is skipped for its attempt count only (not in `failed`)."""
@@ -375,8 +419,22 @@ class ClassicalPolicy:
                     continue
                 slot = self._next_drop_slot(target_bin)
                 if slot is None:
+                    slot = next(iter(self._overflow_slots(target_bin)), None)
+                if slot is None:
                     self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
                     continue
+                p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
+                                      drop_slot=slot)
+            elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
+                target_bin = resolve_bin(self.mapping, d.color, getattr(d, "shape", None))
+                slot = None
+                if target_bin is not None:
+                    free = [i for i in range(len(self.planner.drop_slots(target_bin)))
+                            if i not in self.slot_used[target_bin]]
+                    slot = free[0] if free else next(iter(self._overflow_slots(target_bin)), None)
+                    if slot is None:
+                        self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
+                        continue
                 p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
                                       drop_slot=slot)
             else:
@@ -431,12 +489,15 @@ class ClassicalPolicy:
         """
         scored = []
         corrections = []
+        yellow_unknown = bool(self.cfg["policy"].get("verify_yellow_unknown", False))
         for d, footprint_bin in bin_dets:
             target_bin = resolve_bin(self.mapping, d.color)
             score_bin = self._score_bin(d)
             scored.append((d, footprint_bin, score_bin))
             if score_bin is not None and score_bin == target_bin:
                 self.used_drop_slots[score_bin].add(self._nearest_slot(score_bin, d.top[:2]))
+            elif yellow_unknown and d.color == "yellow":
+                continue  # Felix review: a yellow in-bin blob is "unknown", never a mismatch -> no correction
             elif target_bin is not None:
                 corrections.append((d, footprint_bin, target_bin))
 
@@ -459,6 +520,9 @@ class ClassicalPolicy:
                 if matching:
                     self.retry_targets.pop(matching[0])
                 self.last_verification = ("ok", pending)
+            elif yellow_unknown and pending["color"] == "yellow":
+                self.reserved_drop_slots[target].add(slot)   # unknown: keep the slot blocked, no retry / relook
+                self.last_verification = ("unknown", pending)
             else:
                 # Keep the attempted slot unavailable: if the side-bin view was
                 # occluded, a successful object may still be sitting there.
@@ -476,6 +540,8 @@ class ClassicalPolicy:
             status, pending = self.last_verification
             if status == "ok":
                 self._note(t, f"verified {pending['color']} in {pending['target_bin']} slot {pending['drop_slot']}")
+            elif status == "unknown":
+                self._note(t, f"release of {pending['color']} in {pending['target_bin']} unknown (not retried)")
             else:
                 self._note(t, f"release of {pending['color']} not verified in {pending['target_bin']}; retry")
             self.last_verification = None
@@ -534,8 +600,18 @@ class ClassicalPolicy:
         xy = plan.waypoints["grasp"][:2]
         self.attempts.append((xy, 1))
         self.n_started += 1
+        if plan.corrective:
+            self.n_corrections += 1
+        if self.cfg["policy"].get("grasp_diag_log", False) and plan.side in ("left", "right"):
+            ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
+            if "close" in ph and "lift" in ph:
+                self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": ph["close"][1],
+                               "lift_end": ph["lift"][1], "t": t, "samples": {}}
         self._enqueue(plan.arm, plan.hand)
-        if plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
+        if self._slots_on() and plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
+            self.slot_used[plan.target_bin].add(plan.drop_slot)
+            self.slot_pending = (plan.target_bin, plan.drop_slot, plan.waypoints["grasp"][:2].copy(), plan.color)
+        elif plan.target_bin in self.scene.bin_names and plan.drop_slot is not None:
             self.reserved_drop_slots[plan.target_bin].add(plan.drop_slot)
             self.verification_pending = {"color": plan.color, "target_bin": plan.target_bin,
                                          "drop_slot": plan.drop_slot, "corrective": plan.corrective,
@@ -547,6 +623,39 @@ class ClassicalPolicy:
     # ------------------------------------------------------------------ action plumbing
     def _enqueue(self, a, h):
         self.queue_a, self.queue_h = np.asarray(a, float), np.asarray(h, float)
+
+    def _grasp_diag(self, obs):
+        """policy.grasp_diag_log (passive, never changes a command): once per pick, measured hand_q vs commanded
+        hand_cmd vs the `closed` posture at the end of the close hold and at the end of the lift. held = the active
+        hand still lags its command by >= 0.010 rad (fingers stalled on an object); no = they reached the target
+        (closed on nothing)."""
+        g = self._gdiag
+        q = obs.get("hand_q")
+        left = 0 if self.queue_a is None else len(self.queue_a)
+        done = g["n"] - left
+        if q is not None:
+            for key, at in (("close", g["close_end"]), ("lift", g["lift_end"])):
+                if key not in g["samples"] and done >= at:
+                    g["samples"][key] = (done, np.asarray(q, float).copy(), np.asarray(self.hand_cmd, float).copy())
+        if "lift" not in g["samples"] and left > 0:
+            return
+        self._gdiag = None
+        plan = g["plan"]
+        sl = ArmKinematics.sl(plan.side)
+        closed = self.post["closed"][sl]
+        parts = []
+        held = None
+        for key in ("close", "lift"):
+            if key not in g["samples"]:
+                parts.append(f"{key}=n/a")
+                continue
+            tick, hq, hc = g["samples"][key]
+            err = np.abs(hc[sl] - hq[sl])
+            held = bool(err.max() >= 0.010)
+            parts.append(f"{key}@{tick}: track_err_max={err.max():.3f} stall_vs_closed="
+                         f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
+        self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
+                 f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
 
     def _pop(self):
         k = int(self.cfg["motion"]["chunk"])

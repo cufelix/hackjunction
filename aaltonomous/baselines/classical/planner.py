@@ -159,6 +159,10 @@ class Planner:
         for y in ys:
             if ylo - 1e-9 <= y <= yhi + 1e-9 and all(abs(y - p[1]) >= spacing - 1e-9 for p in out):
                 out.append(np.array([x, np.clip(y, ylo, yhi)]))
+        # Slots only (#6 or grasp.drop_slots; never used with both off): drop slots the head camera cannot verify
+        excl = [np.asarray(e, float) for e in (g.get("drop_slot_exclude") or [])]
+        keep = [p for p in out if all(np.linalg.norm(p - e) > 0.005 for e in excl)]
+        out = keep or out
         return out
 
     def _over_counter(self, p):
@@ -531,9 +535,9 @@ class Planner:
         arm_parts, hand_parts, phases = [], [], []
         cur_a, cur_h = arm_q.copy(), hand_q.copy()
 
-        def move(name, Qs, hand_to=None):
+        def move(name, Qs, hand_to=None, scale=1.0):
             nonlocal cur_a, cur_h
-            a = time_scale([cur_a] + list(Qs), vmax, amax, self.dt)
+            a = time_scale([cur_a] + list(Qs), vmax * scale, amax * scale, self.dt)
             h = np.repeat(cur_h[None], len(a), 0)
             if hand_to is not None:  # hand moves during the arm move (ends no later than the arm)
                 hr = ramp(cur_h, hand_to, hv, self.dt)
@@ -563,8 +567,9 @@ class Planner:
         move("to_pregrasp", [q_pre], hand_to=hand_pre)
         move("descend", down)
         hand("close", hand_cls, mo["close_hold_s"])
-        move("lift", up)
-        move("carry", carry + lower)
+        cs = min(1.0, float(mo.get("carry_scale", 1.0)))  # motion.carry_scale <= 1: slower lift + carry only
+        move("lift", up, scale=cs)
+        move("carry", carry + lower, scale=cs)
         hand("open", hand_rel, mo["open_hold_s"])  # widest posture: `open` alone left the cube wedged in the sim
         move("retreat", retreat)
         move("home", [home], hand_to=hand_open)

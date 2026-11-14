@@ -18,6 +18,11 @@ BAKED_OVERLAY = HERE / "overlay.yaml"
 OVERLAY_DIR = HERE / "overlays"
 POSTURES = ("open", "preshape", "closed")
 
+STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config value (base + profile, no overlay)
+# Limits an overlay may never exceed (hard rule: nothing may move faster than the stock sim profile).
+LIMITS = {"motion.carry_scale": (0.0, 1.0)}
+CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack")}
+
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
 FLAGS = {
@@ -37,6 +42,13 @@ FLAGS = {
     "policy.time_margin_s": ("Oliver #3", 0.0, "plans must end this long before the time limit"),
     "policy.episode_summary_log": ("Oliver #3", False, "one log line per episode end"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
+    "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
+    "policy.verify_yellow_unknown": ("Felix #6 rev", False, "#6: yellow in-bin detection = unknown, never mismatch"),
+    "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
+    "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
+    "grasp.drop_slot_overflow": ("Felix #6 rev", "counter", "slots used up: counter (leave it) | stack (slot 0)"),
+    "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
+    "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
 }
 
 
@@ -113,14 +125,30 @@ def load_config(path=None, overrides=None, profile=None, overlay=None):
         cfg["overlay"] = ov["name"]
     for k, v in (overrides or {}).items():
         _set(cfg, k, v)
+    check_flag_values(cfg)
     return cfg
+
+
+def check_flag_values(cfg):
+    """Hard limits on flag values (fail at load = at docker build): carry_scale in (0, 1], known overflow modes."""
+    for k, (lo, hi) in LIMITS.items():
+        v = float(_get(cfg, k))
+        if not lo < v <= hi:
+            raise ValueError(f"{k} = {v} outside ({lo}, {hi}]: never faster than the stock profile")
+    for k, ok in CHOICES.items():
+        if _get(cfg, k) not in ok:
+            raise ValueError(f"{k} = {_get(cfg, k)!r}, want one of {ok}")
 
 
 def effective_flags(cfg):
     """[(key, value, on, owner, what)] for every FLAGS entry of a loaded config."""
-    out = []
+    out, stock = [], None
     for k, (owner, off, what) in FLAGS.items():
         v = _get(cfg, k)
+        if off == STOCK:
+            if stock is None:
+                stock = load_config(profile=cfg.get("profile"), overlay="none")
+            off = _get(stock, k)
         out.append((k, v, v != off, owner, what))
     return out
 

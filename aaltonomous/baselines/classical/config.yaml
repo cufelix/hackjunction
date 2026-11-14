@@ -96,6 +96,10 @@ grasp:
   drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
   drop_slot_wall_margin: 0.03 # object-centre margin from the inner side walls in the reachable near-wall band
   drop_slot_count: 3          # one near-wall row; planner checks every selected slot with IK + safety dry-run
+  drop_slots: false           # FLAG (23-grasp-failure). Standalone drop slots (no verification): each successive object
+                              # in a bin gets the next slot instead of the one fixed drop_xy (STEP 0: 6/30 stacked)
+  drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
+  drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   release_posture: release     # hand posture for letting go (hand.<name>); back to `open` on the way home
@@ -129,6 +133,7 @@ instruction:
 motion:
   arm_max_vel: 0.5            # rad/s per joint (safety filter allows 1.0)
   arm_max_acc: 1.5            # rad/s^2
+  carry_scale: 1.0            # FLAG (Felix). <= 1: vmax/amax scale for the lift + carry phases only (slower carry)
   hand_max_vel: 1.2           # rad/s (filter allows 3.0)
   cart_step: 0.02             # Cartesian segments are split into IK waypoints this far apart
   max_joint_step: 0.4         # rad between neighbouring Cartesian IK waypoints (more = branch flip, bisect / fail)
@@ -168,6 +173,10 @@ policy:
   drop_verify_radius: 0.04    # released top-face centre must be this close to its assigned slot to count as verified
   verify_relooks: 1           # one extra settled frame before giving up on an occluded/missed placement
   correction_reserve_s: 9.0  # do not start a new placement without time for one typical corrective cycle
+  grasp_diag_log: false       # FLAG (passive). One [grasp_diag] line per pick: hand_q vs cmd vs closed, held yes/no
+  verify_yellow_unknown: false   # FLAG (Felix #6 review). A yellow in-bin detection = unknown, never a mismatch
+  max_corrections_per_episode: null   # FLAG (Felix #6 review). Cap on corrective picks; set = counter picks first,
+                                      # an unplannable correction no longer ends the episode (null = stock #6)
   order: nearest_bin          # nearest_bin | largest
   # Time triage (default off = old behaviour: the first plan that does not fit the time left ends the episode).
   # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
