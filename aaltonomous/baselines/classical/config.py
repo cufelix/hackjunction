@@ -192,6 +192,7 @@ FLAGS = {
                                     "extra bin-release height (capped at the carry height); IK failure uses the stock target"),
     "grasp.drop_lateral_margin_m": ("finals safe", 0.0,
                                       "move the bin release toward the bin centre (y only, footprint-checked); IK failure uses the stock target"),
+    "grasp.arm_xy_offset": ("arm offset", {"left": [0.0, 0.0], "right": [0.0, 0.0]}, "per-arm grasp xy correction (pelvis frame, m, each |v| <= 0.05) added to the detected top xy in the planner; zeros = off"),
     "grasp.left_hand_fix.shift_z": ("left hand", 0.0, "left arm + triangle only: add this (m) to the grasp z before the fingertip-clearance raise; 0 = off"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
@@ -369,6 +370,12 @@ def _apply_output_caps(cfg):
 
 def check_flag_values(cfg):
     """Hard limits on flag values (fail at load = at docker build): carry_scale in (0, 1], known overflow modes."""
+    axo = _get(cfg, "grasp.arm_xy_offset")
+    if not isinstance(axo, dict) or set(axo) != {"left", "right"} or any(
+            not isinstance(v, (list, tuple)) or len(v) != 2 or any(
+                isinstance(x, bool) or not isinstance(x, (int, float)) or not np.isfinite(x) or abs(x) > 0.05 for x in v)
+            for v in axo.values()):
+        raise ValueError(f"grasp.arm_xy_offset = {axo!r}: want {{left: [x, y], right: [x, y]}}, finite, |v| <= 0.05 m")
     lhz = _get(cfg, "grasp.left_hand_fix.shift_z")
     if isinstance(lhz, bool) or not isinstance(lhz, (int, float)) or not np.isfinite(lhz) or abs(lhz) > 0.05:
         raise ValueError(f"grasp.left_hand_fix.shift_z = {lhz!r}: want a finite number with |v| <= 0.05 m")

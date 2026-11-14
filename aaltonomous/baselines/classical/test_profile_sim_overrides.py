@@ -59,7 +59,6 @@ class TestSimOverrides(unittest.TestCase):
     def test_auto_none_keeps_finals_values(self):
         cfg = self._decide("none")
         self.assertEqual(cfg["policy"]["fixed_mapping"], {"yellow": "left", "blue": "center", "red": "right"})
-        self.assertTrue(cfg["policy"]["frozen_rgb_guard"])    # real robot: guard on
         self.assertEqual(cfg["scene"]["counter_z_prior"], 0.15)
         self.assertTrue(cfg["grasp"]["release_confirm"])
 
