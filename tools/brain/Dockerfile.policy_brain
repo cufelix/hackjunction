@@ -1,0 +1,56 @@
+# Finals image WITH the adaptive brain: ONE container = policy server (:8000) + llama.cpp server (127.0.0.1:8080).
+# The finals runner starts exactly `docker run -d --gpus all -p PORT:8000 IMAGE` (no volumes, args, second container),
+# so llama-server, Qwen3-VL-8B-Instruct Q8_0 and its mmproj live INSIDE the image and the overlay points at loopback.
+# The default policy image (tools/submission.Dockerfile) stays brain-free; this file is a separate variant.
+#
+# Staged (never downloaded here) under tools/brain/ before the build, from the repo root:
+#   tools/brain/llama.cpp/                          pinned llama.cpp source tree (Qwen3-VL support, CUDA 12.8, sm_120)
+#   tools/brain/models/Qwen3VL-8B-Instruct-Q8_0.gguf
+#   tools/brain/models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
+#   docker build -f tools/brain/Dockerfile.policy_brain -t hackjunction/policy:finals-agent .
+# Record the llama.cpp commit and both GGUF sha256 next to the image. Not built in this branch.
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS llama
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends cmake build-essential git ca-certificates libcurl4-openssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY tools/brain/llama.cpp /src/llama.cpp
+RUN cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DLLAMA_CURL=OFF \
+        -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build /src/build --target llama-server -j"$(nproc)" \
+ && mkdir -p /out/bin /out/lib && cp /src/build/bin/llama-server /out/bin/ && cp /src/build/bin/*.so* /out/lib/ 2>/dev/null || true
+
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 libcublas-12-8 \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --no-cache-dir numpy==2.2.6 scipy==1.15.2 opencv-python-headless==4.10.0.84 pyyaml \
+        msgpack "websockets>=12" pin==3.3.1
+
+# ---- brain: server + models (inside the image; no volume at finals)
+COPY --from=llama /out/ /opt/brain/
+COPY tools/brain/models/ /opt/brain/models/
+COPY tools/brain/entrypoint.policy_brain.sh /opt/brain/entrypoint.sh
+
+# ---- policy: identical file list to tools/submission.Dockerfile
+WORKDIR /app
+COPY third_party/xr_teleoperate/assets/g1/g1_body29_hand14.urdf third_party/xr_teleoperate/assets/g1/
+COPY aaltonomous/__init__.py aaltonomous/
+COPY aaltonomous/deploy/__init__.py aaltonomous/deploy/protocol.py aaltonomous/deploy/policy_server.py aaltonomous/deploy/
+COPY aaltonomous/interface/__init__.py aaltonomous/interface/safety.py aaltonomous/interface/calibration.py \
+     aaltonomous/interface/tasks.py \
+     aaltonomous/interface/joint_spec.yaml aaltonomous/interface/calibration.yaml aaltonomous/interface/
+COPY aaltonomous/scene/__init__.py aaltonomous/scene/scene.py aaltonomous/scene/scene.yaml aaltonomous/scene/
+COPY aaltonomous/baselines/__init__.py aaltonomous/baselines/
+COPY aaltonomous/baselines/classical/*.py aaltonomous/baselines/classical/config.yaml aaltonomous/baselines/classical/
+COPY aaltonomous/baselines/classical/brain/ aaltonomous/baselines/classical/brain/
+COPY aaltonomous/baselines/classical/overlays/ aaltonomous/baselines/classical/overlays/
+# THE flag switch: the agent overlay (brain.url = http://127.0.0.1:8080/completion), baked in as overlay.yaml.
+COPY aaltonomous/baselines/classical/overlays/finals_r22_agent.yaml aaltonomous/baselines/classical/overlay.yaml
+COPY tools/flags.py tools/
+RUN python3 -c "from aaltonomous.baselines.classical.policy_server import ClassicalServerPolicy; ClassicalServerPolicy()" \
+ && python3 tools/flags.py \
+ && python3 -c "import sys; from aaltonomous.baselines.classical.config import BAKED_OVERLAY, resolve_overlay; \
+sys.exit(0 if resolve_overlay() == BAKED_OVERLAY else 'baked overlay not picked up')"
+
+EXPOSE 8000
+ENTRYPOINT ["/opt/brain/entrypoint.sh"]

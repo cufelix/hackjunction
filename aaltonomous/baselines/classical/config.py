@@ -36,8 +36,6 @@ FLAGS = {
     "brain.backend": ("brain", "stub", "stub (= classical choice) | llamacpp (bounded async HTTP + GBNF)"),
     "brain.url": ("brain", "http://127.0.0.1:8080/completion", "llama.cpp server for brain.backend=llamacpp"),
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),
-    "brain.timeout_s": ("brain", 2.0, "brain decision deadline (s); stock config.yaml brain.timeout_s"),
-    "brain.request_timeout_s": ("brain", 1.5, "brain llama.cpp HTTP deadline (s); stock config.yaml brain.request_timeout_s"),
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
     "calib.plane.apply_height": ("P0 table", False, "pre-motion runtime counter_z from N mutually consistent head-depth plane fits (spread/MAD gated, once per episode, clamped to +-max_dz_m); atomically shared by scene and planner keepouts before a checked staging route"),
     "scene.counter_z_prior": ("prior", None, "null | table height in the pelvis frame (m, 0..0.3) used while no depth plane fit is available (apply_height overrides); null = nominal scene.yaml z"),
@@ -53,6 +51,12 @@ FLAGS = {
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
     "brain.planner": ("brain", False, "whole-instruction closed-set primitive plan for resolver abstention/relations"),
+    "brain.image_max_side_px": ("brain speed", 0, "downscale the head RGB to this longest side before encoding it for find()/decide (boxes are scaled back to original pixels); 0 = full size"),
+    "brain.find_n_predict": ("brain speed", 400, "find() output token cap (box JSON); 400 = the old hard-coded cap"),
+    "brain.find_to_detection": ("brain agent", False, "find() point that matches no detection -> a novel Detection from the depth blob there (region grow above the counter plane, generic_grasp, ungraspable -> skip); needs brain.find"),
+    "brain.timeout_s": ("brain", 2.0, "decision deadline (s): later decisions are dropped, the classical planner decides (stock config.yaml 2.0)"),
+    "brain.request_timeout_s": ("brain", 1.5, "absolute llamacpp HTTP deadline (s) (stock config.yaml 1.5)"),
+    "brain.closed_loop": ("brain agent", False, "agent loop: re-plan (async, capped) after every pick/place/find outcome with fresh world JSON + step history; last valid plan keeps running; 2 failed grasps -> other variant or skip; needs brain.planner"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
     "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner and hold the last trusted target (before trust, return no action until one complete finite encoder frame); non-finite head_depth -> 0 (missing)"),
@@ -349,6 +353,10 @@ def check_flag_values(cfg):
     for k, ok in CHOICES.items():
         if _get(cfg, k) not in ok:
             raise ValueError(f"{k} = {_get(cfg, k)!r}, want one of {ok}")
+    for k in ("brain.timeout_s", "brain.request_timeout_s"):
+        v = _get(cfg, k)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or v <= 0.0:
+            raise ValueError(f"{k} = {v!r}: want a finite number > 0")
     for k, n in VECTORS.items():
         v = _get(cfg, k)
         if k == "grasp.point_in_palm" and v == "auto":
