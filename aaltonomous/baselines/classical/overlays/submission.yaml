@@ -50,3 +50,7 @@ flags:
   grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
+  policy.confidence_order: false                # D1/D2      order by 2*p/est_time, never the hardest first
+  policy.object_time_cap: false                 # D2         per-object cap, T-20 s / T-8 s rules
+  policy.speed_tiers: false                     # D3         first object 0.7 + clearance, tiers by outcome
+  policy.confidence_tiers: false                # D4         first-seconds calibration tiers

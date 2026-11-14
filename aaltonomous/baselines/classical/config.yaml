@@ -136,6 +136,7 @@ grasp:
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
+  approach_extra_m: 0.0       # added to the pregrasp height (policy.speed_tiers sets 0.015 for the first object only)
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)
   drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
@@ -266,6 +267,42 @@ policy:
   retry_same_yaw_deg: 20.0
   retry_assoc_radius: 0.06    # an earlier miss belongs to an object of the same colour within this (pushed objects)
   retry_max_variants: 3       # grasp variants planned per retry (each costs one plan() call)
+  # Decision layer D1-D4 (decision.py, numbers in `decision:` below). All default off = stock behaviour.
+  confidence_order: false     # FLAG (D1/D2). Order by 2*p/est_time (p = p_colour*p_bin*p_grasp), never the hardest first
+  object_time_cap: false      # FLAG (D2). Per-object cap, T-20 s no new object, T-8 s release over the bin / retract
+  speed_tiers: false          # FLAG (D3). 1st object 0.7 + 1.5 cm clearance; clean 0.85/0.9; failure 0.6 + centre bin
+  confidence_tiers: false     # FLAG (D4). Hold still, calibration confidence C -> CONFIDENT / DEGRADED / PRIOR-ONLY
+
+# Decision layer numbers (knowledge/humanoid/40-ARCHITECTURE-v4.md sections 2-3). Only read when a policy.* decision flag is on.
+decision:
+  shape_prior: {cube: 0.9, cylinder: 0.8, triangle: 0.6, unknown: 0.75}   # p_grasp shape prior (triangle = prism)
+  hue_full_margin_deg: 15.0   # hue margin (deg) from the HSV range edge that counts as fully confident
+  area_min_px: 60             # blob area below this: p_area 0.3
+  area_full_px: 300           # blob area from which p_area = 1
+  stab_frames: 5              # temporal stability window (frames / looks)
+  est_base_s: 10.0            # pick+place estimate = base + per_m * |object - bin|
+  est_per_m: 20.0
+  reach_comfort_m: 0.35       # IK margin proxy: full below this object radius (pelvis), 0.5 at reach_max_m
+  reach_max_m: 0.45
+  cross_body_factor: 0.75     # IK margin x this when object and target bin are on opposite sides (relocation)
+  cap_reserve_s: 15.0         # per-object cap = (remaining - reserve) / objects left, clamped
+  cap_min_s: 15.0
+  cap_max_s: 35.0
+  no_new_s: 20.0              # T-20 s: nothing new
+  release_s: 8.0              # T-8 s: release over the bin, else retract
+  first_scale: 0.7            # speed tiers: scale of arm_max_vel / arm_max_acc (never above 1.0)
+  first_clearance_m: 0.015
+  clean_scale: [0.85, 0.9]    # after 1 clean success / after >= 2
+  fail_scale: 0.6
+  hold_s: 4.0                 # confidence tiers: hold still this long (3-5 s)
+  hold_frames: 4              # detect frames taken during the hold (stability + C inputs)
+  confident_c: 0.6
+  degraded_c: 0.3
+  degraded_scale: 0.6
+  degraded_min_p: 0.85        # DEGRADED: only objects with p_colour*p_bin >= this
+  c_weights: {pitch: 0.4, bin: 0.35, depth: 0.25}   # missing components drop out, weights renormalised
+  depth_lo: 0.2               # valid depth fraction -> 0 at this, 1 at depth_hi
+  depth_hi: 0.6
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.

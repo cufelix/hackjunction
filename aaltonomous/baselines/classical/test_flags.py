@@ -86,6 +86,9 @@ class TestFlags(unittest.TestCase):
         expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary",
                                             "policy.max_total_attempts"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
+        base = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r16_nopp")) if is_on}
+        expect["ab_decision"] = base | {"policy.confidence_order", "policy.object_time_cap", "policy.speed_tiers",
+                                        "policy.confidence_tiers"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -118,7 +121,7 @@ class TestFlags(unittest.TestCase):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
-                                      "finals_real", "rc1"})
+                                      "finals_real", "rc1", "ab_decision"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
