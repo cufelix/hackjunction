@@ -97,6 +97,9 @@ FLAGS = {
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),
     "motion.lift_on_stall.timeout_s": ("round 9", STOCK, "lift_on_stall: longest close hold (stock 1.2 s)"),
+    "grasp.adaptive_close": ("fasthold", False, "close hold: lift once the fingers stall after grasp.adaptive_close_hold_s, "
+                                                "at most grasp.lift_on_stall_timeout_s (= motion.lift_on_stall, adaptive timing)"),
+    "motion.conditional_settle": ("fasthold", False, "settle before a look: settle_min_s if the measured arm is still, else settle_max_s"),
     "grasp.point_in_palm": ("pinch fix", STOCK, "object centre in the LEFT palm frame (right = [1,-1,1] mirror)"),
     "grasp.close_posture_by_shape": ("hybrid", False, "per pick: demo posture only for a confident metric triangle, else the configured one"),
     "grasp.posture_by_shape_min_conf": ("hybrid", 0.5, "close_posture_by_shape: min shape confidence (0..1) for the demo posture"),
@@ -210,6 +213,22 @@ def _apply_arm_vel_cap(cfg):
         mo["arm_max_vel"], mo["arm_max_acc"] = cap, float(mo["arm_max_acc"]) * cap / v
 
 
+def _check_timing(cfg):
+    """grasp.adaptive_close and motion.conditional_settle timing params: finite, positive, min <= max."""
+    for k in ("grasp.adaptive_close_hold_s", "grasp.lift_on_stall_timeout_s", "motion.settle_min_s",
+              "motion.settle_max_s", "motion.settle_vel_eps"):
+        v = float(_get(cfg, k))
+        if not (np.isfinite(v) and v > 0.0):
+            raise ValueError(f"{k} = {v}: want a finite positive number")
+    if float(_get(cfg, "grasp.adaptive_close_hold_s")) > float(_get(cfg, "grasp.lift_on_stall_timeout_s")):
+        raise ValueError("grasp.adaptive_close_hold_s > grasp.lift_on_stall_timeout_s: min must be <= max")
+    if float(_get(cfg, "motion.settle_min_s")) > float(_get(cfg, "motion.settle_max_s")):
+        raise ValueError("motion.settle_min_s > motion.settle_max_s: min must be <= max")
+    n = _get(cfg, "motion.settle_window_samples")
+    if not (isinstance(n, int) and not isinstance(n, bool) and n >= 2):
+        raise ValueError(f"motion.settle_window_samples = {n!r}: want an integer >= 2")
+
+
 def check_flag_values(cfg):
     """Hard limits on flag values (fail at load = at docker build): carry_scale in (0, 1], known overflow modes."""
     for k, (lo, hi) in LIMITS.items():
@@ -236,6 +255,7 @@ def check_flag_values(cfg):
         budget = float(budget)
         if not np.isfinite(budget) or budget <= 0.0:
             raise ValueError(f"policy.object_time_budget_s = {budget}: want null or a finite positive number of seconds")
+    _check_timing(cfg)
     ice = _get(cfg, "perception.inject_cam_error")
     if ice is not None and not (isinstance(ice, (list, tuple)) and len(ice) == 5
                                 and all(isinstance(x, (int, float)) for x in ice)):

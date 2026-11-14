@@ -165,15 +165,21 @@ class TestFlags(unittest.TestCase):
     def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
-        self.assertEqual(set(retry), {"ab_b1_inj_p7", "ab_binvote", "ab_cgate", "ab_cgate_fk", "ab_cgate_live", "ab_colour_kmeans",
-                                      "ab_decision", "ab_drop_height_extra_m", "ab_drop_lateral_margin_m", "ab_first_object_speed_scale",
-                                      "ab_fk_xcheck", "ab_generic_fallback", "ab_hand_calib", "ab_held_detector", "ab_inj_p4",
-                                      "ab_inj_p7", "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_isolated_first", "ab_log_joint_offset",
-                                      "ab_object_time_budget_s", "ab_place_gate", "ab_plane_b1_inj_p7", "ab_plane_cgate",
-                                      "ab_plane_cgate_live", "ab_plane_cgate_live_fk", "ab_plane_cgate_live_vote", "ab_plane_inj_p7",
-                                      "ab_retry_vary", "ab_retry_vary_slots", "ab_safety", "ab_vel80", "ab_vel85", "ab_vel90",
-                                      "brain_llm", "cand_r16", "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18", "finals_real",
-                                      "rc1", "rc1_strict", "safe_profile"})
+        self.assertEqual(set(retry), {"ab_b1_inj_p7", "ab_binvote", "ab_cgate", "ab_cgate_fk",
+                                      "ab_cgate_live", "ab_colour_kmeans", "ab_decision",
+                                      "ab_drop_height_extra_m", "ab_drop_lateral_margin_m",
+                                      "ab_fasthold", "ab_first_object_speed_scale", "ab_fk_xcheck",
+                                      "ab_generic_fallback", "ab_hand_calib", "ab_held_detector",
+                                      "ab_inj_p4", "ab_inj_p7", "ab_inj_p7_yl", "ab_inj_p7_yr",
+                                      "ab_isolated_first", "ab_log_joint_offset",
+                                      "ab_object_time_budget_s", "ab_place_gate",
+                                      "ab_plane_b1_inj_p7", "ab_plane_cgate", "ab_plane_cgate_live",
+                                      "ab_plane_cgate_live_fk", "ab_plane_cgate_live_vote",
+                                      "ab_plane_inj_p7", "ab_retry_vary", "ab_retry_vary_slots",
+                                      "ab_safety", "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm",
+                                      "cand_r16", "cand_r16_nopp", "cand_r17", "cand_r18",
+                                      "finals_r18", "finals_real", "rc1", "rc1_strict",
+                                      "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
@@ -280,7 +286,8 @@ class TestFlags(unittest.TestCase):
         """Overlays can never make anything faster than the stock sim profile."""
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
                           ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
-                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap")])   # arm_vel_cap: min() only
+                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap", "motion.conditional_settle")])
+        # arm_vel_cap: min() only; conditional_settle: shortens a still-arm settle, never the motion speed
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",

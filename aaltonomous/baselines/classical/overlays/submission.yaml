@@ -66,6 +66,8 @@ flags:
   motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
   motion.lift_on_stall.enabled: false           # round 9    lift on finger stall (min close_hold_s, max timeout_s)
   motion.lift_on_stall.timeout_s: 1.2           # round 9    stock 1.2
+  grasp.adaptive_close: false                   # fasthold   close hold: lift on finger stall (adaptive timing)
+  motion.conditional_settle: false              # fasthold   settle 0.1 s if the arm is still, else 0.3 s
   grasp.point_in_palm: [0.0862, -0.0864, 0.0143]  # pinch fix  ON 2026-11-14 = ab_pinch_v1; LEFT palm frame, right mirrored
   grasp.close_posture: closed_tight                  # pinch fix  ON = ab_pinch_v1 (Modal 60/82 vs 52/82)
   grasp.close_posture_by_shape: true           # hybrid     demo posture only for a confident metric triangle

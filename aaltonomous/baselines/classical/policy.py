@@ -38,7 +38,7 @@ from .held import HeldDetector
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
+from .planner import Plan, Planner, close_timing, lookup_bin, lookup_detection_bin, ramp
 from .safety_shell import reserve_pair, reserve_plan
 from .brain import BrainLayer, build_world
 from .brain.find import FindClient, extract_queries, match_found
@@ -218,6 +218,7 @@ class ClassicalPolicy:
         self.held_detector.reset()
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
+        self._arm_hist = []         # motion.conditional_settle: (t, measured arm_q) per act() call, newest last
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
@@ -533,6 +534,11 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        if self.cfg["motion"].get("conditional_settle", False) and obs.get("arm_q") is not None:
+            n = int(self.cfg["motion"]["settle_window_samples"])
+            if not self._arm_hist or t > self._arm_hist[-1][0]:   # one sample per sim time (act can repeat a time)
+                self._arm_hist.append((t, np.asarray(obs["arm_q"], float).copy()))
+                del self._arm_hist[:-n]
         if self.held_detector.mode == "finger_sum":
             if first:
                 # The first command is synthesized from this same measurement,
@@ -611,7 +617,7 @@ class ClassicalPolicy:
             self._note(t, f"to home ({len(a) / HZ:.1f} s)")
             return self._pop() if len(a) else self._hold()
         if self.state == "settle":
-            n = int(round(self.cfg["motion"]["settle_s"] * HZ))
+            n = int(round(self._settle_s() * HZ))
             self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
             self.state = "look"
             return self._pop()
@@ -1144,6 +1150,22 @@ class ClassicalPolicy:
                      "deprecated alias, policy.object_time_cap is set")
         else:
             self._cap_alias_s = float(budget)
+
+    def _settle_s(self):
+        """Seconds to settle before a look. Off: motion.settle_s. motion.conditional_settle: settle_min_s when the measured
+        arm was still over the last settle_window_samples act() calls (max |dq|/dt < settle_vel_eps), else settle_max_s
+        (also when there is not enough history yet)."""
+        mo = self.cfg["motion"]
+        if not mo.get("conditional_settle", False):
+            return float(mo["settle_s"])
+        n = int(mo["settle_window_samples"])
+        if len(self._arm_hist) < n:
+            return float(mo["settle_max_s"])
+        (t0, q0), (t1, q1) = self._arm_hist[-n], self._arm_hist[-1]
+        if t1 <= t0:
+            return float(mo["settle_max_s"])
+        still = float(np.abs(q1 - q0).max()) / (t1 - t0) < float(mo["settle_vel_eps"])
+        return float(mo["settle_min_s"]) if still else float(mo["settle_max_s"])
 
     def _dflag(self, name):
         if name == "object_time_cap" and self._cap_alias_s is not None:
@@ -1983,11 +2005,12 @@ class ClassicalPolicy:
                         f"max_angle={'None' if ang is None else f'{ang:.1f}'}")
             self.log(f"[grasp_posture] t={t:.1f} {plan.color} {plan.side} label={label} conf={conf:.2f} path={path} "
                      f"posture={'pinch_demo' if nm == 'closed_demo' else 'pinch_v1'} ({nm})" + gate)
+        stall_on, close_min_s, _ = close_timing(self.cfg)
         ls = self.cfg["motion"].get("lift_on_stall") or {}
         self._stall = None
-        if ls.get("enabled", False) and plan.close_hold is not None and plan.side in ("left", "right"):
+        if stall_on and plan.close_hold is not None and plan.side in ("left", "right"):
             self._stall = {"n": len(plan.arm), "hold": plan.close_hold, "sl": ArmKinematics.sl(plan.side),
-                           "min": int(round(float(self.cfg["motion"]["close_hold_s"]) * HZ)),
+                           "min": int(round(close_min_s * HZ)),
                            "rad": float(ls.get("stall_rad", 0.01)), "need": int(ls.get("settle_ticks", 3)),
                            "last": None, "still": 0, "t": t}
         if (self.cfg["policy"].get("grasp_diag_log", False) or self.held_detector.mode == "finger_sum") \

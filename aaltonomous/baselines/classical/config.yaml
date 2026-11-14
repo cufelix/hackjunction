@@ -200,6 +200,10 @@ grasp:
   point_in_palm: [0.099, -0.084, 0.015]
   held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
+  adaptive_close: false       # FLAG (fasthold). Close hold = adaptive_close_hold_s, then lift as soon as the fingers stall,
+                              # at most lift_on_stall_timeout_s (stall detection: motion.lift_on_stall stall_rad/settle_ticks)
+  adaptive_close_hold_s: 0.4  # adaptive_close: minimum hold before a stall may end it (must be <= timeout)
+  lift_on_stall_timeout_s: 1.2  # adaptive_close: longest close hold (planned length)
   # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
   # gates, not independently switchable features. The classifier is consulted even when classify_shape is off.
   generic_fallback: false
@@ -335,6 +339,11 @@ motion:
     settle_ticks: 3
   open_hold_s: 0.4
   settle_s: 0.5               # hold at home before looking (arm lag, motion blur)
+  conditional_settle: false   # FLAG (fasthold). Before a look: settle_min_s if the measured arm is still, else settle_max_s
+  settle_min_s: 0.1           # conditional_settle: arm still (max joint |dq|/dt < settle_vel_eps over the window)
+  settle_max_s: 0.3           # conditional_settle: arm moving, or no history yet
+  settle_vel_eps: 0.02        # rad/s
+  settle_window_samples: 3    # act() calls (obs samples, ~chunk ticks apart) in the stillness window
   chunk: 10                   # ticks returned per act() (0.33 s)
   hold_ticks: 6               # ticks per hold while planning / waiting (fewer requests; <= 0.2 s extra latency)
   counter_clearance: 0.03     # hand points above the counter footprint stay this high during transit

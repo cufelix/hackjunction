@@ -114,6 +114,21 @@ def time_scale(Qs, vmax, amax, dt):
     return out
 
 
+def close_timing(cfg):
+    """(stall_on, min_s, planned_s) of the closed-hand hold. Off: motion.close_hold_s, planned = max(min, lift_on_stall
+    timeout) when motion.lift_on_stall is enabled. grasp.adaptive_close: min = grasp.adaptive_close_hold_s, planned =
+    grasp.lift_on_stall_timeout_s, stall detection as motion.lift_on_stall."""
+    g = cfg.get("grasp") or {}
+    if g.get("adaptive_close", False):
+        lo, hi = float(g["adaptive_close_hold_s"]), float(g["lift_on_stall_timeout_s"])
+        return True, lo, max(lo, hi)
+    lo = float(cfg["motion"]["close_hold_s"])
+    ls = cfg["motion"].get("lift_on_stall") or {}
+    if ls.get("enabled", False):
+        return True, lo, max(lo, float(ls.get("timeout_s", 1.2)))
+    return False, lo, lo
+
+
 def ramp(a, b, vmax, dt):
     """Linear move a -> b (excluding a) with every component at most vmax."""
     a, b = np.asarray(a, float), np.asarray(b, float)
@@ -844,10 +859,7 @@ class Planner:
 
         move("to_pregrasp", [q_pre], hand_to=hand_pre)
         move("descend", down)
-        ls = mo.get("lift_on_stall") or {}
-        close_hold_s = mo["close_hold_s"]
-        if ls.get("enabled", False):  # hold up to timeout_s; the policy starts the lift early on a finger stall
-            close_hold_s = max(close_hold_s, float(ls.get("timeout_s", 1.2)))
+        _, _, close_hold_s = close_timing(self.cfg)  # planned hold; the policy starts the lift early on a finger stall
         hand("close", hand_cls, close_hold_s)
         cs = min(1.0, float(mo.get("carry_scale", 1.0)))  # motion.carry_scale <= 1: slower lift + carry only
         move("lift", up, scale=cs)
