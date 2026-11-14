@@ -103,6 +103,16 @@ grasp:
   close_posture_by_shape: false
   posture_by_shape_min_conf: 0.5
   point_in_palm_demo: [0.1094, -0.0694, 0.0142]   # used only with close_posture_by_shape (right = y mirrored)
+  # grasp.posture_apex_gate (FLAG, default off, needs close_posture_by_shape): the demo posture additionally needs
+  # a real prism top face. On the top-face points (mm, pelvis xy): triangle_pose apex_conf >= posture_apex_min_conf
+  # AND the largest vertex angle of cv2.minEnclosingTriangle <= posture_apex_max_angle_deg; else fall back to
+  # close_posture. Geometric, not tuned: an equilateral prism top is 60 deg, a cube top cut by an occluder keeps a
+  # 90 deg corner, 75 deg is the midpoint; apex_conf 0.5 is the middle of 0..1 (Modal diag run: cut cubes 89.7/90.0
+  # deg + conf 0.00, prisms 60.6-61.9 deg + conf 0.75-0.77). Computation from Oliver's apex_conf_eval.py
+  # (origin/feat/grasp-yaw e0f1ca2, mm fix).
+  posture_apex_gate: false
+  posture_apex_min_conf: 0.5
+  posture_apex_max_angle_deg: 75.0
   approach_axis_in_palm: [0.0, -1.0, 0.0]   # palm-frame axis that must point down (left; right mirrors y)
   finger_hint: [1.0, 0.0, 0.0]              # weak preference for the finger direction (pelvis frame)
   finger_hints:               # tried in turn (LEFT arm; right mirrors y): forward, forward-inward, inward

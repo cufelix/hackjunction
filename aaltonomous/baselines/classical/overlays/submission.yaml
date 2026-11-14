@@ -42,4 +42,5 @@ flags:
   grasp.close_posture: closed_tight                  # pinch fix  ON = ab_pinch_v1 (Modal 60/82 vs 52/82)
   grasp.close_posture_by_shape: false           # hybrid     demo posture only for a confident metric triangle
   grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
+  grasp.posture_apex_gate: false                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1

@@ -34,6 +34,7 @@ class Detection:
     apex_yaw: float | None = None  # triangle only: pelvis-frame heading (rad, x fwd, y left) centre -> any one vertex (mod 120 deg)
     apex_conf: float = 0.0     # confidence of apex_yaw, 0..1 (from perception.triangle_pose)
     shape_conf: float = 0.0    # shape_id confidence (0..1) behind `shape`
+    apex_gate: tuple | None = None  # grasp.posture_apex_gate only: (apex_conf, max vertex angle deg) of a "triangle" top
     shape_path: str | None = None  # shape_id path ("metric" | "blob" | "abstain_*" | "off"), only filled when grasp.close_posture_by_shape
     shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
@@ -73,6 +74,8 @@ class Perception:
         self.classify_shape = bool(self.cfg.get("classify_shape", False))
         self.want_path = bool(cfg.get("grasp", {}).get("close_posture_by_shape", False))  # shape_id path for the posture gate
         self._last_path = None
+        # grasp.posture_apex_gate (default off): prism-top check features for "triangle" detections (apex_gate.py)
+        self.want_apex = self.want_path and bool(cfg.get("grasp", {}).get("posture_apex_gate", False))
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
         # #7 near-bin guard: abstain on shape when the top face may be cut by the bin exclusion (needs classify_shape)
         self.near_bin_guard = bool(self.cfg.get("near_bin_guard", False))
@@ -573,6 +576,9 @@ class Perception:
             det.shape_conf, det.shape_path = conf, self._last_path
         if apex_yaw is not None:
             det.apex_yaw, det.apex_conf = apex_yaw, apex_conf
+        if self.want_apex and shape == "triangle":
+            from .apex_gate import apex_gate_features
+            det.apex_gate = apex_gate_features(top[:, :2], altitude=self.size)
         if self.shape_diag:
             nb = bool(near_bin) if (self.classify_shape and self.near_bin_guard) else _safe_near_bin(self, top)
             det.shape_diag = self._diag(det, "depth", top[:, :2], blob, conf, path, nb)

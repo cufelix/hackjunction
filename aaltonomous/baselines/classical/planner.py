@@ -120,6 +120,7 @@ class Planner:
         self.safety = safety or SafetyConfig(dt=dt)
         self.dt = dt
         self._posture = None   # grasp.close_posture_by_shape: posture of the pick being planned
+        self._apex = None      # grasp.posture_apex_gate: (pass, apex_conf, max angle) of the pick being planned
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
 
@@ -490,13 +491,23 @@ class Planner:
         conf = float(getattr(det, "shape_conf", 0.0) or 0.0)
         path = getattr(det, "shape_path", None)
         if label == "triangle" and path == "metric" and conf >= float(g.get("posture_by_shape_min_conf", 0.5)):
-            return "closed_demo", np.asarray(g["point_in_palm_demo"], float), label, conf, path
+            if not g.get("posture_apex_gate", False):
+                return "closed_demo", np.asarray(g["point_in_palm_demo"], float), label, conf, path
+            # grasp.posture_apex_gate: the demo posture also needs a real prism top (apex_gate.py), else fall back
+            from .apex_gate import apex_gate_pass
+            ac, ang = getattr(det, "apex_gate", None) or (0.0, None)
+            ok = apex_gate_pass(ac, ang, float(g.get("posture_apex_min_conf", 0.5)),
+                                float(g.get("posture_apex_max_angle_deg", 75.0)))
+            self._apex = (ok, ac, ang)
+            if ok:
+                return "closed_demo", np.asarray(g["point_in_palm_demo"], float), label, conf, path
         return g.get("close_posture", "closed"), None, label, conf, path
 
     def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
         if not self.cfg["grasp"].get("close_posture_by_shape", False):
             self._posture = None
             return self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin)
+        self._apex = None
         name, pt, label, conf, path = self._posture_choice(det)
         saved = self.kin.offset
         if pt is not None:
@@ -506,7 +517,7 @@ class Planner:
             p = self._plan_side_inner(det, side, bin_name, arm_q, hand_q, place_xy, drop_slot, source_bin)
         finally:
             self.kin.offset, self._posture = saved, None
-        p.posture = (name, label, conf, path)
+        p.posture = (name, label, conf, path) if self._apex is None else (name, label, conf, path, self._apex)
         return p
 
     def _plan_side_inner(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None):
