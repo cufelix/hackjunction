@@ -69,6 +69,7 @@ flags:
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
   grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)
+  policy.score_order: false                     # r22        EV/s pick order (finals_r22_order turns it on)
   policy.time_triage: false                     # Oliver #3  skip plans that do not fit, try the next object
   policy.max_total_attempts: null               # Oliver #3  e.g. 12; null = off
   policy.max_attempts: 2                        # stock 2    tries per object
