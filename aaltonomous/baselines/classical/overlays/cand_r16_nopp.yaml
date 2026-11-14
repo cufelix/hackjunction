@@ -1,0 +1,52 @@
+# cand_r16_nopp: submission + ab_retry_vary_slots flags (retry_vary_grasp, max_attempts_vary 3, drop_slots; border_posture off); principal_point stays file
+# Submission flag overlay. submission.Dockerfile bakes this file into the image as
+# aaltonomous/baselines/classical/overlay.yaml; load_config() applies it after the `sim` profile.
+# The organisers run `docker run -d --gpus all -p <port>:8000 <image>` with no env/args, so THIS FILE is the switch.
+#
+# Only keys listed in config.FLAGS are accepted (typo -> the docker build fails).
+# Flags ON here (each only after its GPU A/B): instruction.resolve (2026-11-14). Everything else = its OFF value.
+# Flip a flag ONLY after its A/B run (knowledge/humanoid/21-submission-pipeline.md), then rebuild. Check: python3 tools/flags.py --overlay submission
+name: cand_r16_nopp
+flags:
+  instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
+                                                #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
+  policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
+  policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
+  perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
+  perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
+  perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
+  perception.classify_shape: true              # Oliver #5/#7 shape from the top face
+  perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre
+  perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)
+  perception.no_blob_shape: false               # Oliver     no top face -> no shape (never the 2D blob)
+  perception.shape_diag: false                  # Oliver     passive [shape_diag] log lines
+  perception.hsv_set: robust                     # real colour  stock | robust (one HSV set for sim + real head cam)
+  perception.split_blobs: true                 # real colour  split touching same-colour objects
+  grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
+  grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
+  grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)
+  policy.time_triage: false                     # Oliver #3  skip plans that do not fit, try the next object
+  policy.max_total_attempts: null               # Oliver #3  e.g. 12; null = off
+  policy.max_attempts: 2                        # stock 2    tries per object
+  policy.retry_pass: false                      # Oliver #3  once-per-episode retry pass (retry_extra_attempts 2)
+  policy.time_margin_s: 0.0                     # Oliver #3  e.g. 1.0; 0 = off
+  policy.episode_summary_log: false             # Oliver #3  one log line per episode end
+  policy.retry_vary_grasp: true                # retry-vary another grasp after held=no; held=no -> abort the carry
+  policy.max_attempts_vary: 3                # retry-vary e.g. 3 (needs retry_vary_grasp), only with time left
+  grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture
+  policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
+  policy.verify_yellow_unknown: false           # Felix #6r  yellow in-bin detection = unknown (needs verify)
+  policy.max_corrections_per_episode: null      # Felix #6r  e.g. 1; set = counter picks first (needs verify)
+  grasp.drop_slots: true                       # Timi 23    standalone drop slots (no verify needed)
+  grasp.drop_slot_overflow: counter             # Felix #6r  counter | stack, when the slots are used up
+  policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
+  motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
+  motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
+  motion.lift_on_stall.enabled: false           # round 9    lift on finger stall (min close_hold_s, max timeout_s)
+  motion.lift_on_stall.timeout_s: 1.2           # round 9    stock 1.2
+  grasp.point_in_palm: [0.0862, -0.0864, 0.0143]  # pinch fix  ON 2026-11-14 = ab_pinch_v1; LEFT palm frame, right mirrored
+  grasp.close_posture: closed_tight                  # pinch fix  ON = ab_pinch_v1 (Modal 60/82 vs 52/82)
+  grasp.close_posture_by_shape: true           # hybrid     demo posture only for a confident metric triangle
+  grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
+  grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
+  hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
