@@ -44,6 +44,8 @@ from .brain.find import FindClient, extract_queries, match_found
 HZ = 30.0
 _HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence names a hole AND the lid
 _LID = re.compile(r"\blids?\b")
+_TRUNC_CUT = ".;!?\n"   # instruction.max_chars: sentence / clause boundaries, then whitespace
+_WS = " \t\r\n"
 
 
 def _lower_thread_priority(nice=10):
@@ -102,6 +104,18 @@ class ClassicalPolicy:
         self.reset()
 
     # ------------------------------------------------------------------ API
+    def _cap_text(self, text):
+        """instruction.max_chars: cut a long instruction at the last boundary within the cap (logged). Unchanged when off."""
+        mc = int((self.cfg.get("instruction") or {}).get("max_chars", 0) or 0)
+        if mc <= 0 or not isinstance(text, str) or len(text) <= mc:
+            return text
+        head = text[:mc]
+        cut = max(head.rfind(c) for c in _TRUNC_CUT) + 1
+        if cut <= 0:
+            cut = max(head.rfind(c) for c in _WS) + 1 or mc
+        self.log(f"[instruction] truncated {len(text)}->{cut} chars")
+        return text[:cut]
+
     def _instruction_mapping(self, info):
         """Instruction text -> mapping for `scene.resolve_bin`, or None to fall back to FIXED.
 
@@ -113,7 +127,7 @@ class ClassicalPolicy:
         try:                                        # the WHOLE body, not just the resolve call
             if not (self.cfg.get("instruction") or {}).get("resolve", False):
                 return None
-            text = (info or {}).get("instruction") or ""
+            text = self._cap_text((info or {}).get("instruction") or "")
             if not text:
                 return None
             from .instruction import resolve
@@ -197,6 +211,7 @@ class ClassicalPolicy:
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
+        self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
         # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
         lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
@@ -351,9 +366,73 @@ class ClassicalPolicy:
         self._decision = "stop"
 
     def act(self, obs):
-        if not self._shell:
-            return self._act(obs)
-        return self._act_shell(obs)
+        ng = bool((self.cfg.get("safety") or {}).get("nan_guard", False))
+        if ng:
+            obs, hold = self._nan_guard(obs)
+            if hold is not None:
+                return hold
+        res = self._act_shell(obs) if self._shell else self._act(obs)
+        if ng:
+            a, h = np.asarray(res["arm_q_target"], float), np.asarray(res["hand_q_target"], float)
+            if len(a) and len(h):
+                self._emitted = (a[-1].copy(), h[-1].copy())
+        return res
+
+    # ------------------------------------------------------------------ safety.nan_guard
+    _nan_t = -1e9
+
+    def _nan_log(self, msg):
+        now = time.monotonic()
+        if now - self._nan_t >= 1.0:   # rate limit: at most one line per second
+            self._nan_t = now
+            self.log(f"[nan_guard] {msg}")
+
+    @staticmethod
+    def _fallback_pose(q, home):
+        """Per joint: the measured value where it is finite, else the home value of that joint (self.home =
+        config home_arm_q, hand: self.post['open'] from config hand.open). A missing or wrong-shape reading gives the
+        whole home pose. Never zeros: a zero target is a large move for the arms."""
+        home = np.asarray(home, float)
+        try:
+            v = np.asarray(q, float).reshape(-1)
+        except (TypeError, ValueError):
+            return home.copy()
+        if v.shape != home.shape:
+            return home.copy()
+        return np.where(np.isfinite(v), v, home)
+
+    def _nan_guard(self, obs):
+        """Non-finite arm_q / hand_q: skip the planner this tick and hold the last emitted action (before any action this
+        episode: measured-or-home pose, see _fallback_pose). Non-finite head_depth pixels -> 0 = missing depth: perception keeps only
+        depth_range_mm (config.yaml, 150..2000 mm) so 0 is invalid there (perception.py:369, :336). All-finite obs: returned
+        as is. Returns (obs, hold_action or None)."""
+        if not isinstance(obs, dict):
+            return obs, None
+        bad_q = False
+        for k in ("arm_q", "hand_q"):
+            v = obs.get(k)
+            if v is not None:
+                try:
+                    bad_q = bad_q or not bool(np.all(np.isfinite(np.asarray(v, float))))
+                except (TypeError, ValueError):
+                    pass   # malformed: _act's own handling is unchanged
+        dep = obs.get("head_depth")
+        if isinstance(dep, np.ndarray) and dep.dtype.kind == "f" and not np.isfinite(dep).all():
+            obs = {**obs, "head_depth": np.where(np.isfinite(dep), dep, dep.dtype.type(0))}
+            self._nan_log(f"head_depth: {int((~np.isfinite(dep)).sum())} non-finite px -> 0 (missing depth)")
+        if not bad_q:
+            return obs, None
+        if self._emitted is not None:
+            a, h = self._emitted
+            what = "last emitted action"
+        else:   # nothing emitted yet: per joint the measured value where finite, else home (never zeros)
+            a = self._fallback_pose(obs.get("arm_q"), self.home)
+            h = self._fallback_pose(obs.get("hand_q"), self.post["open"])
+            what = "measured-or-home pose (none emitted yet)"
+        self._nan_log(f"non-finite arm_q/hand_q: planner skipped, holding {what}")
+        k = max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
+        return obs, {"arm_q_target": np.repeat(np.asarray(a, float)[None], k, 0),
+                     "hand_q_target": np.repeat(np.asarray(h, float)[None], k, 0), "done": False}
 
     # ------------------------------------------------------------------ policy.safety_shell
     def _shell_init(self):
@@ -395,10 +474,9 @@ class ClassicalPolicy:
         elif self.arm_cmd is not None:
             a, h = self.arm_cmd, self.hand_cmd
         else:
-            try:
-                a, h = obs["arm_q"], obs["hand_q"]
-            except Exception:
-                a = h = np.zeros(14)
+            # nothing commanded yet: measured where finite, else home (same rule as _nan_guard; never zeros)
+            a = self._fallback_pose(obs.get("arm_q"), self.home)
+            h = self._fallback_pose(obs.get("hand_q"), self.post["open"])
         k = max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
         return {"arm_q_target": np.repeat(np.asarray(a, float)[None], k, 0),
                 "hand_q_target": np.repeat(np.asarray(h, float)[None], k, 0), "done": False}
@@ -1488,7 +1566,7 @@ class ClassicalPolicy:
             if not (self.cfg.get("instruction") or {}).get("resolve", False):
                 return {}, "unresolved"
             from .instruction import resolve
-            parsed = resolve(str((info or {}).get("instruction") or ""), fallback={}) or {}
+            parsed = resolve(str(self._cap_text((info or {}).get("instruction") or "")), fallback={}) or {}
             return dict(parsed), "resolver" if parsed else "unresolved"
         except Exception:
             return {}, "unresolved"

@@ -35,6 +35,8 @@ FLAGS = {
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
+    "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
+    "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner, hold the last emitted action (zero hold before any); non-finite head_depth -> 0 (missing)"),
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
@@ -215,6 +217,11 @@ def check_flag_values(cfg):
             continue
         if not (isinstance(v, (list, tuple)) and len(v) == n and all(isinstance(x, (int, float)) for x in v)):
             raise ValueError(f"{k} = {v!r}: want {n} numbers")
+    mc = _get(cfg, "instruction.max_chars")
+    if not isinstance(mc, int) or isinstance(mc, bool) or mc < 0:
+        raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")
+    if not isinstance(_get(cfg, "safety.nan_guard"), bool):
+        raise ValueError("safety.nan_guard: want true or false")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:

@@ -7,6 +7,7 @@ Does not touch policy/instruction.py (frozen); it only reads its vocabulary tabl
 """
 from __future__ import annotations
 
+import functools
 import re
 
 from . import instruction as _ins
@@ -73,15 +74,22 @@ def _limit(n: int) -> int:
     return 0 if n < 3 else 1 if n <= 5 else 2
 
 
+# ponytail: collapsed forms precomputed once; a target not in this table (e.g. a selfcheck injection) is collapsed on the fly.
+_COLLAPSED: dict[str, str] = {t: _collapse(t) for t in FUZZY_TARGETS}
+
+
+@functools.lru_cache(maxsize=4096)
 def _fuzzy(tok: str) -> str | None:
     """Unique canonical target for a near-miss token, else None (unknown or ambiguous)."""
     lim = _limit(len(tok))
     hits: dict[str, int] = {}
     for t in FUZZY_TARGETS:
-        forms = {t, _collapse(t)}
+        ct = _COLLAPSED.get(t) or _collapse(t)
+        forms = {t, ct}
         # first letter is almost never the typo, and requiring it keeps real words (below/yellow) out
-        d = min((_dist(tok, f) for f in forms), default=9) if tok[0] == t[0] else 9
-        if len(tok) >= 3 and tok in (_skeleton(t), _skeleton(_collapse(t))) and tok != t:
+        # edit distance >= length difference: skip forms that cannot be within lim (a 12k-char token costs nothing)
+        d = min((_dist(tok, f) for f in forms if abs(len(f) - len(tok)) <= lim), default=9) if tok[0] == t[0] else 9
+        if len(tok) >= 3 and tok in (_skeleton(t), _skeleton(ct)) and tok != t:
             d = 0 if d > lim else d  # vowel-dropped form (cntr, rght, lft, ylw)
         if d <= lim and lim:
             hits[t] = d
@@ -172,6 +180,8 @@ def name_colours(sentence: str) -> str:
 
 def normalize(sentence: str) -> str:
     """Map colour names and near-miss tokens onto the resolver's vocabulary, then drop colour-named-bin clauses."""
+    if sentence is None:
+        return ""
     return drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, name_colours(sentence))))
 
 
@@ -202,11 +212,13 @@ def _selfcheck() -> None:
     saved = FUZZY_TARGETS
     assert normalize("lefz") == "left"
     FUZZY_TARGETS, VOCAB["lefy"] = saved + ("lefy",), "red"
+    _fuzzy.cache_clear()   # the lookup is cached; the injected target changes its answer
     try:
         assert normalize("lefz") == "lefz"
     finally:
         FUZZY_TARGETS = saved
         del VOCAB["lefy"]
+        _fuzzy.cache_clear()
     # real-English neighbours and "right" meaning correct are not mangled; nothing non-near-miss becomes a bin word
     assert normalize("blur light fight night") == "blur light fight night"
     assert normalize("it is right, so read the rite and write") == "it is right, so read the rite and write"

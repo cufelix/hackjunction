@@ -267,6 +267,13 @@ ik:
 instruction:
   resolve: false
   normalize: false            # FLAG (Felix). resolve(normalize(text)): fixes typos/synonyms; needs resolve
+  max_chars: 0                # FLAG (fuzz). >0: cap the text at this many chars, cut at the last sentence/clause boundary
+                              # (. ; ! ? newline) else the last space; the resolver is quadratic (50k chars = 19 s). 0 = off
+
+# safety.nan_guard (FLAG, fuzz): non-finite arm_q / hand_q -> no planner tick, hold the last emitted action; non-finite
+# head_depth pixels -> 0 (missing depth). Off = unchanged.
+safety:
+  nan_guard: false
 
 # AI brain (brain/): closed-set tool choice over the classical planner. Off = byte-identical to before.
 brain:

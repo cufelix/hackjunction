@@ -117,6 +117,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_binvote"] = nopp | {"bin.vote.enabled"}   # rebased on cand_r17
         expect["ab_plane_cgate_live_vote"] = expect["ab_plane_cgate_live"] | {"bin.vote.enabled"}
         expect["ab_isolated_first"] = nopp | {"decision.isolated_first"}   # rebased on cand_r17
+        expect["ab_robust_input"] = nopp | {"instruction.max_chars", "safety.nan_guard"}   # cand_r17 + the fuzz fixes
         expect["ab_generic_fallback"] = nopp | {"grasp.generic_fallback"}   # rebased on cand_r17
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
         expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
@@ -161,7 +162,7 @@ class TestFlags(unittest.TestCase):
                                       "finals_real", "rc1", "ab_decision", "ab_place_gate",
                                       "ab_object_time_budget_s", "ab_colour_kmeans", "ab_cgate", "ab_plane_cgate", "ab_cgate_fk", "ab_cgate_live", "ab_plane_cgate_live", "ab_plane_cgate_live_fk", "ab_binvote", "ab_plane_cgate_live_vote", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90", "ab_isolated_first", "cand_r18", "finals_r18", "ab_generic_fallback",
                                       "ab_inj_p7", "ab_inj_p4", "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_plane_inj_p7",
-                                      "ab_plane_b1_inj_p7", "ab_b1_inj_p7"})
+                                      "ab_plane_b1_inj_p7", "ab_b1_inj_p7", "ab_robust_input"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
