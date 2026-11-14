@@ -611,6 +611,8 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        if first:
+            self._ep_t0 = t
         if self.held_detector.mode == "finger_sum":
             if first:
                 # The first command is synthesized from this same measurement,
@@ -703,6 +705,8 @@ class ClassicalPolicy:
             shift, extra, conf = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg, log=lambda m: self._note(t, m))
             self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = shift, extra, conf
             self._bv_frames = []
+        if self.state == "look" and self._await_pitch_cal(t):
+            return self._hold()
         if self.state == "look":
             if self._dflag("confidence_tiers") and self.tier is None:
                 try:
@@ -751,6 +755,22 @@ class ClassicalPolicy:
             self.state = "settle"
             return self._act(obs)
         return self._hold(done=True)
+
+    PITCH_WAIT_S = 1.0   # perception.online_pitch_cal: the first look waits at most this long (sim time) for the commit
+
+    def _await_pitch_cal(self, t):
+        """online_pitch_cal ON: the first look must not run on the nominal extrinsics before the fit committed (it would
+        see 0 detections and end the episode). True = hold this tick (max PITCH_WAIT_S from the episode start). Threaded:
+        never blocks. Not threaded: bounded join of the fit worker. Flag off: always False."""
+        if not self.cfg["perception"].get("online_pitch_cal", False) or self.pitch_calibration is not None:
+            return False
+        if t - getattr(self, "_ep_t0", t) >= self.PITCH_WAIT_S:
+            return False
+        th = self._pitch_thread
+        if not self.threaded and th is not None:
+            th.join(timeout=2.0)
+            return self.pitch_calibration is None and th.is_alive()
+        return True
 
     # ------------------------------------------------------------------ look + plan
     def _look_job(self, job):
