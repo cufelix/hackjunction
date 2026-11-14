@@ -1,5 +1,5 @@
 --- a/aaltonomous/sim/aalto_task/dr.py	2026-11-14 12:17:15.075075032 +0100
-+++ b/aaltonomous/sim/aalto_task/dr.py	2026-11-14 12:18:22.935337870 +0100
++++ b/aaltonomous/sim/aalto_task/dr.py	2026-11-14 12:41:46.194651444 +0100
 @@ -104,9 +104,63 @@
          "rot_offset_rad": [float(rc.uniform(-aj, aj)) if aj else 0.0 for _ in range(3)],
          "stream_seed": int(rc.integers(2 ** 31)),
@@ -57,7 +57,7 @@
 +                "xyz_m": [_draw(r, _sym(v)) / 100.0 for v in xyz]},
 +        "bin_dx_m": {b: (common + float(r.uniform(-jit, jit)) if jit else common) / 100.0 for b in bin_names},
 +        "render_colors": A.get("render_colors"), "bin_rgb": A.get("bin_rgb"), "tape_rgb": A.get("tape_rgb"),
-+        "ensure_object": A.get("ensure_object"),
++        "ensure_object": A.get("ensure_object"), "object_region": A.get("object_region"),
 +    }
 +
 +
@@ -112,7 +112,7 @@
          depth = np.where(valid, np.clip(np.round(d), 1, 65535), 0).astype(np.uint16)
      return rgb, depth
 --- a/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 12:17:15.505077988 +0100
-+++ b/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 12:18:57.240775182 +0100
++++ b/aaltonomous/sim/aalto_task/hooks.py	2026-11-14 12:41:46.194412133 +0100
 @@ -68,7 +68,18 @@
              print(f"[aalto] head RGB-D on tcp :{rp}")
          self.last_frame = None
@@ -133,10 +133,35 @@
          self.dr_params, self._dr_base, self._cam_rng = None, None, None
          cp = int(os.environ.get("AALTO_CLOCK_PORT", str(sp + 1 if sp else 0)))
          self.clock = None
-@@ -122,12 +133,32 @@
+@@ -94,6 +105,7 @@
+     def place(self, env, layout):
+         if self.dr_params:
+             layout = dr.jitter_layout(layout, self.dr_params)
++            layout = self._remap_region(layout)
+         poses, active = assign(self.sc, layout)
+         origin = _t(env.scene.env_origins)[0]
+         dev = origin.device
+@@ -122,12 +134,49 @@
                          "speed": round(float(np.linalg.norm(v)), 5)})
          return out
  
++    def _remap_region(self, layout):
++        """adv profile `object_region` (pelvis frame, real grasp distribution): affine remap of the stock spawn region
++        (x 0.26-0.33 m, y +-0.17 m) -> x_c + kx*(x - 0.295), y_c + ky*y. Applied in the sim so the client layout is unchanged."""
++        R = ((self.dr_params or {}).get("adv") or {}).get("object_region")
++        if not R:
++            return layout
++        o0 = np.asarray(self.sc.origin, float)           # pelvis x = o0x + y_mat ; pelvis y = o0y + x_mat
++        out = []
++        for o in layout:
++            o = dict(o)
++            px, py = o0[0] + o["y"], o0[1] + o["x"]
++            px = R["x_c"] + R["kx"] * (px - 0.295)
++            py = R["y_c"] + R["ky"] * py
++            o["y"], o["x"] = float(px - o0[0]), float(py - o0[1])
++            out.append(o)
++        return out
++
 +    def _ensure_object(self, layout):
 +        """adv profile `ensure_object: [colour, shape]`: make sure one such object is in the layout (replaces the
 +        first entry otherwise). Scoring reads the placed objects' names, so it stays consistent."""
@@ -167,7 +192,7 @@
          if cmd == "info":
              d = None if not self.dr_cfg else {"name": self.dr_cfg.get("name"), "path": self.dr_cfg["_path"]}
              return {"ok": True, "dr": d, "ports": self.ports, "n_objects": len(self.names), **self.clock_info()}
-@@ -136,7 +167,7 @@
+@@ -136,7 +185,7 @@
          if cmd == "reset_random":
              if self.dr_cfg:
                  self.randomize(env, req.get("seed"))
@@ -176,7 +201,7 @@
              return {"ok": True, "active": self.place(env, lay), "layout": lay}
          if cmd == "state":
              return {"ok": True, "objects": self.state(env), "layout": self.layout}
-@@ -254,9 +285,16 @@
+@@ -254,9 +303,16 @@
                                  "color": tuple(p.GetAttribute("inputs:color").Get() or (1, 1, 1)),
                                  "translate": tuple(t.Get()) if t and t.Get() is not None else None}
      roots = {"Counter": "/World/envs/env_0/Counter"}
@@ -193,7 +218,7 @@
      for n in rt.names:
          roots[f"obj:{n}"] = _env0(env.scene[n].cfg.prim_path)
      for k, r in roots.items():
-@@ -303,12 +341,22 @@
+@@ -303,12 +359,22 @@
          T, O = P["textures"], P["objects"]
          for k, lst in base["colors"].items():
              for sh, rgb in lst:
@@ -216,7 +241,7 @@
                      new = dr.jitter_color(rgb, o["dh"], o["s"], o["v"])
                  sh.GetInput("diffuseColor").Set(Gf.Vec3f(*[float(min(max(c, 0.0), 1.0)) for c in new]))
          tex = stage.GetPrimAtPath("/World/envs/env_0/Mat/material/texture")
-@@ -344,11 +392,36 @@
+@@ -344,11 +410,36 @@
              C = P["camera"]
              q = (R.from_rotvec(C["rot_offset_rad"]) * R.from_quat(q0[0].cpu().numpy())).as_quat()   # xyzw
              pos = pos0[0].cpu().numpy() + np.asarray(C["pos_offset"])
