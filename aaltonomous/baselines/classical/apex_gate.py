@@ -18,12 +18,35 @@ def apex_gate_features(xy_metres, altitude: float = TRIANGLE_ALTITUDE):
     import cv2
     xy = np.asarray(xy_metres, float).reshape(-1, 2)
     xy = xy[np.all(np.isfinite(xy), axis=1)]
+    if not _usable_cloud(xy):
+        return 0.0, None
+    try:
+        return _features(xy, altitude)
+    except (cv2.error, ValueError, FloatingPointError, np.linalg.LinAlgError):
+        return 0.0, None
+
+
+def _usable_cloud(xy, eps: float = 1e-9) -> bool:
+    """>= 3 distinct, non-collinear points with a hull of non-zero area (metres)."""
+    import cv2
+    if len(xy) < 3 or len(np.unique(np.round(xy, 9), axis=0)) < 3:
+        return False
+    c = xy - xy.mean(0)
+    if np.linalg.svd(c, compute_uv=False)[-1] < 1e-6:          # < 1 micron spread across the minor axis: collinear
+        return False
+    return float(cv2.contourArea(cv2.convexHull(xy.astype(np.float32)))) > eps
+
+
+def _features(xy, altitude):
+    import cv2
     tp = triangle_pose(xy, altitude=altitude)
     conf = 0.0 if tp is None else float(tp[2])
     ang = None
     if len(xy) >= 5:
-        _, tri = cv2.minEnclosingTriangle((xy * 1000.0).astype(np.float32).reshape(-1, 1, 2))
-        t = tri.reshape(3, 2).astype(float)
+        ok, tri = cv2.minEnclosingTriangle((xy * 1000.0).astype(np.float32).reshape(-1, 1, 2))
+        t = np.asarray(tri, float).reshape(-1, 2)
+        if t.shape != (3, 2) or not np.all(np.isfinite(t)):
+            return 0.0, None
         angs = []
         for k in range(3):
             u, w = t[(k + 1) % 3] - t[k], t[(k + 2) % 3] - t[k]

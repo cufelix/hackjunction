@@ -396,10 +396,21 @@ class Perception:
             n, lab = cv2.connectedComponents((dist >= frac * dmax).astype(np.uint8), connectivity=8)
             if n < 3:
                 continue
-            d = np.stack([cv2.distanceTransform((lab != k).astype(np.uint8), cv2.DIST_L2, 5) for k in range(1, n)])
-            owner = np.argmin(d, axis=0)
-            parts = [((owner == j) & (crop > 0)) for j in range(n - 1)]
-            if min(int(p.sum()) for p in parts) < min_part:
+            # at most as many seeds as objects the blob can hold (strongest peaks), decided BEFORE any per-seed work
+            k_max = min(int(s.get("max_parts", 3)), max(1, int(round(area / exp))))
+            if k_max < 2:
+                continue
+            if n - 1 > k_max:
+                strength = np.zeros(n)
+                np.maximum.at(strength, lab.ravel(), dist.ravel())
+                keep = np.argsort(-strength[1:], kind="stable")[:k_max] + 1
+                lab = np.where(np.isin(lab, keep), lab, 0)
+            # single pass: every pixel -> its nearest seed (labels of the zero components of the seed-free image)
+            _, owner = cv2.distanceTransformWithLabels((lab == 0).astype(np.uint8), cv2.DIST_L2, 5,
+                                                       labelType=cv2.DIST_LABEL_CCOMP)
+            ids = [int(v) for v in np.unique(owner[lab > 0])]
+            parts = [((owner == j) & (crop > 0)) for j in ids]
+            if len(parts) < 2 or min(int(p.sum()) for p in parts) < min_part:
                 continue
             return self._parts_out(blob, parts, x, y, w, h)
         # No neck (e.g. two cubes side by side = one rectangle): an elongated blob is cut along its major axis into

@@ -182,6 +182,18 @@ class TestSplitBlobs(unittest.TestCase):
         big = discs([(300, 300)], r=45)                                   # 6360 px > 1.5 x 2000, one peak
         self.assertEqual(len(p.split_blob(big, int(big.sum()), np.array([300.0, 300.0]), None)), 1)
 
+    def test_split_blob_many_peaks_is_capped(self):
+        """A noisy blob with many distance peaks never yields more parts than max_parts / round(area / expected)."""
+        p = Perception(load_config(overlay="none", overrides={"perception.split_blobs": True,
+                                                               "perception.split.fallback_area_px": 2000}), SC, None)
+        m = np.zeros((480, 640), np.uint8)
+        for i in range(12):                                   # 12 touching bumps on a bar: area ~ 3.6 x expected
+            cv2.circle(m, (100 + 14 * i, 200), 9, 1, -1)
+        area = int(m.sum())
+        parts = p.split_blob(m, area, np.array([0.0, 0.0]), None)
+        self.assertLessEqual(len(parts), min(3, max(1, round(area / 2000))))
+        self.assertEqual(sum(a for _, a, _ in parts), area)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -887,6 +887,15 @@ class TestApexGate(unittest.TestCase):
         self.assertEqual(apex_gate_features(self._prism(0.0)[:3])[1], None)      # too few points -> no angle -> fail
         self.assertFalse(apex_gate_pass(1.0, None, 0.5, 75.0))
 
+    def test_degenerate_clouds_fall_back(self):
+        from .apex_gate import apex_gate_features, apex_gate_pass
+        line = np.c_[np.linspace(0, 0.04, 20), np.linspace(0, 0.04, 20)]
+        for pts in (np.zeros((30, 2)), np.tile([0.01, 0.02], (30, 1)), line, line[:2], np.zeros((0, 2)),
+                    np.full((10, 2), np.nan), np.c_[np.linspace(0, 0.04, 20), np.zeros(20)]):
+            with np.errstate(all="raise"):
+                self.assertEqual(apex_gate_features(pts), (0.0, None))
+        self.assertFalse(apex_gate_pass(0.0, None, 0.5, 75.0))
+
     def test_planner_fallback_and_demo(self):
         from .apex_gate import apex_gate_features
         tp = TestPostureByShape()
