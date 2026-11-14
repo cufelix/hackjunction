@@ -1,5 +1,10 @@
 # Classical rung-1 baseline (`sort_fixed`)
 
+`policy.fixed_mapping` is scene metadata for an explicitly identified `sort_fixed` episode. The server passes it in
+the reset mapping contract; when unset, the authoritative mapping is `aaltonomous.interface.tasks.FIXED_MAPPING`.
+It is never a fallback for blank, failed, or unparsed `sort_language` instructions. The finals venue override is
+yellow -> left, purple (internal blue class) -> center, orange (internal red class) -> right.
+
 Head RGB-D → HSV colour blobs + depth → object top centre in the pelvis frame → top-down "claw" grasp planned with
 Pinocchio IK → carry to the bin given by the mapping (rung 1: red → left, yellow → center, blue → right) → release → home → look again, until nothing sortable is left
 (`done`). Plans are pre-checked against the safety filter (0 clips). Cross-body objects are put down where the other

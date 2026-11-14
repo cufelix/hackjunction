@@ -35,7 +35,8 @@ FUZZY_TARGETS: tuple[str, ...] = (
 # Ordinary synonyms -> a canonical word. NB "blocks" is absent on purpose (instruction.py: a generic noun for all three
 # solids; only "square block(s)" / "round block(s)" are rewritten, see _block_phrases). "box" is a bin word too, so it is
 # decided by context (_box_objects). "can" / "roll" are a modal and a verb, so the singular is decided by context
-# (_noun_shapes); only the plurals are listed here.
+# (_noun_shapes). Rod/pipe/roof/ridge can describe scene fixtures, so they need positive placement syntax too
+# (_ambiguous_shape_objects) instead of being rewritten token-by-token.
 SYNONYMS: dict[str, str] = {
     # cube
     "die": "cube", "dice": "cube", "brick": "cube", "bricks": "cubes",
@@ -43,10 +44,10 @@ SYNONYMS: dict[str, str] = {
     "cans": "cylinders", "tin": "cylinder", "tins": "cylinders", "drum": "cylinder", "drums": "cylinders",
     "barrel": "cylinder", "barrels": "cylinders", "canister": "cylinder", "canisters": "cylinders",
     "pillar": "cylinder", "pillars": "cylinders", "column": "cylinder", "columns": "cylinders",
-    "rolls": "cylinders", "rods": "cylinders", "rod": "cylinder", "pipes": "cylinders", "pipe": "cylinder",
+    "rolls": "cylinders",
     # triangle (triangular prism)
     "pyramid": "triangle", "pyramids": "triangles", "tetrahedron": "triangle", "tetrahedra": "triangles",
-    "prismatic": "triangle", "roof": "triangle", "roofs": "triangles", "ridge": "triangle", "ridges": "triangles",
+    "prismatic": "triangle",
     # cube (cuboid is the resolver's word for the same solid)
     "hexahedron": "cube", "hexahedra": "cubes", "hexahedrons": "cubes", "cuboids": "cubes",
     # containers -> bin(s)
@@ -232,6 +233,49 @@ def name_foreign(sentence: str) -> str:
     return sentence
 
 
+# Ambiguous scene nouns are shapes only inside an actionable object placement. In particular, relational descriptions
+# ("the red roof is above the left bin", "the red rod points to the left bin") must remain unknown so strict mode cannot
+# manufacture a sortable compound key from them.
+_AMBIG_SHAPE = {
+    "rod": "cylinder", "rods": "cylinders", "pipe": "cylinder", "pipes": "cylinders",
+    "roof": "triangle", "roofs": "triangles", "ridge": "triangle", "ridges": "triangles",
+}
+_AMBIG_SHAPE_RE = re.compile(r"\b(?:" + "|".join(_AMBIG_SHAPE) + r")\b", re.I)
+_PLACE_VERBS = frozenset("put move place drop send sort carry take".split())
+_FLOW_VERBS = frozenset("go goes belong belongs".split())
+_PLACE_PREPS = frozenset("in into to onto inside".split())
+
+
+def _clause_words(sentence: str, start: int, end: int) -> tuple[list[str], list[str]]:
+    """Words before/after one token inside its punctuation-delimited clause."""
+    lo = max((sentence.rfind(c, 0, start) for c in ".;:!?\n"), default=-1) + 1
+    hi = min((p for c in ".;:!?\n" if (p := sentence.find(c, end)) >= 0), default=len(sentence))
+    return _WORD.findall(sentence[lo:start].lower()), _WORD.findall(sentence[end:hi].lower())
+
+
+def _positive_placement(sentence: str, start: int, end: int) -> bool:
+    """True only when this noun participates in a clear object -> positional-bin command."""
+    before, after = _clause_words(sentence, start, end)
+    positions = set(_ins._BIN_WORDS)
+    if not positions.intersection(after):
+        return False
+    # "red rods (should) go left" / "yellow roofs belong in the right bin"
+    if _FLOW_VERBS.intersection(after[:3]):
+        return True
+    # "put/move the red rod into the left bin". Requiring a destination preposition after the noun keeps
+    # descriptive uses such as "the rod points to the left bin" out: "points" is not a placement verb.
+    return bool(_PLACE_VERBS.intersection(before) and _PLACE_PREPS.intersection(after))
+
+
+def _ambiguous_shape_objects(sentence: str) -> str:
+    def sub(m: re.Match[str]) -> str:
+        if not _positive_placement(m.string, m.start(), m.end()):
+            return m.group(0)
+        new = _AMBIG_SHAPE[m.group(0).lower()]
+        return new.capitalize() if m.group(0)[0].isupper() else new
+    return _AMBIG_SHAPE_RE.sub(sub, sentence)
+
+
 # Singular "can" / "roll" is a cylinder only as a noun: after a determiner or at a clause start, with an optional colour
 # word ("the red can", "Red roll goes left"). "you can put" and "Blue ones roll to the left" stay untouched.
 _NOUN_SHAPE = re.compile(
@@ -241,6 +285,10 @@ _NOUN_SHAPE = re.compile(
 
 def _noun_shapes(sentence: str) -> str:
     def sub(m: re.Match[str]) -> str:
+        # A bare clause-leading "Can" is a modal/question, not a cylinder. Clause-leading colour+noun ("Red roll")
+        # remains valid because group 2 is non-empty.
+        if m.group(3).lower() == "can" and not m.group(2) and not m.group(1).strip():
+            return m.group(0)
         return m.group(1) + m.group(2) + ("Cylinder" if m.group(3)[0].isupper() else "cylinder")
     return _NOUN_SHAPE.sub(sub, sentence)
 
@@ -257,36 +305,24 @@ def _block_phrases(sentence: str) -> str:
     return _SHAPE_BLOCK.sub(sub, sentence)
 
 
-# "box" as an OBJECT (a cube) versus a BIN. Colour-named bins are already dropped (drop_colour_bin_clauses, which runs
-# first). A box is a bin when it follows a bin/position/ordinal word, sits after a destination preposition ("into the
-# box", "from the box"), is described by a position ("the box on the left", "box is orange") or is followed by one.
+# "box" as an OBJECT (a cube) versus a BIN. Rewriting is opt-in: the noun needs a colour (or plural object form) and a
+# positive placement whose destination is a separate positional bin. This keeps both copular bin-description orders
+# ("the box is orange", "the left one is the orange box") and box A/B/C as bins.
 _BOX = re.compile(r"\b(boxes|box)\b", re.I)
-_DEST = frozenset("in into to onto inside on at from near by beside under behind towards toward".split())
-_ORD_WORDS = frozenset("first second third 1st 2nd 3rd last".split())
-_BIN_NOUN_AFTER = frozenset("bin bins container containers slot slots".split())
-_BOX_BIN_AFTER = frozenset("is are was were has have sits sit stands lies".split())
+_OBJECT_COLOURS = frozenset((*_ins._COLOR_WORDS, "orange", "purple", "violet", "lilac"))
 
 
-def _is_bin_box(before: list[str], after: list[str]) -> bool:
-    pos = set(_ins._BIN_WORDS) | {"far"}
-    if before and (before[-1] in pos or before[-1] in _ORD_WORDS):
-        return True
-    if _DEST.intersection(before[-3:]):
-        return True
-    if not after:
+def _is_object_box(m: re.Match[str]) -> bool:
+    before, after = _clause_words(m.string, m.start(), m.end())
+    if after[:1] and after[0] in ("a", "b", "c"):
         return False
-    if after[0] in pos or after[0] in _BIN_NOUN_AFTER or after[0] in _BOX_BIN_AFTER:
-        return True
-    if after[0] in ("on", "at", "near", "by", "beside", "next") and pos.intersection(after[1:4]):
-        return True
-    return after[0] == "to" and bool(pos.intersection(after[1:3])) and not _BIN_NOUN_AFTER.intersection(after[:5])
+    object_noun = m.group(0).lower() == "boxes" or bool(_OBJECT_COLOURS.intersection(before[-3:]))
+    return object_noun and _positive_placement(m.string, m.start(), m.end())
 
 
 def _box_objects(sentence: str) -> str:
     def sub(m: re.Match[str]) -> str:
-        before = _WORD.findall(m.string[:m.start()].lower())[-3:]
-        after = _WORD.findall(m.string[m.end():].lower())[:4]
-        if _is_bin_box(before, after):
+        if not _is_object_box(m):
             return m.group(0)
         new = "cubes" if m.group(0).lower() == "boxes" else "cube"
         return new.capitalize() if m.group(0)[0].isupper() else new
@@ -302,7 +338,7 @@ def normalize(sentence: str) -> str:
         return ""
     sentence = _LIFT_LR.sub(lambda m: f"(left to {m.group(1)})", sentence)
     sentence = _REGARDLESS.sub(lambda m: "Regardless of colour" if m.group(0)[0].isupper() else "regardless of colour", sentence)
-    sentence = _noun_shapes(_block_phrases(name_foreign(name_colours(sentence))))
+    sentence = _ambiguous_shape_objects(_noun_shapes(_block_phrases(name_foreign(name_colours(sentence)))))
     return _box_objects(drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, sentence))))
 
 
@@ -325,6 +361,8 @@ _TRIGGERS = tuple(re.compile(p, re.I) for p in (
     r"\b(?:if|unless|otherwise|in\s+case|when\s+there)\b",
     r"\b(?:on\s+the\s+table|leave|in\s+front\s+of|behind|beside|next\s+to|near|between|on\s+top\s+of|outside)\b",
     r"\b(?:closest|nearest|farthest|furthest|biggest|largest|smallest|tallest|left\s+of|right\s+of)\b",
+    r"^\s*(?:can|could|would|should|may|might|will|do|does|did|is|are)\s+(?:the\s+)?"
+    r"(?:red|orange|yellow|purple|violet|blue|cube|cylinder|triangle|rod|pipe|roof|ridge)\b",
     r"\b(?:back\s+to)\b|\bfrom\s+the\s+(?:\w+\s+){0,2}(?:bins?|box(?:es)?|containers?|slots?|trays?|crates?|baskets?)\b",
     r"\b(?:one|two|three|four|five|\d+)\s+of\b|\b(?:only|just)\s+(?:one|two|three)\b|\ba\s+single\b|\bhalf\b"
     r"|\ball\s+but\b|\bfirst\s+(?:two|three)\b|\b(?:exactly|at\s+(?:most|least)|a\s+few|some\s+of|several)\b",
@@ -336,6 +374,13 @@ _CATCH_ALL = re.compile(r"\b(?:everything\s+else|anything\s+else|the\s+rest|rema
                         r"all\s+other|any\s+others?)\b(?!\s+(?:\w+\s+)?(?:colou?rs?|shapes?|cubes?|cylinders?|triangles?|"
                         r"prisms?|red|yellow|blue|purple|violet|orange|lilac|gold\w*|cube|cylinder|triangle)\b)", re.I)
 _BLOCKS = re.compile(r"\bblocks?\b", re.I)
+_AMBIG_RELATION = re.compile(r"\b(?:above|over|with|points?\s+to)\b", re.I)
+_AMBIG_NOUN_IN = re.compile(r"\b(?:rods?|pipes?|roofs?|ridges?)\b", re.I)
+_MULTI_DEST = re.compile(
+    r"\bboth\s+(?:the\s+)?(?:left|right|center|centre|middle)\s+(?:bins?|box(?:es)?|containers?|baskets?|"
+    r"crates?|tubs?|trays?|receptacles?|buckets?)\b[^.;!?\n]{0,80}\band\s+(?:the\s+)?"
+    r"(?:left|right|center|centre|middle)\s+(?:bins?|box(?:es)?|containers?|baskets?|crates?|tubs?|trays?|"
+    r"receptacles?|buckets?)\b", re.I)
 
 
 def _strict_keys(text: str) -> tuple[set[str], set[str]]:
@@ -365,7 +410,8 @@ def _nonkey_words(text: str) -> int:
 
 
 def _triggered(clause: str) -> bool:
-    return any(rx.search(clause) for rx in _TRIGGERS)
+    return (any(rx.search(clause) for rx in _TRIGGERS)
+            or bool(_AMBIG_NOUN_IN.search(clause) and _AMBIG_RELATION.search(clause)))
 
 
 def _cross_unbound(k, out: dict, named) -> bool:
@@ -424,6 +470,19 @@ def _strict(text, mapping: dict) -> dict:
     if not mapping or _SWAP.search(text):   # (a)
         return {"default": None}
     out = dict(mapping)
+    # One object cannot be placed in two bins simultaneously. The base resolver chooses the first; strict mode marks
+    # every key in that sentence-level command as an abstain instead.
+    conflicts = []
+    for m in _MULTI_DEST.finditer(text):
+        lo = max((text.rfind(c, 0, m.start()) for c in ".;!?\n"), default=-1) + 1
+        hi = min((p for c in ".;!?\n" if (p := text.find(c, m.end())) >= 0), default=len(text))
+        conflicts.append(_strict_keys(text[lo:hi]))
+    for cols, shps in conflicts:
+        for k in (*cols, *shps):
+            out[k] = None
+        for k in list(out):
+            if isinstance(k, tuple) and (k[0] in cols or k[1] in shps):
+                out[k] = None
     pieces = _pieces(text)
     for (cols, shps), _, _, t in pieces:   # (b)
         if not t:

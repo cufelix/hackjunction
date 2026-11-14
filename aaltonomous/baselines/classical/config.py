@@ -45,7 +45,7 @@ FLAGS = {
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
-    "policy.fixed_mapping": ("organisers P0", None, "colour->bin fallback when the instruction is empty/missing (null = sim FIXED_MAPPING; real robot: yellow left, blue center, red right)"),
+    "policy.fixed_mapping": ("organisers P0", None, "explicit sort_fixed scene metadata passed by server reset (null = shared FIXED_MAPPING; finals venue: yellow left, blue center, red right); never a language fallback"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
     "perception.y_affine": ("Timi 23 §13", None, "y -= a*y + b (perceived - true y model, pelvis frame)"),
