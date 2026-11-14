@@ -45,7 +45,7 @@ FLAGS = {
     "instruction.empty_abstain": ("fault drill", False, "with instruction.resolve: empty / whitespace-only instruction abstains (0 pts) instead of the policy.fixed_mapping fallback"),
     "grasp.abort_lift_first": ("fault drill", False, "empty-grasp abort (held_detector finger_sum): open in place, lift along the plan's clearance-checked lift, then go home (stock: straight joint-space line, dips ~16 mm below the counter)"),
     "policy.no_objects_relook": ("fault drill", False, "no detection and nothing picked yet: hold and look again until the time limit instead of done"),
-    "perception.flood_guard": ("fault drill", 0.0, "one colour class covering more than this fraction of the frame (tape / flood) = no colour information: no detections; 0 = off"),
+    "perception.flood_guard": ("fault drill", 0.0, "one colour class covering more than this fraction of the valid-depth pixels outside the bins (tape / flood) = no colour information: no detections; 0 = off"),
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),

@@ -546,6 +546,65 @@ class Drills:
         _, pol = self._image((255, 106, 0), "img_orange")
         self.assertEqual(started_picks(pol), [], "picked something out of a frame-filling orange blob")
 
+    def _flood_frame(self):
+        """Seed-0 head frame: the orange bins cover ~36 % of it and sit in the red HSV range."""
+        env, obs = make_world(seed=0)
+        pol = ClassicalPolicy(config=load_config(overlay=self.OVERLAY), log=lambda *a: None, safety=env.filter.cfg)
+        rq = (np.asarray(obs["arm_q"], float), np.asarray(obs["hand_q"], float))
+        return pol, obs["head_rgb"], obs["head_depth"], rq
+
+    @staticmethod
+    def _near(dets, xy, tol=0.04):
+        x, y = xy
+        return [d for d in dets if float(np.hypot(d.top[0] - x, d.top[1] - y)) <= tol]
+
+    @known("submission", "finals_r21", reason="an orange band over the objects is read as red, so the yellow and blue objects are labelled red; perception.flood_guard is off here and on in r22")
+    def test_09d_object_band_not_labelled_red_and_bins_do_not_trip(self):
+        """Rows 240:400 painted orange cover the objects. The guard must refuse those red labels, and a normal
+        frame (orange bins ~35-37 % of the image) must still return yellow, blue and red."""
+        pol, rgb, depth, rq = self._flood_frame()
+        p = pol.perception
+        bin_frac = float((p._bin_hulls_mask(rgb.shape[:2]) == 0).mean())
+        self.assertGreaterEqual(bin_frac, 0.35, f"bin footprint {bin_frac:.3f} is not the ~35-37 % normal frame")
+        self.assertLessEqual(bin_frac, 0.37, f"bin footprint {bin_frac:.3f} is not the ~35-37 % normal frame")
+        clean = p.detect(rgb, depth, robot_q=rq)
+        colours = {d.color for d in clean}
+        self.assertTrue({"yellow", "blue", "red"} <= colours, f"normal frame dropped colours: {colours}")
+        self.assertEqual(self._near(clean, (0.27, 0.02))[0].color, "yellow")
+        self.assertEqual(self._near(clean, (0.31, 0.09))[0].color, "blue")
+        if p.flood_guard > 0.0:
+            tape = np.broadcast_to(np.array([255, 106, 0], rgb.dtype), rgb.shape).copy()
+            self.assertEqual(p.detect(tape, depth, robot_q=rq), [], "a frame of orange tape still published detections")
+            with_bins = p.detect(rgb, depth, include_bins=True, robot_q=rq)
+            self.assertTrue({"yellow", "blue", "red"} <= {d.color for d in with_bins},
+                            "counting the orange bins tripped the guard on a normal frame")
+        band = rgb.copy()
+        band[240:400] = (255, 106, 0)
+        dets = p.detect(band, depth, robot_q=rq)
+        for xy, name in (((0.27, 0.02), "yellow"), ((0.31, 0.09), "blue")):
+            reds = [d for d in self._near(dets, xy) if d.color == "red"]
+            self.assertFalse(reds, f"{name} at {xy} labelled red under an object-band flood")
+
+    def test_09e_invalid_depth_orange_blend_keeps_colours(self):
+        """A 9 % blend toward orange that only reddens invalid-depth pixels must not wipe the real colours."""
+        pol, rgb, depth, rq = self._flood_frame()
+        p = pol.perception
+        orange = np.array([255, 106, 0], np.float32)
+        blend = np.clip(rgb.astype(np.float32) * 0.91 + orange * 0.09, 0, 255).astype(rgb.dtype)
+        new = (p.masks(blend)["red"] > 0) & ~(p.masks(rgb)["red"] > 0)
+        dlo, dhi = p.cfg["depth_range_mm"]
+        valid = (depth.astype(float) >= dlo) & (depth.astype(float) <= dhi)
+        self.assertGreater(int(new.sum()), 0, "the blend added no red pixels")
+        self.assertEqual(int((new & valid).sum()), 0, "the blend reddened valid-depth pixels")
+        clean = p.detect(rgb, depth, robot_q=rq)
+        kept = p.detect(blend, depth, robot_q=rq)
+        self.assertTrue(clean, "normal frame produced no detections")
+        for d in clean:
+            hits = self._near(kept, d.top[:2])
+            self.assertTrue(hits, f"invalid-depth orange blend dropped {d.color} at {np.round(d.top[:2], 3)}")
+            closest = min(hits, key=lambda h: float(np.hypot(h.top[0] - d.top[0], h.top[1] - d.top[1])))
+            self.assertEqual(closest.color, d.color)
+
     # ---- 11. an empty grasp (always the case in the mock world's contact-less grasp) aborts the carry: the retreat must clear
     @known("finals_r21", reason="_abort_empty_grasp (held_detector finger_sum) retreats on ONE joint-space line from the grasp pose to home: fingertips dip ~16 mm below the counter and cross a bin wall; fixed by grasp.abort_lift_first (r22). Submission uses the stall detector and does not abort.")
     def test_11_empty_grasp_abort_retreat_clears_counter_and_bins(self):

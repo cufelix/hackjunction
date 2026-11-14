@@ -176,8 +176,9 @@ perception:
     enabled: false
     min_gap_deg: 6.0
     red_min_s: 110             # layer 2b: red-labelled candidate with top-face S below this -> abstain (0-255)
-  flood_guard: 0.0           # FLAG (fault drill). >0: a frame where ONE colour class covers more than this fraction of the image
-                              # (e.g. tape over the lens, 0.6) has no colour information: no detections, never a pick. 0 = off
+  flood_guard: 0.0           # FLAG (fault drill). >0: one colour class covering more than this fraction of the valid-depth
+                              # pixels outside the bins (tape / flood; the orange bins are not counted) has no colour
+                              # information: no detections, never a pick. 0 = off
   colour_kmeans: false       # FLAG (EV gate). Once per episode, bounded k=3 on robust object-blob HSV pixels;
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:

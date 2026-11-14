@@ -33,6 +33,8 @@ as an unexpected success. Result key: PASS / KNOWN (recorded failure) / --.
 | 8a/b/c | objects beyond reach / at the near edge / floor+behind | PASS | PASS | PASS | planner declines unreachable plans |
 | 9a/b | all-black / all-white image: no pick | PASS | PASS | PASS | |
 | 9c | saturated-orange image (tape): no pick | KNOWN picks "red" objects | KNOWN | PASS | `perception.flood_guard: 0.6` |
+| 9d | orange band over the objects: not labelled red; bins 35-37 % still detect | KNOWN labels them red | KNOWN | PASS | flood fraction is valid-depth pixels outside the bins |
+| 9e | orange blend on invalid-depth pixels only: colours kept | PASS | PASS | PASS | same denominator (a raw-frame fraction would wipe the episode) |
 | 10a/b | act() at 60 Hz / 10 Hz with jitter | KNOWN latency | PASS | PASS | shell |
 | 11 | empty grasp abort retreat clears counter + bins | PASS (stall detector never aborts) | KNOWN 15-16 mm into the counter, crosses a bin wall | PASS | `grasp.abort_lift_first` |
 
@@ -52,8 +54,10 @@ New flags (all default OFF, registered in `config.py` FLAGS, `config.yaml`, `ove
   top. Falls back to the stock path if the arm is not on the plan's close/lift path.
 * `policy.no_objects_relook`: with no detection at all and nothing picked yet, `_after_look` ended the episode
   (`done=True`). Now it settles and looks again until the time limit (never after a pick: the normal finish is unchanged).
-* `perception.flood_guard` (0.6): one colour class covering more than 60 % of the frame (nominal frames: red/orange
-  bins 35-37 %) is no colour information; no detections. Without it an orange-filled frame labels the real objects red.
+* `perception.flood_guard` (0.6): one colour class covering more than 60 % of the valid-depth pixels outside the
+  bins is no colour information; no detections. The orange bins are ~35-37 % of a normal frame and are not counted,
+  and neither are depth holes. Without it an orange-filled frame labels the real objects red. An orange band over
+  the objects trips it; paint that only reddens invalid-depth pixels does not.
 * `instruction.empty_abstain`: empty / whitespace text abstains instead of the `policy.fixed_mapping` fallback.
   Deliberately NOT in `finals_r22_robust`: the fixed mapping is the organisers' real-robot sort_fixed (yellow left,
   blue center, red right) and abstaining forfeits those points if that task sends no text. Tim decides; flip it in the

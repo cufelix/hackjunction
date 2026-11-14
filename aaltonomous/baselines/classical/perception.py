@@ -1033,6 +1033,31 @@ class Perception:
         if self._colour_kmeans_tries >= 3:
             self._colour_kmeans_done = True  # give up after the 3rd attempt; robust ranges stay
 
+    def _flooded(self, masks, depth, keep, include_bins):
+        """True when one colour covers more than ``flood_guard`` of the pixels ``detect`` can label.
+
+        The denominator is valid depth outside the bins. The orange bins are already ~35-37 % of a normal
+        frame and sit in the red range; depth holes never become objects. Both are left out of the fraction,
+        so a normal frame does not trip and a frame of tape still does. Called only when the flag is on.
+        """
+        if include_bins:
+            # This keep still contains the bins. Rebuild without them, and keep the arm zeros already on it.
+            object_keep = self._keep_mask(depth, exclude_bins=True).copy()
+            object_keep[keep == 0] = 0
+            keep = object_keep
+        if depth is None or np.ndim(depth) != 2:
+            region = keep > 0
+        else:
+            dlo, dhi = self.cfg["depth_range_mm"]
+            valid = (np.asarray(depth, float) >= dlo) & (np.asarray(depth, float) <= dhi)
+            region = valid & (keep > 0)
+            if not region.any():
+                region = keep > 0
+        n = int(region.sum())
+        if n == 0:
+            return False
+        return any(float((m[region] > 0).sum()) / n > self.flood_guard for m in masks.values())
+
     def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None):
         """Detect coloured objects.
 
@@ -1060,9 +1085,9 @@ class Perception:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
             self._fit_colour_kmeans(hsv, kkeep)
         masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
-        if self.flood_guard > 0.0 and any(float(m.mean()) / 255.0 > self.flood_guard for m in masks.values()):
-            self.log(f"[flood_guard] one colour class covers > {self.flood_guard:.0%} of the frame: no colour information, "
-                     f"no detections")
+        if self.flood_guard > 0.0 and self._flooded(masks, depth, keep, include_bins):
+            self.log(f"[flood_guard] one colour class covers > {self.flood_guard:.0%} of the valid-depth pixels outside "
+                     f"the bins: no colour information, no detections")
             return ([], []) if debug else []
         items = self._hue_guard_items(masks, hsv) if self.hue_guard else masks.items()
         for color, m in items:

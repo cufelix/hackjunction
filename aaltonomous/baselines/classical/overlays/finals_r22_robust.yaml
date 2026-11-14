@@ -62,5 +62,5 @@ flags:
   perception.color_gate.sat_floor: true
   grasp.abort_lift_first: true                  # r22 drill   empty-grasp abort lifts clear (open in place, plan lift, home) instead of a joint line through the counter
   policy.no_objects_relook: true                # r22 drill   nothing seen + nothing picked: hold and look again until the time limit, never done early
-  perception.flood_guard: 0.6                   # r22 drill   one colour class > 60 % of the frame (tape over the lens) = no colour information, no picks
+  perception.flood_guard: 0.6                   # r22 drill   one colour > 60 % of the valid-depth pixels outside the bins = no colour information, no picks
   instruction.empty_abstain: false              # r22 drill   OFF on purpose: empty text keeps the organisers' fixed mapping (Tim decides)
