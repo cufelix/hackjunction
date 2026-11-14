@@ -67,10 +67,13 @@ class TestScoreOrder(unittest.TestCase):
         pol.act(obs(10.0))
         self.assertEqual(len([m for _, m in pol.events if m.startswith("execute")]), 1)
 
-    def test_endgame_only_quickest_certain(self):
+    def test_endgame_keeps_all_certain_quickest_first(self):
         dets = [det("red", 0.30, 0.1), det("blue", 0.45, -0.2), det("yellow", 0.34, 0.0, "triangle", cc=0.8)]
-        c = order(mk(dets, limit=100.0), t=80.0)          # 17 s usable < endgame 25 s
-        self.assertLessEqual(len(c), 1)
+        pol = mk(dets, limit=100.0)                       # 17 s usable < endgame 25 s; yellow is not certain
+        c = order(pol, t=80.0)
+        self.assertEqual([d.color for d in c], ["red", "blue"])
+        tcs = [pol._so_estimate(d, 80.0)[2] for d in c]
+        self.assertEqual(tcs, sorted(tcs))
 
     def test_flags_off_identical(self):
         dets = scene5()

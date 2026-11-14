@@ -102,6 +102,7 @@ class ClassicalPolicy:
         "verify_relooks_remaining", "retry_colors", "retry_targets", "used_drop_slots", "reserved_drop_slots",
         "_skill_pending", "_pend_out", "_stab", "_stab_last", "_dec_warned", "_cap_logged", "_prior_side",
         "_brain_reg", "_brain_n", "_last_pick", "_brain_looks", "_brain_finds", "tiers", "tier", "C",
+        "_target_cooldowns",
     )
     _LOOK_PERCEPTION_FIELDS = ("_ah_est", "_ah_tries", "hsv", "_colour_kmeans_done", "_colour_kmeans_tries",
                                "colour_kmeans_info", "color_gate_degraded", "fk_mask_px")
@@ -1476,8 +1477,12 @@ class ClassicalPolicy:
         return worker, logs
 
     def _commit_look_result(self, result):
+        before = {id(x) for x in self._target_cooldowns}
         for name, value in result.state:
             setattr(self, name, value)
+        for x in self._target_cooldowns:      # cooldowns the worker just started: run from the live clock, not the launch snapshot
+            if id(x) not in before:
+                x["until"] = float(self._latest_t) + float(self.cfg["planner"]["per_target_cooldown_s"])
         for name, value in result.perception_state:
             setattr(self.perception, name, value)
         self.scene.counter_z_runtime = result.counter_z_runtime
@@ -1890,6 +1895,10 @@ class ClassicalPolicy:
             if near:
                 tr = min(near, key=lambda item: np.linalg.norm(src - item["xy"]))
                 tr["count"] = max(0, tr["count"] - 1)
+                tr["xy"] = np.asarray(det.top[:2], float).copy()     # the track follows the object to its new spot
+        if pend.get("slot") is not None:                             # the bounced object left its drop slot: free it
+            for slots in (self.slot_used, self.reserved_drop_slots):
+                slots.get(pend["bin"], set()).discard(pend["slot"])
         rad = float(pol["same_object_radius"])
         self.failed = [f for f in self.failed if np.linalg.norm(det.top[:2] - f) >= rad
                        and np.linalg.norm(src - f) >= rad]
@@ -2210,13 +2219,13 @@ class ClassicalPolicy:
             elif r[1] <= 0.0:
                 why = "ev<=0 (last)"
             elif r[4] > left:
-                why = "no time"
+                why = "est. over time left (real plan decides)"   # an estimate never drops a pick; _choose checks the real plan
             notes.append((r, why))
-            if why in ("ok", "ev<=0 (last)"):   # rows are sorted by EV/s, so EV <= 0 rows already sit after the rest
+            if why != "pw>=0.8":                # rows are sorted by EV/s, so EV <= 0 rows already sit after the rest
                 out.append(r)
         if out and left < float(pol.get("score_endgame_s", 25.0)):
             certain = [r for r in out if r[3] <= float(pol.get("score_certain_pw", 0.1))]
-            out = [min(certain, key=lambda r: r[4])] if certain else []
+            out = sorted(certain, key=lambda r: r[4])     # every certain object, quickest first; "none" only when all are gone
         for r, why in notes:
             self.log(f"[score_order] t={t:.1f} {r[7].color:<6} {str(getattr(r[7], 'shape', None)):<8} arm={r[5]:<5} "
                      f"bin={r[6]} ps={r[2]:.2f} pw={r[3]:.2f} t={r[4]:.1f}s EV={r[1]:+.2f} EV/s={r[0]:+.3f} {why}")
@@ -3644,6 +3653,7 @@ class ClassicalPolicy:
             self.n_corrections += 1
         if self._landing_on() and not plan.corrective and plan.target_bin in self.scene.bin_names:
             self._landing = {"color": plan.color, "bin": plan.target_bin, "src_xy": np.asarray(xy, float).copy(),
+                             "slot": plan.drop_slot,
                              "pre_xy": [d.top[:2].copy() for d in self.last_detections if d.color == plan.color],
                              "t": float(t)}
         if plan.posture is not None and self.cfg["policy"].get("grasp_diag_log", False):
