@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from .config import BAKED_OVERLAY, FLAGS, OVERLAY_DIR, STOCK, _get, effective_flags, load_config, load_overlay
 
 
@@ -81,7 +83,8 @@ class TestFlags(unittest.TestCase):
                                     "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
                                     "perception.hsv_set", "perception.split_blobs"}}
         r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary"}
+        expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary",
+                                            "policy.max_total_attempts"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
@@ -91,6 +94,66 @@ class TestFlags(unittest.TestCase):
             self.assertEqual(on, keys, name)
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
+
+    def test_finals_real_loads_as_cand_r16_with_calibrated_intrinsics(self):
+        from aaltonomous.interface.calibration import Calibration
+        from aaltonomous.scene.scene import Scene
+        from .perception import Perception
+
+        sim = load_config(overlay="cand_r16")
+        real = load_config(overlay="finals_real")
+        self.assertEqual((sim["perception"]["principal_point"], real["perception"]["principal_point"]),
+                         ("center", "file"))
+        self.assertEqual(real["policy"]["max_total_attempts"], 18)
+        sim["overlay"] = real["overlay"]
+        sim["perception"]["principal_point"] = "file"
+        self.assertEqual(real, sim)
+
+        calibration = Calibration.load()
+        perception = Perception(real, Scene.load(), calibration, log=None)
+        np.testing.assert_array_equal(perception.cal.cams[perception.cam].K,
+                                      calibration.cams[perception.cam].K)
+
+    def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
+        retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
+                 if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
+        self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
+                                      "finals_real", "rc1"})
+        self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
+                            if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
+
+    def test_instruction_normalize_flag_is_off_by_default_and_rc1_adds_only_it(self):
+        self.assertFalse(load_config(overlay="none")["instruction"]["normalize"])
+        self.assertFalse(load_config(overlay="cand_r17")["instruction"]["normalize"])
+        base = load_config(overlay="cand_r17")
+        rc1 = load_config(overlay="rc1")
+        self.assertTrue(rc1["instruction"]["normalize"])
+        base["overlay"], base["instruction"]["normalize"] = "rc1", True
+        self.assertEqual(rc1, base)
+
+    def test_cand_r17_differs_from_historical_r16_nopp_only_in_max_total_attempts(self):
+        r16, r17 = load_config(overlay="cand_r16_nopp"), load_config(overlay="cand_r17")
+        self.assertEqual((r16["overlay"], r17["overlay"]), ("cand_r16_nopp", "cand_r17"))
+        self.assertIsNone(r16["policy"]["max_total_attempts"])
+        self.assertEqual(r17["policy"]["max_total_attempts"], 18)
+        for c in (r16, r17):
+            c.pop("overlay")
+            c["policy"].pop("max_total_attempts")
+        self.assertEqual(r16, r17)
+
+    def test_normalize_flag_changes_the_resolved_mapping_only_when_on(self):
+        from .policy import ClassicalPolicy
+        text = "Put the cans in the right receptacle and the bricks in the left receptacle."
+        for flag in (False, True):
+            cfg = load_config(overlay="rc1")
+            cfg["instruction"]["normalize"] = flag
+            pol = ClassicalPolicy(config=cfg, log=None)
+            m = pol._instruction_mapping({"instruction": text})
+            self.assertEqual((m or {}).get("cube") == "left" and (m or {}).get("cylinder") == "right", flag, (flag, m))
+
+    def test_normalize_selfcheck(self):
+        from . import normalize
+        normalize._selfcheck()
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm
