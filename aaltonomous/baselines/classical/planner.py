@@ -16,6 +16,7 @@ Every planned tick is checked before it is used:
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -291,8 +292,16 @@ class Planner:
             last.reason = f"{side} cannot place at ({spot[0]:+.2f},{spot[1]:+.2f}): {p.reason}"
         return last
     def _plan_side_hints(self, det, side, bin_name, arm_q, hand_q, **kw):
-        """_plan_side with each finger direction of grasp.finger_hints in turn (fingers forward can reach over the
-        centre bin's wall when the object is close to it; then fingers inward/sideways)."""
+        """Triangle prisms with `grasp.yaw_align`: finger directions derived from the detected apex yaw first; else
+        (and as the fallback) _plan_side with each finger direction of grasp.finger_hints in turn (fingers forward
+        can reach over the centre bin's wall when the object is close to it; then fingers inward/sideways)."""
+        if self._yaw_align_on(det) and kw.get("place_xy") is None:
+            p = self._plan_side_yaw(det, side, bin_name, arm_q, hand_q, **kw)
+            if p is not None:
+                return p
+        return self._plan_side_legacy(det, side, bin_name, arm_q, hand_q, **kw)
+
+    def _plan_side_legacy(self, det, side, bin_name, arm_q, hand_q, **kw):
         hints = self.cfg["grasp"].get("finger_hints") or [self.cfg["grasp"].get("finger_hint", [1.0, 0.0, 0.0])]
         saved, first = self.kin.hint, None
         try:
@@ -306,6 +315,69 @@ class Planner:
             return first
         finally:
             self.kin.hint = saved
+
+    # ------------------------------------------------------------------ yaw-aligned triangle grasp (grasp.yaw_align)
+    def _yaw_align_on(self, det):
+        g = self.cfg["grasp"]
+        ya = getattr(det, "apex_yaw", None)
+        return (bool(g.get("yaw_align", False)) and getattr(det, "shape", None) == "triangle"
+                and ya is not None and np.isfinite(ya)
+                and float(getattr(det, "apex_conf", 1.0)) >= float(g.get("yaw_min_conf", 0.5)))
+
+    def yaw_hint_angles(self, apex_yaw, side):
+        """Candidate finger directions (pelvis-frame angle, rad), best first, for an equilateral triangle whose apex
+        (any of the 3 vertices) points along `apex_yaw` (pelvis frame, x forward, y left). Finger direction = apex
+        direction + s*phi + k*120 deg, s = +1 left arm, -1 right arm (the mirror image; phi is calibrated on the left
+        hand). Candidates further than yaw_max_dev_deg from the arm's natural direction (-yaw_ref_deg left, +yaw_ref_deg
+        right = forward, slightly inward) are dropped; the rest are sorted nearest first."""
+        g = self.cfg["grasp"]
+        s = 1.0 if side == "left" else -1.0
+        ref = -s * np.radians(float(g.get("yaw_ref_deg", 25.0)))
+        phi = s * np.radians(float(g.get("yaw_phi_deg", 105.0)))
+        out = []
+        for k in range(3):
+            a = apex_yaw + phi + 2 * np.pi * k / 3
+            da = abs((a - ref + np.pi) % (2 * np.pi) - np.pi)
+            if da <= np.radians(float(g.get("yaw_max_dev_deg", 75.0))):
+                out.append((da, a))
+        return [a for _, a in sorted(out)][: int(g.get("yaw_max_hints", 2))]
+
+    @staticmethod
+    def _tri_shift(phi, r=0.030):
+        """Midpoint (m, along f) of the triangle's extent in direction f at angle phi from the apex direction
+        (vertices r from the centroid): phi=0 -> +7.5 mm towards the apex, phi=60 deg -> -7.5 mm."""
+        v = np.radians([0.0, 120.0, 240.0])
+        return 0.5 * (r * np.cos(phi - v).max() - r * np.cos(phi + np.pi - v).max())
+
+    def _finger_err(self, plan, side, a):
+        """Angle (deg) between the palm x axis (finger direction) at the end of the descend and the heading a."""
+        e = next(e for name, s, e in plan.phases if name == "descend")
+        self.kin._fk(plan.arm[e - 1])
+        x = self.kin.data.oMf[self.kin.palm[side]].rotation[:, 0]
+        d = np.arctan2(x[1], x[0]) - a
+        return float(np.degrees(abs((d + np.pi) % (2 * np.pi) - np.pi)))
+
+    def _plan_side_yaw(self, det, side, bin_name, arm_q, hand_q, **kw):
+        """Try the yaw-derived finger directions (strong hint weight, grasp point moved to the pinch midpoint).
+        Returns the first Plan whose achieved finger direction is within yaw_tol_deg, else None (-> legacy hints)."""
+        g = self.cfg["grasp"]
+        saved = (self.kin.hint, self.kin.w_hint)
+        try:
+            for a in self.yaw_hint_angles(float(det.apex_yaw), side):
+                f = np.array([np.cos(a), np.sin(a), 0.0])
+                d2 = copy.copy(det)
+                if g.get("yaw_tri_shift", True):  # pinch midpoint along f is not the centroid
+                    d2.top = det.top + self._tri_shift(a - float(det.apex_yaw)) * f
+                self.kin.hint, self.kin.w_hint = f, float(g.get("yaw_hint_weight", 3.0))
+                p = self._plan_side(d2, side, bin_name, arm_q, hand_q, **kw)
+                if p.ok:
+                    err = self._finger_err(p, side, a)
+                    if err <= float(g.get("yaw_tol_deg", 12.0)):
+                        p.reason = f"yaw-aligned ({np.degrees(a):.0f} deg, err {err:.0f})"
+                        return p
+        finally:
+            self.kin.hint, self.kin.w_hint = saved
+        return None
 
     def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None):
         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
