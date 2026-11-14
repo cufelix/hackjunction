@@ -8,7 +8,7 @@ import unittest
 from aaltonomous.scene.scene import resolve_bin
 
 from .config import load_config
-from .normalize import normalize, structured_final, structured_normalize
+from .normalize import _s_core, normalize, structured_final, structured_normalize
 
 COLOURS = ("red", "yellow", "blue")
 SHAPES = ("cube", "cylinder", "triangle")
@@ -41,10 +41,19 @@ class TestColourShapeScope(unittest.TestCase):
         self.assertIsNone(b[("red", "triangle")])
 
     def test_orange_can_variants(self):
-        for text in ("Put orange can in the leftmost bin, yellow cube in the center bin, blue triangle in the right bin.",
-                     "The rightmost bin is for yellow cube, The leftmost bin is for red prism, The middle bin is for blue can.",
-                     "The middle bin is for yellow can, The left bin is for red square block, The right bin is for blue prism."):
+        # The bin of each named object, not merely "three slots filled": a swap of those bins must fail.
+        cases = (
+            ("Put orange can in the leftmost bin, yellow cube in the center bin, blue triangle in the right bin.",
+             {("red", "cylinder"): "left", ("yellow", "cube"): "center", ("blue", "triangle"): "right"}),
+            ("The rightmost bin is for yellow cube, The leftmost bin is for red prism, The middle bin is for blue can.",
+             {("yellow", "cube"): "right", ("red", "triangle"): "left", ("blue", "cylinder"): "center"}),
+            ("The middle bin is for yellow can, The left bin is for red square block, The right bin is for blue prism.",
+             {("yellow", "cylinder"): "center", ("red", "cube"): "left", ("blue", "triangle"): "right"}),
+        )
+        for text, want in cases:
             b = bins(text)
+            for key, bin_ in want.items():
+                self.assertEqual(b[key], bin_, text)
             self.assertEqual(sum(v is not None for v in b.values()), 3, text)
 
     def test_can_stays_a_verb_when_it_modifies_a_verb(self):
@@ -66,6 +75,22 @@ class TestColourShapeScope(unittest.TestCase):
     def test_typo_repair_needs_a_following_shape_word(self):
         self.assertEqual(structured_normalize("pupre goes left"), normalize("pupre goes left"))
         self.assertEqual(structured_normalize("the lead cube goes left"), normalize("the lead cube goes left"))
+
+    def test_protected_near_words_are_not_colours(self):
+        self.assertNotIn("purple", structured_normalize("people cubes go left").lower())
+        self.assertNotIn("purple", structured_normalize("purpose cubes belong in the left bin").lower())
+        self.assertNotIn("purple", structured_normalize("puddle cubes go to the right bin").lower())
+        self.assertNotIn("violet", structured_normalize("violent prisms go left").lower())
+        # the word is not a colour: abstain that shape, keep a different object the sentence does name
+        b = bins("people cubes go left, yellow cylinders go right")
+        self.assertIsNone(b[("blue", "cube")])
+        self.assertIsNone(b[("red", "cube")])
+        self.assertIsNone(b[("yellow", "cube")])
+        self.assertEqual(b[("yellow", "cylinder")], "right")
+        b = bins("violent prisms go left")
+        self.assertTrue(all(b[(c, "triangle")] is None for c in COLOURS))
+        b = bins("puddle cubes go to the right bin")
+        self.assertTrue(all(b[(c, "cube")] is None for c in COLOURS))
 
     def test_colour_blocks_with_a_catch_all_only_map_the_cube_cell(self):
         for text, col, bin_, rest in (
@@ -108,8 +133,22 @@ class TestComplement(unittest.TestCase):
         self.assertEqual(m.get("default"), "right")
 
     def test_unparsed_half_defers_to_the_unchanged_path(self):
-        self.assertEqual(run("Put blah in the left bin. For the remaining shapes, hmm."),
-                         structured_final(structured_normalize("Put blah in the left bin. For the remaining shapes, hmm.")))
+        # An unparsed complement half abstains. Comparing the helper to itself would pass for any mapping.
+        text = "Put blah in the left bin. For the remaining shapes, hmm."
+        norm = structured_normalize(text)
+        self.assertEqual(run(text), _s_core(norm))
+        self.assertEqual(run(text), {"default": None})
+
+    def test_colour_blocks_with_a_keyed_complement_only_map_the_cube(self):
+        # "blocks" is cubes or every solid. The other shapes of that colour were not given a bin.
+        b = bins("Yellow blocks go center. For the remaining shapes, red goes left and blue goes right.")
+        self.assertEqual(b[("yellow", "cube")], "center")
+        self.assertIsNone(b[("yellow", "cylinder")])
+        self.assertIsNone(b[("yellow", "triangle")])
+        self.assertEqual(b[("red", "cylinder")], "left")
+        self.assertEqual(b[("red", "triangle")], "left")
+        self.assertEqual(b[("blue", "cylinder")], "right")
+        self.assertEqual(b[("blue", "triangle")], "right")
 
 
 class TestIntensifier(unittest.TestCase):
@@ -149,6 +188,36 @@ class TestCzech(unittest.TestCase):
         for t in ("Put the cube on the left, a level thing", "Levy a model"):
             self.assertEqual(structured_normalize(t), normalize(t))
 
+    def test_deliver_and_repair_verbs_are_not_right(self):
+        # dopravte = deliver, napravte = correct. The adverbs are doprava / napravo.
+        b = bins("dopravte červené kostky doleva")
+        self.assertEqual(b[("red", "cube")], "left")
+        self.assertTrue(all(b[(c, s)] is None for c in COLOURS for s in SHAPES if (c, s) != ("red", "cube")))
+        b = bins("dopravte červené kostky doleva a modré válce doprava")
+        self.assertEqual(b[("red", "cube")], "left")
+        self.assertEqual(b[("blue", "cylinder")], "right")
+        self.assertIsNone(b[("red", "cylinder")])
+        self.assertIsNone(b[("blue", "cube")])
+        b = bins("Napravte červené doleva a modré doprava")
+        self.assertEqual(b[("red", "cube")], "left")
+        self.assertEqual(b[("blue", "cube")], "right")
+        self.assertIsNone(b[("yellow", "cube")])
+
+    def test_lone_a_is_not_rewritten_to_and(self):
+        # "a" is the left ordinal and the English article. Rewriting it makes the next bin leak backwards.
+        norm = structured_normalize("modré do a, žluté doprava")
+        self.assertIn(" do a", norm)
+        b = bins("modré do a, žluté doprava")
+        self.assertIsNone(b[("blue", "cube")])
+        self.assertIsNone(b[("blue", "cylinder")])
+        self.assertEqual(b[("yellow", "cube")], "right")
+        art = structured_normalize("a yellow cube goes doleva and a blue cube goes doprava")
+        self.assertNotIn("and and", art)
+        self.assertTrue(art.lower().startswith("a "))
+        b = bins("a yellow cube goes doleva and a blue cube goes doprava")
+        self.assertIsNone(b[("yellow", "cube")])
+        self.assertIsNone(b[("blue", "cube")])
+
 
 class TestAmber(unittest.TestCase):
     def test_amber_never_maps_to_red_or_to_a_guess(self):
@@ -167,6 +236,23 @@ class TestAmber(unittest.TestCase):
 
     def test_amber_is_orange_only_with_the_flag_off(self):
         self.assertIn("orange", normalize("the amber items go left"))
+
+    def test_amber_shape_does_not_paint_blue(self):
+        # "amber cubes left, everything else right": amber abstains, blue takes the catch-all.
+        b = bins("Put amber cubes left. Everything else right.")
+        self.assertIsNone(b[("yellow", "cube")])
+        self.assertIsNone(b[("red", "cube")])
+        self.assertIsNone(b[("yellow", "cylinder")])
+        for s in SHAPES:
+            self.assertEqual(b[("blue", s)], "right")
+        b = bins("amber cylinders left, the rest right")
+        self.assertEqual(b[("blue", "cylinder")], "right")
+        self.assertEqual(b[("blue", "cube")], "right")
+        self.assertIsNone(b[("yellow", "cylinder")])
+        self.assertIsNone(b[("red", "cylinder")])
+        # a real shape-wide rule beside amber is abstained (0), not applied to blue
+        b = bins("all cubes go left, and amber items go right")
+        self.assertTrue(all(v is None for v in b.values()))
 
 
 class TestWiringAndSpeed(unittest.TestCase):
