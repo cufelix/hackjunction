@@ -179,6 +179,7 @@ perception:
     max_parts: 3
 
 bin:
+  geometry_runtime: false     # FLAG (bin geo). perception follows planner.bin_shift for every bin consumer (needs bin.vote.enabled for a shift)
   vote:                       # FLAG (bin vote). Per-bin position from 3 votes (depth rim, orange tape, nominal prior)
     enabled: false
     agree_m: 0.04             # two votes closer than this agree -> mean of the closest pair
