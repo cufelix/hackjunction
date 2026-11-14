@@ -180,7 +180,8 @@ class ClassicalPolicy:
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         mo = self.cfg["motion"]
         self.output_limiter = (MotionOutputLimiter(
-            mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"], mo["hand_max_acc"], 1.0 / HZ)
+            mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"], mo["hand_max_acc"], 1.0 / HZ,
+            arm_lim=(self.spec.arm_lower, self.spec.arm_upper), hand_lim=(self.spec.hand_lower, self.spec.hand_upper))
             if mo.get("output_caps") is not None else None)
         # calib.fk_xcheck (FLAG, default OFF, log-only): RGB head-pose cross-check vs the Dex3 hand FK. Its own
         # ArmKinematics: the worker thread must never touch the planner's pinocchio data.
@@ -872,7 +873,8 @@ class ClassicalPolicy:
         res = self._act_entry(obs)
         if self._mirror_im:   # hand.mirror_index_middle (R42a): last stop before the runner, every return path
             h = np.asarray(res["hand_q_target"], float)
-            res = dict(res, hand_q_target=np.stack([self._im_emit(r) for r in h]) if h.ndim == 2 else self._im_emit(h))
+            if h.size:   # zero-row hold (no encoder sample yet): nothing to mirror
+                res = dict(res, hand_q_target=np.stack([self._im_emit(r) for r in h]) if h.ndim == 2 else self._im_emit(h))
         return res
 
     def _im_emit(self, r):
@@ -906,6 +908,8 @@ class ClassicalPolicy:
     def _limit_motion_output(self, action, obs):
         """M4 final boundary: cap every route, including holds, home, endgame and empty-grasp queue replacement."""
         a, h = np.asarray(action["arm_q_target"], float), np.asarray(action["hand_q_target"], float)
+        if not a.size or not h.size:   # zero-row hold: no command to cap, and no a[0] start target to read
+            return action
 
         def start(key, target):
             try:

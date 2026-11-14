@@ -150,10 +150,12 @@ class MotionOutputLimiter:
     policy request; samples within an action chunk remain spaced by the runner's fixed control period.
     """
 
-    def __init__(self, arm_vmax, arm_amax, hand_vmax, hand_amax, dt):
+    def __init__(self, arm_vmax, arm_amax, hand_vmax, hand_amax, dt, arm_lim=None, hand_lim=None):
         self.arm_vmax, self.arm_amax = float(arm_vmax), float(arm_amax)
         self.hand_vmax, self.hand_amax = float(hand_vmax), float(hand_amax)
         self.dt = float(dt)
+        # (lower, upper) URDF joint limits: the acceleration-shaped step can overshoot a target at the limit.
+        self.arm_lim, self.hand_lim = arm_lim, hand_lim
         self.reset()
 
     def reset(self):
@@ -191,6 +193,10 @@ class MotionOutputLimiter:
                 arm[i], self.arm_q, self.arm_v, self.arm_vmax, self.arm_amax, step_dt)
             self.hand_q, self.hand_v = self._step(
                 hand[i], self.hand_q, self.hand_v, self.hand_vmax, self.hand_amax, step_dt)
+            if self.arm_lim is not None:
+                self.arm_q = np.clip(self.arm_q, *self.arm_lim)
+            if self.hand_lim is not None:
+                self.hand_q = np.clip(self.hand_q, *self.hand_lim)
             out_a[i], out_h[i] = self.arm_q, self.hand_q
             sample_time = first_time if i == 0 else sample_time + step_dt
         self.last_time = sample_time
