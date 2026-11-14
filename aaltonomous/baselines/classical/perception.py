@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 
 from .bin_vote import bin_geometry
+from .prism_orientation import prism_orientation
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
 from .shape_2d import decide_shape2d, shape2d_features
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
@@ -121,6 +122,10 @@ class Detection:
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
     sat_med: float | None = None  # perception.color_gate.sat_floor only: median HSV S (0-255) over the blob mask
     hue_mixed: bool = False       # H1: a post-split part still contains both red and yellow source-mask pixels
+    prism_orientation: str | None = None  # perception.prism_orientation only: "standing" | "lying" | None (unsure)
+    ridge_yaw: float | None = None  # lying prism: pelvis-frame heading (rad, mod pi) of the ridge = long axis
+    prism_xy: tuple | None = None   # lying prism: ridge-strip centre (pelvis xy, = footprint centroid by symmetry)
+    prism_conf: float = 0.0         # smallest normalised cue margin of the orientation decision (0..1)
 
     def __repr__(self):
         x, y, z = self.top
@@ -263,6 +268,9 @@ class Perception:
         # grasp.posture_apex_gate (default off): prism-top check features for "triangle" detections (apex_gate.py)
         self.want_apex = self.want_path and bool(cfg.get("grasp", {}).get("posture_apex_gate", False))
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
+        # perception.prism_orientation (default off): standing vs lying triangular prism (prism_orientation.py)
+        self.prism_orientation = bool(self.cfg.get("prism_orientation", False))
+        self.prism_params = dict(self.cfg.get("prism_orientation_params") or {})
         # #7 near-bin guard: abstain on shape when the top face may be cut by the bin exclusion (needs classify_shape)
         self.near_bin_guard = bool(self.cfg.get("near_bin_guard", False))
         # perception.y_affine [a, b] (23-grasp-failure §11b/§13): perceived - true y = a*y + b (pelvis) -> subtract it.
@@ -2008,12 +2016,39 @@ class Perception:
         if self.want_apex and shape == "triangle":
             from .apex_gate import apex_gate_features
             det.apex_gate = apex_gate_features(top[:, :2], altitude=self.size)
+        if self.prism_orientation:
+            self._apply_prism_orientation(det, P, top)
         if self.generic_fallback:   # flag off: no call, no work
             self._apply_generic_fallback(det, conf, blob, frame_depth)
         if self.shape_diag:
             nb = bool(near_bin) if (self.classify_shape and self.near_bin_guard) else _safe_near_bin(self, top)
             det.shape_diag = self._diag(det, "depth", top[:, :2], blob, conf, path, nb)
         return det
+
+    def _apply_prism_orientation(self, det, P, top):
+        """perception.prism_orientation: sets det.prism_orientation (+ ridge_yaw / prism_xy / prism_conf for a lying prism).
+        A lying prism is a triangle prism whatever the rectangular top face said: shape -> "triangle", path "lying" (so
+        the demo posture, which is for standing prisms, is not chosen). Unsure / error: det untouched."""
+        try:
+            p = self.prism_params
+            length = float(p.get("length_m") or self.height)
+            dims = self.scene.object_dims("triangle")
+            r = prism_orientation(P, top, self.scene.counter_z, 3.0 * dims["apothem"], dims["side"], length,
+                                  float(self.cfg["top_band"]), float(self.cfg["top_percentile"]),
+                                  int(self.cfg["min_valid_depth_px"]), float(p.get("fill_min", 0.75)))
+        except Exception as exc:   # never raise into act()
+            self.log(f"[prism] orientation failed: {type(exc).__name__}: {exc}")
+            return
+        if r is None:
+            return
+        det.prism_orientation, det.prism_conf = r["orientation"], r["conf"]
+        if r["orientation"] != "lying":
+            return
+        xy = np.asarray(r["xy"], float) + self.xy_offset
+        if self.y_affine is not None:
+            xy = self._y_affine(xy)
+        det.ridge_yaw, det.prism_xy = r["ridge_yaw"], (float(xy[0]), float(xy[1]))
+        det.shape, det.shape_conf, det.shape_path = "triangle", r["conf"], "lying"
 
     def _apply_shape2d(self, det, blob):
         """perception.shape_2d_v2, yellow only. A confident metric shape is kept (disagreement logged). Where the shape is

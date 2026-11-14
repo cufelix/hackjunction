@@ -223,6 +223,7 @@ def staggered_release_ramp(a, b, side, vmax, dt, delay_s):
 
 
 class Planner:
+    _lying = False   # grasp.lying_prism: the pick being planned is a lying prism
     def __init__(self, cfg, scene, postures, home, kin: ArmKinematics | None = None, safety: SafetyConfig | None = None,
                  spec: JointSpec | None = None, mapping=None, dt=1.0 / 30.0):
         self.cfg, self.scene, self.post, self.home = cfg, scene, postures, np.asarray(home, float)
@@ -233,6 +234,7 @@ class Planner:
         self._posture = None   # grasp.close_posture_by_shape: posture of the pick being planned
         self._apex = None      # grasp.posture_apex_gate: (pass, apex_conf, max angle) of the pick being planned
         self.vary = None       # policy.retry_vary_grasp: {"posture": name | None, "yaw": rad | None} for the next plan()
+        self._lying = False    # grasp.lying_prism: the pick being planned is a lying prism (grasp height / posture)
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
         self.object_speed_scale = None  # policy.first_object_speed_scale: arm phase speed x this (a copy, per plan)
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
@@ -694,6 +696,10 @@ class Planner:
             # Width is valid only across the proposal's minor axis. Never fall
             # through to legacy orientations after accepting a generic proposal.
             return self._plan_side_generic(det, side, bin_name, arm_q, hand_q, **kw)
+        if self._lying_on(det) and kw.get("place_xy") is None and kw.get("source_bin") is None:
+            p = self._plan_side_lying(det, side, bin_name, arm_q, hand_q, **kw)
+            if p is not None:
+                return p      # else: the current (standing-prism) path below
         vy = (self.vary or {}).get("yaw")
         # A corrective cleanup has place_xy but still needs a changed grasp after a miss. Ordinary relocations keep
         # the legacy free-yaw planning because their destination search is already the fallback path.
@@ -762,6 +768,51 @@ class Planner:
         x = self.kin.data.oMf[self.kin.palm[side]].rotation[:, 0]
         d = np.arctan2(x[1], x[0]) - a
         return float(np.degrees(abs((d + np.pi) % (2 * np.pi) - np.pi)))
+
+    # ------------------------------------------------------------------ lying prism (grasp.lying_prism)
+    def _lying_on(self, det):
+        ry, pxy = getattr(det, "ridge_yaw", None), getattr(det, "prism_xy", None)
+        return (bool(self.cfg["grasp"].get("lying_prism", False)) and getattr(det, "prism_orientation", None) == "lying"
+                and ry is not None and np.isfinite(ry) and pxy is not None and bool(np.all(np.isfinite(pxy))))
+
+    def lying_headings(self, ridge_yaw, side):
+        """Candidate palm-x headings (pelvis rad), best first, for a prism lying with its ridge along `ridge_yaw`. The jaw
+        closes along palm x (URDF FK: thumb tip vs index/middle tips differ in palm x only), so the closing axis is across
+        the ridge: ridge +- 90 deg. Candidates further than yaw_max_dev_deg from the arm's natural direction are dropped."""
+        g = self.cfg["grasp"]
+        s = 1.0 if side == "left" else -1.0
+        ref = -s * np.radians(float(g.get("yaw_ref_deg", 25.0)))
+        out = []
+        for k in (-1, 1):
+            a = float(ridge_yaw) + k * np.pi / 2
+            a = (a + np.pi) % (2 * np.pi) - np.pi
+            da = abs((a - ref + np.pi) % (2 * np.pi) - np.pi)
+            if da <= np.radians(float(g.get("yaw_max_dev_deg", 75.0))):
+                out.append((da, a))
+        return [a for _, a in sorted(out)]
+
+    def _plan_side_lying(self, det, side, bin_name, arm_q, hand_q, **kw):
+        """Grasp across the ridge: palm-x heading = ridge +- 90 deg (strong IK hint, achieved heading within
+        grasp.lying_yaw_tol_deg), grasp point = the footprint centroid (det.prism_xy). Grasp height + posture: see
+        _plan_side_inner / _posture_choice (self._lying). None -> caller falls back to the standing-prism path."""
+        g = self.cfg["grasp"]
+        saved = (self.kin.hint, self.kin.w_hint)
+        try:
+            self._lying = True
+            for a in self.lying_headings(float(det.ridge_yaw), side):
+                d2 = copy.copy(det)
+                d2.top = np.r_[np.asarray(det.prism_xy, float), det.top[2]]
+                self.kin.hint, self.kin.w_hint = np.array([np.cos(a), np.sin(a), 0.0]), float(g.get("yaw_hint_weight", 3.0))
+                p = self._plan_side(d2, side, bin_name, arm_q, hand_q, **kw)
+                if p.ok:
+                    err = self._finger_err(p, side, a)
+                    if err <= float(g.get("lying_yaw_tol_deg", 10.0)):
+                        p.reason = f"lying prism across ridge ({np.degrees(a):.0f} deg, err {err:.0f})"
+                        return p
+        finally:
+            self.kin.hint, self.kin.w_hint = saved
+            self._lying = False
+        return None
 
     def _generic_on(self, det):
         return (bool(self.cfg["grasp"].get("generic_fallback", False))
@@ -866,6 +917,8 @@ class Planner:
         label = getattr(det, "shape", None)
         conf = float(getattr(det, "shape_conf", 0.0) or 0.0)
         path = getattr(det, "shape_path", None)
+        if self._lying:   # grasp.lying_prism: the demo posture is for standing prisms
+            return g.get("close_posture", "closed"), None, label, conf, path
         width = getattr(det, "generic_width", None)
         if getattr(det, "generic_required", False) and width is not None:
             if float(width) <= float(g.get("generic_narrow_width", 0.035)):
@@ -928,6 +981,10 @@ class Planner:
                     corrective=source_bin is not None)
         sl = ArmKinematics.sl(side)
         H, post = self._object_height(det), self.post
+        hfrac = g["height_frac"]
+        if self._lying:   # grasp.lying_prism: height = triangle altitude, grasp at the section centroid (= apothem)
+            dims = sc.object_dims("triangle")
+            H, hfrac = 3.0 * dims["apothem"], 1.0 / 3.0   # altitude; centroid of the section = altitude / 3
         if self._generic_on(det):
             hlo, hhi = cfg["perception"].get("height_range", (0.4, 2.0))
             if not np.isfinite(H) or not float(hlo) * self.height <= H <= float(hhi) * self.height:
@@ -940,7 +997,7 @@ class Planner:
 
         # grasp height: object mid-height, raised until the preshaped fingers clear the counter
         xy = det.top[:2] + np.asarray((g.get("arm_xy_offset") or {}).get(side, [0.0, 0.0]), float)  # per-arm, TUNE
-        z = (det.top[2] - H / 2) if source_bin is not None else (zc + g["height_frac"] * H)
+        z = (det.top[2] - H / 2) if source_bin is not None else (zc + hfrac * H)
         for _ in range(4):
             qg, ok = self._ik(side, np.r_[xy, z], arm_q, "grasp", plan)
             if not ok:

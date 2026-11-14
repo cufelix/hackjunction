@@ -194,6 +194,11 @@ perception:
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
   near_bin_guard: false       # FLAG (#7, Oliver). With classify_shape: abstain on shape (None) when the top face is
                               # within a bin footprint + margin + object size (face possibly cut by the bin exclusion)
+  prism_orientation: false    # FLAG (prism orient). Standing vs lying triangular prism (prism_orientation.py): Detection.prism_orientation,
+                              # ridge_yaw, prism_xy; a lying prism gets shape "triangle" / path "lying". Unsure = current behaviour
+  prism_orientation_params:
+    fill_min: 0.75            # footprint hull / min-area-rect: triangle 1/2, rectangle 1 -> midpoint
+    length_m: null            # prism extrusion length (standing height); null = scene objects.size * height_ratio. MEASURE on the real part
   shape_diag: false           # FLAG (Oliver). Passive: Detection.shape_diag + one [shape_diag] log line per detection
   no_blob_shape: false        # FLAG (Oliver, f857054). With classify_shape: no metric top face -> abstain (None) instead of
                               # the 2D-blob ratio (blob includes side faces: prism -> 'cylinder'). Off = blob fallback
@@ -375,6 +380,10 @@ grasp:
   yaw_max_hints: 2
   yaw_min_conf: 0.5
   yaw_tri_shift: true         # move the grasp point to the midpoint of the object's extent along the finger direction
+  lying_prism: false          # FLAG (prism orient, needs perception.prism_orientation). Lying prism: close ACROSS the ridge
+                              # (palm x = the closing axis = ridge +- 90 deg), grasp at the cross-section centroid height
+                              # (object_dims apothem = altitude/3), grasp.close_posture (never the standing-prism demo posture)
+  lying_yaw_tol_deg: 10.0     # lying_prism: achieved palm-x heading vs ridge +- 90 deg; 22.5 mm half length * sin(10 deg) = 3.9 mm < the 5.2 mm squeeze
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
