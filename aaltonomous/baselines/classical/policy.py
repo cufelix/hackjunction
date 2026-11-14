@@ -50,6 +50,7 @@ from .brain.find import FindClient, extract_queries, match_found
 HZ = 30.0
 _HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence names a hole AND the lid
 _LID = re.compile(r"\blids?\b")
+FALLBACK_INSTRUCTION_CHARS = 20000   # DoS bound when instruction.max_chars is 0 (off)
 _TRUNC_CUT = ".;!?\n"   # instruction.max_chars: sentence / clause boundaries, then whitespace
 _WS = " \t\r\n"
 
@@ -295,8 +296,9 @@ class ClassicalPolicy:
             text = self._cap_text((info or {}).get("instruction") or "")
             if not str(text).strip():               # fixed mapping is reserved for an identified sort_fixed task
                 return {"default": None}
-            from .brain.planner import MAX_INSTRUCTION_CHARS
-            if len(str(text)) > MAX_INSTRUCTION_CHARS:       # bounded: reset() has a 1.0 s watchdog
+            mc = int(instruction_cfg.get("max_chars", 0) or 0)
+            limit = mc if mc > 0 else FALLBACK_INSTRUCTION_CHARS   # DoS bound; stock never sees >20k instructions
+            if len(str(text)) > limit:               # bounded reset() watchdog (1.0 s)
                 self.log(f"instruction resolve skipped ({len(str(text))} chars): no fixed fallback")
                 return None
             from .instruction import resolve
