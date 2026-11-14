@@ -476,6 +476,7 @@ grasp:
   approach_extra_m: 0.0       # added to the pregrasp height (policy.speed_tiers sets 0.015 for the first object only)
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)
+  novel_near_rim_retry: false # FLAG (R22). Novel/generic: a failed drop leg retries once at the bin's near rim (no inset).
   drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
   drop_slot_wall_margin: 0.03 # object-centre margin from the inner side walls in the reachable near-wall band
   drop_slot_count: 3          # legacy count / grid slots per row; planner checks each selected slot with IK + safety

@@ -204,6 +204,7 @@ FLAGS = {
     "grasp.cylinder_no_yaw_vary": ("cyl yaw", False, "retry on a detected cylinder varies the posture only, never the finger yaw (rotationally symmetric)"),
     "grasp.staggered_release": ("finals grasp", False, "release thumb and first finger before DDS slots 5/6"),
     "grasp.staggered_release_delay_s": ("finals grasp", 0.30, "delay before DDS slots 5/6 begin opening when staggered_release is on"),
+    "grasp.novel_near_rim_retry": ("novel R22", False, "novel/generic objects: when the drop leg fails, retry once releasing at the target bin's near rim (no inset); clearances unchanged"),
     "bin.geometry_runtime": ("bin geo", False, "every bin consumer (perception masks/hulls/near_bin/in_bin/gate, planner drop/slots/collision) follows bin_geometry(): nominal + the voted shift"),
     "bin.vote.max_shift_m": ("bin vote", 0.10, "a bin vote result further than this from the prior is discarded (prior kept); real venue bins measure +8..+15 cm vs nominal"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),

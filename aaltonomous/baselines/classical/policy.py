@@ -1859,7 +1859,10 @@ class ClassicalPolicy:
                     self._cool_target(d, t, p.reason or "infeasible")
                     target_blocked = True
                     break
-                self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
+                if getattr(d, "novel", False):
+                    self.log(f"[novel] plan reject: {p.reason} (cannot correct {d.color} from {source_bin} to slot {slot})")
+                else:
+                    self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
             if budget_blocked or target_blocked:
                 continue
             def cleanup(det, arm, hand, planner=None, **_):
@@ -1880,7 +1883,10 @@ class ClassicalPolicy:
             if self._target_guard_on():
                 self._cool_target(d, t, p.reason or "infeasible")
             else:
-                self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
+                if getattr(d, "novel", False):
+                    self.log(f"[novel] plan reject: {p.reason} (cannot remove {d.color} from wrong {source_bin} bin)")
+                else:
+                    self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
         return None
 
     def _overflow_slots(self, bin_name):
@@ -2559,7 +2565,10 @@ class ClassicalPolicy:
                 guarded_failure = True
             else:
                 self.failed.append(d.top[:2])
-                self.log(f"[classical] skip {d}: {p.reason}")
+                if getattr(d, "novel", False):
+                    self.log(f"[novel] plan reject: {p.reason} (skip {d})")
+                else:
+                    self.log(f"[classical] skip {d}: {p.reason}")
             if fp:
                 return planner_fail(p.reason)
         if over_cap:   # nothing within the cap: the quickest over-cap plan beats leaving points on the counter
