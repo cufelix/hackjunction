@@ -1,6 +1,7 @@
 """Feature flags + the submission overlay (integration branch). Run:
     python -m unittest aaltonomous.baselines.classical.test_flags -v
 """
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,13 @@ from .config import BAKED_OVERLAY, FLAGS, OVERLAY_DIR, STOCK, _get, effective_fl
 
 
 class TestFlags(unittest.TestCase):
+    def test_no_finals_overlay_uses_center_principal_point(self):
+        """finals overlays must keep the file principal point; the sim centre is perception.sim_center_principal_point only."""
+        import glob
+        offenders = [p for p in glob.glob(str(OVERLAY_DIR / "finals_*.yaml"))
+                     if re.search(r"principal_point:\s*center\b", Path(p).read_text())]
+        self.assertEqual(offenders, [])
+
     def test_every_flag_defaults_off(self):
         cfg = load_config(overlay="none")
         for k, (_, off, _) in FLAGS.items():
@@ -212,7 +220,7 @@ class TestFlags(unittest.TestCase):
             "perception.sat_floor_adaptive", "perception.area_floor_geometric", "perception.topface_mode",
             "perception.partial_ok_near_hand", "perception.relook_before_done"}   # recall A/B on top of r22
         expect["finals_r22_cal"] = expect["finals_r22"] | {"calib.hand_icp_primary", "calib.counter_after_hand",
-                                                       "calib.refit_per_look", "perception.principal_point"}   # handcal A/B
+                                                       "calib.refit_per_look", "perception.sim_center_principal_point"}   # handcal A/B (file principal point, sim centre only)
         expect["finals_r22_grasp"] = expect["finals_r22"] | {"perception.assoc_radius_m", "policy.retry_jitter_m",
                                                          "grasp.staggered_release", "held.read_through_carry"}   # release A/B
         expect["finals_r22_gate"] = expect["finals_r22"] | {
@@ -298,11 +306,13 @@ class TestFlags(unittest.TestCase):
     def test_finals_r22_cal_is_r22_plus_calibration_and_sim_principal_point(self):
         r21, r22 = load_config(overlay="finals_r22"), load_config(overlay="finals_r22_cal")
         self.assertEqual(r22["profile"], "sim")
-        self.assertEqual(r22["perception"]["principal_point"], "center")
+        self.assertEqual(r22["perception"]["principal_point"], "file")
+        self.assertTrue(r22["perception"]["sim_center_principal_point"])
         for key in ("hand_icp_primary", "counter_after_hand", "refit_per_look"):
             self.assertTrue(r22["calib"][key])
             r22["calib"][key] = r21["calib"][key]
         r22["perception"]["principal_point"] = r21["perception"]["principal_point"]
+        r22["perception"]["sim_center_principal_point"] = r21["perception"]["sim_center_principal_point"]
         r22["overlay"] = r21["overlay"]
         self.assertEqual(r22, r21)
 
