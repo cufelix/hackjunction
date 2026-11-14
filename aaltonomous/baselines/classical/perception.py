@@ -2714,7 +2714,7 @@ class Perception:
             return f"height {h:.2f} sizes"
         return None
 
-    def _fk_arm_mask(self, shape, arm_q, hand_q=None):
+    def _fk_arm_mask(self, shape, arm_q, hand_q=None, dilate_px=None, fill=None):
         """FK arm/hand mask from filled per-link silhouettes at the current camera pose.
 
         Surface samples are 5 mm apart, so marking their projected pixels alone leaves coloured robot pixels between
@@ -2731,8 +2731,9 @@ class Perception:
                 self._arm_surface = ArmSurface()
             h, w = shape
             m = np.zeros(shape, np.uint8)
-            r = int(self.color_gate_cfg.get("fk_dilate_px", 0))
-            fill = self.fk_silhouette or r > 0   # gatefix fk_silhouette, or fixfk's dilation-coupled per-link fill
+            r = int(self.color_gate_cfg.get("fk_dilate_px", 0)) if dilate_px is None else int(dilate_px)
+            if fill is None:
+                fill = self.fk_silhouette or r > 0   # gatefix fk_silhouette, or fixfk's dilation-coupled per-link fill
             for P, _ in self._arm_surface.posed_links(arm_q, hand_q):
                 uvz = self._project(P)
                 ok = np.all(np.isfinite(uvz), axis=1) & (uvz[:, 2] > 0)
