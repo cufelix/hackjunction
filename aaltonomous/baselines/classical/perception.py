@@ -703,6 +703,44 @@ class Perception:
                                           float(elapsed_ms), str(reason))
         return self.calibration
 
+    def _counter_plane(self, depth, c):
+        """Pelvis points of `depth` (stride-subsampled) and the counter plane z = ax + by + c fitted to them.
+        (P, coef, None) or (None, None, reason). Shared by calibrate_bins and the bin.vote rim vote."""
+        dlo, dhi = self.cfg["depth_range_mm"]
+        valid = (depth >= dlo) & (depth <= dhi)
+        if valid.mean() < float(c.get("min_valid_frac", self.cfg["min_valid_frac"])):
+            return (None, None, "insufficient valid depth")
+
+        stride = max(1, int(c.get("pixel_stride", 3)))
+        vv, uu = np.nonzero(valid[::stride, ::stride])
+        vv, uu = vv * stride, uu * stride
+        P = self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float))
+        sc = self.scene
+
+        # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.
+        pm = sc.pelvis_to_mat(P)
+        mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
+        counter = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) &
+                   (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03) &
+                   (np.abs(P[:, 2] - sc.counter_z) < float(c.get("plane_z_window", 0.06))))
+        plane_points = P[counter]
+        if len(plane_points) < int(c.get("min_plane_points", 500)):
+            return (None, None, "counter plane not visible")
+        A = np.c_[plane_points[:, :2], np.ones(len(plane_points))]
+        keep = np.ones(len(A), bool)
+        coef = np.array([0.0, 0.0, sc.counter_z])
+        plane_tol = float(c.get("plane_inlier_m", 0.006))
+        for _ in range(3):
+            if keep.sum() < int(c.get("min_plane_points", 500)):
+                break
+            coef = np.linalg.lstsq(A[keep], plane_points[keep, 2], rcond=None)[0]
+            residual = plane_points[:, 2] - A @ coef
+            center = np.median(residual)
+            keep = np.abs(residual - center) <= plane_tol
+        if keep.sum() < int(c.get("min_plane_points", 500)):
+            return (None, None, "counter plane fit rejected")
+        return P, coef, None
+
     def calibrate_bins(self, depth):
         """Estimate a single XY correction by aligning elevated depth points to the fixed bin walls.
 
@@ -723,39 +761,12 @@ class Perception:
             return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, "disabled")
         if depth is None or np.ndim(depth) != 2:
             return result(False, False, 0.0, self.xy_offset.copy(), 0, np.inf, "no depth frame")
-        dlo, dhi = self.cfg["depth_range_mm"]
-        valid = (depth >= dlo) & (depth <= dhi)
-        if valid.mean() < float(c.get("min_valid_frac", self.cfg["min_valid_frac"])):
-            return result(False, False, 0.0, self.xy_offset.copy(), 0, np.inf, "insufficient valid depth")
-
-        stride = max(1, int(c.get("pixel_stride", 3)))
-        vv, uu = np.nonzero(valid[::stride, ::stride])
-        vv, uu = vv * stride, uu * stride
-        P = self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float))
+        P, coef, why = self._counter_plane(depth, c)
+        if why == "insufficient valid depth":
+            return result(False, False, 0.0, self.xy_offset.copy(), 0, np.inf, why)
+        if why:
+            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, why)
         sc = self.scene
-
-        # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.
-        pm = sc.pelvis_to_mat(P)
-        mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
-        counter = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) &
-                   (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03) &
-                   (np.abs(P[:, 2] - sc.counter_z) < float(c.get("plane_z_window", 0.06))))
-        plane_points = P[counter]
-        if len(plane_points) < int(c.get("min_plane_points", 500)):
-            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, "counter plane not visible")
-        A = np.c_[plane_points[:, :2], np.ones(len(plane_points))]
-        keep = np.ones(len(A), bool)
-        coef = np.array([0.0, 0.0, sc.counter_z])
-        plane_tol = float(c.get("plane_inlier_m", 0.006))
-        for _ in range(3):
-            if keep.sum() < int(c.get("min_plane_points", 500)):
-                break
-            coef = np.linalg.lstsq(A[keep], plane_points[keep, 2], rcond=None)[0]
-            residual = plane_points[:, 2] - A @ coef
-            center = np.median(residual)
-            keep = np.abs(residual - center) <= plane_tol
-        if keep.sum() < int(c.get("min_plane_points", 500)):
-            return result(False, True, 0.0, self.xy_offset.copy(), 0, np.inf, "counter plane fit rejected")
 
         height = P[:, 2] - (np.c_[P[:, :2], np.ones(len(P))] @ coef)
         b = sc.cfg["bins"]

@@ -91,6 +91,7 @@ FLAGS = {
     "grasp.posture_apex_gate": ("apex gate", False, "close_posture_by_shape: demo also needs apex_conf + max vertex angle (cut-cube guard)"),
     "grasp.close_posture": ("pinch fix", "closed", "grasp posture: closed | closed_tight"),
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
+    "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
     "policy.confidence_order": ("D1/D2", False, "order by 2*p/est_time (p_colour*p_bin*p_grasp), never the hardest first"),
     "policy.object_time_cap": ("D2", False, "per-object cap (remaining-15)/left 15..35 s, T-20 s no new object, T-8 s release/retract"),

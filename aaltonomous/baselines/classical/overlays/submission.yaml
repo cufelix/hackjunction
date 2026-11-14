@@ -70,3 +70,4 @@ flags:
   policy.object_time_cap: false                 # D2         per-object cap, T-20 s / T-8 s rules
   policy.speed_tiers: false                     # D3         first object 0.7 + clearance, tiers by outcome
   policy.confidence_tiers: false                # D4         first-seconds calibration tiers
+  bin.vote.enabled: false                       # bin vote  per-bin position from 3 votes (A/B: ab_binvote)
