@@ -146,6 +146,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
+        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20"):
+            expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -168,6 +170,7 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(real["policy"]["max_total_attempts"], 18)
         sim["overlay"] = real["overlay"]
         sim["perception"]["principal_point"] = "file"
+        sim["policy"]["fixed_mapping"] = real["policy"]["fixed_mapping"]   # organisers P0
         self.assertEqual(real, sim)
 
         calibration = Calibration.load()

@@ -27,6 +27,7 @@ class Stub:
         self.log = self.logged.append
 
     mapping = staticmethod(ClassicalPolicy._instruction_mapping)
+    _cap_text = ClassicalPolicy._cap_text
 
 
 def call(resolve, info):
