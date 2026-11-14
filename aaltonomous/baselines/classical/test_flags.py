@@ -89,6 +89,7 @@ class TestFlags(unittest.TestCase):
         base = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r16_nopp")) if is_on}
         expect["ab_decision"] = base | {"policy.confidence_order", "policy.object_time_cap", "policy.speed_tiers",
                                         "policy.confidence_tiers"}
+        expect["ab_isolated_first"] = base | {"decision.isolated_first"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -121,7 +122,7 @@ class TestFlags(unittest.TestCase):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp",
-                                      "finals_real", "ab_decision"})
+                                      "finals_real", "ab_decision", "ab_isolated_first"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for cfg in retry.values()))
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
