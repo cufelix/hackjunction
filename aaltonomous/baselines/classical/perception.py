@@ -105,6 +105,9 @@ class Detection:
     shape_conf: float = 0.0    # shape_id confidence (0..1) behind `shape`
     apex_gate: tuple | None = None  # grasp.posture_apex_gate only: (apex_conf, max vertex angle deg) of a "triangle" top
     shape_path: str | None = None  # shape_id path ("metric" | "blob" | "abstain_*" | "off"), only filled when grasp.close_posture_by_shape
+    generic_required: bool = False  # grasp.generic_fallback: label absent/below confidence threshold
+    generic_width: float | None = None  # accepted proposal's closing-axis width (m); None means abstain
+    generic_confidence: float = 0.0
     shape_diag: dict | None = None  # perception.shape_diag only: source, n_top, ratio_cloud, ratio_blob, path, label,
                                     # conf, near_bin, dz_top (top z - counter z, m), top_xy (list of [x, y], pelvis)
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
@@ -207,8 +210,13 @@ class Perception:
         self.pitch_calibration = None
         self.pitch_T = None
         # opt-in shape / triangle pose (all default OFF = stock behaviour)
-        self.classify_shape = bool(self.cfg.get("classify_shape", False))
-        self.want_path = bool(cfg.get("grasp", {}).get("close_posture_by_shape", False))  # shape_id path for the posture gate
+        grasp = cfg.get("grasp", {})
+        self.generic_fallback = bool(grasp.get("generic_fallback", False))
+        self.generic_shape_min_conf = float(grasp.get("generic_shape_min_conf", 0.5))
+        self.generic_min_confidence = float(grasp.get("generic_min_confidence", 0.5))
+        self.generic_max_width = float(grasp.get("generic_max_width", 0.060))
+        self.classify_shape = bool(self.cfg.get("classify_shape", False)) or self.generic_fallback
+        self.want_path = bool(grasp.get("close_posture_by_shape", False)) or self.generic_fallback
         self._last_path = None
         # grasp.posture_apex_gate (default off): prism-top check features for "triangle" detections (apex_gate.py)
         self.want_apex = self.want_path and bool(cfg.get("grasp", {}).get("posture_apex_gate", False))
@@ -1014,13 +1022,15 @@ class Perception:
         ok = (d >= dlo) & (d <= dhi)
         det = None
         if ok.sum() >= c["min_valid_depth_px"]:
-            det = self._from_depth(color, u[ok], v[ok], d[ok], area, blob)
+            det = self._from_depth(color, u[ok], v[ok], d[ok], area, blob, depth)
         if det is None:
             det = self._from_plane(color, centroid, area, int(ok.sum()))
             if det is not None:
                 det.shape, conf, path = self._shape_conf(None, blob)
                 if self.want_path:
                     det.shape_conf, det.shape_path = conf, self._last_path
+                if self.generic_fallback:
+                    self._apply_generic_fallback(det, conf, blob, depth)
                 if self.shape_diag:
                     det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
         if det is not None and hsv is not None:
@@ -1260,7 +1270,7 @@ class Perception:
                  f"r_blob={f(g['ratio_blob'])} path={g['path']} label={g['label']} conf={g['conf']:.2f} "
                  f"near_bin={g['near_bin']} dz_top={f(g['dz_top'], 4)}" + (f" rej={why}" if why else ""))
 
-    def _from_depth(self, color, u, v, d, area, blob=None):
+    def _from_depth(self, color, u, v, d, area, blob=None, frame_depth=None):
         P = self._pixel_to_pelvis(u, v, d)
         z_top = np.percentile(P[:, 2], self.cfg["top_percentile"])
         top = P[P[:, 2] >= z_top - self.cfg["top_band"]]
@@ -1294,10 +1304,53 @@ class Perception:
         if self.want_apex and shape == "triangle":
             from .apex_gate import apex_gate_features
             det.apex_gate = apex_gate_features(top[:, :2], altitude=self.size)
+        if self.generic_fallback:   # flag off: no call, no work
+            self._apply_generic_fallback(det, conf, blob, frame_depth)
         if self.shape_diag:
             nb = bool(near_bin) if (self.classify_shape and self.near_bin_guard) else _safe_near_bin(self, top)
             det.shape_diag = self._diag(det, "depth", top[:, :2], blob, conf, path, nb)
         return det
+
+    def _apply_generic_fallback(self, det, shape_conf, blob, depth):
+        """Attach an accepted generic proposal, or mark the detection so policy abstains.
+
+        This is only called on the opt-in path. Any malformed calibration/depth
+        degrades to leaving the object in place instead of terminating a look.
+        """
+        if not self.generic_fallback or det is None:
+            return
+        known = det.shape in ("cube", "cylinder", "triangle")
+        det.generic_required = (not known) or float(shape_conf) < self.generic_shape_min_conf
+        if not det.generic_required or depth is None or blob is None:
+            return
+        try:
+            from .generic_grasp import propose_grasp
+            camera = self.cal.cams[self.cam]
+            raw_depth = np.asarray(depth)
+            dlo, dhi = self.cfg["depth_range_mm"]
+            valid_depth = np.isfinite(raw_depth) & (raw_depth >= dlo) & (raw_depth <= dhi)
+            depth_m = np.where(valid_depth, raw_depth, 0.0).astype(np.float64) * float(camera.depth_scale)
+            # Keep the original RGB blob for the proposal's truncation check:
+            # invalid edge depth must not hide that the object touches the frame.
+            proposal = propose_grasp(blob, depth_m, camera.K, self._T())
+        except Exception:
+            return
+        if proposal is None:
+            return
+        det.generic_confidence = float(proposal.confidence)
+        if (proposal.confidence < self.generic_min_confidence or proposal.width <= 0.005 or
+                proposal.width > self.generic_max_width):
+            return
+        centre = np.asarray(proposal.centre, float).copy()
+        centre[:2] += self.xy_offset
+        if self.y_affine is not None:
+            centre[:2] = self._y_affine(centre[:2])
+        det.top = centre
+        det.yaw = float(proposal.yaw)
+        det.generic_width = float(proposal.width)
+        # A low-confidence known label must never select a shape-specific bin.
+        det.shape = None
+        det.shape_path = "generic"
 
     def _from_plane(self, color, uv, area, n_depth):
         """Centroid ray of the blob intersected with the horizontal plane at the object's top."""
