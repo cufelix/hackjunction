@@ -24,9 +24,14 @@ class TestFlags(unittest.TestCase):
         sub = load_config(overlay="submission")
         self.assertEqual(sub.pop("overlay"), "submission")
         on = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        self.assertEqual(on, {"instruction.resolve", "policy.bin_lookup"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
+        self.assertEqual(on, {"instruction.resolve", "policy.bin_lookup", "grasp.close_posture", "hand.closed_tight",
+                              "grasp.point_in_palm", "motion.close_hold_s"})        # A/B: sort_language 54/74 vs 1/74 (box A, twice)
         sub["instruction"]["resolve"] = False
         sub["policy"]["bin_lookup"] = "colour"
+        for k in ("close_posture", "point_in_palm"):                       # pinch_v1 grasp (Modal 60/82 vs 52/82)
+            sub["grasp"][k] = stock["grasp"][k]
+        sub["hand"]["closed_tight"] = stock["hand"]["closed_tight"]
+        sub["motion"]["close_hold_s"] = stock["motion"]["close_hold_s"]
         self.assertEqual(sub, stock)
         self.assertEqual(set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"]), set(FLAGS))
 
