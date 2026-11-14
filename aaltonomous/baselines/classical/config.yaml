@@ -77,6 +77,12 @@ perception:
     red:    [[[0, 70, 70], [16, 255, 255]], [[170, 70, 70], [180, 255, 255]]]
     yellow: [[[18, 45, 90], [52, 255, 255]]]
     blue:   [[[100, 70, 50], [145, 255, 255]]]
+  reject_orange: false        # FLAG (yellow-phantom, Oliver). Clip red/yellow out of the orange bin hue basin (`orange`)
+  orange:                     # sim bins H ~12 (nominal) / 15-24 (DR); sim red H 0-7, sim yellow H 23-31 S >= 81.
+    red_h_max: 8              # NOTE: real orange PIECES (red class, H 9-15) are lost with this on -> sim only
+    yellow_h_min: 22
+    yellow_s_h: 26            # yellow with H <= this also needs S >= yellow_s_min
+    yellow_s_min: 80
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
                               # 94/120 orange pieces merged with a neighbour) at distance-transform peaks
   split:
