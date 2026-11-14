@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import functools
 import re
+import unicodedata
 
 from . import instruction as _ins
 
@@ -230,80 +231,289 @@ def name_foreign(sentence: str) -> str:
     return sentence
 
 
-# instruction.multilingual: conservative Finnish / Czech -> plain English before resolve().  This
+# instruction.multilingual: conservative supported-language -> plain English before resolve(). This
 # is deliberately separate from the older, broad name_foreign() token aliases above: those aliases
 # are part of the existing instruction.normalize path and must remain byte-for-byte unchanged when
-# this new flag is off.  The multilingual path accepts a closed vocabulary and a small command
+# this flag is off. The multilingual path accepts a closed vocabulary and a small command
 # grammar instead of translating isolated words.  Therefore strict mode cannot accidentally turn a
 # half-understood foreign sentence into a confident placement.
 _ML_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 _ML_UNPARSED = "unparsed multilingual instruction"
+_ML_SPECIAL_LATIN = str.maketrans({
+    "ł": "l", "ø": "o", "đ": "d", "ð": "d", "þ": "th", "æ": "ae", "œ": "oe", "ß": "ss",
+})
 
 
-def _ml_words(spec: dict[str, tuple[str, str]], kind: str, value: str, words: str) -> None:
-    for word in words.split():
-        spec[word] = (kind, value)
+def _ml_fold(word: str) -> str:
+    """Case/diacritic fold Latin text without altering Cyrillic letters."""
+    out: list[str] = []
+    latin_base = False
+    for char in unicodedata.normalize("NFD", word.casefold().translate(_ML_SPECIAL_LATIN)):
+        if unicodedata.combining(char):
+            if not latin_base:
+                out.append(char)
+            continue
+        out.append(char)
+        latin_base = "LATIN" in unicodedata.name(char, "")
+    return unicodedata.normalize("NFC", "".join(out))
 
 
-_FI: dict[str, tuple[str, str]] = {}
-_ml_words(_FI, "verb", "put", "laita pane siirrä siirra")
-_ml_words(_FI, "color", "purple", "violetti violetit violetin purppura purppurat purppuran")
-_ml_words(_FI, "color", "orange", "oranssi oranssit oranssin")
-_ml_words(_FI, "color", "yellow", "keltainen keltaiset keltaisen")
-_ml_words(_FI, "shape", "cube", "kuutio kuutiot kuution kuutioita")
-_ml_words(_FI, "shape", "cylinder", "sylinteri sylinterit sylinterin sylintereitä sylintereita")
-_ml_words(_FI, "shape", "triangle", "prisma prismat prisman kolmio kolmiot kolmion")
-_ml_words(_FI, "direction", "left", "vasen vasemmalle vasempaan vasemmassa")
-_ml_words(_FI, "direction", "right", "oikea oikealle oikeaan oikeassa")
-_ml_words(_FI, "direction", "center", "keski keskelle keskimmäiseen keskimmainen keskimmäinen")
-_ml_words(_FI, "bin", "bin", "laatikko laatikkoon laatikossa lokero lokeroon lokerossa kori koriin")
-_ml_words(_FI, "and", "and", "ja")
-_ml_words(_FI, "filler", "", "kaikki ne nämä nama esine esineet kappale kappaleet objekti objektit")
-_ml_words(_FI, "filler", "", "menee menevät menevat kuuluu kuuluvat värinen väriset varinen variset")
-_ml_words(_FI, "filler", "", "ole hyvä hyva kiitos kohteeseen")
-
-_CZ: dict[str, tuple[str, str]] = {}
-_ml_words(_CZ, "verb", "put", "dej polož poloz přesuň presun hoď hod")
-_ml_words(_CZ, "color", "purple", "fialový fialovy fialové fialove fialovou fialová fialova")
-_ml_words(_CZ, "color", "orange", "oranžový oranzovy oranžové oranzove oranžovou oranzovou")
-_ml_words(_CZ, "color", "yellow", "žlutý zluty žluté zlute žlutou zlutou")
-_ml_words(_CZ, "shape", "cube", "kostka kostky kostku kostek")
-_ml_words(_CZ, "shape", "cylinder", "válec valec válce valce válců valcu")
-_ml_words(_CZ, "shape", "triangle", "hranol hranoly hranolů hranolu trojúhelník trojuhelnik")
-_ml_words(_CZ, "shape", "triangle", "trojúhelníky trojuhelniky")
-_ml_words(_CZ, "direction", "left", "doleva vlevo levý levy levé leve levého leveho")
-_ml_words(_CZ, "direction", "right", "doprava vpravo pravý pravy pravé prave pravého praveho")
-_ml_words(_CZ, "direction", "center", "doprostřed doprostred střed stredu středu prostřední prostredni")
-_ml_words(_CZ, "bin", "bin", "koš kos koše kose přihrádka prihradka přihrádky prihradky")
-_ml_words(_CZ, "bin", "bin", "krabice box boxu kontejner kontejneru")
-_ml_words(_CZ, "and", "and", "a")
-_ml_words(_CZ, "filler", "", "do na všechny vsechny vše vse objekty objekt předměty predmety předmět predmet")
-_ml_words(_CZ, "filler", "", "patří patri prosím prosim barvy barva kus kusy")
-
-# Only semantic words identify the language. Filler words and conjunctions are unsafe signals:
-# Czech "do" / "a", Finnish "ne", and the command word "pane" are all ordinary English words.
-_FI_SIGNAL = frozenset(w for w, (kind, _) in _FI.items()
-                       if kind in {"verb", "color", "shape", "direction", "bin"} and w != "pane")
-_CZ_SIGNAL = frozenset(w for w, (kind, _) in _CZ.items()
-                       if kind in {"verb", "color", "shape", "direction", "bin"} and w != "box")
-_ML_KEY = re.compile(r"^(?:C(?:S)?|S)(?:A(?:C(?:S)?|S))*$")
+def _ml_table(*rows: tuple[str, str, str]) -> dict[str, tuple[str, str]]:
+    table: dict[str, tuple[str, str]] = {}
+    for kind, value, words in rows:
+        for raw in words.split():
+            word = _ml_fold(raw)
+            token = (kind, value)
+            old = table.get(word)
+            if old is not None and old != token:
+                raise ValueError(f"ambiguous multilingual token {raw!r}: {old!r} / {token!r}")
+            table[word] = token
+    return table
 
 
-def _ml_language(words: list[str]) -> dict[str, tuple[str, str]] | None | bool:
-    """Return a language table, None for non-FI/CZ, or False for mixed/ambiguous language."""
-    fi = sum(w in _FI_SIGNAL for w in words)
-    cz = sum(w in _CZ_SIGNAL for w in words)
-    if not fi and not cz:
-        return None
-    if fi and cz:
-        return False
-    return _FI if fi else _CZ
+# English entries are used only after an unmistakably foreign semantic token is present. Pure
+# English bypasses this table and reaches the frozen resolver byte-identically.
+_ML_EN = _ml_table(
+    ("verb", "put", "put place sort move drop"),
+    ("color", "yellow", "yellow yellows"),
+    ("color", "purple", "purple purples violet violets lilac"),
+    ("color", "orange", "orange oranges red reds"),
+    ("color", "blue", "blue blues"),
+    ("shape", "cube", "cube cubes box boxes block blocks"),
+    ("shape", "cylinder", "cylinder cylinders can cans"),
+    ("shape", "triangle", "prism prisms triangle triangles roof roofs"),
+    ("direction", "left", "left"), ("direction", "center", "center centre middle"),
+    ("direction", "right", "right"),
+    ("bin", "bin", "bin bins basket baskets container containers compartment compartments slot slots"),
+    ("and", "and", "and"),
+    # `a` is a Czech/Slovak conjunction, an English/Romance article, and accent-folded French/
+    # Portuguese `à`. Lookup marks that one collision explicitly; the tiny grammar disambiguates it.
+    ("ambig_and", "and", "a"),
+    ("filler", "", "the all every object objects item items piece pieces one ones into in to on at of"),
+    ("filler", "", "please colored coloured goes go must should be is are i"),
+)
+
+_ML_LANGUAGES = {
+    "fi": _ml_table(
+        ("verb", "put", "laita pane siirrä järjestä pudota"),
+        ("color", "purple", "violetti violetit violetin violetteja purppura purppurat purppuran lila lilat"),
+        ("color", "orange", "oranssi oranssit oranssin oransseja punainen punaiset punaisen"),
+        ("color", "yellow", "keltainen keltaiset keltaisen keltaisia"),
+        ("color", "blue", "sininen siniset sinisen sinisiä"),
+        ("shape", "cube", "kuutio kuutiot kuution kuutioita rasia rasiat rasian palikka palikat palikan"),
+        ("shape", "cylinder", "sylinteri sylinterit sylinterin sylintereitä purkki purkit purkin"),
+        ("shape", "triangle", "prisma prismat prisman kolmio kolmiot kolmion katto katot katon"),
+        ("direction", "left", "vasen vasemmalle vasempaan vasemmassa vasemmalla"),
+        ("direction", "right", "oikea oikealle oikeaan oikeassa oikealla"),
+        ("direction", "center", "keski keskelle keskimmäiseen keskimmainen keskimmäinen keskellä"),
+        ("bin", "bin", "laatikko laatikkoon laatikossa lokero lokeroon lokerossa kori koriin korissa"),
+        ("and", "and", "ja"),
+        ("filler", "", "kaikki ne nämä nama esine esineet kappale kappaleet objekti objektit menee menevät"),
+        ("filler", "", "kuuluu kuuluvat värinen väriset ole hyvä hyva kiitos kohteeseen"),
+    ),
+    "cs": _ml_table(
+        ("verb", "put", "dej polož přesuň hoď třiď přemísti upusť"),
+        ("color", "purple", "fialový fialové fialovou fialová šeříkový šeříkové šeříkovou"),
+        ("color", "orange", "oranžový oranžové oranžovou červený červené červenou"),
+        ("color", "yellow", "žlutý žluté žlutou"), ("color", "blue", "modrý modré modrou"),
+        ("shape", "cube", "kostka kostky kostku kostek krabička krabičky krabičku blok bloky bloků"),
+        ("shape", "cylinder", "válec válce válců plechovka plechovky plechovku"),
+        ("shape", "triangle", "hranol hranoly hranolů trojúhelník trojúhelníky střecha střechy střechu"),
+        ("direction", "left", "doleva vlevo levý levé levého levém"),
+        ("direction", "right", "doprava vpravo pravý pravé pravého pravém"),
+        ("direction", "center", "doprostřed střed středu prostřední prostředního uprostřed"),
+        ("bin", "bin", "koš koše přihrádka přihrádky krabice boxu kontejner kontejneru"),
+        ("ambig_and", "and", "a"),
+        ("filler", "", "do na všechny vše objekty objekt předměty předmět patří prosím barvy barva kus kusy"),
+    ),
+    "de": _ml_table(
+        ("verb", "put", "lege leg stell stelle sortiere sortieren bewege verschiebe wirf lass fallen"),
+        ("color", "yellow", "gelb gelbe gelber gelbes gelben gelbem"),
+        ("color", "purple", "lila violett violette violetter violettes violetten fliederfarben fliederfarbene"),
+        ("color", "orange", "orange oranges orangene orangener orangen rot rote roter rotes roten rotem"),
+        ("color", "blue", "blau blaue blauer blaues blauen blauem"),
+        ("shape", "cube", "würfel würfels würfeln schachtel schachteln block blöcke blöcken klotz klötze"),
+        ("shape", "cylinder", "zylinder zylinders zylindern dose dosen büchse büchsen"),
+        ("shape", "triangle", "prisma prismas prismen dreieck dreiecke dach dächer dächern"),
+        ("direction", "left", "links linke linker linkes linken linkem"),
+        ("direction", "center", "mitte mittig mittlere mittlerer mittleres mittleren mittlerem zentral"),
+        ("direction", "right", "rechts rechte rechter rechtes rechten rechtem"),
+        ("bin", "bin", "behälter behälters behältern fach fächer fächern korb körbe körben kiste kisten"),
+        ("and", "and", "und"),
+        ("filler", "", "der die das den dem des ein eine einen einem einer alle allen allem aller"),
+        ("filler", "", "in ins im nach zu zur zum auf bitte gehört gehören objekte gegenstände"),
+    ),
+    "sv": _ml_table(
+        ("verb", "put", "lägg placera sortera flytta släpp"),
+        ("color", "yellow", "gul gula gult"),
+        ("color", "purple", "lila violett violetta syrenfärgad syrenfärgade"),
+        ("color", "orange", "orange orangea röd röda rött"), ("color", "blue", "blå blåa blått"),
+        ("shape", "cube", "kub kuben kuber kuberna låda lådan lådor block blocket blocken kloss klossar"),
+        ("shape", "cylinder", "cylinder cylindern cylindrar burk burken burkar"),
+        ("shape", "triangle", "prisma prismat prismor triangel triangeln trianglar tak taket"),
+        ("direction", "left", "vänster vänstra vänstert"),
+        ("direction", "center", "mitten mitt mellersta centrum centrala"),
+        ("direction", "right", "höger högra högert"),
+        ("bin", "bin", "behållare behållaren behållarefack fack facket korg korgen korgar"),
+        ("and", "and", "och"),
+        ("filler", "", "den det de en ett alla i in till på snälla objekten föremålen hör ska"),
+    ),
+    "es": _ml_table(
+        ("verb", "put", "pon coloca ordena clasifica mueve traslada deja suelta"),
+        ("color", "yellow", "amarillo amarilla amarillos amarillas"),
+        ("color", "purple", "morado morada morados moradas púrpura violetas violeta lila lilas"),
+        ("color", "orange", "naranja naranjas rojo roja rojos rojas"),
+        ("color", "blue", "azul azules"),
+        ("shape", "cube", "cubo cubos caja cajas bloque bloques"),
+        ("shape", "cylinder", "cilindro cilindros lata latas bote botes"),
+        ("shape", "triangle", "prisma prismas triángulo triángulos tejado tejados techo techos"),
+        ("direction", "left", "izquierda izquierdo izquierdas izquierdos"),
+        ("direction", "center", "centro central medio media"),
+        ("direction", "right", "derecha derecho derechas derechos"),
+        ("bin", "bin", "contenedor contenedores cesta cestas compartimento compartimentos cubeta cubetas"),
+        ("and", "and", "y"),
+        ("filler", "", "el la los las un una unos unas todos todas al del en hacia por favor objetos piezas va van"),
+    ),
+    "fr": _ml_table(
+        ("verb", "put", "mets mettez place placez trie triez déplace déplacez lâche lâchez"),
+        ("color", "yellow", "jaune jaunes"),
+        ("color", "purple", "violet violette violets violettes pourpre pourpres lilas"),
+        ("color", "orange", "orange oranges rouge rouges"), ("color", "blue", "bleu bleue bleus bleues"),
+        ("shape", "cube", "cube cubes boîte boîtes bloc blocs"),
+        ("shape", "cylinder", "cylindre cylindres canette canettes boîteconserve boîtesconserve"),
+        ("shape", "triangle", "prisme prismes triangle triangles toit toits"),
+        ("direction", "left", "gauche gauches"),
+        ("direction", "center", "centre centres central centrale milieu"),
+        ("direction", "right", "droite droit droites droits"),
+        ("bin", "bin", "bac bacs panier paniers compartiment compartiments conteneur conteneurs"),
+        ("and", "and", "et"),
+        ("filler", "", "le la les un une des du de au aux dans vers tous toutes objets pièces va vont l"),
+    ),
+    "it": _ml_table(
+        ("verb", "put", "metti mettete colloca collocate ordina smista sposta lascia lasciare"),
+        ("color", "yellow", "giallo gialla gialli gialle"),
+        ("color", "purple", "viola violetto violetta violetti violette lilla"),
+        ("color", "orange", "arancione arancioni rosso rossa rossi rosse"),
+        ("color", "blue", "blu azzurro azzurra azzurri azzurre"),
+        ("shape", "cube", "cubo cubi scatola scatole blocco blocchi"),
+        ("shape", "cylinder", "cilindro cilindri lattina lattine barattolo barattoli"),
+        ("shape", "triangle", "prisma prismi triangolo triangoli tetto tetti"),
+        ("direction", "left", "sinistra sinistro sinistre sinistri"),
+        ("direction", "center", "centro centrale mezzo metà"),
+        ("direction", "right", "destra destro destre destri"),
+        ("bin", "bin", "contenitore contenitori cestino cestini scomparto scomparti cesto cesti"),
+        ("and", "and", "e"),
+        ("filler", "", "il lo la gli le un uno una tutti tutte nel nella nei nelle al alla in verso per favore oggetti pezzi"),
+    ),
+    "pl": _ml_table(
+        ("verb", "put", "połóż połóżcie umieść umieście sortuj przenieś przesuń upuść wrzuć"),
+        ("color", "yellow", "żółty żółta żółte żółci żółtą żółtego żółtych"),
+        ("color", "purple", "fioletowy fioletowa fioletowe fioletową fioletowego fioletowych liliowy liliowa liliowe"),
+        ("color", "orange", "pomarańczowy pomarańczowa pomarańczowe pomarańczową czerwony czerwona czerwone czerwoną"),
+        ("color", "blue", "niebieski niebieska niebieskie niebieską niebieskiego niebieskich"),
+        ("shape", "cube", "sześcian sześciany sześcianu sześcianem kostka kostki kostkę pudełko pudełka blok bloki bloków"),
+        ("shape", "cylinder", "walec walce walca walców puszka puszki puszkę"),
+        ("shape", "triangle", "graniastosłup graniastosłupy pryzmat pryzmaty trójkąt trójkąty dach dachy"),
+        ("direction", "left", "lewo lewa lewy lewe lewej lewego lewym"),
+        ("direction", "center", "środek środka środku centralny centralna centralne"),
+        ("direction", "right", "prawo prawa prawy prawe prawej prawym"),
+        ("bin", "bin", "pojemnik pojemnika pojemniku pojemniki kosz kosza koszu przegródka przegródki"),
+        ("and", "and", "oraz"),
+        ("filler", "", "do na w we wszystkie wszyscy każdy każda każdego proszę obiekty przedmioty kawałki należy należą"),
+    ),
+    "pt": _ml_table(
+        ("verb", "put", "põe ponha coloque coloca ordene classifique mova desloque largue solte"),
+        ("color", "yellow", "amarelo amarela amarelos amarelas"),
+        ("color", "purple", "roxo roxa roxos roxas púrpura violetas violeta lilás lilases"),
+        ("color", "orange", "laranja laranjas vermelho vermelha vermelhos vermelhas"),
+        ("color", "blue", "azul azuis"),
+        ("shape", "cube", "cubo cubos caixa caixas bloco blocos"),
+        ("shape", "cylinder", "cilindro cilindros lata latas"),
+        ("shape", "triangle", "prisma prismas triângulo triângulos telhado telhados teto tetos"),
+        ("direction", "left", "esquerda esquerdo esquerdas esquerdos"),
+        ("direction", "center", "centro central meio média"),
+        ("direction", "right", "direita direito direitas direitos"),
+        ("bin", "bin", "recipiente recipientes cesto cestos compartimento compartimentos contentor contentores"),
+        ("and", "and", "e"),
+        ("filler", "", "o os as um uma uns umas todos todas no na nos nas ao em para por favor objetos peças vai vão"),
+    ),
+    "uk": _ml_table(
+        ("verb", "put", "поклади покладіть помісти помістіть сортуй сортуйте пересунь перемісти кинь покинь poklady pokladit pomisty sortuy peresun peremisty kyn"),
+        ("color", "yellow", "жовтий жовта жовте жовті жовтого жовту zhovtyi zhovta zhovte zhovti"),
+        ("color", "purple", "фіолетовий фіолетова фіолетове фіолетові фіолетову бузковий бузкова бузкове бузкові fioletovyi fioletova fioletovi buzkovyi buzkova"),
+        ("color", "orange", "помаранчевий помаранчева помаранчеве помаранчеві червоний червона червоне червоні червону pomaranchevyi pomarancheva chervonyi chervona chervoni"),
+        ("color", "blue", "синій синя синє сині синього синю synii synia synie syni"),
+        ("shape", "cube", "куб куби куба кубом коробка коробки коробку блок блоки kub kuby korobka blok bloky"),
+        ("shape", "cylinder", "циліндр циліндри циліндра банка банки банку tsylindr tsylindry banka banky"),
+        ("shape", "triangle", "призма призми призму трикутник трикутники дах дахи pryzma pryzmy trykutnyk dakh dakhy"),
+        ("direction", "left", "ліворуч лівий ліва ліве лівому livoruch livyi liva live"),
+        ("direction", "center", "центр центрі середина середині центральний tsentr tsentri seredyna seredyni"),
+        ("direction", "right", "праворуч правий права праве правому pravoruch pravyi prava prave"),
+        ("bin", "bin", "кошик кошика кошику контейнер контейнера контейнері відсік відсіку koshyk konteiner vidsik"),
+        ("and", "and", "і та й ta"),
+        ("filler", "", "у в до на всі усе будь ласка обєкти предмети має мають іде йде bud laska vsi use"),
+    ),
+    "ru": _ml_table(
+        ("verb", "put", "положи положите помести поместите сортируй отсортируй перемести передвинь брось polozhi polozhite pomesti sortiruy otsortiruy peremesti peredvin bros"),
+        ("color", "yellow", "жёлтый желтый жёлтая желтая жёлтое желтое жёлтые желтые жёлтого желтого жёлтую желтую zheltyy zheltaya zheltoe zheltye"),
+        ("color", "purple", "фиолетовый фиолетовая фиолетовое фиолетовые сиреневый сиреневая сиреневое сиреневые fioletovyy fioletovaya fioletovye sirenevyy sirenevaya"),
+        ("color", "orange", "оранжевый оранжевая оранжевое оранжевые красный красная красное красные красную oranzhevyy oranzhevaya krasnyy krasnaya krasnye"),
+        ("color", "blue", "синий синяя синее синие синего синюю siniy sinyaya sinee sinie"),
+        ("shape", "cube", "куб кубы куба кубом коробка коробки коробку блок блоки kub kuby korobka blok bloki"),
+        ("shape", "cylinder", "цилиндр цилиндры цилиндра банка банки банку tsilindr tsilindry banka banki"),
+        ("shape", "triangle", "призма призмы призму треугольник треугольники крыша крыши prizma prizmy treugolnik krysha kryshi"),
+        ("direction", "left", "влево слева левый левая левое левую левом vlevo sleva levyy levaya"),
+        ("direction", "center", "центр центре середина середине центральный tsentr tsentre seredina seredine"),
+        ("direction", "right", "вправо справа правый правая правое правом vpravo sprava pravyy pravaya"),
+        ("bin", "bin", "корзина корзины корзину контейнер контейнера контейнере отсек отсеке korzina konteyner otsek"),
+        ("and", "and", "и а"),
+        ("filler", "", "в во на до все всё пожалуйста объекты предметы должен должны идет идут vse pozhaluysta obekty predmety"),
+    ),
+    "sk": _ml_table(
+        ("verb", "put", "daj polož presuň premiestni trieď zoraď hoď pusť"),
+        ("color", "yellow", "žltý žltá žlté žltí žltého žltú"),
+        ("color", "purple", "fialový fialová fialové fialoví fialového fialovú orgovánový orgovánová orgovánové"),
+        ("color", "orange", "oranžový oranžová oranžové oranžoví oranžového oranžovú červený červená červené červenú"),
+        ("color", "blue", "modrý modrá modré modrí modrého modrú"),
+        ("shape", "cube", "kocka kocky kocku kociek škatuľa škatule škatuľu blok bloky blokov"),
+        ("shape", "cylinder", "valec valce valca valcov plechovka plechovky plechovku"),
+        ("shape", "triangle", "hranol hranoly hranola hranolov trojuholník trojuholníky strecha strechy"),
+        ("direction", "left", "doľava vľavo ľavý ľavá ľavé ľavého ľavom"),
+        ("direction", "center", "stred strede stredu uprostred prostredný prostredná prostredné"),
+        ("direction", "right", "doprava vpravo pravý pravá pravé pravom"),
+        ("bin", "bin", "kôš koša koši priehradka priehradky priehradku kontajner kontajnera kontajneri"),
+        ("ambig_and", "and", "a"),
+        ("filler", "", "do na v vo všetky všetko každý každá prosím objekty predmety kusy patrí patria"),
+    ),
+}
+
+# Foreign semantic tokens that are also ordinary English words. They remain usable once another
+# foreign signal is present, but cannot by themselves divert an English instruction into this path.
+_ML_UNSAFE_SIGNALS = frozenset({"pane", "leg", "lass", "fallen", "mitt", "media", "viola"})
+
+
+def _ml_merge() -> tuple[dict[str, tuple[str, str]], frozenset[str]]:
+    lexicon = dict(_ML_EN)
+    signals: set[str] = set()
+    for table in _ML_LANGUAGES.values():
+        for word, token in table.items():
+            old = lexicon.get(word)
+            if old is not None and old != token:
+                raise ValueError(f"ambiguous multilingual token {word!r}: {old!r} / {token!r}")
+            lexicon[word] = token
+            if (token[0] in {"verb", "color", "shape", "direction", "bin"}
+                    and word not in _ML_EN and word not in _ML_UNSAFE_SIGNALS):
+                signals.add(word)
+    return lexicon, frozenset(signals)
+
+
+_ML_LEXICON, _ML_SIGNALS = _ml_merge()
 
 
 def _ml_split(tokens: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
     """Split `X left and Y right`, but retain `X and Y left` as a many-to-one clause."""
     for i, (kind, _) in enumerate(tokens):
-        if kind != "and":
+        if kind not in {"and", "ambig_and"}:
             continue
         before, after = tokens[:i], tokens[i + 1:]
         if (any(k == "direction" for k, _ in before)
@@ -318,6 +528,20 @@ def _ml_clause(tokens: list[tuple[str, str]]) -> str | None:
     if sum(k == "verb" for k, _ in tokens) > 1:
         return None
     core = [(k, v) for k, v in tokens if k not in ("verb", "filler")]
+    # `a` is a conjunction between selectors, but an article/preposition everywhere else.
+    disambiguated = []
+    for i, (kind, value) in enumerate(core):
+        if kind != "ambig_and":
+            disambiguated.append((kind, value))
+        elif (i and i + 1 < len(core) and core[i - 1][0] in {"color", "shape"}
+              and core[i + 1][0] in {"color", "shape"}):
+            disambiguated.append(("and", value))
+    core = disambiguated
+    while core and core[0][0] == "and":
+        core.pop(0)
+    while core and core[-1][0] == "and":
+        core.pop()
+    core = [item for i, item in enumerate(core) if item[0] != "and" or not i or core[i - 1][0] != "and"]
     dirs = [(i, v) for i, (k, v) in enumerate(core) if k == "direction"]
     bins = [i for i, (k, _) in enumerate(core) if k == "bin"]
     if len(dirs) != 1 or len(bins) > 1:
@@ -328,29 +552,46 @@ def _ml_clause(tokens: list[tuple[str, str]]) -> str | None:
     key_items = [(i, k, v) for i, (k, v) in enumerate(core) if k not in ("direction", "bin")]
     if not key_items or any(i < di for i, _, _ in key_items) and any(i > di for i, _, _ in key_items):
         return None
-    kinds = "".join({"color": "C", "shape": "S", "and": "A"}.get(k, "?") for _, k, _ in key_items)
-    if not _ML_KEY.fullmatch(kinds):
+    groups: list[list[tuple[str, str]]] = [[]]
+    for _, kind, value in key_items:
+        if kind == "and":
+            if not groups[-1]:
+                return None
+            groups.append([])
+        elif kind in {"color", "shape"}:
+            groups[-1].append((kind, value))
+        else:
+            return None
+    if (not groups[-1] or any(len(group) > 2 or len({kind for kind, _ in group}) != len(group)
+                              for group in groups)):
         return None
-    keys = " ".join("and" if k == "and" else v for _, k, v in key_items)
+    # Romance languages normally say noun then adjective (`cubo amarillo`); canonical English
+    # needs adjective then noun (`yellow cube`).
+    selectors = [" ".join(value for kind, value in sorted(group, key=lambda item: item[0] == "shape"))
+                 for group in groups]
+    keys = " and ".join(selectors)
     return f"put {keys} in the {direction} bin"
 
 
+@functools.cache
 def canonicalize_multilingual(sentence: str) -> str:
-    """Conservatively map supported Finnish/Czech commands to resolver English.
+    """Conservatively map supported multilingual commands to resolver English once per string.
 
     Common commands cover verb-first, object-first and destination-first orders; singular/plural
-    colour and shape selectors; adjective or adverb destinations; shared destinations; and lists
-    joined by Finnish ``ja`` / Czech ``a``. Any detected foreign instruction outside that grammar
-    becomes an opaque unparsed marker. With instruction.strict this resolves to ``default: None``.
-    English and other non-detected text is returned byte-identically.
+    colour and shape selectors; inflected adjective or adverb destinations; shared destinations;
+    code-switching; Latin text with or without diacritics; and Cyrillic or transliteration. Any
+    detected foreign instruction outside that grammar becomes an opaque unparsed marker. With
+    instruction.strict this resolves to ``default: None``. English and other non-detected text is
+    returned byte-identically.
     """
-    words = [m.group(0).casefold() for m in _ML_WORD.finditer(sentence)]
-    language = _ml_language(words)
-    if language is None:
+    if not isinstance(sentence, str):
+        return _ML_UNPARSED
+    words = [_ml_fold(m.group(0)) for m in _ML_WORD.finditer(sentence)]
+    if not any(word in _ML_SIGNALS for word in words):
         return sentence
     residue = _ML_WORD.sub("", sentence)
-    if (language is False or not words or any(w not in language for w in words)
-            or re.search(r"[^\s,;:.!?-]", residue)):
+    if (not words or any(word not in _ML_LEXICON for word in words)
+            or re.search(r"[^\s,;:.!?\-'’]", residue)):
         return _ML_UNPARSED
 
     # Punctuation separates the common comma/semicolon/full-stop instruction lists. Conjunctions
@@ -358,8 +599,8 @@ def canonicalize_multilingual(sentence: str) -> str:
     raw_parts = [p for p in re.split(r"[,;:.!?]+", sentence) if p.strip()]
     clauses: list[str] = []
     for part in raw_parts:
-        part_words = [m.group(0).casefold() for m in _ML_WORD.finditer(part)]
-        classified = [language[w] for w in part_words]
+        part_words = [_ml_fold(m.group(0)) for m in _ML_WORD.finditer(part)]
+        classified = [_ML_LEXICON[word] for word in part_words]
         for clause in _ml_split(classified):
             canonical = _ml_clause(clause)
             if canonical is None:
