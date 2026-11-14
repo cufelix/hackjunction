@@ -134,7 +134,7 @@ class TestFlags(unittest.TestCase):
         expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
         expect["finals_r19"] = expect["finals_r18"] | {"perception.hue_guard.enabled", "instruction.max_chars", "safety.nan_guard",
                                                         "instruction.strict"}   # r18 + hue + fuzz + strict
-        expect["finals_r19b"] = expect["finals_r19"] | {"policy.safety_shell"}   # P0 Hz
+        expect["finals_r19b"] = expect["finals_r19"] | {"policy.safety_shell", "perception.color_gate.sat_floor"}   # P0 Hz
         expect["finals_r19c"] = (expect["finals_r19"] | {"policy.safety_shell"}) - {"perception.online_pitch_cal", "perception.color_gate.enabled",
                                                                               "perception.color_gate.live_bins", "perception.color_gate.fk_mask"}
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.vote.enabled", "bin.geometry_runtime", "grasp.held_detector",

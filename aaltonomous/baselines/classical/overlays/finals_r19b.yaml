@@ -54,3 +54,4 @@ flags:
   safety.nan_guard: true                        # r19 fuzz   non-finite arm_q/hand_q -> hold last emitted action
   instruction.strict: true                      # r19 Felix  never guess a bin: abstain (0) instead of FIXED/inferred (-1); Timi OK
   policy.safety_shell: true                     # r19b P0 Hz  act() never blocks; vel_reserve stays 0 (plans untouched)
+  perception.color_gate.sat_floor: true

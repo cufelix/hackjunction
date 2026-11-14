@@ -58,3 +58,4 @@ flags:
   bin.geometry_runtime: true                    # r20 R2  every bin consumer follows the voted shift
   grasp.held_detector: finger_sum               # r20     bias-corrected held; empty close aborted early
   calib.plane.apply_height: true                # r20 R9  runtime counter_z from the depth plane (real table +5..14 cm), clamp 0.20, nominal fallback
+  perception.color_gate.sat_floor: true
