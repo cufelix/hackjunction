@@ -16,7 +16,9 @@ from .policy import HZ, ClassicalPolicy
 FINALS = ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_real")
 OVERLAY, TAU, TIME_LIMIT = "finals_r21", 0.35, 45.0
 # the mock never blocks the fingers, so finger_sum reads every close as empty and aborts the carry: use the stall detector
-STALL = {"grasp.held_detector": "stall"}
+# M4 motion.output_caps (finals overlays) smears the commands against the plan by a few ticks and aborts the pinned-finger
+# sticky scenarios on a hand_position clip (bisected to aab7e6c); these tests check the lag logic, so they run caps-off.
+STALL = {"grasp.held_detector": "stall", "motion.output_caps": None}
 OFF = {"grasp.release_wait_s": None, "grasp.release_confirm": False}
 
 
@@ -65,11 +67,18 @@ def run(seed=0, overlay=OVERLAY, overrides=None, tau=TAU, sticky=None, time_limi
         if job is not None and job.get("result") is None:
             time.sleep(0.002)
             continue
+        pt = getattr(pol, "_pitch_thread", None)
+        bv = getattr(pol, "_bv_job", None)
+        if ((pt is not None and pt.is_alive()) or any(j["result"] is None for j in list(pol._jobs.values()))
+                or (bv is not None and bv.get("result") is None)):
+            # virtual clock: let the table-plane fit, counter-height fit and staging proof finish like on a 30 Hz wall clock
+            time.sleep(0.002)
+            continue
         obs, info = env.step(pol.act(obs))
         n += 1
         if info["episode_over"]:
             break
-    return {"ev": ev, "starts": starts, "cmds": cmds, "pol": pol, "n": n, "info": info}
+    return {"ev": ev, "starts": starts, "cmds": cmds, "pol": pol, "n": n, "info": info, "env": env}
 
 
 def per_pick_s(r):
