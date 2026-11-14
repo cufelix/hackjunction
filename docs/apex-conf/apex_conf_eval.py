@@ -99,7 +99,7 @@ def main():
     clouds, labs = load(a.npz, [int(x) for x in a.xy_cols.split(",")])
     order = a.int_labels.split(",")
     import cv2
-    rows, by = [], {}
+    rows, by, byang = [], {}, {}
     for i, (xy, l) in enumerate(zip(clouds, labs)):
         l = norm_label(l, order)
         xy = xy[np.all(np.isfinite(xy), axis=1)]
@@ -109,14 +109,25 @@ def main():
         if len(xy) >= 5:
             _, _, r = P.triangle_fit(xy)
             fill = float(cv2.contourArea(cv2.convexHull(xy.astype(np.float32)))) / (3.0 * np.sqrt(3.0) * r * r)
-        rows.append((i, l, len(xy), conf, r, fill))
+        ang = None
+        if len(xy) >= 5:
+            _, tri = cv2.minEnclosingTriangle(xy.astype(np.float32).reshape(-1, 1, 2))
+            t = tri.reshape(3, 2).astype(float)
+            angs = []
+            for k in range(3):
+                u, w = t[(k + 1) % 3] - t[k], t[(k + 2) % 3] - t[k]
+                angs.append(np.degrees(np.arccos(np.clip(u @ w / (np.linalg.norm(u) * np.linalg.norm(w) + 1e-12), -1, 1))))
+            ang = float(max(angs))
+        rows.append((i, l, len(xy), conf, r, fill, ang))
         by.setdefault(l, []).append(conf)
+        byang.setdefault(l, []).append(ang)
     print(f"samples {len(rows)}; altitude {a.altitude} m; min_points {a.min_points}")
     for l in sorted(by):
         v = by[l]
         ok = [x for x in v if x is not None]
         hi = sum(x >= 0.5 for x in ok)
         print(f"  {l:9s} n={len(v):3d} None={len(v) - len(ok):2d} apex_conf {dist(v)} | >=0.5: {hi}/{len(v)}")
+        print(f"  {'':9s} max vertex angle of min enclosing triangle (deg): {dist(byang[l])}")
     tri = [x for x in by.get("triangle", []) if x is not None]
     oth = [x for l in ("cube", "cylinder") for x in by.get(l, []) if x is not None]
     if tri and oth:
@@ -125,10 +136,14 @@ def main():
             tp_ = sum(x >= t for x in tri)
             fp = sum(x >= t for x in oth)
             print(f"  threshold {t}: triangles kept {tp_}/{len(by['triangle'])}, cube/cyl passing as triangle {fp}/{len(oth)}")
+    ta = [x for x in byang.get("triangle", []) if x is not None]
+    oa = [x for l in ("cube", "cylinder") for x in byang.get(l, []) if x is not None]
+    if ta and oa:
+        print(f"max-angle gap min(cube,cyl) - max(triangle) = {min(oa) - max(ta):+.1f} deg  (positive = separable; prism ~60, cut cube >= 90)")
     out = Path(a.npz).with_name("apex_conf.csv")
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["index", "label", "n_points", "apex_conf", "inradius_m", "fill"])
+        w.writerow(["index", "label", "n_points", "apex_conf", "inradius_m", "fill", "max_vertex_angle_deg"])
         w.writerows(rows)
     print("per-sample table:", out)
 
