@@ -100,6 +100,24 @@ class ClassicalPolicy:
             except Exception as e:
                 self.hand_calib = None
                 (log or print)(f"hand calibration disabled: {type(e).__name__}: {e}")
+        # calib.hand_icp_primary: self-contained fitter + generation-guarded executor. Construction (URDF/FK asset load)
+        # is outside the episode watchdog. The policy only polls it and emits holds until the result is ready.
+        self.primary_calibration = None
+        ccfg = self.cfg.get("calib") or {}
+        self.primary_calibration_enabled = bool(ccfg.get("hand_icp_primary", False))
+        if ccfg.get("hand_icp_primary", False) or ccfg.get("counter_after_hand", False):
+            try:
+                from .calibration_fit import AsyncCalibrationPhase, CounterHeightTracker, PrimaryCalibrationFitter
+                primary = PrimaryCalibrationFitter(ccfg.get("primary_fit") or {},
+                                                   crosscheck=ccfg.get("refit_per_look", False))
+                if ccfg.get("hand_icp_primary", False):
+                    self.primary_calibration = AsyncCalibrationPhase(primary, ccfg.get("primary_fit") or {})
+                if ccfg.get("counter_after_hand", False):
+                    self.perception.counter_tracker = CounterHeightTracker(
+                        primary, ccfg.get("counter_fit") or {}, self.scene.nominal_counter_z)
+            except Exception as exc:
+                self.primary_calibration = None
+                (log or print)(f"primary calibration disabled: {type(exc).__name__}: {exc}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         # calib.fk_xcheck (FLAG, default OFF, log-only): RGB head-pose cross-check vs the Dex3 hand FK. Its own
         # ArmKinematics: the worker thread must never touch the planner's pinocchio data.
@@ -267,6 +285,12 @@ class ClassicalPolicy:
         self._hc_prev_q = None
         self._hc_job = None
         self._hc_still = 0
+        self._primary_done = not self.primary_calibration_enabled
+        self._primary_result = None
+        self._primary_counter_tries = 0
+        self._last_motion_time = None
+        if self.primary_calibration is not None:
+            self.primary_calibration.reset()
         self.last_bin_detections = []
         self.used_drop_slots = {name: set() for name in self.scene.bin_names}
         self.reserved_drop_slots = {name: set() for name in self.scene.bin_names}
@@ -453,6 +477,74 @@ class ClassicalPolicy:
         self._note(t, f"hand calibration {'accepted' if res.success else 'fallback'} (try {self._hc_tries}): "
                       f"{res.summary()}")
 
+    def _calibration_frame(self, obs):
+        """Metadata consumed only by the opt-in stale-frame guards."""
+        aq = np.asarray(obs.get("arm_q"), float)
+        hq = np.asarray(obs.get("hand_q"), float)
+        stamps = [float(obs.get("t", 0.0))]
+        stamps.extend(float(obs[k]) for k in ("head_timestamp", "joint_timestamp") if obs.get(k) is not None)
+        return {"timestamp": min(stamps),
+                "joints": np.r_[aq, hq], "last_motion_time": self._last_motion_time}
+
+    def _primary_calibration_step(self, obs, t):
+        """Return True while the pre-motion phase owns the state machine and act() must emit only a hold."""
+        if self._primary_done:
+            return False
+        if self.primary_calibration is None:
+            prior = self.scene.nominal_counter_z + float(
+                self.cfg["calib"]["primary_fit"].get("fallback_counter_dz_m", 0.15))
+            self.perception.set_camera_pose(self.perception.current_T())
+            self.scene.counter_z_runtime = prior
+            self._primary_done = True
+            self._note(t, f"[primary_calib] unavailable: nominal extrinsic, counter_z prior={prior:.3f}")
+            return False
+        if self._primary_result is None:
+            try:
+                update = self.primary_calibration.advance(
+                    self.perception.cal, self.perception.cam, obs.get("head_depth"), obs.get("arm_q"),
+                    obs.get("hand_q"), self._calibration_frame(obs)["timestamp"], self.scene.nominal_counter_z,
+                    self._last_motion_time)
+            except Exception as exc:
+                update = None
+                self._note(t, f"[primary_calib] worker adapter failed: {type(exc).__name__}: {exc}")
+            if update is None or (not update.hold and update.result is None):
+                # The worker itself failed/timed out. Preserve the explicit final fallback.
+                self.perception.set_camera_pose(self.perception.current_T())
+                self.scene.counter_z_runtime = self.scene.nominal_counter_z + float(
+                    self.cfg["calib"]["primary_fit"].get("fallback_counter_dz_m", 0.15))
+                self._primary_done = True
+                self._note(t, f"[primary_calib] nominal fallback ({'unknown' if update is None else update.reason})")
+                return False
+            if update.result is None:
+                return True
+            result = update.result
+            self._primary_result = result
+            self.perception.set_camera_pose(result.T)
+            for name, passed, detail in result.checks:
+                self._note(t, f"[primary_calib/check] {name}: {'PASS' if passed else 'FAIL'} {detail}")
+            self._note(t, f"[primary_calib] {result.summary()}")
+            if result.source == "nominal":
+                self.scene.counter_z_runtime = result.counter_z
+                self._primary_done = True
+                return False
+        if self.cfg["calib"].get("counter_after_hand", False):
+            self._primary_counter_tries += 1
+            update = self.perception.update_counter_height(obs.get("head_depth"), self._calibration_frame(obs))
+            if update is not None and update.committed:
+                self._primary_done = True
+                return False
+            limit = int((self.cfg["calib"].get("counter_fit") or {}).get("max_tries", 12))
+            if self._primary_counter_tries >= limit:
+                prior = self.scene.nominal_counter_z + float(
+                    self.cfg["calib"]["primary_fit"].get("fallback_counter_dz_m", 0.15))
+                self.scene.counter_z_runtime = prior
+                self._primary_done = True
+                self._note(t, f"[counter_after_hand] fallback after {limit} tries: counter_z prior={prior:.3f}")
+                return False
+            return True
+        self._primary_done = True
+        return False
+
     def confirm(self):
         self._decision = "go"
 
@@ -471,6 +563,8 @@ class ClassicalPolicy:
         if self.fk_xcheck_enabled:   # before both paths: the safety shell's act() is the same entry point
             self._poll_fk_xcheck(obs, float(obs.get("t", 0.0)))
         res = self._act_shell(obs) if self._shell else self._act(obs)
+        if not getattr(self, "_last_action_steady", True):
+            self._last_motion_time = float(obs.get("t", 0.0))
         if ng:
             a, h = np.asarray(res["arm_q_target"], float), np.asarray(res["hand_q_target"], float)
             if len(a) and len(h):
@@ -635,7 +729,10 @@ class ClassicalPolicy:
             elif obs.get("hand_q") is not None:
                 self.held_detector.observe(t, self._held_command(), obs["hand_q"])
         self._joint_offset_diag(obs, t)
-        if (not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False)
+        if self._primary_calibration_step(obs, t):
+            return self._hold()
+        if (not self.cfg.get("calib", {}).get("hand_icp_primary", False)
+                and not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False)
                 and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
             self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
         if not self._calibration_done and (self.cfg["perception"].get("self_calibration") or {}).get("enabled", False):
@@ -775,7 +872,8 @@ class ClassicalPolicy:
         """online_pitch_cal ON: the first look must not run on the nominal extrinsics before the fit committed (it would
         see 0 detections and end the episode). True = hold this tick (max PITCH_WAIT_S from the episode start). Threaded:
         never blocks. Not threaded: bounded join of the fit worker. Flag off: always False."""
-        if not self.cfg["perception"].get("online_pitch_cal", False) or self.pitch_calibration is not None:
+        if (self.cfg.get("calib", {}).get("hand_icp_primary", False)
+                or not self.cfg["perception"].get("online_pitch_cal", False) or self.pitch_calibration is not None):
             return False
         if t - getattr(self, "_ep_t0", t) >= self.PITCH_WAIT_S:
             return False
@@ -806,15 +904,21 @@ class ClassicalPolicy:
         return {"robot_q": (np.asarray(obs["arm_q"], float),
                             None if obs.get("hand_q") is None else np.asarray(obs["hand_q"], float))}
 
+    def _counter_kw(self, obs):
+        if not self.cfg.get("calib", {}).get("counter_after_hand", False):
+            return {}
+        return {"calibration_frame": self._calibration_frame(obs)}
+
     def _look(self, obs):
         verify = self._verify_on()
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
-            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs))
+            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs),
+                                          **self._counter_kw(obs))
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
             return self._choose_retry(dets, obs, verify=False)
         dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
-                                                   **self._detect_kw(), **self._fk_kw(obs))
+                                                   **self._detect_kw(), **self._fk_kw(obs), **self._counter_kw(obs))
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
@@ -2261,6 +2365,7 @@ class ClassicalPolicy:
         """Build the action dict; keep its last command for debug.log_joint_offset only (flag off: nothing retained)."""
         out = {"arm_q_target": np.asarray(a, float).copy(), "hand_q_target": np.asarray(h, float).copy(),
                "done": bool(done)}
+        self._last_action_steady = bool(steady)
         if (self.cfg.get("debug") or {}).get("log_joint_offset", False):
             self._last_policy_arm_cmd = out["arm_q_target"][-1].copy()
             self._last_policy_hand_cmd = out["hand_q_target"][-1].copy()
