@@ -31,6 +31,9 @@ from .bin_vote import bin_geometry
 from .kinematics import ArmKinematics
 from .config import soft_hand_active, soft_overclose
 
+# Handle grasps only: release this far inside the bin's near inner wall when the stock release cannot be carried to.
+HANDLE_NEAR_RIM_INSET_M = 0.03
+
 
 def lookup_bin(cfg, mapping, color, shape=None):
     """Target bin of a detection. policy.bin_lookup: colour (stock: mapping[colour]) | resolve_bin (scene.resolve_bin:
@@ -295,10 +298,11 @@ class Planner:
         sh = self.bin_geometry(name)["shift"]
         return c + sh if sh is not None else c
 
-    def _drop_xy0(self, name):
+    def _drop_xy0(self, name, inset=False):
         """Release point (pelvis xy) in bin `name`: the point of the inner footprint nearest the pelvis, `grasp.drop_inset`
-        inside the inner walls (the published box row puts the box centres past the arm's reach). None -> centre."""
-        inset = self.cfg["grasp"].get("drop_inset")
+        inside the inner walls (the published box row puts the box centres past the arm's reach). None -> centre.
+        `inset` overrides grasp.drop_inset (the handle near-rim retry)."""
+        inset = self.cfg["grasp"].get("drop_inset") if inset is False else inset
         c = self._bin_xy0(name)
         if inset is None:
             return c
@@ -1332,6 +1336,26 @@ class Planner:
             carry, lower, retreat = drop_leg(P)
         if drop_adjustment_on:
             plan.waypoints["drop_adjusted" if adjusted else "drop_fallback"] = P["drop"].copy()
+        if not retreat and place_xy is None and drop_slot is None and getattr(det, "grasp_kind", None) == "handle":
+            # Handle grasp: the carry may be unable to clear the bin rim at the stock release (5 cm inside the near
+            # wall). Retry the same drop leg with the release at the NEAR rim, HANDLE_NEAR_RIM_INSET_M inside the
+            # inner walls, at the stock release height. Bin keep-out checks below still apply to the new waypoints.
+            first_reason = plan.reason
+            near = self._drop_xy0(bin_name, inset=HANDLE_NEAR_RIM_INSET_M)
+            sh = self.bin_geometry(bin_name)["shift"]
+            near = near + sh if sh is not None else near
+            for key in ("carry", "carry_mid", "lower", "retreat"):
+                plan.ik.pop(key, None)
+                plan.waypoints.pop(key, None)
+            plan.reason = ""
+            P["above_bin"] = np.r_[near, z_carry]
+            P["drop"] = np.r_[near, stock_z_drop]
+            P["retreat"] = np.r_[near, stock_z_drop + g["retreat_up"]]
+            carry, lower, retreat = drop_leg(P)
+            if retreat:
+                plan.waypoints["drop_near_rim"] = P["drop"].copy()
+            else:
+                plan.reason = first_reason
         if not retreat:
             plan.reason = plan.reason or f"IK failed on {[k for k, v in plan.ik.items() if not v[0]]} ({side})"
             return plan

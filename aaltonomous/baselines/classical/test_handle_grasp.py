@@ -62,6 +62,13 @@ class TestPanHandleGrasp(unittest.TestCase):
         self.assertTrue(novel[0].ungraspable)
         self.assertEqual(novel[0].ungraspable_reason, "wider than the hand, no handle")
 
+    def test_disc_cut_by_image_edge_keeps_visible_handle_graspable(self):
+        # default centre: the disc touches the bottom image edge, the handle is fully in view -> no border penalty
+        novel, _, _, _ = self.novels(0)
+        self.assertEqual(len(novel), 1)
+        self.assertTrue(novel[0].graspable)
+        self.assertEqual(novel[0].grasp_kind, "handle")
+
     def test_handle_grasp_clears_the_rim_or_is_ungraspable(self):
         # 0 deg: full handle visible -> grasp on the handle >= rim + 3 cm.
         novel, dc, dir_p, perp_p = self.novels(0)
