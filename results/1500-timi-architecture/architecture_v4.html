@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Väiski — architektura v4</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #d8d2c4;
+    --grid: rgba(40, 32, 18, 0.05);
+    --sheet: #f3f0e8;
+    --paper: #fbf9f4;
+    --ink: #1a1814;
+    --muted: #403c35;
+    --line: #d2cbbd;
+    --signal: #0e5c4c;
+    --on-signal: #f3fbf7;
+    --ok-bg: #d5f0e0;
+    --ok-fg: #0a4f2e;
+    --wip-bg: #f6e3bb;
+    --wip-fg: #6a3c00;
+    --plan-bg: #e4e1d9;
+    --plan-fg: #3a3833;
+    --term-bg: #1a1814;
+    --term-fg: #f7f4ee;
+    --term-muted: #ddd6c8;
+    --off-bg: #e4e0d6;
+    --off-fg: #2c2924;
+    --off-muted: #4a453c;
+    --off-line: #c9c2b4;
+    --shadow: 0 1px 1px rgba(40, 32, 18, 0.05), 0 14px 32px rgba(40, 32, 18, 0.07);
+    --tconf: #e5f4ee;
+    --tdeg: #f8efd8;
+    --tpri: #eceae4;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #0c0d0b;
+      --grid: rgba(243, 239, 230, 0.035);
+      --sheet: #141613;
+      --paper: #1c1f1b;
+      --ink: #f3efe6;
+      --muted: #d0c9bb;
+      --line: #34382f;
+      --signal: #7ed9bc;
+      --on-signal: #07241c;
+      --ok-bg: #143528;
+      --ok-fg: #b7ebc9;
+      --wip-bg: #3d2e14;
+      --wip-fg: #f2d08a;
+      --plan-bg: #2a2d28;
+      --plan-fg: #d0cbc0;
+      --term-bg: #ece7dc;
+      --term-fg: #16140f;
+      --term-muted: #3e3a32;
+      --off-bg: #121410;
+      --off-fg: #ddd7cc;
+      --off-muted: #c2bbb0;
+      --off-line: #3a3e36;
+      --shadow: 0 1px 1px rgba(0, 0, 0, 0.35), 0 16px 36px rgba(0, 0, 0, 0.35);
+      --tconf: #152e28;
+      --tdeg: #332915;
+      --tpri: #262824;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scrollbar-color: var(--line) var(--bg); }
+
+  body {
+    margin: 0;
+    padding: 20px 16px 36px;
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 32px 32px;
+    color: var(--ink);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: var(--signal);
+    color: var(--on-signal);
+  }
+
+  .sheet {
+    max-width: 1440px;
+    margin: 0 auto;
+    background: var(--sheet);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 22px 18px 18px;
+    box-shadow: var(--shadow);
+  }
+
+  h1, h2, h3, p { margin: 0; }
+
+  h1 {
+    font-size: 1.75rem;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+    font-weight: 700;
+    text-wrap: balance;
+  }
+
+  .principle {
+    margin-top: 8px;
+    max-width: 78ch;
+    font-size: 1.05rem;
+    line-height: 1.35;
+    font-weight: 600;
+    text-wrap: pretty;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+
+  .legend, .score {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .legend b {
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  h2 {
+    margin: 22px 0 10px;
+    font-size: 0.95rem;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+    font-weight: 700;
+  }
+
+  h2 .quiet {
+    font-weight: 600;
+    color: var(--muted);
+  }
+
+  h2 svg {
+    display: inline-block;
+    vertical-align: -3px;
+    margin-right: 6px;
+    color: var(--signal);
+  }
+
+  .panel.off h2 svg { color: var(--off-fg); }
+
+  .flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    position: relative;
+  }
+
+  .card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 10px 10px;
+    box-shadow: 0 1px 1px rgba(40, 32, 18, 0.04), 0 8px 18px rgba(40, 32, 18, 0.04);
+  }
+
+  .card.term {
+    background: var(--term-bg);
+    color: var(--term-fg);
+    border-color: transparent;
+  }
+
+  .idx {
+    width: 24px;
+    height: 24px;
+    margin: 0 0 8px;
+    color: var(--signal);
+  }
+
+  .idx circle { fill: currentColor; }
+  .idx text {
+    fill: var(--on-signal);
+    font-size: 11px;
+    font-weight: 700;
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .idx path {
+    fill: none;
+    stroke: var(--on-signal);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .card h3 {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    font-weight: 700;
+    text-wrap: balance;
+  }
+
+  .spec {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .spec li {
+    position: relative;
+    margin-top: 3px;
+    padding-left: 10px;
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.35;
+    overflow-wrap: break-word;
+  }
+
+  .card.term .spec li { color: var(--term-muted); }
+
+  .spec li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 5px;
+    height: 1.5px;
+    background: currentColor;
+  }
+
+  .out {
+    margin-top: 8px;
+    font-size: 15px;
+    line-height: 1.25;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-content: flex-start;
+    margin-top: auto;
+    padding-top: 8px;
+  }
+
+  .badge {
+    display: inline-block;
+    max-width: 100%;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.35;
+    letter-spacing: 0.01em;
+    overflow-wrap: anywhere;
+  }
+
+  .ok { background: var(--ok-bg); color: var(--ok-fg); }
+  .wip { background: var(--wip-bg); color: var(--wip-fg); }
+  .plan { background: var(--plan-bg); color: var(--plan-fg); }
+
+  .sides, .bottom {
+    display: grid;
+    gap: 12px;
+  }
+
+  .panel {
+    min-width: 0;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 14px 8px;
+  }
+
+  .panel .dek {
+    margin: 2px 0 8px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .panel.off {
+    background: var(--off-bg);
+    color: var(--off-fg);
+    border-style: dashed;
+    border-color: var(--off-line);
+  }
+
+  .panel.off .dek,
+  .panel.off .cut span { color: var(--off-muted); }
+
+  .mod, .cut {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .mod li, .cut li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    align-items: start;
+    padding: 9px 0;
+  }
+
+  .mod li + li,
+  .cut li + li { border-top: 1px solid var(--line); }
+
+  .panel.off .cut li + li { border-top-color: var(--off-line); }
+
+  .mod-name, .cut strong {
+    display: block;
+    font-size: 14px;
+    line-height: 1.3;
+    font-weight: 700;
+  }
+
+  .mod p, .cut span {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.84em;
+    font-weight: 500;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+
+  .mod-name code { margin-left: 6px; }
+
+  .badge-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .tiers {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .tiers th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0 8px 6px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tiers td {
+    padding: 7px 8px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tiers tr:last-child td { border-bottom: 0; }
+
+  .tconf td { background: var(--tconf); }
+  .tdeg td { background: var(--tdeg); }
+  .tpri td { background: var(--tpri); }
+
+  .tiers td:first-child {
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  caption, .note {
+    caption-side: bottom;
+    text-align: left;
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.4;
+    padding-top: 8px;
+  }
+
+  .note { margin-top: 8px; }
+
+  .time { position: relative; min-width: 0; }
+
+  .time ol {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .when {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .time strong {
+    display: block;
+    margin: 1px 0 2px;
+    font-size: 15px;
+    letter-spacing: -0.02em;
+  }
+
+  .time p {
+    color: var(--muted);
+    font-size: 12.5px;
+    line-height: 1.35;
+  }
+
+  .time .badges { padding-top: 6px; }
+
+  .dot {
+    display: block;
+    width: 10px;
+    height: 10px;
+    margin-bottom: 6px;
+    border-radius: 50%;
+    background: var(--ink);
+    box-shadow: 0 0 0 3px var(--paper);
+  }
+
+  .dot.wip { background: var(--wip-fg); }
+  .dot.plan { background: var(--plan-fg); }
+
+  .time-line { display: none; }
+
+  .span { grid-column: 1 / -1; }
+
+  @media (min-width: 700px) {
+    .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .time ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  @media (min-width: 860px) {
+    .sides { grid-template-columns: minmax(0, 1.7fr) minmax(0, 0.85fr); }
+    .bottom { grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.9fr); }
+    .sheet { padding: 26px 22px 20px; }
+  }
+
+  @media (min-width: 1000px) {
+    .flow { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+
+  @media (min-width: 720px) {
+    .time ol {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      padding-top: 14px;
+      border-top: 2px solid var(--line);
+    }
+    .dot {
+      margin-top: -20px;
+      margin-bottom: 8px;
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .flow {
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      gap: 8px;
+      padding-top: 32px;
+    }
+
+    .flow::before {
+      content: "";
+      position: absolute;
+      top: 11px;
+      height: 2px;
+      left: calc((100% - 56px) / 16);
+      right: calc((100% - 56px) / 16);
+      background: var(--signal);
+      z-index: 0;
+    }
+
+    .card { padding: 12px 8px 8px; z-index: 1; }
+
+    .idx {
+      position: absolute;
+      top: -32px;
+      left: 50%;
+      margin: 0;
+      transform: translateX(-50%);
+      z-index: 2;
+    }
+
+    .idx.wide text { font-size: 8.5px; }
+
+    .card h3 { font-size: 13px; }
+  }
+
+  @media (min-width: 1200px) and (prefers-reduced-motion: no-preference) {
+    .flow::before {
+      animation: draw 0.85s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+  }
+
+  @keyframes draw {
+    from { clip-path: inset(0 100% 0 0); }
+    to { clip-path: inset(0 0 0 0); }
+  }
+
+  @media (max-width: 719px) {
+    h1 { font-size: 1.45rem; }
+    .tiers td:first-child { white-space: normal; }
+  }
+</style>
+</head>
+<body>
+  <main class="sheet">
+    <header>
+      <h1>Väiski — architektura v4</h1>
+      <p class="principle">každý modul hlásí jistotu; nejistota → opatrnost; poslední pojistka = SKIP (0 b &gt; −1 b)</p>
+      <div class="meta">
+        <p class="legend">
+          <b>Stav buildu</b>
+          <span class="badge ok">hotovo</span>
+          <span class="badge wip">rozpracováno</span>
+          <span class="badge plan">plánováno</span>
+        </p>
+        <p class="score">Sim základny: 111/124 objektů · 0 špatných košů · 0 safety clipů · 30 Hz</p>
+      </div>
+    </header>
+
+    <h2 id="tok">Hlavní tok</h2>
+    <div class="flow" aria-labelledby="tok">
+      <article class="card term">
+        <svg class="idx" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11"/>
+          <path d="M7 12 H16 M12.5 8.5 L16.5 12 L12.5 15.5"/>
+        </svg>
+        <h3>Vstupy</h3>
+        <ul class="spec">
+          <li>hlavová RGB-D</li>
+          <li>2 kamery v zápěstí</li>
+          <li>klouby</li>
+          <li>instrukce</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <svg class="idx" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11"/>
+          <text x="12" y="16" text-anchor="middle">1</text>
+        </svg>
+        <h3>Samo-kalibrace</h3>
+        <ul class="spec">
+          <li>0–4 s, na místě</li>
+          <li>stůl → náklon</li>
+          <li>ruka → poloha kamery</li>
+          <li>koše hlasováním</li>
+        </ul>
+        <div class="badges">
+          <span class="badge wip">náklon 70 %</span>
+          <span class="badge wip">B1 70 %</span>
+          <span class="badge plan">koše plánováno</span>
+        </div>
+      </article>
+
+      <article class="card">
+        <svg class="idx" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11"/>
+          <text x="12" y="16" text-anchor="middle">2</text>
+        </svg>
+        <h3>Percepce</h3>
+        <ul class="spec">
+          <li>barvy per epizoda</li>
+          <li>objekt = blob nad stolem</li>
+          <li>klasifikátor veto</li>
+        </ul>
+        <div class="badges">
+          <span class="badge wip">barvy 60 %</span>
+          <span class="badge plan">veto plánováno</span>
+        </div>
+      </article>
+
+      <article class="card">
+        <svg class="idx" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11"/>
+          <text x="12" y="16" text-anchor="middle">3</text>
+        </svg>
+        <h3>Jazyk</h3>
+        <ul class="spec">
+          <li>překlepy → parser</li>
+          <li>abstain</li>
+        </ul>
+        <div class="badges">
+          <span class="badge ok">překlepy hotovo</span>
+        </div>
+      </article>
+
+      <article class="card">
+        <svg class="idx" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11"/>
+          <text x="12" y="16" text-anchor="middle">4</text>
+        </svg>
+        <h3>Rozhodování</h3>
+        <ul class="spec">
+          <li>pořadí podle jistoty</li>
+          <li>gate p ≥ 0,7</li>
+          <li>časový limit</li>
+          <li>rychlostní tiery</li>
+          <li>CONFIDENT / DEGRADED / PRIOR-ONLY</li>
+        </ul>
+        <div class="badges">
+          <span class="badge wip">vrstva 70 %</span>
+        </div>
+      </article>
+
+      <article class="card">
+        <svg class="idx" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11"/>
+          <text x="12" y="16" text-anchor="middle">5</text>
+        </svg>
+        <h3>Úchop + pouštění + retry</h3>
+        <ul class="spec">
+          <li>úchopy z reálných dat</li>
+          <li>palec první</li>
+          <li>retry „stále na stole“</li>
+        </ul>
+        <div class="badges">
+          <span class="badge wip">úchopy 70 %</span>
+          <span class="badge ok">pouštění hotovo</span>
+        </div>
+      </article>
+
+      <article class="card">
+        <svg class="idx" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11"/>
+          <text x="12" y="16" text-anchor="middle">6</text>
+        </svg>
+        <h3>Safety + 30 Hz</h3>
+        <ul class="spec">
+          <li>suchý běh filtru</li>
+          <li>20 % rezerva rate/jerk</li>
+          <li>watchdog drží poslední</li>
+          <li>fallback: hold + retract</li>
+        </ul>
+        <div class="badges">
+          <span class="badge plan">shell plánováno</span>
+          <span class="badge ok">fault drill hotovo</span>
+        </div>
+      </article>
+
+      <article class="card term">
+        <svg class="idx wide" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="11"/>
+          <text x="12" y="15.5" text-anchor="middle">28</text>
+        </svg>
+        <h3>Výstup</h3>
+        <p class="out">28 kloubů<br>@ 30 Hz</p>
+        <div class="badges">
+          <span class="badge ok">30 Hz drží</span>
+        </div>
+      </article>
+    </div>
+
+    <div class="sides">
+      <section class="panel" aria-labelledby="gated">
+        <h2 id="gated">
+          <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M4 17 V3 H16 V17 M4 8 H16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          GATED <span class="quiet">(zapne se jen když vyhraje v simu)</span>
+        </h2>
+        <p class="dek">Adversariální sim, 60 epizod, párované seedy, metrika mean − std. Safety stop = −6. Bez výhry nad základnou zůstává vypnutý.</p>
+        <ul class="mod">
+          <li>
+            <div>
+              <div class="mod-name">B1 · hand-eye <code>perception.hand_calibration</code></div>
+              <p>FK → hloubka (ICP), strop 3 cm / 3°. Fallback: nominál po náklonu stolu.</p>
+            </div>
+            <span class="badge wip">70 %</span>
+          </li>
+          <li>
+            <div>
+              <div class="mod-name">B2 · křížová kontrola <code>calib.fk_xcheck</code></div>
+              <p>Ruka v RGB, bez hloubky. Rozpor nad 2° → prior a pomaleji. Levnější, preferuj.</p>
+            </div>
+            <span class="badge plan">plánováno</span>
+          </li>
+          <li>
+            <div>
+              <div class="mod-name">V · koše <code>bin.vote</code></div>
+              <p>Hloubka, RGB a prior, 2 ze 3 do 4 cm. Jinak medián a vyšší pouštění.</p>
+            </div>
+            <span class="badge plan">plánováno</span>
+          </li>
+          <li>
+            <div>
+              <div class="mod-name">K · klasifikátor <code>cls.veto</code></div>
+              <p>Crop veto s kalibrovanou abstencí. Nerozhoduje, jen zastaví chybu pravidel.</p>
+            </div>
+            <div class="badge-col">
+              <span class="badge plan">plánováno</span>
+              <span class="badge ok">popisky hotovo</span>
+            </div>
+          </li>
+          <li>
+            <div>
+              <div class="mod-name">C · zápěstí <code>wrist.servo</code></div>
+              <p>HSV blob → malá korekce xy, 2–3 kroky. Ztracený blob, kraj nebo korekce nad 3 cm → open-loop. Časově omezené.</p>
+            </div>
+            <span class="badge wip">30 %</span>
+          </li>
+          <li>
+            <div>
+              <div class="mod-name">Mozek · Qwen3-VL-8B <code>brain.enabled</code></div>
+              <p>Jen když parser neví (abstain). Nikdy nemění známý koš, nikdy „hotovo“, timeout 0,5 s → jinak skip. Lokálně na RTX 5090.</p>
+            </div>
+            <span class="badge wip">test na boxu E</span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel off" aria-labelledby="off">
+        <h2 id="off">
+          <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M5.2 5.2 L14.8 14.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          VYPNUTO
+        </h2>
+        <p class="dek">Do scoringu se nedostanou.</p>
+        <ul class="cut">
+
+          <li>
+            <div>
+              <strong>Víko</strong>
+              <span>Mimo běh.</span>
+            </div>
+          </li>
+          <li>
+            <div>
+              <strong>Paměť</strong>
+              <span>Mimo běh.</span>
+            </div>
+          </li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="bottom">
+      <section class="panel" aria-labelledby="tiers">
+        <h2 id="tiers">Tiery jistoty</h2>
+        <table class="tiers">
+          <thead>
+            <tr>
+              <th>Tier</th>
+              <th>Podmínka</th>
+              <th>Chování</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="tconf">
+              <td>CONFIDENT</td>
+              <td>C ≥ 0,6 a náklon ≈ FK, rozdíl ≤ 2°</td>
+              <td>plná rychlost po prvním čistém objektu, všechny koše</td>
+            </tr>
+            <tr class="tdeg">
+              <td>DEGRADED</td>
+              <td>0,3 ≤ C &lt; 0,6</td>
+              <td>60 %, jen objekty s p ≥ 0,85, přednost středního koše</td>
+            </tr>
+            <tr class="tpri">
+              <td>PRIOR-ONLY</td>
+              <td>C &lt; 0,3</td>
+              <td>profil −7,5°, jeden pokus do středního koše, pak hold</td>
+            </tr>
+          </tbody>
+          <caption>C je logistický fit ze simu: inliery roviny, rozsah náklonu, shoda s priorem, shoda košů, podíl platné hloubky. Self-checky selžou hromadně → dry mode, hold.</caption>
+        </table>
+      </section>
+
+      <section class="panel" aria-labelledby="plan">
+        <h2 id="plan">RC1 → FREEZE → release → submit</h2>
+        <div class="time">
+          <ol>
+            <li>
+              <span class="dot wip"></span>
+              <span class="when">3.–4. h</span>
+              <strong>RC1</strong>
+              <p>proti základně, 60 ep, mean − std, 0 stopů</p>
+              <div class="badges"><span class="badge wip">sim 50 %</span></div>
+            </li>
+            <li>
+              <span class="dot"></span>
+              <span class="when">T+7</span>
+              <strong>FREEZE</strong>
+              <p>tvrdý stop, gated jen za flagem. Mezi RC1 a freeze A/B, 4.–7. h</p>
+            </li>
+            <li>
+              <span class="dot plan"></span>
+              <span class="when">7.–10. h</span>
+              <strong>release</strong>
+              <p>fault drill a soak 100+ epizod, rate ≥ 27 Hz, 0 stopů</p>
+            </li>
+            <li>
+              <span class="dot plan"></span>
+              <span class="when">10.–12. h</span>
+              <strong>submit</strong>
+              <p>image, offline test, odevzdání</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
