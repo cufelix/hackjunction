@@ -195,6 +195,33 @@ class TestEmptyGraspAbort(unittest.TestCase):
         self.assertEqual(res[0], "plan")
         self.assertTrue(pol.planner.calls[-1])                   # varied posture/yaw, not the stock grasp
 
+    def test_aborted_empty_close_still_writes_a_grasp_diag_line_with_scores(self):
+        _, pol, q = self.started(sums=(-0.01, -0.01))
+        logs = []
+        pol.log = logs.append
+        pol._grasp_diag({"hand_q": q})
+        self.assertIsNone(pol._gdiag)
+        diag = [m for m in logs if m.startswith("[grasp_diag]")]
+        self.assertEqual(len(diag), 1, logs)
+        self.assertIn("held=no aborted=1", diag[0])
+        self.assertIn("close@", diag[0])
+        self.assertIn("lift=n/a", diag[0])
+        for field in ("finger_sum", "index_sum", "middle_sum", "threshold", "sample_held", "stall_vs_closed",
+                      "cmd_vs_closed"):
+            self.assertIn(f"{field}=", diag[0])
+        self.assertRegex(diag[0], r"finger_sum=-?\d+\.\d+ index_sum=-?\d+\.\d+ middle_sum=-?\d+\.\d+")
+        self.assertTrue(any(m.startswith("[held_abort]") for m in logs))
+
+    def test_diag_formatting_error_never_raises_into_the_abort(self):
+        _, pol, q = self.started(sums=(-0.01, -0.01))
+        logs = []
+        pol.log = logs.append
+        pol._diag_body = lambda g: 1 / 0
+        pol._grasp_diag({"hand_q": q})
+        self.assertIsNone(pol._gdiag)
+        self.assertIs(pol.vary_hist[-1]["held"], False)
+        self.assertTrue(any("format_error=ZeroDivisionError" in m for m in logs))
+
     def test_held_close_is_not_aborted(self):
         _, pol, q = self.started(sums=(0.19, 0.02))
         n = len(pol.queue_a)
