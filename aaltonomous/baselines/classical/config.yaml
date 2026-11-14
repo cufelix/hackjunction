@@ -156,7 +156,7 @@ perception:
   # (hue_guard.py). Selected by perception.hsv_set: robust_v2. Other bounds equal hsv_robust.
   hsv_robust_v2:
     red:    [[[0, 70, 70], [22, 255, 255]], [[170, 70, 70], [180, 255, 255]]]
-    yellow: [[[24, 45, 90], [52, 255, 255]]]
+    yellow: [[[24, 35, 90], [60, 255, 255]]]
     blue:   [[[100, 70, 50], [145, 255, 255]]]
   hue_guard:                 # FLAG (tech lead). Layer 2: adjacent red|yellow pair closer than min_gap_deg abstains (hue_guard.py)
     enabled: false

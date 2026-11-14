@@ -15,7 +15,7 @@ from aaltonomous.interface.calibration import Calibration
 from aaltonomous.scene.scene import Scene
 
 from .config import load_config
-from .hue_guard import Cand, judge, top_face_hsv
+from .hue_guard import Cand, classify_hue, judge, top_face_hsv
 from .mock_world import Renderer
 from .perception import Detection, Perception
 
@@ -132,6 +132,15 @@ class TestHueGuard(unittest.TestCase):
         self.assertEqual(judge([Cand("red", 20.0, 144, 179), Cand("yellow", 30.0, 46, 133)], V2),  # layer 3 labels H20 red
                          [("red", None), ("yellow", None)])
 
+    def test_f_purple_is_never_yellow(self):
+        """Real purple tops H 106-111 (S 151, V 229) and blue H 100-145 must never be classed yellow under robust_v2."""
+        p = Perception(ON, SC, CAL, log=lambda s: None)
+        for h in (106, 111, 120):
+            self.assertNotEqual(classify_hue(h, V2), "yellow", h)
+            hsv = np.full((30, 30, 3), (h, 151, 229), np.uint8)
+            yellow = p._masks_hsv(cv2.cvtColor(cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB), cv2.COLOR_RGB2HSV))["yellow"]
+            self.assertEqual(int((yellow > 0).sum()), 0, h)
+
     def test_c2_layer3_side_faces_never_red(self):
         """Yellow cube: top 35 % H 39 S 76 V 245, sides 65 % H 16 S 150 V 140. Must be yellow (or abstain), never red."""
         hsv = np.zeros((30, 30, 3), np.uint8)
@@ -188,6 +197,7 @@ class TestHueGuard(unittest.TestCase):
               "| recall guard:", {t: ok[t] / 20 for t in ok}, "| raw mask wrong:", raw_wrong,
               "| raw recall:", {t: raw_ok[t] / 20 for t in raw_ok}, "| unshifted:", ref)
         self.assertEqual(guard_wrong, 0)                      # mandatory: no wrong label under any shift
+        # target 0.90 (tech lead) is NOT met: 17/20 = 0.85; misses are safe (mask gate or red S floor), see comment above
         self.assertGreaterEqual(ok["yellow"] / 20, 0.70)
         self.assertGreaterEqual(ok["red"] / 20, 0.95)
 
