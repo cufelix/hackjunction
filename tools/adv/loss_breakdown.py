@@ -86,7 +86,11 @@ def start_positions(trial):
         _, c, s, _ = n.split("_")
         pool[(c, s)].append(n)
     out = {}
-    for o in trial["layout"]:
+    layout = [dict(o) for o in trial["layout"]]
+    eo = (((trial.get("dr_params") or {}).get("adv")) or {}).get("ensure_object")
+    if eo and layout and not any(o["color"] == eo[0] and o.get("shape", "cube") == eo[1] for o in layout):
+        layout[0]["color"], layout[0]["shape"] = eo       # the sim swapped the first object (adv ensure_object)
+    for o in layout:
         n = pool[(o["color"], o.get("shape", "cube"))].pop(0)
         px, py = O0[0] + o["y"], O0[1] + o["x"]
         if R:

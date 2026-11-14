@@ -8,11 +8,11 @@
 #   and checked out as a detached worktree under /data/work/oliver/adv/ck_<sha>.
 set -u
 [[ $# -ge 5 ]] || { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
-SRC=$1; OV=$2; PROF=$3; SEED0=$4; N=$5; PORT=${6:-8002}
+SRC=$1; OV=$2; PROF=${3#adv_}; SEED0=$4; N=$5; PORT=${6:-8002}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; source "$HERE/adv_env.sh"
 ADV_RUNS=${ADV_RUNS:-/data/work/oliver/adv/runs}; ADV_REPO=${ADV_REPO:-/data/work/oliver/cand}
 TASK_NAME=${ADV_TASK:-sort_fixed}; IMG=${IMG:-hackjunction/policy:integ-770888c}
-if [[ -d "$SRC/aaltonomous" ]]; then CK=$(readlink -f "$SRC"); SHA=$(git -C "$CK" rev-parse --short=8 HEAD 2>/dev/null || echo dir)
+if [[ -d "$SRC/aaltonomous" ]]; then CK=$(readlink -f "$SRC"); SHA=$(git -C "$CK" rev-parse --short=8 HEAD 2>/dev/null || basename "$CK" | sed "s/^ck_//")
 else
   SHA=$(git -C "$ADV_REPO" rev-parse --short=8 --verify "$SRC^{commit}") || { echo "cannot resolve $SRC in $ADV_REPO"; exit 1; }
   CK=/data/work/oliver/adv/ck_$SHA
