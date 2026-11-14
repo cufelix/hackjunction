@@ -113,6 +113,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_object_time_budget_s"] = nopp | {"policy.object_time_budget_s"}
         expect["ab_colour_kmeans"] = nopp | {"perception.colour_kmeans"}
         expect["ab_cgate"] = nopp | {"perception.color_gate.enabled"}
+        expect["ab_neutral_obstacles"] = nopp | {"perception.neutral_obstacles"}
         expect["ab_sat_floor"] = nopp | {"perception.color_gate.enabled", "perception.color_gate.sat_floor"}
         expect["ab_plane_cgate"] = nopp | {"perception.color_gate.enabled", "perception.online_pitch_cal"}
         expect["ab_cgate_fk"] = nopp | {"perception.color_gate.enabled", "perception.color_gate.fk_mask"}
@@ -203,7 +204,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_plane_cgate_live", "ab_plane_cgate_live_fk",
                                       "ab_plane_cgate_live_vote", "ab_plane_inj_p7",
                                       "ab_retry_vary", "ab_retry_vary_slots", "ab_robust_input",
-                                      "ab_safety", "ab_sat_floor", "ab_shape2d", "ab_skills",
+                                      "ab_neutral_obstacles", "ab_safety", "ab_sat_floor", "ab_shape2d", "ab_skills",
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",

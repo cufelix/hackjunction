@@ -69,6 +69,7 @@ FLAGS = {
     "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = the policy's current bin estimate (bin.vote shift / calibrate_bins); none -> nominal + near_margin_m towards the robot"),
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
     "perception.color_gate.sat_floor": ("Felix gate", False, "reject blue (purple) blobs with median HSV S < sat_floor_params.blue and yellow < .yellow (shadow / sheen); red and orange unchanged"),
+    "perception.neutral_obstacles": ("Oliver neutral", False, "dark / grey / colourless non-target blobs (median V < neutral_params.v_dark 55, or S < s_grey 30; sizeable >= min_area_px 300; above the counter when depth exists) are never detections; they become Perception.neutral_obstacles (3D footprint from depth when present, else image-only and ignored) and the planner rejects hand points within margin_m 0.02 of a footprint (any phase). No new colour class"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
