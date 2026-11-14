@@ -54,6 +54,7 @@ class Scene:
     cfg: dict
 
     counter_z_runtime = None   # calib.plane.apply_height: runtime table height (pelvis frame); None = the nominal scene value
+    mat_z_follows_counter = False   # calib.wide_counter_window: mat z = height above the RUNTIME counter (mat_to_pelvis / pelvis_to_mat)
 
     def __post_init__(self):
         c = self.cfg
@@ -76,10 +77,16 @@ class Scene:
         """(..., 2 or 3) mat coords -> (..., 3) pelvis frame. Mat x -> pelvis y, mat y -> pelvis x."""
         p = np.asarray(p, float)
         z = p[..., 2] if p.shape[-1] == 3 else np.zeros(p.shape[:-1])
-        return self.origin + np.stack([p[..., 1], p[..., 0], z], axis=-1)
+        out = self.origin + np.stack([p[..., 1], p[..., 0], z], axis=-1)
+        if self.mat_z_follows_counter:
+            out[..., 2] += self.counter_z - float(self.origin[2])
+        return out
 
     def pelvis_to_mat(self, p):
         d = np.asarray(p, float) - self.origin
+        if self.mat_z_follows_counter:
+            d = d.copy()
+            d[..., 2] -= self.counter_z - float(self.origin[2])
         return np.stack([d[..., 1], d[..., 0], d[..., 2]], axis=-1)
 
     @property

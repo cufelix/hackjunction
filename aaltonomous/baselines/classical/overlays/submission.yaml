@@ -134,3 +134,5 @@ flags:
   perception.inject_cam_error: null             # TEST ONLY [dpitch_deg, dyaw_deg, dx, dy, dz]: perturb the head extrinsics
   instruction.max_chars: 0                      # fuzz fix   0 = off; N>0 caps the instruction text at N chars (boundary cut)
   safety.nan_guard: false                       # fuzz fix   non-finite arm_q/hand_q -> hold last action, no planner tick
+  calib.wide_counter_window: false              # counter-z   nominal -8..+22 cm estimation window (finals_r22_counter turns it on)
+  planner.bin_wall_extra_m: 0.0                 # counter-z   extra bin wall height on release/carry and rim keepout (finals_r22_counter: 0.01)

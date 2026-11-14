@@ -65,7 +65,11 @@ calib:
     max_dz_m: 0.20            # clamp |z - nominal|
     max_tilt_deg: 8.0         # plane tilt above this -> nominal (tilt is only reported, never corrected)
     min_inliers: 500          # plane inliers needed
+    counter_z_prior_m: null   # wide_counter_window: absolute pelvis z used while the height is unmeasured (null = none: workspace rule fails open)
+    wide_lo_m: 0.08           # wide_counter_window: counter z window below nominal
+    wide_hi_m: 0.22           # wide_counter_window: counter z window above nominal (estimate outside = rejected)
     window_m: 0.40            # coarse z window around nominal for the first pass (then 0.03 around that pass's plane)
+  wide_counter_window: false  # FLAG (counter-z): estimation window nominal -wide_lo_m .. +wide_hi_m, runtime height estimated (also without apply_height), mat z follows it; see COUNTERZ.md
   fk_xcheck: false            # FLAG (B2, log-only): RGB head-pose residual vs Dex3 hand FK (fk_xcheck.py)
   fk_xcheck_config:
     period_s: 0.5             # worker-thread cadence; act() never waits for the search
@@ -294,6 +298,9 @@ perception:
     min_aspect: 1.4           # no distance-transform neck: cut along the major axis only if this elongated (mock: one
                               # object <= 1.35, two touching >= 1.48)
     max_parts: 3
+
+planner:
+  bin_wall_extra_m: 0.0      # FLAG (counter-z): extra bin wall height (m) added to the release/carry height and the rim keepout; finals 0.01
 
 bin:
   geometry_runtime: false     # FLAG (bin geo). perception follows planner.bin_shift for every bin consumer (needs bin.vote.enabled for a shift)
