@@ -272,8 +272,11 @@ policy:
   speed_tiers: false          # FLAG (D3). 1st object 0.7 + 1.5 cm clearance; clean 0.85/0.9; failure 0.6 + centre bin
   confidence_tiers: false     # FLAG (D4). Hold still, calibration confidence C -> CONFIDENT / DEGRADED / PRIOR-ONLY
 
-# Decision layer numbers (knowledge/humanoid/40-ARCHITECTURE-v4.md sections 2-3). Only read when a policy.* decision flag is on.
+# Decision layer numbers (knowledge/humanoid/40-ARCHITECTURE-v4.md sections 2-3), plus the optional learned model.
 decision:
+  learned_p: false             # FLAG (Decision AI). Learned success/duration model; OFF leaves D1-D4 byte-identical
+  learned_p_model: null        # FLAG param. null = bundled models/learned_p.json; any load/predict error fails open
+  learned_p_weight: 0.5        # FLAG param. p = weight*p_model + (1-weight)*hand-set prior
   shape_prior: {cube: 0.9, cylinder: 0.8, triangle: 0.6, unknown: 0.75}   # p_grasp shape prior (triangle = prism)
   hue_full_margin_deg: 15.0   # hue margin (deg) from the HSV range edge that counts as fully confident
   area_min_px: 60             # blob area below this: p_area 0.3

@@ -34,6 +34,7 @@ from aaltonomous.scene.scene import Scene, resolve_bin
 from . import decision as dec
 from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
+from .learned_p import LearnedSuccessModel
 from .perception import Perception
 from .planner import Plan, Planner, lookup_bin, ramp
 
@@ -69,6 +70,9 @@ class ClassicalPolicy:
             sys.setswitchinterval(min(sys.getswitchinterval(), 0.001))
         self.time_limit = time_limit
         self.log = log or (lambda *a: None)
+        ld = self.cfg.get("decision") or {}
+        self.learned_p = (LearnedSuccessModel(ld.get("learned_p_model"), ld.get("learned_p_weight", 0.5), self.log)
+                          if ld.get("learned_p", False) else None)
         self.reset()
 
     # ------------------------------------------------------------------ API
@@ -574,27 +578,46 @@ class ClassicalPolicy:
             else:
                 p = self._plan_pick(d, dict(obstacles=others))
             self.plans.append(p)
+            learned_info = (self._conf_info(d, obs, dets)
+                            if p.ok and self.learned_p is not None and self.learned_p.model is not None else None)
+            if self.learned_p is not None and self.learned_p.model is None:
+                learned_info = None  # prediction failed: duration/time decisions also stay on their original path
+            expected_s = learned_info["t"] if learned_info is not None else p.duration
+            if learned_info is not None:
+                p.learned_p_info = learned_info
+                p.learned_detection = d
+                p.learned_expected_s = expected_s
             if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
                 self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")
                 continue
-            if p.ok and cap_s is not None and p.duration > cap_s:
-                over_cap.append(p)   # too slow for its share of the time: try the next object, this one is the fallback
-                self.log(f"[time_cap] {d.color} plan {p.duration:.1f} s > cap {cap_s:.1f} s: trying the next candidate")
+            if p.ok and cap_s is not None and expected_s > cap_s:
+                over_cap.append((p, d, expected_s))   # too slow for its share: try next; quickest is the fallback
+                if learned_info is None:
+                    self.log(f"[time_cap] {d.color} plan {p.duration:.1f} s > cap {cap_s:.1f} s: trying the next candidate")
+                else:
+                    self.log(f"[time_cap] {d.color} expected {expected_s:.1f} s > cap {cap_s:.1f} s: trying the next candidate")
                 continue
             if p.ok:
-                if triage and p.duration > left:  # feasible but too slow for the time left: try the next candidate
-                    self.too_long.append((d.top[:2], p.duration))
+                if triage and expected_s > left:  # feasible but too slow for the time left: try the next candidate
+                    self.too_long.append((d.top[:2], expected_s))
                     n_long += 1
-                    shortest = p if shortest is None or p.duration < shortest.duration else shortest
-                    self.log(f"[classical] {d.color} takes {p.duration:.1f} s > {left:.1f} s left: trying the next candidate")
+                    if learned_info is None:
+                        shortest = p if shortest is None or p.duration < shortest.duration else shortest
+                        self.log(f"[classical] {d.color} takes {p.duration:.1f} s > {left:.1f} s left: trying the next candidate")
+                    else:
+                        shortest = p if shortest is None or expected_s < getattr(shortest, "learned_expected_s", shortest.duration) else shortest
+                        p.learned_expected_s = expected_s
+                        self.log(f"[classical] {d.color} expects {expected_s:.1f} s > {left:.1f} s left: trying the next candidate")
                     continue
+                self._learned_attempt(d, dets, obs, p)
                 return ("plan", p, len(dets))
             self.failed.append(d.top[:2])
             self.log(f"[classical] skip {d}: {p.reason}")
         if over_cap:   # nothing within the cap: the quickest over-cap plan beats leaving points on the counter
-            best = min(over_cap, key=lambda q: q.duration)
-            if not triage or best.duration <= left:
-                self.log(f"[time_cap] no candidate within {cap_s:.1f} s: taking the quickest ({best.duration:.1f} s)")
+            best, best_d, best_expected = min(over_cap, key=lambda q: q[2])
+            if not triage or best_expected <= left:
+                self.log(f"[time_cap] no candidate within {cap_s:.1f} s: taking the quickest ({best_expected:.1f} s)")
+                self._learned_attempt(best_d, dets, obs, best)
                 return ("plan", best, len(dets))
         if verify and self.verify_relooks_remaining > 0:
             self.verify_relooks_remaining -= 1
@@ -614,7 +637,8 @@ class ClassicalPolicy:
             self.log(f"[decision] {name} failed ({exc!r}), stock behaviour")
 
     def _decision_on(self):
-        return any(self._dflag(f) for f in ("confidence_order", "object_time_cap", "speed_tiers", "confidence_tiers"))
+        return (self.learned_p is not None or
+                any(self._dflag(f) for f in ("confidence_order", "object_time_cap", "speed_tiers", "confidence_tiers")))
 
     def _dcfg(self):
         d = dict(dec.DEFAULTS)
@@ -665,7 +689,23 @@ class ClassicalPolicy:
         except Exception:
             return None
 
-    def _conf_info(self, d, obs):
+    def _learned_features(self, d, obs, target_bin, dets=None):
+        """Cheap features known before planning. `hand` is Planner's deterministic preferred-side proxy."""
+        xy = np.asarray(d.top[:2], float)
+        nn = None
+        if dets is not None:
+            ds = [float(np.linalg.norm(xy - np.asarray(o.top[:2], float))) for o in dets if o is not d]
+            nn = min(ds) if ds else None
+        bin_y = float(self.planner.bin_xy(target_bin)[1]) if target_bin is not None else 0.0
+        ref_y = bin_y if abs(bin_y) > 0.1 else float(xy[1])
+        hand = "left" if ref_y > float(self.cfg["grasp"]["y_split"]) else "right"
+        return {"shape": getattr(d, "shape", None) or "unknown", "colour": d.color,
+                "hand": hand, "target_bin": target_bin or "unknown",
+                "attempt_index": self._attempt_count(xy, d.color) + 1, "pelvis_x": float(xy[0]),
+                "pelvis_y": float(xy[1]), "distance": float(np.hypot(xy[0], xy[1])),
+                "nearest_neighbor_distance": nn, "time_remaining": max(0.0, self.time_limit - float(obs.get("t", 0.0)))}
+
+    def _conf_info(self, d, obs, dets=None):
         """D1: p_colour, p_bin, p_grasp, p = product, gate = p_colour * p_bin, est time, target bin / centre flag."""
         dc = self._dcfg()
         b = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
@@ -677,8 +717,16 @@ class ClassicalPolicy:
         pb = dec.p_bin(centre, self.C, dc)
         cov = (d.n_depth / d.n_px) if d.n_px else 0.0
         pg = dec.p_grasp(getattr(d, "shape", None), d.top[:2], float(bxy[1]), cov, dc)
-        return {"p": pc * pb * pg, "gate": pc * pb, "t": dec.est_time(d.top[:2], bxy, dc), "bin": b, "centre": centre,
-                "pc": pc, "pb": pb, "pg": pg}
+        prior = pc * pb * pg
+        t_prior = dec.est_time(d.top[:2], bxy, dc)
+        features = self._learned_features(d, obs, b, dets)
+        t_est = self.learned_p.duration(features, t_prior) if self.learned_p is not None else t_prior
+        p = self.learned_p.probability(features, prior) if self.learned_p is not None else prior
+        if self.learned_p is not None and self.learned_p.model is None:
+            p, t_est = prior, t_prior
+        # `gate` is deliberately never learned: wrong-bin safety remains p_colour * p_bin.
+        return {"p": p, "p_prior": prior, "gate": pc * pb, "t": t_est, "t_prior": t_prior, "bin": b,
+                "centre": centre, "pc": pc, "pb": pb, "pg": pg, "features": features}
 
     def _conf_rank(self, cands, dets, obs, retry_prefix):
         """policy.confidence_order: 2*p/est_time, shape ties cube < cylinder < prism, never the hardest first. Called on
@@ -686,7 +734,7 @@ class ClassicalPolicy:
         self._push_frame(dets)
         items = []
         for d in cands:
-            i = self._conf_info(d, obs)
+            i = self._conf_info(d, obs, dets)
             items.append({"d": d, "i": i, "p": i["p"], "t": i["t"], "shape": getattr(d, "shape", None),
                           "centre_first": self.tier == dec.DEGRADED and i["centre"]})
         out = dec.rank(items, self._dcfg())
@@ -696,6 +744,31 @@ class ClassicalPolicy:
                 f"{it['d'].color}/{it['shape']} p={it['p']:.2f} (c={it['i']['pc']:.2f} b={it['i']['pb']:.2f} "
                 f"g={it['i']['pg']:.2f}) t={it['t']:.0f}s" for it in out))
         return [it["d"] for it in out]
+
+    def _learned_attempt(self, d, dets, obs, plan):
+        """Attach selected features now; log only if/when this plan actually starts."""
+        if self.learned_p is None:
+            return
+        i = getattr(plan, "learned_p_info", None) or self._conf_info(d, obs, dets)
+        plan.learned_p_info = i
+        plan.learned_log_features = dict(i["features"])
+
+    def _log_learned_attempt(self, plan, t):
+        """Emit beside execute with its timestamp, not the earlier threaded look/plan timestamp."""
+        i = getattr(plan, "learned_p_info", None)
+        f = getattr(plan, "learned_log_features", None)
+        if self.learned_p is None or i is None or f is None:
+            return
+        val = lambda x: "na" if x is None else x
+        self.log("[learned_p] " + " ".join((
+            f"t={float(t):.2f}", f"colour={f['colour']}", f"shape={f['shape']}",
+            f"hand={f['hand']}", f"actual_hand={plan.side or 'na'}", f"target_bin={f['target_bin']}",
+            f"actual_target={plan.target_bin or 'unknown'}",
+            f"attempt={f['attempt_index']}",
+            f"x={f['pelvis_x']:.5f}", f"y={f['pelvis_y']:.5f}", f"distance={f['distance']:.5f}",
+            f"nn={val(f['nearest_neighbor_distance'])}", f"time_remaining={f['time_remaining']:.3f}",
+            f"p_prior={i['p_prior']:.6f}", f"p_final={i['p']:.6f}", f"duration_prior={i['t_prior']:.4f}",
+            f"duration_model={i['t']:.4f}")))
 
     def _observe_outcome(self, dets):
         """D3: judge the last pick at the next look: the object (same colour, within retry_assoc_radius of the grasp
@@ -1163,7 +1236,9 @@ class ClassicalPolicy:
         return reserve
 
     def _has_time(self, plan, t):
-        return t + plan.duration + self._time_reserve(plan.corrective) <= self.time_limit
+        # Learned duration may reject a plan earlier, but can never hide a longer known trajectory or weaken safety.
+        duration = max(plan.duration, getattr(plan, "learned_expected_s", plan.duration))
+        return t + duration + self._time_reserve(plan.corrective) <= self.time_limit
 
     def _start(self, plan, t):
         xy = plan.waypoints["grasp"][:2]
@@ -1218,6 +1293,7 @@ class ClassicalPolicy:
                                          "drop_slot": plan.drop_slot, "corrective": plan.corrective,
                                          "source_xy": plan.waypoints["grasp"][:2].copy()}
         self.state = "executing"
+        self._log_learned_attempt(plan, t)
         self._note(t, f"execute {plan.summary()}")
         return self._pop()
 

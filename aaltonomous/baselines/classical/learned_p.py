@@ -46,6 +46,8 @@ class LearnedSuccessModel:
 
     @staticmethod
     def _validate(model):
+        if model.get("version") != 1:
+            raise ValueError(f"unsupported model version {model.get('version')!r}")
         names = model["feature_names"]
         means, stds, weights = model["means"], model["stds"], model["weights"]
         if not isinstance(names, list) or not names or len({str(n) for n in names}) != len(names):
@@ -91,6 +93,8 @@ class LearnedSuccessModel:
         logit = float(self.model["bias"]) + sum(float(w) * v for w, v in zip(self.model["weights"], x))
         cal = self.model.get("calibration") or {"a": 1.0, "b": 0.0}
         p = _sigmoid(float(cal["a"]) * logit + float(cal["b"]))
+        if not math.isfinite(p):
+            raise ValueError("non-finite prediction")
         return min(max(p, 0.05), 0.98)
 
     def probability(self, features, prior):

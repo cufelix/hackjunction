@@ -89,6 +89,7 @@ class TestFlags(unittest.TestCase):
         base = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r16_nopp")) if is_on}
         expect["ab_decision"] = base | {"policy.confidence_order", "policy.object_time_cap", "policy.speed_tiers",
                                         "policy.confidence_tiers"}
+        expect["ab_learnp"] = expect["ab_decision"] | {"decision.learned_p"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -121,8 +122,14 @@ class TestFlags(unittest.TestCase):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp",
-                                      "finals_real", "ab_decision"})
+                                      "finals_real", "ab_decision", "ab_learnp"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for cfg in retry.values()))
+
+    def test_ab_learnp_is_exactly_ab_decision_plus_learned_toggle(self):
+        base, learned = load_config(overlay="ab_decision"), load_config(overlay="ab_learnp")
+        base["overlay"] = learned["overlay"]
+        learned["decision"]["learned_p"] = False
+        self.assertEqual(learned, base)
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm

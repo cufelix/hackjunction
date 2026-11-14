@@ -76,6 +76,9 @@ FLAGS = {
     "policy.object_time_cap": ("D2", False, "per-object cap (remaining-15)/left 15..35 s, T-20 s no new object, T-8 s release/retract"),
     "policy.speed_tiers": ("D3", False, "1st object 0.7 + 1.5 cm clearance, clean 0.85/0.9, failure 0.6 + centre bin only"),
     "policy.confidence_tiers": ("D4", False, "hold 3-5 s, calibration C -> CONFIDENT / DEGRADED / PRIOR-ONLY"),
+    "decision.learned_p": ("decision AI", False, "learned success/duration model for ordering and time decisions"),
+    "decision.learned_p_model": ("decision AI", STOCK, "JSON success-model path (null = bundled models/learned_p.json)"),
+    "decision.learned_p_weight": ("decision AI", STOCK, "blend weight for learned probability vs hand-set prior"),
 }
 
 
@@ -228,4 +231,3 @@ def home_arm(cfg, spec: JointSpec | None = None):
     if bad:
         raise ValueError(f"home_arm_q too close to the joint limits: {bad}")
     return q
-
