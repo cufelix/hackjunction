@@ -387,6 +387,19 @@ def _aliases(low):
     return re.sub(r"\b(?:bin|box|container)\s+([abc123])\b", lambda m: f"the {table[m.group(1)]} bin" if m.group(1) in table else m.group(0), low)
 
 
+# A keyless catch-all tail that says the leftovers STAY ("leave everything else on the counter",
+# "don't move anything else"). Cut out before any other machinery sees it: it names no key, so it must
+# neither create a default bin nor feed the negation/elimination rules that would re-derive a named key.
+_REST_STAYS = re.compile(
+    r"(?:,|\band\b|\.)?\s*(?:please\s+)?(?:"
+    r"(?<!n't )(?<!not )(?<!never )(?:leave|keep|let)\s+(?:everything\s+else|anything\s+else|all\s+else|the\s+rest)\s+"
+    r"(?:on\s+the\s+(?:counter|table)|where\s+(?:it|they)\s+(?:is|are)|alone|be|as\s+is|untouched|in\s+place)"
+    r"|(?:everything\s+else|the\s+rest)\s+stays?\s+"
+    r"(?:on\s+the\s+(?:counter|table)|where\s+(?:it|they)\s+(?:is|are)|put|in\s+place|untouched)"
+    r"|(?:do\s*n[o']?t|do\s+not|never)\s+(?:move|touch)\s+(?:anything\s+else|everything\s+else|the\s+rest)"
+    r")(?=\s*(?:[.,;!]|$))")  # must end the clause: "don't move anything else to the left" is not a tail
+
+
 def resolve(text, fallback=None):
     """Instruction sentence -> mapping for scene.resolve_bin(). Never returns None.
 
@@ -406,7 +419,9 @@ def resolve(text, fallback=None):
     low = _aliases(str(text).lower())
     # Structural pre-pass (see the patterns above). Order matters: appositive first, so the key
     # word survives; all-but second, so the excluded key never reaches clause parsing.
-    stays = bool(_LEAVE.search(low) or _NEG.search(low))
+    rest_stays = bool(_REST_STAYS.search(low))
+    low = _REST_STAYS.sub(" ", low)
+    stays = rest_stays or bool(_LEAVE.search(low) or _NEG.search(low))
     low = _LEAVE.sub(" ", low)  # a key told to stay put is never mentioned again, so nothing completes it
     low = _APPOS.sub("the ", low)
     low = _BETWEEN.sub("middle", low)  # "the bin between the left and right ones" -> the centre bin
