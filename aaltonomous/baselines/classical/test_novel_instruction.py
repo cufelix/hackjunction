@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 
 from .mock_world import make_mock_env
-from .novel_objects import match_instruction
+from .novel_objects import match_instruction, novel_noun_named
 from .policy import ClassicalPolicy
 from .test_universal import MOCK_OV, OVERLAY
 
@@ -19,6 +19,11 @@ class MatchInstructionTest(unittest.TestCase):
         m = match_instruction("put the pan in the middle bin", [det("grey", "with-handle")])
         self.assertIsNotNone(m.matched)
         self.assertEqual(m.target_bin, "center")
+
+    def test_left_box_is_left_bin(self):
+        m = match_instruction("put the pan in the left box", [det("grey", "with-handle")])
+        self.assertIsNotNone(m.matched)
+        self.assertEqual(m.target_bin, "left")
 
     def test_gray_equals_grey(self):
         m = match_instruction("put the gray mug in the left bin", [det("grey", "with-handle")])
@@ -78,6 +83,40 @@ def make_pol(instruction, task=None):
     pol = ClassicalPolicy(log=None, safety=env.filter.cfg, time_limit=120.0, overlay=OVERLAY, overrides=dict(MOCK_OV))
     pol.reset(info)
     return pol
+
+
+KNOWN_PARAPHRASES = [
+    "The red cube goes in the left bin.", "Red goes left.", "The blue one belongs in the right bin.",
+    "Put the yellow cube into the center bin.", "The purple pieces should end up in the middle bin.",
+    "Drop the red ones into the right bin.", "Move every orange block to the left bin.",
+    "All blue objects go in the right bin.", "Place the yellow triangle in the centre bin.",
+    "The red cylinder needs to go into the left bin.", "Could you put the blue cubes in the right bin please?",
+    "Sort the red items into the left bin.", "Take the orange one and drop it in the middle bin.",
+    "The yellow things belong in the right bin.", "Toss the purple prism into the left bin.",
+    "Every red piece ends up in the right bin.", "Bring the blue cylinder to the center bin.",
+    "Red ones go to the right-hand bin.", "Put all the orange shapes in the left bin.",
+    "I want the yellow cube in the right bin.",
+    "Put the red cube in the left box.", "The blue ones go in the right box.",
+    "Drop the yellow cylinder into the middle crate.",
+]
+NOVEL_NOUN_SENTENCES = [
+    "put the pan in the middle bin", "The frying pan goes in the left bin.", "Put the mug into the right bin.",
+    "The ball belongs in the center bin.", "Drop the cups in the left bin.",
+]
+
+
+class KnownParaphraseGuardTest(unittest.TestCase):
+    def test_known_paraphrases_name_no_novel_noun_and_stay_inert(self):
+        for s in KNOWN_PARAPHRASES:
+            with self.subTest(sentence=s):
+                self.assertFalse(novel_noun_named(s))
+                self.assertTrue(make_pol(s)._universal_inert)
+
+    def test_novel_noun_sentences_are_not_inert(self):
+        for s in NOVEL_NOUN_SENTENCES:
+            with self.subTest(sentence=s):
+                self.assertTrue(novel_noun_named(s))
+                self.assertFalse(make_pol(s)._universal_inert)
 
 
 class KnownTaskGuardTest(unittest.TestCase):

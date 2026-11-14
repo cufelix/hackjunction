@@ -21,14 +21,14 @@ SHAPE_WORDS = {
     "round": ("ball", "sphere", "orb", "round"),
     "elongated": ("marker", "pen", "pencil", "rod", "stick", "wand", "spoon", "spatula", "bar"),
     "with-handle": ("pan", "cup", "mug", "handled", "handle", "skillet", "saucepan", "pot", "jug", "kettle", "ladle"),
-    "box-like": ("box", "carton", "packet"),
+    "box-like": ("carton", "packet"),
 }
 _GENERIC_NOUNS = {"object", "item", "thing", "piece", "one", "ones", "objects", "items", "things", "pieces",
                   "blocks", "block", "shapes", "shape", "stuff", "cube", "cubes", "cylinder", "cylinders",
                   "triangle", "triangles", "prism", "prisms"}
 _KNOWN_FAMILY = ("red", "orange", "yellow", "blue", "purple")   # known-task colours the existing detector owns
 _KNOWN_SHAPES = ("cube", "cylinder", "triangle")
-_BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+bin)?\b", re.I)
+_BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+(?:bins?|box(?:es)?|crates?|buckets?|baskets?|containers?|trays?|bowls?))?\b", re.I)
 _BIN_ALIAS = {"centre": "center", "middle": "center", "mid": "center", "central": "center"}
 _WORDS = re.compile(r"[a-z]+", re.I)
 # One filler/reserved vocabulary for match_instruction and unknown_words.
@@ -37,16 +37,20 @@ _FILLER = frozenset(set(PALETTE) | _GENERIC_NOUNS | {
     "in", "into", "to", "on", "bin", "left", "right", "center", "centre", "middle", "mid", "central", "hand",
     "please", "up", "and", "small", "little", "large", "big", "toy", "cube", "cylinder", "prism",
     "can", "could", "would", "you", "kindly", "it", "of", "with", "onto", "inside", "over", "there", "that",
-    "this", "now", "then", "go", "should", "frying", "sauce", "metal", "wooden", "plastic", "kitchen", "my", "its"})
+    "this", "now", "then", "go", "should", "frying", "sauce", "metal", "wooden", "plastic", "kitchen", "my", "its",
+    "goes", "belongs", "belong", "end", "ends", "must", "need", "needs", "want", "wants", "set", "toss", "throw",
+    "deliver", "transfer", "carry", "bring", "all", "every", "each", "any", "them", "those", "these", "from",
+    "where", "is", "are", "be", "get", "gets", "let", "has", "have", "which", "what", "there", "their", "s", "i",
+    "me", "we", "side", "bucket", "basket", "container", "tray",
+    "box", "boxes", "crate", "crates", "buckets", "baskets", "containers", "trays", "bowl", "bowls", "bins"})
 _RESERVED = _FILLER | frozenset(w for ws in SHAPE_WORDS.values() for w in ws)
 
 
 def novel_noun_named(text):
-    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) or an unknown word."""
+    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) from SHAPE_WORDS only."""
     low = str(text or "").lower().replace("gray", "grey")
     words = set(_WORDS.findall(low))
-    named = any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
-    return named or bool(_unknown(words))
+    return any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
 
 
 def _unknown(words):

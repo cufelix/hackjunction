@@ -141,14 +141,16 @@ class TestNovelInstructionAndSafety(unittest.TestCase):
         for d in self.novels:
             self.assertIsNone(lookup_detection_bin(self.cfg, {d.color: "left"}, d))
 
-    def test_unmatched_novel_is_not_picked_and_is_an_obstacle(self):
+    def test_matched_novel_is_not_picked_and_is_an_obstacle(self):
         pol = ClassicalPolicy(config=self.cfg, log=None)
         pol.reset({"instruction": "put the red cube in the right bin"})
+        pol._universal_inert = False  # exercise the keep-out path (a non-inert episode)
         pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
         known = next(d for d in self.dets if not getattr(d, "novel", False))
         obstacle = next(d for d in self.novels if d.color == "black")
         # Keep only one known target and one deliberately unmatched novel.
         pol._match_novel([known, obstacle])
+        obstacle.novel_matched = True  # keep-outs are only instruction-matched novel dets
         calls = []
 
         def fake_plan(det, kw, plan_fn=None):
@@ -163,6 +165,25 @@ class TestNovelInstructionAndSafety(unittest.TestCase):
         self.assertEqual(len(clearance), 1)
         np.testing.assert_allclose(clearance[0][:2], obstacle.top[:2])
         self.assertIsNone(obstacle.novel_target_bin)
+
+    def test_inert_episode_builds_no_novel_keepouts(self):
+        pol = ClassicalPolicy(config=self.cfg, log=None)
+        pol.reset({"instruction": "put the red cube in the right bin"})
+        pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
+        known = next(d for d in self.dets if not getattr(d, "novel", False))
+        obstacle = next(d for d in self.novels if d.color == "black")
+        pol._match_novel([known, obstacle])
+        calls = []
+
+        def fake_plan(det, kw, plan_fn=None):
+            calls.append((det, copy.deepcopy(kw)))
+            return Plan(True, color=det.color, target_bin="right")
+
+        self.assertIs(pol._universal_inert, True)
+        with patch.object(pol, "_plan_pick", side_effect=fake_plan):
+            result = pol._choose([known, obstacle], {"t": 1.0}, verify=False)
+        self.assertEqual(result[0], "plan")
+        self.assertNotIn("clearance_obstacles", calls[0][1])
 
 
 if __name__ == "__main__":
