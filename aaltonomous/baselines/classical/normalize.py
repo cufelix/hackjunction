@@ -32,8 +32,10 @@ FUZZY_TARGETS: tuple[str, ...] = (
     "cube", "cubes", "cylinder", "cylinders", "triangle", "triangles",
     "prism", "prisms", "wedge", "wedges",
 )
-# Ordinary synonyms -> a canonical word. NB "blocks" / "box" are absent on purpose (see instruction.py:
-# they are generic nouns for objects/bins) and "can" is a modal verb, so only plural "cans" is listed.
+# Ordinary synonyms -> a canonical word. NB "blocks" is absent on purpose (instruction.py: a generic noun for all three
+# solids; only "square block(s)" / "round block(s)" are rewritten, see _block_phrases). "box" is a bin word too, so it is
+# decided by context (_box_objects). "can" / "roll" are a modal and a verb, so the singular is decided by context
+# (_noun_shapes); only the plurals are listed here.
 SYNONYMS: dict[str, str] = {
     # cube
     "die": "cube", "dice": "cube", "brick": "cube", "bricks": "cubes",
@@ -41,10 +43,10 @@ SYNONYMS: dict[str, str] = {
     "cans": "cylinders", "tin": "cylinder", "tins": "cylinders", "drum": "cylinder", "drums": "cylinders",
     "barrel": "cylinder", "barrels": "cylinders", "canister": "cylinder", "canisters": "cylinders",
     "pillar": "cylinder", "pillars": "cylinders", "column": "cylinder", "columns": "cylinders",
-    "rolls": "cylinders",
+    "rolls": "cylinders", "rods": "cylinders", "rod": "cylinder", "pipes": "cylinders", "pipe": "cylinder",
     # triangle (triangular prism)
     "pyramid": "triangle", "pyramids": "triangles", "tetrahedron": "triangle", "tetrahedra": "triangles",
-    "prismatic": "triangle",
+    "prismatic": "triangle", "roof": "triangle", "roofs": "triangles", "ridge": "triangle", "ridges": "triangles",
     # cube (cuboid is the resolver's word for the same solid)
     "hexahedron": "cube", "hexahedra": "cubes", "hexahedrons": "cubes", "cuboids": "cubes",
     # containers -> bin(s)
@@ -106,7 +108,7 @@ def _fuzzy(tok: str) -> str | None:
 def _fix(m: re.Match[str]) -> str:
     raw = m.group(0)
     tok = raw.lower()
-    if tok in VOCAB or tok in PROTECTED:
+    if tok in VOCAB or (tok in PROTECTED and tok not in SYNONYMS):   # an explicit synonym beats the guard list ("rods")
         return raw
     new = SYNONYMS.get(tok) or _fuzzy(tok)
     if new is None:
@@ -230,6 +232,67 @@ def name_foreign(sentence: str) -> str:
     return sentence
 
 
+# Singular "can" / "roll" is a cylinder only as a noun: after a determiner or at a clause start, with an optional colour
+# word ("the red can", "Red roll goes left"). "you can put" and "Blue ones roll to the left" stay untouched.
+_NOUN_SHAPE = re.compile(
+    r"(^|[.;,:!?]\s*|\b(?:the|a|an|each|every|this|that|these|those|one)\s+)"
+    r"((?:(?:red|orange|yellow|purple|violet|blue|lilac|green|pink|white|black|gold(?:en)?)\s+)?)(can|roll)\b", re.I)
+
+
+def _noun_shapes(sentence: str) -> str:
+    def sub(m: re.Match[str]) -> str:
+        return m.group(1) + m.group(2) + ("Cylinder" if m.group(3)[0].isupper() else "cylinder")
+    return _NOUN_SHAPE.sub(sub, sentence)
+
+
+# "square block" / "round block" name the cube / cylinder. A bare "block" stays generic (all three solids).
+_SHAPE_BLOCK = re.compile(r"\b(square|round)\s+blocks?\b", re.I)
+_BLOCK_TO = {"square": "cube", "round": "cylinder"}
+
+
+def _block_phrases(sentence: str) -> str:
+    def sub(m: re.Match[str]) -> str:
+        new = _BLOCK_TO[m.group(1).lower()] + ("s" if m.group(0).lower().endswith("s") else "")
+        return new.capitalize() if m.group(1)[0].isupper() else new
+    return _SHAPE_BLOCK.sub(sub, sentence)
+
+
+# "box" as an OBJECT (a cube) versus a BIN. Colour-named bins are already dropped (drop_colour_bin_clauses, which runs
+# first). A box is a bin when it follows a bin/position/ordinal word, sits after a destination preposition ("into the
+# box", "from the box"), is described by a position ("the box on the left", "box is orange") or is followed by one.
+_BOX = re.compile(r"\b(boxes|box)\b", re.I)
+_DEST = frozenset("in into to onto inside on at from near by beside under behind towards toward".split())
+_ORD_WORDS = frozenset("first second third 1st 2nd 3rd last".split())
+_BIN_NOUN_AFTER = frozenset("bin bins container containers slot slots".split())
+_BOX_BIN_AFTER = frozenset("is are was were has have sits sit stands lies".split())
+
+
+def _is_bin_box(before: list[str], after: list[str]) -> bool:
+    pos = set(_ins._BIN_WORDS) | {"far"}
+    if before and (before[-1] in pos or before[-1] in _ORD_WORDS):
+        return True
+    if _DEST.intersection(before[-3:]):
+        return True
+    if not after:
+        return False
+    if after[0] in pos or after[0] in _BIN_NOUN_AFTER or after[0] in _BOX_BIN_AFTER:
+        return True
+    if after[0] in ("on", "at", "near", "by", "beside", "next") and pos.intersection(after[1:4]):
+        return True
+    return after[0] == "to" and bool(pos.intersection(after[1:3])) and not _BIN_NOUN_AFTER.intersection(after[:5])
+
+
+def _box_objects(sentence: str) -> str:
+    def sub(m: re.Match[str]) -> str:
+        before = _WORD.findall(m.string[:m.start()].lower())[-3:]
+        after = _WORD.findall(m.string[m.end():].lower())[:4]
+        if _is_bin_box(before, after):
+            return m.group(0)
+        new = "cubes" if m.group(0).lower() == "boxes" else "cube"
+        return new.capitalize() if m.group(0)[0].isupper() else new
+    return _BOX.sub(sub, sentence)
+
+
 _LIFT_LR = re.compile(r"\(\s*lift\s+to\s+(right|left)\s*\)", re.I)   # "first bin (lift to right)": a left/right typo
 
 
@@ -239,8 +302,8 @@ def normalize(sentence: str) -> str:
         return ""
     sentence = _LIFT_LR.sub(lambda m: f"(left to {m.group(1)})", sentence)
     sentence = _REGARDLESS.sub(lambda m: "Regardless of colour" if m.group(0)[0].isupper() else "regardless of colour", sentence)
-    sentence = name_foreign(name_colours(sentence))
-    return drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, sentence)))
+    sentence = _noun_shapes(_block_phrases(name_foreign(name_colours(sentence))))
+    return _box_objects(drop_colour_bin_clauses(rewrite_ordinal_bins(_WORD.sub(_fix, sentence))))
 
 
 # Strict mode (instruction.strict): the mapping never guesses. instruction.py is FROZEN, so this filters its output.
