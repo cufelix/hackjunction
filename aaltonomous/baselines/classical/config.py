@@ -52,8 +52,8 @@ FLAGS = {
     "policy.retry_pass": ("Oliver #3", False, "once per episode: max_attempts-skipped objects get retry_extra_attempts"),
     "policy.time_margin_s": ("Oliver #3", 0.0, "plans must end this long before the time limit"),
     "policy.episode_summary_log": ("Oliver #3", False, "one log line per episode end"),
-    "policy.retry_vary_grasp": ("retry-vary", False, "retry after held=no with another grasp (posture/heading), "
-                                                     "never an identical one; held=no -> abort the carry"),
+    "policy.retry_vary_grasp": ("retry-vary", False, "retry after the object remains in the next frame with another "
+                                                     "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
