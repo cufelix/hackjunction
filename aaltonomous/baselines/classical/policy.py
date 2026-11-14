@@ -44,7 +44,7 @@ from .kinematics import ArmKinematics
 from .perception import Perception
 from .planner import MotionOutputLimiter, Plan, Planner, lookup_bin, lookup_detection_bin, ramp, staggered_release_ramp
 from .safety_shell import reserve_pair, reserve_plan
-from .brain import BrainLayer, PlanLayer, build_world, instruction_needs_plan
+from .brain import AgentLoop, BrainLayer, PlanLayer, build_world, instruction_needs_plan
 from .brain.find import FindClient, extract_queries, match_found
 
 HZ = 30.0
@@ -220,6 +220,8 @@ class ClassicalPolicy:
                 self.log(f"[skills] unavailable ({type(exc).__name__}: {exc}); using stock retry order")
         self.plan_brain = (PlanLayer(bc, backend=self.brain.backend, log=self.log)
                            if self.brain is not None and bc.get("planner", False) else None)   # FLAG brain.planner
+        if self.plan_brain is not None and bc.get("closed_loop", False):   # FLAG brain.closed_loop (needs planner)
+            self.plan_brain = AgentLoop(bc, backend=self.brain.backend, log=self.log)
         self.reset()
 
     # ------------------------------------------------------------------ API
@@ -370,6 +372,7 @@ class ClassicalPolicy:
         self._brain_reg, self._brain_n, self._last_pick = [], 0, None
         self._novel_brain_candidates = []
         self._novel_brain_bin = None
+        self._novel_store, self._found, self._agent_dirty, self._last_find_items = [], {}, False, []
         if self.brain is not None:
             self.brain.reset()
         if self.plan_brain is not None:
@@ -2230,6 +2233,8 @@ class ClassicalPolicy:
             stop = None
         if stop is not None:
             return stop
+        if self._ftd_on():   # brain.find_to_detection: novel objects from find() points join the detections (re-grown per look)
+            dets = self._with_novel(dets, obs)
         cands, extra = self._ordered_cands(dets, obs, verify)
         triage = bool(pol.get("time_triage", False))
         forced = None   # (det, bin, variant, table_xy) from the brain or the whole-plan planner
@@ -2290,6 +2295,8 @@ class ClassicalPolicy:
         def planner_fail(reason):
             """The forced primitive cannot run: one async re-plan, or fail closed (never a classical guess)."""
             self._planner_failed(dets, reason, obs)
+            if self._cl_on():   # closed loop: retry / abandon is decided by the agent, never end the episode here
+                return ("relook", None, len(dets))
             return ("planner_pending", dets, verify) if self.plan_brain.req.status == "pending" \
                 else ("none", None, len(dets))
 
@@ -3026,13 +3033,22 @@ class ClassicalPolicy:
                 o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
             world["table_region"] = self._planner_table_region()
             world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            if self._found:
+                world["found"] = dict(self._found)
             # integ-all: in plan mode the plan brain replaces the colour mapping (fixlang abstains on relational text), so
             # a pickable object on the counter is still work, mapping or not
             classical_has_work = any(self._lookup(d) is not None for d in cands) or (
                 self.mapping == {"default": None} and bool(cands))
+            cl = self._cl_on()
+            wkey = (float(obs.get("t", 0.0)), tuple(ids)) if cl else None   # one world JSON per look
 
             if not self.plan_brain.requested:
-                self.plan_brain.request(world)        # first scene: async episode prefetch, never blocks act()
+                if cl:
+                    self.plan_brain.request(world, key=wkey)
+                else:
+                    self.plan_brain.request(world)    # first scene: async episode prefetch, never blocks act()
+            elif cl and self.plan_brain.steps is None:
+                self.plan_brain.request(world, key=wkey)   # the first answer was late / failed: ask again (capped)
             if self.cfg["brain"].get("debug_wait", False):
                 self.plan_brain.wait(float(self.cfg["brain"].get("plan_timeout_s", 2.0)))
 
@@ -3049,8 +3065,16 @@ class ClassicalPolicy:
                 find_enabled=bool(self.cfg["brain"].get("find", False)),
                 classical_has_work=classical_has_work,
             )
+            if cl:
+                self.plan_brain.note_initial()
             if steps is None:
                 return None
+            if cl:
+                self.plan_brain.poll_next(world, reach_fn=reach, place_fn=place,
+                                          find_enabled=bool(self.cfg["brain"].get("find", False)),
+                                          classical_has_work=classical_has_work)
+                if self._agent_dirty and self.plan_brain.request_next(world, key=wkey):
+                    self._agent_dirty = False        # an outcome happened: ask again with this look's fresh world
             while True:
                 call = self.plan_brain.next_call()
                 for skipped in self.plan_brain.skipped_ids:
@@ -3059,6 +3083,14 @@ class ClassicalPolicy:
                                                      self.cfg["policy"]["same_object_radius"] for f in self.failed):
                         self.failed.append(np.asarray(dskip.top[:2], float).copy())
                 if call is None:
+                    if cl:
+                        if self.plan_brain.next_req is not None:
+                            return ("look", None, None, None, None)     # answer in flight: look again, never stall
+                        if classical_has_work:
+                            return None                                 # classical resolver finishes the targets
+                        if self._agent_dirty and self.plan_brain.request_next(world, key=wkey):
+                            self._agent_dirty = False
+                            return ("look", None, None, None, None)
                     return ("stop", None, None, None, None) if self.plan_brain.adopted else None
                 tool, a = call["tool"], call["args"]
                 if tool == "skip":
@@ -3066,12 +3098,19 @@ class ClassicalPolicy:
                     if d is not None:
                         self.failed.append(np.asarray(d.top[:2], float).copy())
                     self.plan_brain.mark("ok", "left on table")
+                    self._agent_dirty = cl or self._agent_dirty
                     continue
                 if tool == "find":
                     try:
-                        found = [ids[i] for i in self._brain_find(a["description"], obs, dets)]
+                        found, dets_f, ids_f = self._brain_find_ids(a["description"], obs, dets)
                         self.log(f"[planner] find({a['description']!r}) -> {found}")
                         self.plan_brain.mark("ok", f"found={found}")
+                        if cl or self._ftd_on():
+                            self._found[a["description"]] = found
+                        if cl:   # the world changed (found ids, maybe a novel object): re-plan from it, async
+                            w2 = self._agent_world(dets_f, ids_f)
+                            self._agent_dirty = not self.plan_brain.request_next(
+                                w2, key=(float(obs.get("t", 0.0)), tuple(ids_f), "find"), why="find")
                     except Exception as e:
                         self.plan_brain.mark("failed", repr(e))
                         self.plan_brain.replan(world, call, repr(e))
@@ -3085,6 +3124,7 @@ class ClassicalPolicy:
                         self.plan_brain.mark("rejected", "no-early-done guard")
                         continue
                     self.plan_brain.mark("ok")
+                    self._agent_dirty = False
                     return ("done", None, None, None, None)
                 d = dmap.get(a["obj_id"])
                 if d is None:                       # scene changed after validation: skip, never improvise
@@ -3095,12 +3135,62 @@ class ClassicalPolicy:
                     if authority is not None and a["bin"] != authority:
                         self.plan_brain.mark("invalid", f"bin-authority: {d.color} is {authority}, not {a['bin']}")
                         continue
-                    return ("pick", d, a["bin"], None, None)
+                    return ("pick", d, a["bin"], call.get("variant"), None)
                 return ("place", d, None, None, np.asarray(a["table_xy"], float))
         except Exception as e:
             self.log(f"[planner] select failed ({e!r})")
             return (("stop", None, None, None, None)
                     if self.plan_brain is not None and self.plan_brain.adopted else None)
+
+    # ---------------------------------------------------------- brain agent (find_to_detection / closed_loop)
+    def _cl_on(self):
+        return isinstance(self.plan_brain, AgentLoop)
+
+    def _ftd_on(self):
+        bc = self.cfg.get("brain") or {}
+        return self.brain is not None and bool(bc.get("find_to_detection", False)) and bool(bc.get("find", False))
+
+    def _variant_chooser(self, untried):
+        """Order of the untried grasp variants: the skill-memory bandit when it exists, else the registry order."""
+        if self.skill_memory is None:
+            return list(untried)
+        ordered = self.skill_memory.choose(("brain_variant",), list(untried))   # only knows its own arms: [] -> default
+        return [v for v in ordered if v in untried] or list(untried)
+
+    def _agent_world(self, dets, ids):
+        world = self._brain_world(dets, ids, None)
+        for o, d in zip(world["objects"], dets):
+            o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
+        world["table_region"] = self._planner_table_region()
+        world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+        if self._found:
+            world["found"] = dict(self._found)
+        return world
+
+    def _with_novel(self, dets, obs):
+        """Known detections + the novel ones, each re-grown from the CURRENT depth at its remembered pixel (gone = placed
+        or moved away -> dropped; the colour detector sees it now -> dropped). An ungraspable one is skipped once."""
+        from .brain.novel import novel_detection
+        known = [d for d in dets if not getattr(d, "novel", False)]
+        keep, out, bc = [], [], self.cfg["brain"]
+        for ent in self._novel_store:
+            try:
+                d = novel_detection(self.perception, obs["head_rgb"], obs["head_depth"], ent["uv"], ent["label"],
+                                    ent["box"], bc)
+            except Exception as e:
+                self.log(f"[novel] re-grow failed ({e!r})")
+                d = None
+            if d is None or any(np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04 for k in known):
+                continue
+            ent["uv"] = d.uv
+            keep.append(ent)
+            out.append(d)
+            if d.ungraspable and not ent.get("skipped"):
+                ent["skipped"] = True
+                self.failed.append(np.asarray(d.top[:2], float).copy())
+                self.log(f"[novel] {d.label!r} ungraspable (footprint {d.footprint}, height {d.height_m}) -> skip")
+        self._novel_store = keep
+        return known + out
 
     def _planner_table_region(self):
         L = self.scene.cfg["layout"]
@@ -3152,6 +3242,11 @@ class ClassicalPolicy:
     def _planner_failed(self, dets, reason, obs):
         call = self.plan_brain.next_call()
         self.plan_brain.mark("failed", reason)
+        if self._cl_on():   # retry / abandon in code (same grasp, then another variant, then skip); async re-plan next look
+            if call is not None and call["tool"] == "pick_place":
+                self.plan_brain.on_grasp_failed(call["args"]["obj_id"], call["args"]["bin"], self._variant_chooser)
+            self._agent_dirty = True
+            return
         try:
             ids = self._brain_ids(dets)
             world = self._brain_world(dets, ids, None)
@@ -3170,6 +3265,8 @@ class ClassicalPolicy:
         if ex is None or self.plan_brain is None:
             return
         self._planner_execution = None
+        if self._ftd_on():   # a novel object is invisible to detect(): confirm it from its re-grown depth blob
+            dets = self._with_novel(dets, obs)
         rad = 2 * self.cfg["policy"]["same_object_radius"]
         source = ex["source_xy"]
         at_source = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - source) < rad for d in dets)
@@ -3182,6 +3279,7 @@ class ClassicalPolicy:
             if target is not None:
                 self._planner_track_move(ex["color"], source, target)
             self.plan_brain.mark("ok", "settled look confirmed")
+            self._agent_dirty = self._cl_on() or self._agent_dirty
         else:
             self._planner_failed(dets, "settled look did not confirm primitive", obs)
 
@@ -3271,8 +3369,43 @@ class ClassicalPolicy:
             bc = self.cfg["brain"]
             self._brain_find_fn = FindClient(bc.get("find_path", "/data/brain/find/find_tool.py"), bc.get("find_url"),
                                              float(bc.get("find_timeout_s", 1.5)))
-        pts = self._brain_find_fn(obs["head_rgb"], query)
-        return [d_i for d_i in match_found(pts, dets)]
+        if not self._ftd_on():
+            pts = self._brain_find_fn(obs["head_rgb"], query)
+            return [d_i for d_i in match_found(pts, dets)]
+        fn = self._brain_find_fn
+        raw = fn.detect(obs["head_rgb"], query) if hasattr(fn, "detect") else fn(obs["head_rgb"], query)
+        items = [it if isinstance(it, dict) else {"point": tuple(it), "bbox": None, "label": query} for it in raw]
+        self._last_find_items = items
+        idx = match_found([it["point"] for it in items], dets)
+        matched = {tuple(map(float, it["point"])) for it in items
+                   if match_found([it["point"]], dets)}
+        from .brain.novel import novel_detection
+        bc = self.cfg["brain"]
+        for it in items:
+            pt = tuple(map(float, it["point"]))
+            if pt in matched or len(self._novel_store) >= int(bc.get("novel_max_objects", 3)):
+                continue
+            if any(((e["uv"][0] - pt[0]) ** 2 + (e["uv"][1] - pt[1]) ** 2) ** 0.5 < 30 for e in self._novel_store):
+                continue
+            d = novel_detection(self.perception, obs["head_rgb"], obs["head_depth"], pt, query, it.get("bbox") or None, bc)
+            if d is None:
+                self.log(f"[novel] find({query!r}) point {pt}: no depth blob above the counter plane")
+                continue
+            self._novel_store.append({"uv": d.uv, "label": str(query)[:80], "box": it.get("bbox") or None})
+            self.log(f"[novel] find({query!r}) -> novel {d.color} object at {np.round(d.top[:2], 3).tolist()} "
+                     f"footprint={d.footprint} height={d.height_m} graspable={not d.ungraspable}")
+        return idx
+
+    def _brain_find_ids(self, query, obs, dets):
+        """find(query) -> (found object ids, detections incl. novel, their ids). Flag off: the old mapping onto dets."""
+        if not self._ftd_on():
+            ids = self._brain_ids(dets)
+            return [ids[i] for i in self._brain_find(query, obs, dets)], dets, ids
+        self._brain_find(query, obs, dets)
+        all_dets = self._with_novel(dets, obs)
+        ids_all = self._brain_ids(all_dets)
+        idx = match_found([it["point"] for it in self._last_find_items], all_dets)
+        return [ids_all[i] for i in idx], all_dets, ids_all
 
     def _brain_points(self, lp, dets, cands, ids):
         """The decision points of the next cycle, with the classical call for each: [(point, state, classical, resolver_abstains)].

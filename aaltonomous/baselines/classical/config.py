@@ -51,6 +51,8 @@ FLAGS = {
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
     "brain.planner": ("brain", False, "whole-instruction closed-set primitive plan for resolver abstention/relations"),
+    "brain.find_to_detection": ("brain agent", False, "find() point that matches no detection -> a novel Detection from the depth blob there (region grow above the counter plane, generic_grasp, ungraspable -> skip); needs brain.find"),
+    "brain.closed_loop": ("brain agent", False, "agent loop: re-plan (async, capped) after every pick/place/find outcome with fresh world JSON + step history; last valid plan keeps running; 2 failed grasps -> other variant or skip; needs brain.planner"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "instruction.max_chars": ("fuzz fix", 0, "cap the instruction text at N chars, cut at the last sentence/clause boundary (resolver is quadratic: 50k chars = 19 s); 0 = off"),
     "safety.nan_guard": ("fuzz fix", False, "non-finite arm_q/hand_q: skip the planner and hold the last trusted target (before trust, return no action until one complete finite encoder frame); non-finite head_depth -> 0 (missing)"),
