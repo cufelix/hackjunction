@@ -293,7 +293,13 @@ def _clauses(low, ord_ok):
         k_here, b_here = counts(here)
         # (A rest that is a keyless catch-all owns its bin: "cubes and cylinders go left; any leftover
         # objects go right" must not hand the spare bin to the cylinders.)
-        if len(k_here) > len(b_here) and len(b_rest) > len(k_rest) and not _BLANKET.search(rest):
+        # Only the NEXT piece decides whether a blanket owns the spare bin; a blanket further on
+        # ("...left and | right bins, everything else in the centre") does not.
+        if len(k_here) > len(b_here) and len(b_rest) > len(k_rest) and not _BLANKET.search(pieces[n + 1]):
+            continue
+        # Mirror case, bins listed first: "the left, | center and right bins take red, yellow and
+        # blue" -- spare keys in the rest belong to the bins sitting here.
+        if len(b_here) > len(k_here) and len(k_rest) > len(b_rest):
             continue
         out.append(here)
         buf = []
