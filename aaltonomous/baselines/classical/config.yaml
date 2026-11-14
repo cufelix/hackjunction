@@ -492,6 +492,8 @@ grasp:
   drop_slot_grid: false       # FLAG (bin capacity). Two reach-biased rows, separated by object width + 1 mm;
                               # stock count 3 -> six distinct slots. false preserves the one-row coordinates exactly.
   drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
+  approach_slow_mps: 0.0      # FLAG (real demo). > 0: the last approach_slow_dist_m of the descend is no faster than this (m/s); 0 = off
+  approach_slow_dist_m: 0.05
   drop_height_extra_m: 0.0    # FLAG (finals safe). Raise the bin release by this (capped at the carry height); IK failure -> stock target
   drop_lateral_margin_m: 0.0  # FLAG (finals safe). Move the release this far toward the bin centre (y only); IK failure -> stock target
   left_hand_fix: {shift_z: 0.0}  # FLAG (left-hand sweep). Left arm + triangle only: grasp z += shift_z (m, |v| <= 0.05) before the fingertip raise; 0 = off

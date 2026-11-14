@@ -1439,7 +1439,24 @@ class Planner:
                 cur_a = a[-1].copy()
 
         move("to_pregrasp", [q_pre], hand_to=hand_pre)
-        move("descend", down)
+        slow_v = float(g.get("approach_slow_mps", 0.0))
+        if slow_v > 0.0 and len(down) >= 2:   # grasp.approach_slow_mps: the last approach_slow_dist_m is slow (real demo)
+            n_tail = min(len(down) - 1, max(1, int(np.ceil(float(g.get("approach_slow_dist_m", 0.05)) / mo["cart_step"]))))
+            t_min = min(n_tail * float(mo["cart_step"]), float(g.get("approach_slow_dist_m", 0.05))) / slow_v
+            sc0 = float(self.object_speed_scale) if self.object_speed_scale is not None else 1.0
+            a_head = time_scale([cur_a] + list(down[:-n_tail]), vmax * sc0, amax * sc0, self.dt) \
+                if len(down) > n_tail else np.repeat(cur_a[None], 0, 0)
+            start = a_head[-1].copy() if len(a_head) else cur_a.copy()
+            sc = sc0
+            for _ in range(8):
+                a_tail = time_scale([start] + list(down[-n_tail:]), vmax * sc, amax * sc, self.dt)
+                if len(a_tail) * self.dt >= t_min - 1e-9:
+                    break
+                sc *= max(0.2, 0.95 * len(a_tail) * self.dt / t_min)
+            a = np.vstack([a_head, a_tail]) if len(a_head) else a_tail
+            add("descend", a, np.repeat(cur_h[None], len(a), 0))
+        else:
+            move("descend", down)
         ls = mo.get("lift_on_stall") or {}
         close_hold_s = mo["close_hold_s"]
         if ls.get("enabled", False):  # hold up to timeout_s; the policy starts the lift early on a finger stall

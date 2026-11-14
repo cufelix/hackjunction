@@ -197,6 +197,8 @@ FLAGS = {
                                     "extra bin-release height (capped at the carry height); IK failure uses the stock target"),
     "grasp.drop_lateral_margin_m": ("finals safe", 0.0,
                                       "move the bin release toward the bin centre (y only, footprint-checked); IK failure uses the stock target"),
+    "grasp.approach_slow_mps": ("real demo", 0.0, "> 0: the last approach_slow_dist_m of the descend runs no faster than this Cartesian speed (m/s); 0 = off (stock timing)"),
+    "grasp.approach_slow_dist_m": ("real demo", 0.05, "length (m) of the descend tail slowed by approach_slow_mps"),
     "grasp.arm_xy_offset": ("arm offset", {"left": [0.0, 0.0], "right": [0.0, 0.0]}, "per-arm grasp xy correction (pelvis frame, m, each |v| <= 0.05) added to the detected top xy in the planner; zeros = off"),
     "grasp.left_hand_fix.shift_z": ("left hand", 0.0, "left arm + triangle only: add this (m) to the grasp z before the fingertip-clearance raise; 0 = off"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
@@ -375,6 +377,10 @@ def _apply_output_caps(cfg):
 
 def check_flag_values(cfg):
     """Hard limits on flag values (fail at load = at docker build): carry_scale in (0, 1], known overflow modes."""
+    asm, asd = _get(cfg, "grasp.approach_slow_mps"), _get(cfg, "grasp.approach_slow_dist_m")
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) for v in (asm, asd)) \
+            or not 0.0 <= asm <= 1.0 or not 0.0 < asd <= 0.2:
+        raise ValueError(f"grasp.approach_slow_mps={asm!r} / approach_slow_dist_m={asd!r}: want 0 <= mps <= 1, 0 < dist <= 0.2")
     axo = _get(cfg, "grasp.arm_xy_offset")
     if not isinstance(axo, dict) or set(axo) != {"left", "right"} or any(
             not isinstance(v, (list, tuple)) or len(v) != 2 or any(
