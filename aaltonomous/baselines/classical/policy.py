@@ -29,6 +29,7 @@ from aaltonomous.interface.tasks import FIXED_MAPPING
 from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene, resolve_bin
 
+from .bin_vote import vote_bins
 from .config import hand_postures, home_arm, load_config
 from .kinematics import ArmKinematics
 from .perception import Perception
@@ -145,6 +146,8 @@ class ClassicalPolicy:
         self._abort = None          # policy.retry_vary_grasp: the close being watched for held=no
         self._summary_logged = False
         self.perception.reset_calibration()
+        self.planner.bin_shift, self.planner.drop_extra = {}, {}   # bin.vote: nominal bins until voted
+        self._bv_frames, self._bv_done = [], False
         self.calibration = None
         self._calibration_done = False
         self.last_bin_detections = []
@@ -228,6 +231,16 @@ class ClassicalPolicy:
             self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
             self.state = "look"
             return self._pop()
+        if self.state == "look" and not self._bv_done and (self.cfg.get("bin") or {}).get("vote", {}).get("enabled"):
+            # bin.vote: first n_frames looks at home, before any pick; then freeze the median, never again
+            v = self.cfg["bin"]["vote"]
+            self._bv_frames.append({"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth")})
+            if len(self._bv_frames) < int(v["n_frames"]):
+                return self._hold()
+            self._bv_done = True
+            shift, extra = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg, log=lambda m: self._note(t, m))
+            self.planner.bin_shift, self.planner.drop_extra = shift, extra
+            self._bv_frames = []
         if self.state == "look":
             cap = self.cfg["policy"].get("max_total_attempts")
             if cap is not None and self.n_started >= int(cap):   # knocked objects reappear as 'new': hard stop

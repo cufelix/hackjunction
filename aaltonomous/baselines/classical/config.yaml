@@ -91,6 +91,18 @@ perception:
                               # object <= 1.35, two touching >= 1.48)
     max_parts: 3
 
+bin:
+  vote:                       # FLAG (bin vote). Per-bin position from 3 votes (depth rim, orange tape, nominal prior)
+    enabled: false
+    agree_m: 0.04             # two votes closer than this agree -> mean of the closest pair
+    search_m: 0.10            # per-bin rim search window and tape window around the prior
+    max_shift_m: 0.10         # a result further than this from the prior is discarded (prior kept)
+    n_frames: 5               # first frames of the episode (arms home, before any pick); the median is frozen
+    low_conf_extra_m: 0.04    # extra release height when the votes do not agree / only the prior is known
+    min_rim_points: 180
+    min_tape_px: 60
+    tape_hsv: [[3, 150, 70], [8, 255, 180]]
+
 grasp:
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
   # fingers point roughly forward and curl down in front of the object, the thumb swings in from behind.

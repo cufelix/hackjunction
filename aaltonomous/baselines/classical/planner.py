@@ -128,16 +128,26 @@ class Planner:
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
+        self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
+        self.drop_extra = {}   # bin.vote: bin name -> extra release height (m) when the bin position is low-confidence
 
     # ------------------------------------------------------------------ geometry helpers
-    def bin_xy(self, name):
+    def _bin_xy0(self, name):
         return self.scene.mat_to_pelvis(np.r_[self.scene.cfg["bins"]["centers"][name], 0.0])[:2]
 
+    def bin_xy(self, name):
+        c = self._bin_xy0(name)
+        return c + self.bin_shift[name] if name in self.bin_shift else c
+
     def drop_xy(self, name):
+        c = self._drop_xy0(name)
+        return c + self.bin_shift[name] if name in self.bin_shift else c
+
+    def _drop_xy0(self, name):
         """Release point (pelvis xy) in bin `name`: the point of the inner footprint nearest the pelvis, `grasp.drop_inset`
         inside the inner walls (the published box row puts the box centres past the arm's reach). None -> centre."""
         inset = self.cfg["grasp"].get("drop_inset")
-        c = self.bin_xy(name)
+        c = self._bin_xy0(name)
         if inset is None:
             return c
         lo, hi = self.scene.bin_inner_box(name)
@@ -147,6 +157,10 @@ class Planner:
         return np.clip(np.zeros(2), lo2, hi2)
 
     def drop_slots(self, name):
+        out = self._drop_slots0(name)
+        return [p + self.bin_shift[name] for p in out] if name in self.bin_shift else out
+
+    def _drop_slots0(self, name):
         """Reach-biased release points in the near-inner-wall band of a bin.
 
         The first point is closest to the robot centre line.  Consecutive
@@ -164,7 +178,7 @@ class Planner:
         ylo, yhi = corners[:, 1].min() + margin, corners[:, 1].max() - margin
         x = min(xhi, xlo + float(g.get("drop_inset") or 0.0))
         if ylo > yhi:
-            return [self.drop_xy(name)]
+            return [self._drop_xy0(name)]
         if ylo <= 0.0 <= yhi:
             ys = [0.0]
             for k in range(1, count):
@@ -611,6 +625,8 @@ class Planner:
         wall = float(sc.cfg["bins"]["wall_height"])
         z_carry = zc + max(g["carry_height"], wall + H + 0.03)
         z_drop = zc + wall + H / 2 + g["drop_above_rim"]
+        if self.drop_extra.get(bin_name):  # bin.vote low-confidence bin: release higher, never above the carry height
+            z_drop = min(z_drop + self.drop_extra[bin_name], z_carry)
         if drop_slot is None:  # stock: one release point per bin (#6 off)
             bxy = self.drop_xy(bin_name)
         else:                  # #6: the assigned drop slot
