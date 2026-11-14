@@ -1770,10 +1770,85 @@ class ClassicalPolicy:
                                                   self._is_centre if tiered else (lambda d: 0))
             except Exception as e:
                 self._dec_fail("isolated_first", e)
+        if decision and pol.get("score_order", False):
+            try:
+                cands = self._score_order(cands, obs)
+            except Exception as e:
+                self._dec_fail("score_order", e)
         if extra:
             extra.sort(key=base)
             cands += extra
         return cands, extra
+
+    # ------------------------------------------------------------------ policy.score_order (EV per second)
+    def _so_estimate(self, d, t):
+        """(p_success, p_wrong, t_cost_s, arm, bin) for one counter candidate. Pure arithmetic, no IK."""
+        pol = self.cfg["policy"]
+        tab = pol.get("score_p_success", {}) or {}
+        shape = getattr(d, "shape", None) or "unknown"
+        ps = float(tab.get(shape, tab.get("unknown", 0.5)))
+        sc = float(getattr(d, "shape_conf", 0.0) or 0.0)
+        if getattr(d, "shape", None) and 0.0 < sc < 1.0:
+            ps *= 0.8 + 0.2 * sc                        # unsure shape -> unsure grasp posture
+        xy = np.asarray(d.top[:2], float)
+        arm_y = float(pol.get("score_arm_y_m", 0.2))
+        side = "left" if xy[1] >= 0 else "right"        # pelvis frame: x forward, y left
+        anchor = np.array([0.0, arm_y if side == "left" else -arm_y])
+        reach = float(np.linalg.norm(xy - anchor))
+        r_max = float(pol.get("score_reach_m", 0.55))
+        if reach > r_max:                               # past the comfortable reach: success drops off linearly
+            ps *= max(0.1, 1.0 - (reach - r_max) / 0.15)
+        if self._skills_on():                           # skill memory: shrink the prior towards the observed rate
+            try:
+                st = self.skill_memory._stats[self._skill_key(d, side)]["stock"]
+                n = float(st["n"])
+                if n > 0:
+                    ps = (ps * 2.0 + float(st["reward"])) / (2.0 + n)
+            except Exception:
+                pass
+        b = lookup_detection_bin(self.cfg, self.mapping, d)
+        if b is None:                                   # abstain class: never a guess
+            return float(np.clip(ps, 0, 1)), 1.0, 1.0, side, None
+        conf = float(np.clip(getattr(d, "color_conf", 1.0), 0.0, 1.0)) * self._bin_confidence(d)
+        if getattr(d, "shape", None) is None and self.cfg.get("policy", {}).get("bin_lookup") == "resolve_bin":
+            conf *= 0.9                                 # shape-dependent mapping with an unknown shape
+        pw = float(np.clip(1.0 - conf, 0.0, 1.0))
+        bxy = np.asarray(self.planner.bin_xy(b), float)
+        path = 2.0 * reach + float(np.linalg.norm(xy - bxy))   # home -> object -> bin, back
+        tc = float(pol.get("score_overhead_s", 8.0)) + path / float(pol.get("score_speed_mps", 0.12))
+        return float(np.clip(ps, 0, 1)), pw, max(tc, 1.0), side, b
+
+    def _score_order(self, cands, obs):
+        """EV per second: ps * (2 (1 - pw) - pw) / t_cost. EV <= 0 is never picked; a pick must finish before
+        time_limit - reserve - score_safety_s; in the last score_endgame_s only the quickest certain object."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        left = self.time_limit - t - self._time_reserve(corrective=False) - float(pol.get("score_safety_s", 3.0))
+        rows = []
+        for d in cands:
+            ps, pw, tc, side, b = self._so_estimate(d, t)
+            ev = ps * (2.0 * (1.0 - pw) - pw)
+            rows.append((ev / tc, ev, ps, pw, tc, side, b, d))
+        rows.sort(key=lambda r: -r[0])
+        out, notes = [], []
+        for r in rows:
+            why = "ok"
+            if r[1] <= 0.0:
+                why = "ev<=0"
+            elif r[4] > left:
+                why = "no time"
+            notes.append((r, why))
+            if why == "ok":
+                out.append(r)
+        if out and left < float(pol.get("score_endgame_s", 25.0)):
+            certain = [r for r in out if r[3] <= float(pol.get("score_certain_pw", 0.1))]
+            out = [min(certain, key=lambda r: r[4])] if certain else []
+        for r, why in notes:
+            self.log(f"[score_order] t={t:.1f} {r[7].color:<6} {str(getattr(r[7], 'shape', None)):<8} arm={r[5]:<5} "
+                     f"bin={r[6]} ps={r[2]:.2f} pw={r[3]:.2f} t={r[4]:.1f}s EV={r[1]:+.2f} EV/s={r[0]:+.3f} {why}")
+        if out:
+            self.log(f"[score_order] t={t:.1f} -> {out[0][7].color} ({out[0][5]} arm, EV/s={out[0][0]:+.3f})")
+        return [r[7] for r in out]
 
     def _choose(self, dets, obs, verify):
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
@@ -1844,6 +1919,11 @@ class ClassicalPolicy:
                 p = self._plan_pick(d, dict(obstacles=others))
             self.plans.append(p)
             if p.ok and not self._object_time_allows(d, p.duration):
+                continue
+            if p.ok and pol.get("score_order", False) and \
+                    t + p.duration + float(pol.get("score_safety_s", 3.0)) + self._time_reserve(p.corrective) > self.time_limit:
+                n_long += 1                      # score_order: do not start a pick that cannot finish in time
+                shortest = p if shortest is None or p.duration < shortest.duration else shortest
                 continue
             if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
                 self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")

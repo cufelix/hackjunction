@@ -109,6 +109,7 @@ FLAGS = {
     "grasp.tri_vertex_align": ("finals cage", False,
                                  "standing triangle: align the index-middle gap with a vertex yaw"),
     "policy.time_triage": ("Oliver #3", False, "skip plans that do not fit the time left, try the next object"),
+    "policy.score_order": ("r22", False, "pick by expected value per second (p_success, p_wrong, t_cost); never EV <= 0; time-budget + endgame stop"),
     "policy.max_total_attempts": ("Oliver #3", None, "global per-episode cap on started picks"),
     "policy.max_attempts": ("stock param", 2, "tries per object before it is skipped (stock 2)"),
     "policy.retry_pass": ("Oliver #3", False, "once per episode: max_attempts-skipped objects get retry_extra_attempts"),
