@@ -1572,22 +1572,30 @@ class Perception:
         return None
 
     def _fk_arm_mask(self, shape, arm_q, hand_q=None):
-        """perception.color_gate.fk_mask: bool image mask of the FK-posed arm + hand surface points projected with the
-        CURRENT camera pose (pitch-cal / B1 corrected), dilated by fk_dilate_px. None on any failure (= no mask)."""
+        """FK arm/hand mask from filled per-link silhouettes at the current camera pose.
+
+        Surface samples are 5 mm apart, so marking their projected pixels alone leaves coloured robot pixels between
+        samples.  A convex hull per link fills those gaps without bridging the two arms (or separate fingers), then
+        the flag-param ``fk_dilate_px`` covers the rendered/real RGB-to-FK edge residual.  None on any failure keeps
+        the historical fail-open behaviour of this optional gate.
+        """
         import cv2
         try:
             if self._arm_surface is None:
                 from .hand_calib import ArmSurface
                 self._arm_surface = ArmSurface()
-            P, _ = self._arm_surface.posed(arm_q, hand_q)
-            uvz = self._project(P)
             h, w = shape
-            ok = np.all(np.isfinite(uvz), axis=1) & (uvz[:, 2] > 0)
-            u, v = np.round(uvz[ok, 0]).astype(int), np.round(uvz[ok, 1]).astype(int)
-            inb = (u >= 0) & (u < w) & (v >= 0) & (v < h)
             m = np.zeros(shape, np.uint8)
-            m[v[inb], u[inb]] = 1
-            r = int(self.color_gate_cfg.get("fk_dilate_px", 15))
+            r = int(self.color_gate_cfg.get("fk_dilate_px", 0))
+            for P, _ in self._arm_surface.posed_links(arm_q, hand_q):
+                uvz = self._project(P)
+                ok = np.all(np.isfinite(uvz), axis=1) & (uvz[:, 2] > 0)
+                uv = np.round(uvz[ok, :2]).astype(np.int32)
+                uv = uv[(uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)]
+                if r > 0 and len(uv) >= 3:
+                    cv2.fillConvexPoly(m, cv2.convexHull(uv), 1)
+                elif len(uv):
+                    m[uv[:, 1], uv[:, 0]] = 1
             if r > 0:
                 m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
             self.fk_mask_px = int(m.sum())
@@ -1685,17 +1693,28 @@ class Perception:
         return None
 
     def _color_gate_boxes(self, g, hedge=True):
-        """[(lo, hi)] mat-frame footprint of every bin. Flag live_bins off: nominal scene.yaml. On: the policy's live
-        estimate (bin.vote shift; a calibrate_bins success already moves the DETECTIONS onto the nominal bins), and with
-        no estimate at all the nominal box grown near_margin_m towards the robot (mat -y = pelvis -x, the drop_2 shift)."""
+        """[(lo, hi)] mat-frame footprint of every bin, with a per-bin confidence hedge.
+
+        A confident bin vote uses its tight live footprint.  Missing, prior-only, and disagreeing votes use the union
+        of the nominal footprint and its full allowed displacement towards the robot (mat -y = pelvis -x).  Trust is
+        keyed only by ``planner.bin_conf[name]``: a populated ``bin_shift`` is not evidence by itself (M1).
+        """
         sc = self.scene
-        shift = dict(getattr(self.bin_shift_src, "bin_shift", None) or {}) if self.live_bins else {}
-        estimate = bool(shift) or (self.calibration is not None and self.calibration.success)
+        src = self.bin_shift_src
+        conf = dict(getattr(src, "bin_conf", None) or {}) if self.live_bins else {}
+        nominal = bin_geometry(sc)
         out = []
-        for g_ in self.bin_geometry(gate=True).values():
+        for name, g_ in self.bin_geometry(gate=True).items():
             lo, hi = g_["outer_lo"], g_["outer_hi"]
-            if hedge and self.live_bins and not estimate:
-                lo = lo - np.array([0.0, float(g.get("near_margin_m", 0.10))])
+            trusted = float(conf.get(name, 0.0)) >= 1.0
+            if hedge and self.live_bins and not trusted:
+                margin = float(g.get("near_margin_m", 0.0))
+                nlo, nhi = nominal[name]["outer_lo"], nominal[name]["outer_hi"]
+                # A shift paired with prior/disagree/missing confidence is not evidence.  Ignore it and sweep the
+                # nominal footprint through the full allowed near displacement; only CONF_AGREE may tighten around
+                # a live shifted box.
+                lo = nlo - np.array([0.0, margin])
+                hi = nhi
             out.append((lo, hi))
         return out
 

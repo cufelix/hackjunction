@@ -1,4 +1,4 @@
-# finals_r21 (R29): finals_r20 flags on rc6 code = gate fk_dilate 0 / near_margin 0, footprint->colour fallback, first-look wait, bin_vote pitch_T, sat_floor, fixed_mapping.
+# finals_r21 (R29): finals_r20 plus New H2/M1 arm-silhouette and confidence-aware live-bin margins.
 name: finals_r21
 flags:
   instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
@@ -46,8 +46,10 @@ flags:
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
   perception.color_gate.enabled: true          # Felix gate   A/B arm: cand_r17 + the color_gate post-filter
   perception.online_pitch_cal: table            # Timi pitch per-episode camera pitch from the counter plane
-  perception.color_gate.live_bins: true        # Felix gate  footprint = live bin estimate, else nominal + 10 cm near
-  perception.color_gate.fk_mask: true          # Felix gate  FK arm/hand mask (dilated 15 px)
+  perception.color_gate.live_bins: true        # Felix gate  per-bin confidence chooses tight vote vs conservative union
+  perception.color_gate.fk_mask: true          # Felix gate  filled per-link FK arm/hand silhouette
+  perception.color_gate.fk_dilate_px: 3        # New H2     render-tested RGB/FK fringe; nearby spawn-object recall
+  perception.color_gate.near_margin_m: 0.10    # New H2/M1  prior/disagree union through full bin.vote.max_shift_m
   motion.arm_vel_cap: 0.90                       # Timi vel   rad/s cap (sim profile 0.97)
   instruction.normalize: true                   # Felix lang   rc1 language layer (Modal 106/117, 0 wrong)
   perception.hue_guard.enabled: true            # r19 Felix  cross-label hue gap + top-face hue + red_min_s: orange/yellow abstain, never swap

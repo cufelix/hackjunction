@@ -221,7 +221,7 @@ class TestColorGateWorkspaceAndCeiling(unittest.TestCase):
 
     def test_bad_tuning_fails_at_load(self):
         for k, v in (("max_cands", 0), ("area_frac", float("nan")), ("edge_h", [0.07, 0.03]), ("ws_x", [0.1]),
-                     ("max_area_frac", "x")):
+                     ("max_area_frac", "x"), ("fk_dilate_px", 1.5)):
             with self.assertRaises(ValueError, msg=(k, v)):
                 load_config(overlay="none", overrides={"perception.color_gate.enabled": True,
                                                        f"perception.color_gate.{k}": v})
@@ -237,19 +237,28 @@ if __name__ == "__main__":
 
 
 class TestColorGateLiveBins(unittest.TestCase):
-    """perception.color_gate.live_bins: the footprint follows the policy's live bin estimate."""
+    """live-bin footprints hedge each bin from planner.bin_conf, never from a nonempty shift dictionary."""
     G = None
 
-    def _p(self, live=True):
+    def _p(self, live=True, margin=0.10):
         cfg = load_config(overlay="none", overrides={"perception.color_gate.enabled": True,
-                                                     "perception.color_gate.live_bins": live})
+                                                     "perception.color_gate.live_bins": live,
+                                                     "perception.color_gate.near_margin_m": margin})
         p = Perception(cfg, SC, CAL, log=lambda *_: None)
         return p, p.color_gate_cfg
 
     def _near(self, dy):   # mat point on the centre bin's axis, dy in front of its NEAR edge (towards the robot)
         return _det(_top([BIN[0], BIN[1] - HALF[1] - dy]), method="plane", n_depth=0)
 
-    def test_no_estimate_grows_the_near_side_by_10cm(self):
+    def test_near_margin_is_a_default_off_flag_and_finals_uses_the_full_vote_displacement(self):
+        from .config import FLAGS
+
+        self.assertIn("perception.color_gate.near_margin_m", FLAGS)
+        self.assertEqual(load_config(overlay="none")["perception"]["color_gate"]["near_margin_m"], 0.0)
+        cfg = load_config(overlay="finals_r21")
+        self.assertEqual(cfg["perception"]["color_gate"]["near_margin_m"], cfg["bin"]["vote"]["max_shift_m"])
+
+    def test_missing_confidence_grows_the_near_side_by_full_allowed_10cm(self):
         p, g = self._p()
         self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")   # 5 cm in front: inside the margin
         self.assertIsNone(p._color_gate_why(self._near(0.15), g))                       # beyond margin + edge band
@@ -258,17 +267,39 @@ class TestColorGateLiveBins(unittest.TestCase):
         p, g = self._p(live=False)
         self.assertIsNone(p._color_gate_why(self._near(0.05), g))
 
-    def test_calibrate_bins_success_counts_as_an_estimate(self):
+    def test_calibration_success_does_not_substitute_for_per_bin_vote_confidence(self):
         p, g = self._p()
         p.calibration = BinCalibration(True, True, 0.9, np.zeros(2), 100, 0.002, 1.0, "ok")
-        self.assertIsNone(p._color_gate_why(self._near(0.05), g))                       # nominal again, no margin
+        self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")
 
-    def test_bin_vote_shift_moves_the_footprint(self):
+    def test_prior_or_disagree_shift_dict_still_gets_the_union_hedge(self):
+        for confidence in (0.5, 0.3):
+            p, g = self._p()
+            p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([-0.07, 0.0])},
+                                                "bin_conf": {"center": confidence}})()
+            g["ws_x"] = None
+            self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin", confidence)
+
+    def test_confident_bin_vote_uses_only_the_tight_shifted_footprint(self):
         p, g = self._p()
-        p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([-0.07, 0.0])}})()   # pelvis dx -7 cm
+        p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([-0.07, 0.0])},
+                                           "bin_conf": {"center": 1.0}})()   # pelvis dx -7 cm
         self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:workspace")   # 2b edge follows the shift
         far = _det(_top([BIN[0], BIN[1] + HALF[1] - 0.03]), method="plane", n_depth=0)  # nominal far strip, now outside
         self.assertEqual(p._color_gate_why(far, g), "color_gate:workspace")             # behind the bin row: 2b
         g["ws_x"] = None
         self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")   # inside the SHIFTED box
         self.assertIsNone(p._color_gate_why(far, g))
+
+    def test_hedge_is_per_bin_and_uses_nominal_to_full_allowed_displacement_union(self):
+        p, g = self._p()
+        p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([0.07, 0.0])},
+                                           "bin_conf": {"left": 1.0, "center": 0.5, "right": 0.3}})()
+        boxes = dict(zip(SC.bin_names, p._color_gate_boxes(g)))
+        nominal = p.bin_geometry(gate=False)
+        for name in ("center", "right"):
+            lo, hi = boxes[name]
+            np.testing.assert_allclose(lo, nominal[name]["outer_lo"] - [0.0, 0.10])
+            np.testing.assert_allclose(hi, nominal[name]["outer_hi"])
+        np.testing.assert_allclose(boxes["left"][0], nominal["left"]["outer_lo"])
+        np.testing.assert_allclose(boxes["left"][1], nominal["left"]["outer_hi"])

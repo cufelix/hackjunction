@@ -147,7 +147,8 @@ class TestFlags(unittest.TestCase):
                                                                               "perception.color_gate.live_bins", "perception.color_gate.fk_mask"}
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.geometry_runtime", "grasp.held_detector",
                                                           "calib.plane.apply_height"}
-        expect["finals_r21"] = expect["finals_r20"]   # R29: same flags, rc6 code
+        expect["finals_r21"] = expect["finals_r20"] | {"perception.color_gate.fk_dilate_px",
+                                                         "perception.color_gate.near_margin_m"}
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
