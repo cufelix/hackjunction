@@ -182,6 +182,8 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_recall"] = expect["finals_r22"] | {
             "perception.sat_floor_adaptive", "perception.area_floor_geometric", "perception.topface_mode",
             "perception.partial_ok_near_hand", "perception.relook_before_done"}   # recall A/B on top of r22
+        expect["finals_r22_cal"] = expect["finals_r22"] | {"calib.hand_icp_primary", "calib.counter_after_hand",
+                                                       "calib.refit_per_look", "perception.principal_point"}   # handcal A/B
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -190,9 +192,9 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
-                  "finals_r22_recall"):
+                  "finals_r22_recall", "finals_r22_cal"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
-        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
         for n in [k for k in expect if k.startswith("finals_")]:
             expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
@@ -229,6 +231,17 @@ class TestFlags(unittest.TestCase):
         np.testing.assert_array_equal(perception.cal.cams[perception.cam].K,
                                       calibration.cams[perception.cam].K)
 
+    def test_finals_r22_cal_is_r22_plus_calibration_and_sim_principal_point(self):
+        r21, r22 = load_config(overlay="finals_r22"), load_config(overlay="finals_r22_cal")
+        self.assertEqual(r22["profile"], "sim")
+        self.assertEqual(r22["perception"]["principal_point"], "center")
+        for key in ("hand_icp_primary", "counter_after_hand", "refit_per_look"):
+            self.assertTrue(r22["calib"][key])
+            r22["calib"][key] = r21["calib"][key]
+        r22["perception"]["principal_point"] = r21["perception"]["principal_point"]
+        r22["overlay"] = r21["overlay"]
+        self.assertEqual(r22, r21)
+
     def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
@@ -249,8 +262,9 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_r22", "finals_r22_recall",
-                                      "finals_real", "rc1", "rc1_strict", "safe_profile"})
+                                      "finals_r21", "finals_r22", "finals_r22_cal",
+                                      "finals_r22_recall", "finals_real", "rc1", "rc1_strict",
+                                      "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 

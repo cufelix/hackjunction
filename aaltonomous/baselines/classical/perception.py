@@ -207,7 +207,7 @@ class Perception:
             K = np.array(cam.K, float).copy()
             f = 0.5 * (K[0, 0] + K[1, 1])
             K[0, 0] = K[1, 1] = f
-            K[0, 2], K[1, 2] = cam.width / 2.0, cam.height / 2.0
+            K[0, 2], K[1, 2] = (cam.width - 1) / 2.0, (cam.height - 1) / 2.0
             self.cal = copy.copy(calibration)
             self.cal.cams = dict(calibration.cams)
             self.cal.cams[self.cam] = dataclasses.replace(cam, K=K)
@@ -229,6 +229,11 @@ class Perception:
         self._ah_est, self._ah_tries = [], 0
         self._ah_done = not bool(self.ah.get("apply_height"))
         self._ah_committed = None
+        calib_cfg = cfg.get("calib") or {}
+        self.counter_after_hand = bool(calib_cfg.get("counter_after_hand", False))
+        self.refit_per_look = bool(calib_cfg.get("refit_per_look", False))
+        self.counter_tracker = None       # installed by policy with the same fitter used by the primary phase
+        self.camera_pose_selected = False
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
@@ -331,6 +336,9 @@ class Perception:
         self._ah_est, self._ah_tries = [], 0
         self._ah_done = not bool(self.ah.get("apply_height"))
         self._ah_committed = None
+        self.camera_pose_selected = False
+        if self.counter_tracker is not None:
+            self.counter_tracker.reset()
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
         self.pitch_calibration = None
@@ -850,6 +858,7 @@ class Perception:
             if hasattr(self, "pitch_T"):
                 self.pitch_T = np.array(T, float)
             self._transform_version += 1
+        self.camera_pose_selected = True
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""
@@ -968,8 +977,27 @@ class Perception:
                  f"spread={spread:.4f} mad={mad:.4f} tilt_deg={sample.tilt_deg:.2f} fallback={fallback}")
         return self._ah_done, self._ah_committed
 
-    def update_counter_height(self, depth):
-        """Synchronous compatibility helper; policy preflight uses measure/accept in a worker + main thread."""
+    def update_counter_height(self, depth, frame=None):
+        """Synchronous compatibility helper; policy preflight uses measure/accept in a worker + main thread.
+        calib.counter_after_hand (handcal): height only after the camera pose is selected, via the shared tracker."""
+        if self.counter_after_hand:
+            if not self.camera_pose_selected or self.counter_tracker is None or frame is None:
+                return None
+            if self.counter_tracker.value is not None and not self.refit_per_look:
+                return None
+            try:
+                update = self.counter_tracker.observe(
+                    self.cal, self.cam, depth, self.current_T(), frame["timestamp"], frame["joints"],
+                    frame.get("last_motion_time"))
+            except Exception as exc:
+                self.log(f"[counter_after_hand] rejected: {type(exc).__name__}: {exc}")
+                return None
+            if update.committed and update.counter_z is not None:
+                self.scene.counter_z_runtime = float(update.counter_z)
+            self.log(f"[counter_after_hand] accepted={int(update.accepted)} committed={int(update.committed)} "
+                     f"z={update.counter_z} n={update.n_samples} tilt_deg={update.tilt_deg:.2f} "
+                     f"rms_mm={update.residual_m * 1000.0:.2f} ({update.reason})")
+            return update
         if not self.ah.get("apply_height") or self._ah_done:
             return self._ah_committed
         return self.accept_counter_height_sample(self.measure_counter_height(depth))[1]
@@ -1210,14 +1238,16 @@ class Perception:
         if self._colour_kmeans_tries >= 3:
             self._colour_kmeans_done = True  # give up after the 3rd attempt; robust ranges stay
 
-    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None, frame=None):
+    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None, frame=None,
+               calibration_frame=None):
         """Detect one frame under one immutable transform/version when online calibration is enabled."""
         if not self.online_pitch_cal and frame is None:
-            return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q)
+            return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q, calibration_frame)
         with self.use_frame_transform(frame):
-            return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q)
+            return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q, calibration_frame)
 
-    def _detect_frame(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None):
+    def _detect_frame(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None,
+                      calibration_frame=None):
         """Detect coloured objects.
 
         ``include_bins`` keeps pixels over the known bin footprints long enough for
@@ -1230,7 +1260,7 @@ class Perception:
         c = self.cfg
         dets, rejected = [], []
         self.color_gate_degraded = False
-        self.update_counter_height(depth)    # calib.plane.apply_height (inert when off)
+        self.update_counter_height(depth, calibration_frame)    # inert when its flags are off
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
         arm = None
         arm_boundary = None

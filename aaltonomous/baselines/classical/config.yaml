@@ -13,6 +13,49 @@ scene:
   counter_z_prior: null       # FLAG: no-depth fallback table height (m, pelvis frame, 0..0.3); null = nominal scene.yaml z
 
 calib:
+  hand_icp_primary: false      # FLAG: full 6-DOF camera fit from FK forearm/palm surfaces before the first motion
+  counter_after_hand: false    # FLAG: counter height only in the selected camera frame, after N MAD-consistent samples
+  refit_per_look: false        # FLAG: freshness-guarded, bounded plane refit on every look + hand/plane tilt cross-check
+  primary_fit:
+    prior_rot_deg: 3.0         # Gaussian prior about the configured extrinsic
+    prior_trans_m: 0.020
+    multistart_trans_m: 0.012  # scored starts span +/- this translation on every axis
+    multistart_rot_deg: 2.0    # and +/- this camera-frame rotation on every axis
+    counter_clearance_m: 0.058 # depth this close to the fitted counter plane is never arm evidence
+    min_model_points: 150
+    min_inliers: 300
+    min_coverage: 0.55
+    min_valid_frac: 0.35
+    max_residual_m: 0.004
+    min_spread_m: 0.10         # accepted inliers must span this in at least two pelvis axes
+    max_trans_m: 0.050
+    max_rot_deg: 6.0
+    search_px: 56
+    pixel_stride: 3
+    max_data_points: 1800
+    max_iters: 14
+    thr_start_m: 0.055
+    thr_end_m: 0.008
+    depth_noise_m: 0.004
+    decorrelated_samples: 50
+    plane_min_inliers: 500
+    plane_max_rms_m: 0.006
+    plane_tilt_agree_deg: 1.5
+    fallback_counter_dz_m: 0.15
+    stable_pair_s: 0.10
+    stable_joint_rad: 0.02
+    job_timeout_s: 1.5
+  counter_fit:
+    samples: 3                 # never commit from fewer than three estimates
+    max_samples: 7
+    mad_scale: 3.5
+    mad_floor_m: 0.004
+    max_tries: 12
+    max_tilt_deg: 3.0
+    max_update_m: 0.010        # bounded per-look update
+    smooth_alpha: 0.35
+    stale_joint_rad: 0.02
+    stale_pair_s: 0.10
   plane:
     apply_height: false       # FLAG (P0 table): runtime counter_z from the head-depth counter plane (perception.update_counter_height)
     looks: 3                  # median over the first N valid looks
