@@ -240,7 +240,7 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_robust"] = expect["finals_r22"] | {"grasp.abort_lift_first", "policy.no_objects_relook", "perception.flood_guard"}   # robust A/B (integ-all)
         expect["finals_r22_order"] = expect["finals_r22"] | {"policy.score_order"}   # order A/B (integ-all)
         expect["finals_r22_novel"] = expect["finals_r22"] | {"perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles"}   # novel A/B (integ-all)
-        expect["finals_r22_agent"] = expect["finals_r22"] | {"brain.enabled", "brain.find", "brain.planner", "brain.find_to_detection", "brain.closed_loop", "brain.backend"}   # agent A/B (integ-all)
+        expect["finals_r22_agent"] = expect["finals_r22"] | {"brain.enabled", "brain.find", "brain.planner", "brain.find_to_detection", "brain.closed_loop", "brain.backend", "brain.image_max_side_px", "brain.find_n_predict"}   # agent A/B (integ-all)
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
                   "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_counter", "finals_r22_bare", "finals_r22_prism", "finals_r22_cage", "finals_r22_done", "finals_r22_pregrasp", "finals_r22_verify", "finals_r22_robust", "finals_r22_order", "finals_r22_novel", "finals_r22_agent"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
