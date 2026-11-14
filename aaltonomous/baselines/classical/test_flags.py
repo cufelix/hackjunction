@@ -105,6 +105,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_place_gate"] = nopp | {"policy.place_gate"}
         expect["ab_object_time_budget_s"] = nopp | {"policy.object_time_budget_s"}
         expect["ab_colour_kmeans"] = nopp | {"perception.colour_kmeans"}
+        expect["ab_cgate"] = nopp | {"perception.color_gate.enabled"}
+        expect["ab_plane_cgate"] = nopp | {"perception.color_gate.enabled", "perception.online_pitch_cal"}
         expect["ab_decision"] = nopp | {"policy.confidence_order", "policy.object_time_cap", "policy.speed_tiers",
                                         "policy.confidence_tiers"}
         expect["ab_hand_calib"] = nopp | {"perception.hand_calibration.enabled"}   # A/B arm = cand_r17 + the flag
@@ -142,7 +144,7 @@ class TestFlags(unittest.TestCase):
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
                                       "finals_real", "rc1", "ab_decision", "ab_place_gate",
-                                      "ab_object_time_budget_s", "ab_colour_kmeans", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90"})
+                                      "ab_object_time_budget_s", "ab_colour_kmeans", "ab_cgate", "ab_plane_cgate", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
