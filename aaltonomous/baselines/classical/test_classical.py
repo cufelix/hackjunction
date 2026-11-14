@@ -749,6 +749,34 @@ class TestBinLookup(unittest.TestCase):
         rgb, depth = Renderer(SC, CAL).render([ob])
         return pol._look({"head_rgb": rgb, "head_depth": depth, "t": 5.0})
 
+    def test_most_specific_pair_beats_default(self):
+        """Felix: "red cubes left, everything else right" -> a red cube goes LEFT."""
+        from .planner import lookup_bin
+        m = {("red", "cube"): "left", "default": "right"}
+        self.assertEqual(lookup_bin(self.RB, m, "red", "cube"), "left")
+        self.assertEqual(lookup_bin(self.RB, m, "red", "cylinder"), "right")
+        self.assertEqual(lookup_bin(self.RB, m, "blue", "cube"), "right")
+        self.assertEqual(lookup_bin(self.RB, m, "red", None), "right")          # shape abstain: no pair match
+        res = self._look(m, **{"perception.classify_shape": True})
+        self.assertEqual((res[0], res[1].target_bin), ("plan", "left"))
+
+    def test_miss_is_logged_once_per_object_per_episode(self):
+        logs = []
+        pol = ClassicalPolicy(config=load_config(overrides={"policy.bin_lookup": "resolve_bin"}), log=logs.append)
+        pol.reset({"mapping": {"blue": "left"}})
+        pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
+        ob = dict(color="red", shape="cube", yaw=0.0, size=SC.size, height=SC.object_height(),
+                  pos=SC.mat_to_pelvis([0.40, 0.15, SC.object_height() / 2]))
+        rgb, depth = Renderer(SC, CAL).render([ob])
+        obs = {"head_rgb": rgb, "head_depth": depth, "t": 5.0}
+        for _ in range(3):
+            self.assertEqual(pol._look(obs)[0], "none")
+        self.assertEqual([m for m in logs if m.startswith("[bin_lookup]")], ["[bin_lookup] miss color=red shape=None"])
+        pol.reset({"mapping": {"blue": "left"}})                                # new episode: logged again
+        pol.arm_cmd, pol.hand_cmd = pol.home.copy(), pol.post["open"].copy()
+        pol._look(obs)
+        self.assertEqual(sum(m.startswith("[bin_lookup]") for m in logs), 2)
+
     def test_policy_default_shape_and_abstain(self):
         res = self._look({"blue": "left", "default": "right"})
         self.assertEqual((res[0], res[1].target_bin), ("plan", "right"))

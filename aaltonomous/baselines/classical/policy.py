@@ -114,6 +114,7 @@ class ClassicalPolicy:
         self.slot_used = {name: set() for name in self.scene.bin_names}   # grasp.drop_slots standalone
         self.slot_pending = None    # (bin, slot, grasp xy, colour) of the last standalone-slot placement
         self._gdiag = None          # policy.grasp_diag_log: the pick being watched
+        self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self.retry_pass_used = False
         self._summary_logged = False
         self.perception.reset_calibration()
@@ -337,6 +338,18 @@ class ClassicalPolicy:
                 res = self._choose(dets, obs, verify)
         return res
 
+    def _bin_of(self, d):
+        """lookup_bin for a counter candidate; a miss (None / abstain) is logged once per object per episode."""
+        shape = getattr(d, "shape", None)
+        b = lookup_bin(self.cfg, self.mapping, d.color, shape)
+        if b is None:
+            rad = self.cfg["policy"]["same_object_radius"]
+            xy = np.asarray(d.top[:2], float)
+            if not any(c == d.color and np.linalg.norm(xy - p) < rad for c, p in self._bin_misses):
+                self._bin_misses.append((d.color, xy))
+                self.log(f"[bin_lookup] miss color={d.color} shape={shape}")
+        return b
+
     def _slots_on(self):
         """grasp.drop_slots (standalone, default off). With verify_placement on, #6 manages the slots itself."""
         return bool(self.cfg["grasp"].get("drop_slots", False)) and not self._verify_on()
@@ -413,10 +426,10 @@ class ClassicalPolicy:
                     n_long += 1
                     continue
             others = [o.top[:2] for o in dets if o is not d]
+            target_bin = self._bin_of(d)
+            if target_bin is None:
+                continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
             if verify:  # #6: explicit target bin + a free, verified drop slot
-                target_bin = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
-                if target_bin is None:
-                    continue
                 slot = self._next_drop_slot(target_bin)
                 if slot is None:
                     slot = next(iter(self._overflow_slots(target_bin)), None)
@@ -426,21 +439,15 @@ class ClassicalPolicy:
                 p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
                                       drop_slot=slot)
             elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
-                target_bin = lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None))
-                slot = None
-                if target_bin is not None:
-                    free = [i for i in range(len(self.planner.drop_slots(target_bin)))
-                            if i not in self.slot_used[target_bin]]
-                    slot = free[0] if free else next(iter(self._overflow_slots(target_bin)), None)
-                    if slot is None:
-                        self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
-                        continue
+                free = [i for i in range(len(self.planner.drop_slots(target_bin)))
+                        if i not in self.slot_used[target_bin]]
+                slot = free[0] if free else next(iter(self._overflow_slots(target_bin)), None)
+                if slot is None:
+                    self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
+                    continue
                 p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=target_bin, obstacles=others,
                                       drop_slot=slot)
             else:
-                if lookup_bin(self.cfg, self.mapping, d.color, getattr(d, "shape", None)) is None:
-                    self.log(f"[classical] no bin for {d.color}/{getattr(d, 'shape', None)}: leave it on the counter")
-                    continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
                 p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, obstacles=others)
             self.plans.append(p)
             if p.ok:
