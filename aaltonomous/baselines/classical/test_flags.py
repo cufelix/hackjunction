@@ -65,7 +65,10 @@ class TestFlags(unittest.TestCase):
                   "ab_lang_full": {"instruction.resolve", "perception.classify_shape", "perception.no_blob_shape",
                                    "policy.bin_lookup"},
                   "ab_verify_lang": {"policy.verify_placement", "policy.verify_yellow_unknown",
-                                     "policy.max_corrections_per_episode"}}
+                                     "policy.max_corrections_per_episode"},
+                  "ab_realcolour": {"instruction.resolve", "policy.bin_lookup", "grasp.point_in_palm",
+                                    "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
+                                    "perception.hsv_set", "perception.split_blobs"}}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)

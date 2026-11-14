@@ -85,6 +85,9 @@ class Perception:
         self.shape_diag = bool(self.cfg.get("shape_diag", False))
         # no-blob shape (Oliver f857054): no metric top face -> abstain instead of the 2D-blob ratio (default OFF)
         self.no_blob_shape = bool(self.cfg.get("no_blob_shape", False))
+        # real colour (hf_perception 2026-11-14): one HSV set for sim + the real head cam; split touching objects
+        self.hsv = self.cfg["hsv_robust"] if self.cfg.get("hsv_set", "stock") == "robust" else self.cfg["hsv"]
+        self.split_blobs = bool(self.cfg.get("split_blobs", False))
         self.log = log if log is not None else print
 
     def reset_calibration(self):
@@ -268,7 +271,7 @@ class Perception:
         import cv2
         hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
         out = {}
-        for color, ranges in self.cfg["hsv"].items():
+        for color, ranges in self.hsv.items():
             m = np.zeros(hsv.shape[:2], np.uint8)
             for lo, hi in ranges:
                 m |= cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
@@ -289,7 +292,6 @@ class Perception:
         import cv2
         c = self.cfg
         dets, rejected = [], []
-        dlo, dhi = c["depth_range_mm"]
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
         for color, m in self.masks(rgb).items():
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
@@ -302,32 +304,130 @@ class Perception:
                 if area < c["min_area_px"]:
                     continue
                 blob = (lab == i).astype(np.uint8)
-                e = int(c["erode_px"])
-                core = cv2.erode(blob, np.ones((2 * e + 1, 2 * e + 1), np.uint8)) if e > 0 else blob
-                if core.sum() < 0.25 * area:
-                    core = blob
-                v, u = np.nonzero(core)
-                d = depth[v, u].astype(float) if depth is not None else np.zeros(len(u))
-                ok = (d >= dlo) & (d <= dhi)
-                det = None
-                if ok.sum() >= c["min_valid_depth_px"]:
-                    det = self._from_depth(color, u[ok], v[ok], d[ok], area, blob)
-                if det is None:
-                    det = self._from_plane(color, cent[i], area, int(ok.sum()))
-                    if det is not None:
-                        det.shape, conf, path = self._shape_conf(None, blob)
-                        if self.want_path:
-                            det.shape_conf, det.shape_path = conf, self._last_path
-                        if self.shape_diag:
-                            det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
-                why = self._reject(det, bins_first=include_bins)
-                if self.shape_diag and det is not None and det.shape_diag is not None:
-                    self._log_diag(det, why)
-                if why:
-                    rejected.append((det, why))
-                else:
-                    dets.append(det)
+                if self.split_blobs:
+                    for part, p_area, p_cent in self.split_blob(blob, area, cent[i], depth):
+                        self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected)
+                    continue
+                self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected)
         return (dets, rejected) if debug else dets
+
+    def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected):
+        """One colour blob -> Detection (depth top face, else plane) -> dets or rejected (the stock per-blob body)."""
+        import cv2
+        c = self.cfg
+        dlo, dhi = c["depth_range_mm"]
+        e = int(c["erode_px"])
+        core = cv2.erode(blob, np.ones((2 * e + 1, 2 * e + 1), np.uint8)) if e > 0 else blob
+        if core.sum() < 0.25 * area:
+            core = blob
+        v, u = np.nonzero(core)
+        d = depth[v, u].astype(float) if depth is not None else np.zeros(len(u))
+        ok = (d >= dlo) & (d <= dhi)
+        det = None
+        if ok.sum() >= c["min_valid_depth_px"]:
+            det = self._from_depth(color, u[ok], v[ok], d[ok], area, blob)
+        if det is None:
+            det = self._from_plane(color, centroid, area, int(ok.sum()))
+            if det is not None:
+                det.shape, conf, path = self._shape_conf(None, blob)
+                if self.want_path:
+                    det.shape_conf, det.shape_path = conf, self._last_path
+                if self.shape_diag:
+                    det.shape_diag = self._diag(det, "plane", None, blob, conf, path, None)
+        why = self._reject(det, bins_first=include_bins)
+        if self.shape_diag and det is not None and det.shape_diag is not None:
+            self._log_diag(det, why)
+        if why:
+            rejected.append((det, why))
+        else:
+            dets.append(det)
+
+    def expected_area_px(self, blob, centroid, depth):
+        """Pixel area of ONE object (split.object_size) at this blob's distance: area_coef * (fx * size / Z)^2.
+        Z = median valid depth of the blob, else the optical depth of the centroid ray at the object-top plane,
+        else None -> split.fallback_area_px."""
+        s = self.cfg.get("split") or {}
+        size, coef = float(s.get("object_size", 0.045)), float(s.get("area_coef", 1.2))
+        fallback = float(s.get("fallback_area_px", 3000))
+        if self.cal is None or self.cam not in getattr(self.cal, "cams", {}):
+            return fallback
+        K = self.cal.cams[self.cam].K
+        z = None
+        if depth is not None:
+            dlo, dhi = self.cfg["depth_range_mm"]
+            d = depth[blob > 0].astype(float)
+            d = d[(d >= dlo) & (d <= dhi)]
+            if len(d) >= int(self.cfg["min_valid_depth_px"]):
+                z = float(np.median(d)) / 1000.0
+        if z is None:
+            try:
+                T = self.cal._T(self.cam)
+                ray = T[:3, :3] @ np.array([(centroid[0] - K[0, 2]) / K[0, 0], (centroid[1] - K[1, 2]) / K[1, 1], 1.0])
+                if ray[2] < -1e-6:
+                    z = float((self.scene.counter_z + self.height - T[2, 3]) / ray[2])   # optical z (ray_opt z = 1)
+            except Exception:
+                z = None
+        if z is None or not np.isfinite(z) or z <= 0:
+            return fallback
+        return coef * (K[0, 0] * size / z) ** 2
+
+    def split_blob(self, blob, area, centroid, depth):
+        """[(mask, area, centroid)]: the blob itself, or one part per touching object. Only blobs larger than
+        split.area_factor x the expected single-object area are tried. Seeds = connected components of the distance
+        transform above peak_frac * max (tried in order); every blob pixel goes to its nearest seed; accepted only if
+        every part has >= min_part_frac x the expected area. No such neck but an elongated blob (aspect >= min_aspect,
+        e.g. two cubes side by side): k = round(area / expected) equal-area slices along the major axis. Otherwise
+        the blob is returned unchanged."""
+        import cv2
+        s = self.cfg.get("split") or {}
+        whole = [(blob, area, centroid)]
+        exp = self.expected_area_px(blob, centroid, depth)
+        if area <= float(s.get("area_factor", 1.5)) * exp:
+            return whole
+        x, y, w, h = cv2.boundingRect(blob)
+        crop = np.ascontiguousarray(blob[y:y + h, x:x + w])
+        dist = cv2.distanceTransform(crop, cv2.DIST_L2, 5)
+        dmax = float(dist.max())
+        min_part = float(s.get("min_part_frac", 0.3)) * exp
+        for frac in s.get("peak_frac", [0.5, 0.6, 0.7, 0.8]):
+            n, lab = cv2.connectedComponents((dist >= frac * dmax).astype(np.uint8), connectivity=8)
+            if n < 3:
+                continue
+            d = np.stack([cv2.distanceTransform((lab != k).astype(np.uint8), cv2.DIST_L2, 5) for k in range(1, n)])
+            owner = np.argmin(d, axis=0)
+            parts = [((owner == j) & (crop > 0)) for j in range(n - 1)]
+            if min(int(p.sum()) for p in parts) < min_part:
+                continue
+            return self._parts_out(blob, parts, x, y, w, h)
+        # No neck (e.g. two cubes side by side = one rectangle): an elongated blob is cut along its major axis into
+        # k = round(area / expected) equal-area slices.
+        vv, uu = np.nonzero(crop)
+        pts = np.c_[uu, vv].astype(float)
+        evals, evecs = np.linalg.eigh(np.cov((pts - pts.mean(0)).T))
+        if evals[0] <= 0 or np.sqrt(evals[1] / evals[0]) < float(s.get("min_aspect", 1.4)):
+            return whole
+        k = int(np.clip(round(area / exp), 2, int(s.get("max_parts", 3))))
+        proj = (pts - pts.mean(0)) @ evecs[:, 1]
+        edges = np.quantile(proj, np.linspace(0, 1, k + 1)[1:-1])
+        idx = np.searchsorted(edges, proj)
+        parts = []
+        for j in range(k):
+            p = np.zeros_like(crop, bool)
+            p[vv[idx == j], uu[idx == j]] = True
+            parts.append(p)
+        if min(int(p.sum()) for p in parts) < min_part:
+            return whole
+        return self._parts_out(blob, parts, x, y, w, h)
+
+    @staticmethod
+    def _parts_out(blob, parts, x, y, w, h):
+        out = []
+        for p in parts:
+            full = np.zeros_like(blob)
+            full[y:y + h, x:x + w] = p
+            vv, uu = np.nonzero(p)
+            out.append((full, int(p.sum()), np.array([x + uu.mean(), y + vv.mean()])))
+        return out
 
     def _keep_mask(self, depth, exclude_bins=True):
         """uint8 mask of pixels that may belong to an object: no valid depth (unknown), or a 3D point at object

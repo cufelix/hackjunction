@@ -62,6 +62,33 @@ perception:
   shape_diag: false           # FLAG (Oliver). Passive: Detection.shape_diag + one [shape_diag] log line per detection
   no_blob_shape: false        # FLAG (Oliver, f857054). With classify_shape: no metric top face -> abstain (None) instead of
                               # the 2D-blob ratio (blob includes side faces: prism -> 'cylinder'). Off = blob fallback
+  hsv_set: stock              # FLAG (real colour, Timi). stock = `hsv` above | robust = `hsv_robust` below
+  # One set for sim AND the real head cam (no AALTO_PROFILE needed). Measured (hf_perception, 2026-11-14):
+  #   sim DR objects  red H 0-7/170-179 S>=75 | yellow H 23-31 S>=81 | blue H 100-116 S>=73 (V >= 122 everywhere)
+  #   real HF objects orange H 9-15 S>=96 | yellow H 22-50 S>=51 (top faces overexposed: V~250, hue drifts green,
+  #                   S drops) | violet H 108-123 S>=112;  lab 2026-11-11: orange H 11-14, yellow H 25 S 185, purple
+  #                   H 127 S 97
+  #   bins            sim H ~12 (nominal), 15-24 (DR) | real H 2-7  -> every set overlaps some bin; the bins are
+  #                   removed by the 3D bin-footprint cut (_keep_mask, depth) and the in_bin reject, as before.
+  # Kept from stock: blue H >= 100 (sim blue starts at 100, so the real robot-arm/background FPs at H 100-107 are
+  # NOT removed by colour; they rely on the depth height / mat filters like before).
+  hsv_robust:
+    red:    [[[0, 70, 70], [16, 255, 255]], [[170, 70, 70], [180, 255, 255]]]
+    yellow: [[[18, 45, 90], [52, 255, 255]]]
+    blue:   [[[100, 70, 50], [145, 255, 255]]]
+  split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
+                              # 94/120 orange pieces merged with a neighbour) at distance-transform peaks
+  split:
+    object_size: 0.045        # m, expected object edge for the size gate
+    area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;
+                              # two touching objects >= 2.1 -> gate 1.8 separates them)
+    area_factor: 1.5          # only blobs larger than area_factor * expected area are candidates
+    fallback_area_px: 3000    # expected single-object area when neither depth nor extrinsics give Z
+    peak_frac: [0.5, 0.6, 0.7, 0.8]   # sure-foreground thresholds (fraction of the max distance) tried in order
+    min_part_frac: 0.3        # every part must have >= this fraction of the expected single-object area
+    min_aspect: 1.4           # no distance-transform neck: cut along the major axis only if this elongated (mock: one
+                              # object <= 1.35, two touching >= 1.48)
+    max_parts: 3
 
 grasp:
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),

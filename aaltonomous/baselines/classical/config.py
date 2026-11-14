@@ -22,7 +22,7 @@ STOCK = "<stock>"   # FLAGS off-value for a tuning param: OFF = the stock config
 # Limits an overlay may never exceed (hard rule: nothing may move faster than the stock sim profile).
 LIMITS = {"motion.carry_scale": (0.0, 1.0)}
 CHOICES = {"grasp.drop_slot_overflow": ("counter", "stack"), "grasp.close_posture": ("closed", "closed_tight"),
-           "policy.bin_lookup": ("colour", "resolve_bin")}
+           "policy.bin_lookup": ("colour", "resolve_bin"), "perception.hsv_set": ("stock", "robust")}
 VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affine": 2}
 
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
@@ -38,6 +38,8 @@ FLAGS = {
     "perception.near_bin_guard": ("Oliver #7", False, "classify_shape abstains next to a bin (cut top face)"),
     "perception.no_blob_shape": ("Oliver #5/#7", False, "no metric top face -> shape None, never the 2D blob ratio"),
     "perception.shape_diag": ("Oliver #5/#7", False, "passive [shape_diag] log line per detection (no action change)"),
+    "perception.hsv_set": ("real colour", "stock", "stock | robust: one HSV set for sim + the real head cam (hsv_robust)"),
+    "perception.split_blobs": ("real colour", False, "split touching same-colour objects at distance-transform peaks"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
