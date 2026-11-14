@@ -1,0 +1,2679 @@
+{
+ "note": "Our own guess at unseen phrasings. Not the organisers' held-out set. Ground truth keys: left/center/right.",
+ "categories": {
+  "1": "verb paraphrase",
+  "2": "object noun paraphrase",
+  "3": "bin synonym (box, container, ...)",
+  "4": "bin-first word order",
+  "5": "relative position phrasing (the one on the left)",
+  "6": "modal / polite / first person",
+  "7": "'respectively' and list forms",
+  "8": "central / middle synonyms for center",
+  "9": "terse and punctuation-light",
+  "10": "multi-sentence",
+  "11": "British 'centre'",
+  "12": "third pair by elimination (remaining / other / last bin)",
+  "13": "casing, spacing, whitespace"
+ },
+ "counts": {
+  "1": 48,
+  "2": 24,
+  "3": 24,
+  "4": 12,
+  "5": 12,
+  "6": 24,
+  "7": 12,
+  "8": 18,
+  "9": 12,
+  "10": 12,
+  "11": 36,
+  "12": 18,
+  "13": 18
+ },
+ "n_colour": 270,
+ "n_shape": 24,
+ "colour_sentences": [
+  {
+   "category": 1,
+   "text": "Stack the blue objects in the left bin, the red objects in the center bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Stack the blue objects in the left bin, the yellow objects in the right bin and the red objects in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Stack the yellow objects in the center bin, the red objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Stack the yellow objects in the center bin, the blue objects in the right bin and the red objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Stack the red objects in the right bin, the blue objects in the left bin and the yellow objects in the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Stack the red objects in the right bin, the yellow objects in the center bin and the blue objects in the left bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Load the yellow objects in the left bin, the red objects in the center bin and the blue objects in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Load the red objects in the left bin, the blue objects in the right bin and the yellow objects in the center bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Load the blue objects in the center bin, the red objects in the left bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Load the blue objects in the center bin, the yellow objects in the right bin and the red objects in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Load the red objects in the right bin, the yellow objects in the left bin and the blue objects in the center bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Load the yellow objects in the right bin, the blue objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Transfer the yellow objects in the left bin, the blue objects in the center bin and the red objects in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Transfer the yellow objects in the left bin, the red objects in the right bin and the blue objects in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Transfer the blue objects in the center bin, the red objects in the left bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Transfer the red objects in the center bin, the yellow objects in the right bin and the blue objects in the left bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Transfer the red objects in the right bin, the blue objects in the left bin and the yellow objects in the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Transfer the blue objects in the right bin, the yellow objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Deposit the blue objects in the left bin, the red objects in the center bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Deposit the blue objects in the left bin, the yellow objects in the right bin and the red objects in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Deposit the red objects in the center bin, the yellow objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Deposit the red objects in the center bin, the blue objects in the right bin and the yellow objects in the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Deposit the yellow objects in the right bin, the red objects in the left bin and the blue objects in the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Deposit the yellow objects in the right bin, the blue objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Send the yellow objects in the left bin, the red objects in the center bin and the blue objects in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Send the red objects in the left bin, the yellow objects in the right bin and the blue objects in the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Send the yellow objects in the center bin, the blue objects in the left bin and the red objects in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Send the blue objects in the center bin, the yellow objects in the right bin and the red objects in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Send the blue objects in the right bin, the red objects in the left bin and the yellow objects in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Send the red objects in the right bin, the blue objects in the center bin and the yellow objects in the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Carry the red objects in the left bin, the blue objects in the center bin and the yellow objects in the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Carry the red objects in the left bin, the yellow objects in the right bin and the blue objects in the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Carry the blue objects in the center bin, the red objects in the left bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Carry the yellow objects in the center bin, the red objects in the right bin and the blue objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Carry the blue objects in the right bin, the yellow objects in the left bin and the red objects in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Carry the yellow objects in the right bin, the blue objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Toss the yellow objects in the left bin, the blue objects in the center bin and the red objects in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Toss the blue objects in the left bin, the red objects in the right bin and the yellow objects in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Toss the red objects in the center bin, the yellow objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Toss the yellow objects in the center bin, the red objects in the right bin and the blue objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Toss the red objects in the right bin, the blue objects in the left bin and the yellow objects in the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Toss the blue objects in the right bin, the yellow objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Sort the blue objects in the left bin, the red objects in the center bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Sort the red objects in the left bin, the yellow objects in the right bin and the blue objects in the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Sort the yellow objects in the center bin, the red objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Sort the red objects in the center bin, the blue objects in the right bin and the yellow objects in the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Sort the yellow objects in the right bin, the blue objects in the left bin and the red objects in the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 1,
+   "text": "Sort the blue objects in the right bin, the yellow objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all yellow blocks in the left bin, all red blocks in the center bin, and all blue blocks in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all yellow blocks in the left bin, all blue blocks in the right bin, and all red blocks in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all blue blocks in the center bin, all red blocks in the left bin, and all yellow blocks in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all red blocks in the center bin, all yellow blocks in the right bin, and all blue blocks in the left bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all blue blocks in the right bin, all yellow blocks in the left bin, and all red blocks in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all red blocks in the right bin, all blue blocks in the center bin, and all yellow blocks in the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all red pieces in the left bin, all yellow pieces in the center bin, and all blue pieces in the right bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all blue pieces in the left bin, all red pieces in the right bin, and all yellow pieces in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all yellow pieces in the center bin, all blue pieces in the left bin, and all red pieces in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all red pieces in the center bin, all blue pieces in the right bin, and all yellow pieces in the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all yellow pieces in the right bin, all red pieces in the left bin, and all blue pieces in the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all blue pieces in the right bin, all yellow pieces in the center bin, and all red pieces in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all red items in the left bin, all yellow items in the center bin, and all blue items in the right bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all blue items in the left bin, all red items in the right bin, and all yellow items in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all yellow items in the center bin, all red items in the left bin, and all blue items in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all yellow items in the center bin, all blue items in the right bin, and all red items in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all blue items in the right bin, all yellow items in the left bin, and all red items in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all red items in the right bin, all blue items in the center bin, and all yellow items in the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all yellow shapes in the left bin, all blue shapes in the center bin, and all red shapes in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all yellow shapes in the left bin, all red shapes in the right bin, and all blue shapes in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all red shapes in the center bin, all yellow shapes in the left bin, and all blue shapes in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all blue shapes in the center bin, all red shapes in the right bin, and all yellow shapes in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all blue shapes in the right bin, all yellow shapes in the left bin, and all red shapes in the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 2,
+   "text": "Put all red shapes in the right bin, all blue shapes in the center bin, and all yellow shapes in the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the red objects in the left box, the yellow objects in the center box and the blue objects in the right box.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the yellow objects in the left box, the red objects in the right box and the blue objects in the center box.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the red objects in the center box, the blue objects in the left box and the yellow objects in the right box.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the blue objects in the center box, the red objects in the right box and the yellow objects in the left box.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the blue objects in the right box, the yellow objects in the left box and the red objects in the center box.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the yellow objects in the right box, the blue objects in the center box and the red objects in the left box.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the red objects in the left container, the yellow objects in the center container and the blue objects in the right container.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the blue objects in the left container, the yellow objects in the right container and the red objects in the center container.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the yellow objects in the center container, the blue objects in the left container and the red objects in the right container.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the yellow objects in the center container, the red objects in the right container and the blue objects in the left container.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the red objects in the right container, the blue objects in the left container and the yellow objects in the center container.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the blue objects in the right container, the red objects in the center container and the yellow objects in the left container.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the red objects in the left bucket, the yellow objects in the center bucket and the blue objects in the right bucket.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the blue objects in the left bucket, the yellow objects in the right bucket and the red objects in the center bucket.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the yellow objects in the center bucket, the blue objects in the left bucket and the red objects in the right bucket.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the red objects in the center bucket, the blue objects in the right bucket and the yellow objects in the left bucket.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the yellow objects in the right bucket, the red objects in the left bucket and the blue objects in the center bucket.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the blue objects in the right bucket, the red objects in the center bucket and the yellow objects in the left bucket.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the blue objects in the left tray, the red objects in the center tray and the yellow objects in the right tray.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the blue objects in the left tray, the yellow objects in the right tray and the red objects in the center tray.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the red objects in the center tray, the yellow objects in the left tray and the blue objects in the right tray.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the yellow objects in the center tray, the blue objects in the right tray and the red objects in the left tray.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the yellow objects in the right tray, the red objects in the left tray and the blue objects in the center tray.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 3,
+   "text": "Put the red objects in the right tray, the blue objects in the center tray and the yellow objects in the left tray.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 4,
+   "text": "In the left bin goes everything blue, in the center bin everything red, and in the right bin everything yellow.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 4,
+   "text": "In the left bin goes everything red, in the right bin everything yellow, and in the center bin everything blue.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 4,
+   "text": "In the center bin goes everything blue, in the left bin everything yellow, and in the right bin everything red.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 4,
+   "text": "In the center bin goes everything yellow, in the right bin everything red, and in the left bin everything blue.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 4,
+   "text": "In the right bin goes everything yellow, in the left bin everything blue, and in the center bin everything red.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 4,
+   "text": "In the right bin goes everything red, in the center bin everything blue, and in the left bin everything yellow.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 4,
+   "text": "The left bin takes the yellow objects. The center bin takes the red objects. The right bin takes the blue objects.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 4,
+   "text": "The left bin takes the red objects. The right bin takes the yellow objects. The center bin takes the blue objects.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 4,
+   "text": "The center bin takes the red objects. The left bin takes the blue objects. The right bin takes the yellow objects.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 4,
+   "text": "The center bin takes the yellow objects. The right bin takes the blue objects. The left bin takes the red objects.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 4,
+   "text": "The right bin takes the blue objects. The left bin takes the yellow objects. The center bin takes the red objects.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 4,
+   "text": "The right bin takes the blue objects. The center bin takes the red objects. The left bin takes the yellow objects.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The bin on the left is for yellow, the middle one is for red, and the bin on the right is for blue.",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The bin on the left is for blue, the bin on the right is for red, and the middle one is for yellow.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The middle one is for red, the bin on the left is for blue, and the bin on the right is for yellow.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The middle one is for yellow, the bin on the right is for blue, and the bin on the left is for red.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The bin on the right is for red, the bin on the left is for yellow, and the middle one is for blue.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The bin on the right is for blue, the middle one is for yellow, and the bin on the left is for red.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The bin on the left is for red, the center one is for yellow, and the bin on the right is for blue.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The bin on the left is for blue, the bin on the right is for red, and the center one is for yellow.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The center one is for yellow, the bin on the left is for red, and the bin on the right is for blue.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The center one is for red, the bin on the right is for blue, and the bin on the left is for yellow.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The bin on the right is for blue, the bin on the left is for yellow, and the center one is for red.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 5,
+   "text": "The bin on the right is for yellow, the center one is for blue, and the bin on the left is for red.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Red objects should go in the left bin, blue objects should go in the center bin, and yellow objects should go in the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Yellow objects should go in the left bin, blue objects should go in the right bin, and red objects should go in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Red objects should go in the center bin, yellow objects should go in the left bin, and blue objects should go in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Blue objects should go in the center bin, yellow objects should go in the right bin, and red objects should go in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Yellow objects should go in the right bin, red objects should go in the left bin, and blue objects should go in the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Blue objects should go in the right bin, red objects should go in the center bin, and yellow objects should go in the left bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Please put the blue objects into the left bin, the yellow objects into the center bin, and the red objects into the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Please put the blue objects into the left bin, the red objects into the right bin, and the yellow objects into the center bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Please put the yellow objects into the center bin, the red objects into the left bin, and the blue objects into the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Please put the red objects into the center bin, the blue objects into the right bin, and the yellow objects into the left bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Please put the yellow objects into the right bin, the blue objects into the left bin, and the red objects into the center bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Please put the red objects into the right bin, the yellow objects into the center bin, and the blue objects into the left bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 6,
+   "text": "I want the red things in the left bin, the blue things in the center bin, and the yellow things in the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 6,
+   "text": "I want the blue things in the left bin, the yellow things in the right bin, and the red things in the center bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 6,
+   "text": "I want the yellow things in the center bin, the red things in the left bin, and the blue things in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 6,
+   "text": "I want the blue things in the center bin, the red things in the right bin, and the yellow things in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 6,
+   "text": "I want the red things in the right bin, the yellow things in the left bin, and the blue things in the center bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 6,
+   "text": "I want the yellow things in the right bin, the blue things in the center bin, and the red things in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Each blue object goes to the left bin, each yellow object goes to the center bin, each red object goes to the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Each red object goes to the left bin, each yellow object goes to the right bin, each blue object goes to the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Each yellow object goes to the center bin, each red object goes to the left bin, each blue object goes to the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Each blue object goes to the center bin, each red object goes to the right bin, each yellow object goes to the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Each red object goes to the right bin, each blue object goes to the left bin, each yellow object goes to the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 6,
+   "text": "Each yellow object goes to the right bin, each blue object goes to the center bin, each red object goes to the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Put the red, yellow and blue objects in the left, center and right bins, respectively.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Put the red, blue and yellow objects in the left, right and center bins, respectively.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Put the yellow, blue and red objects in the center, left and right bins, respectively.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Put the yellow, red and blue objects in the center, right and left bins, respectively.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Put the blue, yellow and red objects in the right, left and center bins, respectively.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Put the blue, red and yellow objects in the right, center and left bins, respectively.",
+   "mapping": {
+    "blue": "right",
+    "red": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Yellow, red, blue: left, center, right (in that order).",
+   "mapping": {
+    "yellow": "left",
+    "red": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Red, blue, yellow: left, right, center (in that order).",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Blue, yellow, red: center, left, right (in that order).",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Blue, red, yellow: center, right, left (in that order).",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Red, yellow, blue: right, left, center (in that order).",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 7,
+   "text": "Yellow, blue, red: right, center, left (in that order).",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the blue objects in the left bin, the yellow objects in the middle bin and the red objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the blue objects in the left bin, the red objects in the right bin and the yellow objects in the middle bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the red objects in the middle bin, the blue objects in the left bin and the yellow objects in the right bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the yellow objects in the middle bin, the blue objects in the right bin and the red objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the red objects in the right bin, the yellow objects in the left bin and the blue objects in the middle bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the yellow objects in the right bin, the red objects in the middle bin and the blue objects in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the blue objects in the left bin, the red objects in the central bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the yellow objects in the left bin, the blue objects in the right bin and the red objects in the central bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the blue objects in the central bin, the yellow objects in the left bin and the red objects in the right bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the yellow objects in the central bin, the red objects in the right bin and the blue objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the red objects in the right bin, the blue objects in the left bin and the yellow objects in the central bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 8,
+   "text": "Put the red objects in the right bin, the yellow objects in the central bin and the blue objects in the left bin.",
+   "mapping": {
+    "red": "right",
+    "yellow": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 8,
+   "text": "The left bin takes the red objects. The middle bin takes the yellow objects. The right bin takes the blue objects.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 8,
+   "text": "The left bin takes the red objects. The right bin takes the blue objects. The middle bin takes the yellow objects.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 8,
+   "text": "The middle bin takes the blue objects. The left bin takes the red objects. The right bin takes the yellow objects.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 8,
+   "text": "The middle bin takes the yellow objects. The right bin takes the red objects. The left bin takes the blue objects.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 8,
+   "text": "The right bin takes the blue objects. The left bin takes the yellow objects. The middle bin takes the red objects.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 8,
+   "text": "The right bin takes the yellow objects. The middle bin takes the blue objects. The left bin takes the red objects.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Sort by colour: blue left, red center, yellow right.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Sort by colour: yellow left, blue right, red center.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Sort by colour: red center, blue left, yellow right.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Sort by colour: red center, yellow right, blue left.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Sort by colour: yellow right, red left, blue center.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Sort by colour: blue right, yellow center, red left.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Take the red ones to the left bin, then the blue ones to the center bin, and finally the yellow ones to the right bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Take the red ones to the left bin, then the yellow ones to the right bin, and finally the blue ones to the center bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Take the yellow ones to the center bin, then the blue ones to the left bin, and finally the red ones to the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Take the blue ones to the center bin, then the red ones to the right bin, and finally the yellow ones to the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Take the blue ones to the right bin, then the yellow ones to the left bin, and finally the red ones to the center bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 9,
+   "text": "Take the yellow ones to the right bin, then the red ones to the center bin, and finally the blue ones to the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 10,
+   "text": "First, the yellow objects: left bin. Second, the blue objects: center bin. Third, the red objects: right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 10,
+   "text": "First, the red objects: left bin. Second, the blue objects: right bin. Third, the yellow objects: center bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 10,
+   "text": "First, the blue objects: center bin. Second, the red objects: left bin. Third, the yellow objects: right bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 10,
+   "text": "First, the red objects: center bin. Second, the yellow objects: right bin. Third, the blue objects: left bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 10,
+   "text": "First, the yellow objects: right bin. Second, the red objects: left bin. Third, the blue objects: center bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 10,
+   "text": "First, the blue objects: right bin. Second, the yellow objects: center bin. Third, the red objects: left bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 10,
+   "text": "Listen carefully. Blue goes in the left bin. Yellow goes in the center bin. Red goes in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 10,
+   "text": "Listen carefully. Yellow goes in the left bin. Blue goes in the right bin. Red goes in the center bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 10,
+   "text": "Listen carefully. Red goes in the center bin. Yellow goes in the left bin. Blue goes in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 10,
+   "text": "Listen carefully. Blue goes in the center bin. Red goes in the right bin. Yellow goes in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 10,
+   "text": "Listen carefully. Red goes in the right bin. Blue goes in the left bin. Yellow goes in the center bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 10,
+   "text": "Listen carefully. Yellow goes in the right bin. Red goes in the center bin. Blue goes in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the blue objects in the left bin, the yellow objects in the centre bin and the red objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the yellow objects in the left bin, the blue objects in the right bin and the red objects in the centre bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "right",
+    "red": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the red objects in the centre bin, the yellow objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the yellow objects in the centre bin, the red objects in the right bin and the blue objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the blue objects in the right bin, the red objects in the left bin and the yellow objects in the centre bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the red objects in the right bin, the blue objects in the centre bin and the yellow objects in the left bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "The left bin takes the blue objects. The centre bin takes the yellow objects. The right bin takes the red objects.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "The left bin takes the red objects. The right bin takes the blue objects. The centre bin takes the yellow objects.",
+   "mapping": {
+    "red": "left",
+    "blue": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "The centre bin takes the yellow objects. The left bin takes the red objects. The right bin takes the blue objects.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "The centre bin takes the blue objects. The right bin takes the red objects. The left bin takes the yellow objects.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "The right bin takes the red objects. The left bin takes the yellow objects. The centre bin takes the blue objects.",
+   "mapping": {
+    "red": "right",
+    "yellow": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "The right bin takes the yellow objects. The centre bin takes the blue objects. The left bin takes the red objects.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the yellow, blue and red objects in the left, centre and right bins, respectively.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the blue, red and yellow objects in the left, right and centre bins, respectively.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the blue, yellow and red objects in the centre, left and right bins, respectively.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the red, yellow and blue objects in the centre, right and left bins, respectively.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the yellow, red and blue objects in the right, left and centre bins, respectively.",
+   "mapping": {
+    "yellow": "right",
+    "red": "left",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the red, blue and yellow objects in the right, centre and left bins, respectively.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the red objects in the left box, the blue objects in the centre box and the yellow objects in the right box.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the yellow objects in the left box, the red objects in the right box and the blue objects in the centre box.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the blue objects in the centre box, the yellow objects in the left box and the red objects in the right box.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the red objects in the centre box, the yellow objects in the right box and the blue objects in the left box.",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the blue objects in the right box, the red objects in the left box and the yellow objects in the centre box.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put the yellow objects in the right box, the blue objects in the centre box and the red objects in the left box.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put all red blocks in the left bin, all yellow blocks in the centre bin, and all blue blocks in the right bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put all blue blocks in the left bin, all red blocks in the right bin, and all yellow blocks in the centre bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put all red blocks in the centre bin, all blue blocks in the left bin, and all yellow blocks in the right bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put all yellow blocks in the centre bin, all blue blocks in the right bin, and all red blocks in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put all blue blocks in the right bin, all yellow blocks in the left bin, and all red blocks in the centre bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Put all yellow blocks in the right bin, all red blocks in the centre bin, and all blue blocks in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Sort by colour: blue left, yellow centre, red right.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Sort by colour: red left, yellow right, blue centre.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Sort by colour: red centre, blue left, yellow right.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Sort by colour: blue centre, red right, yellow left.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Sort by colour: yellow right, blue left, red centre.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 11,
+   "text": "Sort by colour: yellow right, red centre, blue left.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Put the blue objects in the left bin and the yellow objects in the center bin. The red ones go in the remaining bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Put the red objects in the left bin and the yellow objects in the right bin. The blue ones go in the remaining bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Put the red objects in the center bin and the blue objects in the left bin. The yellow ones go in the remaining bin.",
+   "mapping": {
+    "red": "center",
+    "blue": "left",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Put the blue objects in the center bin and the red objects in the right bin. The yellow ones go in the remaining bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Put the yellow objects in the right bin and the blue objects in the left bin. The red ones go in the remaining bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Put the yellow objects in the right bin and the red objects in the center bin. The blue ones go in the remaining bin.",
+   "mapping": {
+    "yellow": "right",
+    "red": "center",
+    "blue": "left"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Red to the left, blue to the center; whatever is yellow goes in the last bin.",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Yellow to the left, red to the right; whatever is blue goes in the last bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Red to the center, yellow to the left; whatever is blue goes in the last bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Blue to the center, red to the right; whatever is yellow goes in the last bin.",
+   "mapping": {
+    "blue": "center",
+    "red": "right",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Blue to the right, yellow to the left; whatever is red goes in the last bin.",
+   "mapping": {
+    "blue": "right",
+    "yellow": "left",
+    "red": "center"
+   }
+  },
+  {
+   "category": 12,
+   "text": "Yellow to the right, blue to the center; whatever is red goes in the last bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   }
+  },
+  {
+   "category": 12,
+   "text": "The red objects belong in the left bin, the yellow objects belong in the center bin, and the blue ones belong in the other bin.",
+   "mapping": {
+    "red": "left",
+    "yellow": "center",
+    "blue": "right"
+   }
+  },
+  {
+   "category": 12,
+   "text": "The yellow objects belong in the left bin, the red objects belong in the right bin, and the blue ones belong in the other bin.",
+   "mapping": {
+    "yellow": "left",
+    "red": "right",
+    "blue": "center"
+   }
+  },
+  {
+   "category": 12,
+   "text": "The yellow objects belong in the center bin, the blue objects belong in the left bin, and the red ones belong in the other bin.",
+   "mapping": {
+    "yellow": "center",
+    "blue": "left",
+    "red": "right"
+   }
+  },
+  {
+   "category": 12,
+   "text": "The blue objects belong in the center bin, the yellow objects belong in the right bin, and the red ones belong in the other bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   }
+  },
+  {
+   "category": 12,
+   "text": "The blue objects belong in the right bin, the red objects belong in the left bin, and the yellow ones belong in the other bin.",
+   "mapping": {
+    "blue": "right",
+    "red": "left",
+    "yellow": "center"
+   }
+  },
+  {
+   "category": 12,
+   "text": "The red objects belong in the right bin, the blue objects belong in the center bin, and the yellow ones belong in the other bin.",
+   "mapping": {
+    "red": "right",
+    "blue": "center",
+    "yellow": "left"
+   }
+  },
+  {
+   "category": 13,
+   "text": "CARRY THE BLUE OBJECTS IN THE CENTER BIN, THE RED OBJECTS IN THE LEFT BIN AND THE YELLOW OBJECTS IN THE RIGHT BIN.",
+   "mapping": {
+    "blue": "center",
+    "red": "left",
+    "yellow": "right"
+   },
+   "transform": "UPPER"
+  },
+  {
+   "category": 13,
+   "text": "I WANT THE YELLOW THINGS IN THE RIGHT BIN, THE BLUE THINGS IN THE CENTER BIN, AND THE RED THINGS IN THE LEFT BIN.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "transform": "UPPER"
+  },
+  {
+   "category": 13,
+   "text": "CARRY THE YELLOW OBJECTS IN THE CENTER BIN, THE RED OBJECTS IN THE RIGHT BIN AND THE BLUE OBJECTS IN THE LEFT BIN.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "transform": "UPPER"
+  },
+  {
+   "category": 13,
+   "text": "deposit the blue objects in the left bin, the red objects in the center bin and the yellow objects in the right bin.",
+   "mapping": {
+    "blue": "left",
+    "red": "center",
+    "yellow": "right"
+   },
+   "transform": "lower"
+  },
+  {
+   "category": 13,
+   "text": "load the yellow objects in the right bin, the blue objects in the center bin and the red objects in the left bin.",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "transform": "lower"
+  },
+  {
+   "category": 13,
+   "text": "i want the yellow things in the center bin, the red things in the left bin, and the blue things in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "transform": "lower"
+  },
+  {
+   "category": 13,
+   "text": "Transfer the red objects in the center bin, the yellow objects in the right bin and the blue objects in the left bin",
+   "mapping": {
+    "red": "center",
+    "yellow": "right",
+    "blue": "left"
+   },
+   "transform": "no final period"
+  },
+  {
+   "category": 13,
+   "text": "I want the red things in the left bin, the blue things in the center bin, and the yellow things in the right bin",
+   "mapping": {
+    "red": "left",
+    "blue": "center",
+    "yellow": "right"
+   },
+   "transform": "no final period"
+  },
+  {
+   "category": 13,
+   "text": "Please put the blue objects into the left bin, the red objects into the right bin, and the yellow objects into the center bin",
+   "mapping": {
+    "blue": "left",
+    "red": "right",
+    "yellow": "center"
+   },
+   "transform": "no final period"
+  },
+  {
+   "category": 13,
+   "text": "Toss  the  yellow  objects in the center bin, the red objects in the right bin and the blue objects in the left bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "right",
+    "blue": "left"
+   },
+   "transform": "double spaces"
+  },
+  {
+   "category": 13,
+   "text": "Sort  the  yellow  objects in the center bin, the red objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "yellow": "center",
+    "red": "left",
+    "blue": "right"
+   },
+   "transform": "double spaces"
+  },
+  {
+   "category": 13,
+   "text": "Please  put  the  blue objects into the left bin, the yellow objects into the center bin, and the red objects into the right bin.",
+   "mapping": {
+    "blue": "left",
+    "yellow": "center",
+    "red": "right"
+   },
+   "transform": "double spaces"
+  },
+  {
+   "category": 13,
+   "text": "  I want the blue things in the left bin, the yellow things in the right bin, and the red things in the center bin.  ",
+   "mapping": {
+    "blue": "left",
+    "yellow": "right",
+    "red": "center"
+   },
+   "transform": "leading/trailing space"
+  },
+  {
+   "category": 13,
+   "text": "  Carry the red objects in the left bin, the yellow objects in the right bin and the blue objects in the center bin.  ",
+   "mapping": {
+    "red": "left",
+    "yellow": "right",
+    "blue": "center"
+   },
+   "transform": "leading/trailing space"
+  },
+  {
+   "category": 13,
+   "text": "  Carry the yellow objects in the right bin, the blue objects in the center bin and the red objects in the left bin.  ",
+   "mapping": {
+    "yellow": "right",
+    "blue": "center",
+    "red": "left"
+   },
+   "transform": "leading/trailing space"
+  },
+  {
+   "category": 13,
+   "text": "Send the blue objects in the center bin,\nthe yellow objects in the right bin and the red objects in the left bin.",
+   "mapping": {
+    "blue": "center",
+    "yellow": "right",
+    "red": "left"
+   },
+   "transform": "newline between clauses"
+  },
+  {
+   "category": 13,
+   "text": "Transfer the yellow objects in the left bin,\nthe blue objects in the center bin and the red objects in the right bin.",
+   "mapping": {
+    "yellow": "left",
+    "blue": "center",
+    "red": "right"
+   },
+   "transform": "newline between clauses"
+  },
+  {
+   "category": 13,
+   "text": "Toss the red objects in the center bin,\nthe yellow objects in the left bin and the blue objects in the right bin.",
+   "mapping": {
+    "red": "center",
+    "yellow": "left",
+    "blue": "right"
+   },
+   "transform": "newline between clauses"
+  }
+ ],
+ "shape_sentences": [
+  {
+   "text": "Put the triangles in the left bin, the cubes in the center bin and the cylinders in the right bin.",
+   "mapping_by_shape": {
+    "triangle": "left",
+    "cube": "center",
+    "cylinder": "right"
+   }
+  },
+  {
+   "text": "Put the triangles in the left bin, the cubes in the right bin and the cylinders in the center bin.",
+   "mapping_by_shape": {
+    "triangle": "left",
+    "cube": "right",
+    "cylinder": "center"
+   }
+  },
+  {
+   "text": "Put the triangles in the center bin, the cubes in the left bin and the cylinders in the right bin.",
+   "mapping_by_shape": {
+    "triangle": "center",
+    "cube": "left",
+    "cylinder": "right"
+   }
+  },
+  {
+   "text": "Put the cubes in the center bin, the cylinders in the right bin and the triangles in the left bin.",
+   "mapping_by_shape": {
+    "cube": "center",
+    "cylinder": "right",
+    "triangle": "left"
+   }
+  },
+  {
+   "text": "Put the cylinders in the right bin, the cubes in the left bin and the triangles in the center bin.",
+   "mapping_by_shape": {
+    "cylinder": "right",
+    "cube": "left",
+    "triangle": "center"
+   }
+  },
+  {
+   "text": "Put the cylinders in the right bin, the cubes in the center bin and the triangles in the left bin.",
+   "mapping_by_shape": {
+    "cylinder": "right",
+    "cube": "center",
+    "triangle": "left"
+   }
+  },
+  {
+   "text": "Put the cylinders in the left bin, the triangles in the centre bin and the cubes in the right bin.",
+   "mapping_by_shape": {
+    "cylinder": "left",
+    "triangle": "center",
+    "cube": "right"
+   }
+  },
+  {
+   "text": "Put the cylinders in the left bin, the cubes in the right bin and the triangles in the centre bin.",
+   "mapping_by_shape": {
+    "cylinder": "left",
+    "cube": "right",
+    "triangle": "center"
+   }
+  },
+  {
+   "text": "Put the cylinders in the centre bin, the triangles in the left bin and the cubes in the right bin.",
+   "mapping_by_shape": {
+    "cylinder": "center",
+    "triangle": "left",
+    "cube": "right"
+   }
+  },
+  {
+   "text": "Put the cubes in the centre bin, the cylinders in the right bin and the triangles in the left bin.",
+   "mapping_by_shape": {
+    "cube": "center",
+    "cylinder": "right",
+    "triangle": "left"
+   }
+  },
+  {
+   "text": "Put the triangles in the right bin, the cylinders in the left bin and the cubes in the centre bin.",
+   "mapping_by_shape": {
+    "triangle": "right",
+    "cylinder": "left",
+    "cube": "center"
+   }
+  },
+  {
+   "text": "Put the triangles in the right bin, the cubes in the centre bin and the cylinders in the left bin.",
+   "mapping_by_shape": {
+    "triangle": "right",
+    "cube": "center",
+    "cylinder": "left"
+   }
+  },
+  {
+   "text": "The left bin is for cubes, the center bin for triangles, the right bin for cylinders.",
+   "mapping_by_shape": {
+    "cube": "left",
+    "triangle": "center",
+    "cylinder": "right"
+   }
+  },
+  {
+   "text": "The left bin is for triangles, the right bin for cubes, the center bin for cylinders.",
+   "mapping_by_shape": {
+    "triangle": "left",
+    "cube": "right",
+    "cylinder": "center"
+   }
+  },
+  {
+   "text": "The center bin is for cylinders, the left bin for cubes, the right bin for triangles.",
+   "mapping_by_shape": {
+    "cylinder": "center",
+    "cube": "left",
+    "triangle": "right"
+   }
+  },
+  {
+   "text": "The center bin is for cubes, the right bin for cylinders, the left bin for triangles.",
+   "mapping_by_shape": {
+    "cube": "center",
+    "cylinder": "right",
+    "triangle": "left"
+   }
+  },
+  {
+   "text": "The right bin is for triangles, the left bin for cylinders, the center bin for cubes.",
+   "mapping_by_shape": {
+    "triangle": "right",
+    "cylinder": "left",
+    "cube": "center"
+   }
+  },
+  {
+   "text": "The right bin is for cubes, the center bin for cylinders, the left bin for triangles.",
+   "mapping_by_shape": {
+    "cube": "right",
+    "cylinder": "center",
+    "triangle": "left"
+   }
+  },
+  {
+   "text": "The left bin is for cubes, the centre bin for triangles, the right bin for cylinders.",
+   "mapping_by_shape": {
+    "cube": "left",
+    "triangle": "center",
+    "cylinder": "right"
+   }
+  },
+  {
+   "text": "The left bin is for cubes, the right bin for triangles, the centre bin for cylinders.",
+   "mapping_by_shape": {
+    "cube": "left",
+    "triangle": "right",
+    "cylinder": "center"
+   }
+  },
+  {
+   "text": "The centre bin is for cylinders, the left bin for triangles, the right bin for cubes.",
+   "mapping_by_shape": {
+    "cylinder": "center",
+    "triangle": "left",
+    "cube": "right"
+   }
+  },
+  {
+   "text": "The centre bin is for cylinders, the right bin for triangles, the left bin for cubes.",
+   "mapping_by_shape": {
+    "cylinder": "center",
+    "triangle": "right",
+    "cube": "left"
+   }
+  },
+  {
+   "text": "The right bin is for triangles, the left bin for cubes, the centre bin for cylinders.",
+   "mapping_by_shape": {
+    "triangle": "right",
+    "cube": "left",
+    "cylinder": "center"
+   }
+  },
+  {
+   "text": "The right bin is for cubes, the centre bin for triangles, the left bin for cylinders.",
+   "mapping_by_shape": {
+    "cube": "right",
+    "triangle": "center",
+    "cylinder": "left"
+   }
+  }
+ ]
+}
