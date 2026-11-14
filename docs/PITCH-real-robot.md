@@ -81,11 +81,20 @@ Sources: blind results posted in the room after each hash, e.g. the 05242eae run
   that grows across the table. First-attempt success was 70 % on the left and 40 % on the right (b6c88f08, 7e1e8a68).
   `perception.y_affine` corrects it upstream, and spawns on the right went from 21 to 25 of 30 (a880255a).
 - **Shapes only when sure.** Shape is decided from the metric depth top face, never from the colour blob. The blob
-  includes the side faces seen from 48° and is unreliable (f857054). Near a bin, or with a cropped top face, the
+  includes the side faces, because the head camera looks down at 42° from vertical (47.6° from horizontal, calibration.yaml T_pelvis_optical), and is unreliable (f857054). Near a bin, or with a cropped top face, the
   classifier abstains rather than guesses (9c5b9e4). A wrong shape only costs the shape-specific grip; the default
   grip still runs.
 
 ## 4. Honest limits (say these out loud)
+
+- Sample sizes are small; say the intervals first (Wilson 95 %, computed by Felix, 6e987d35):
+  v1 141/151 = 0.934 [0.882, 0.964]; many-to-one 28/30 = 0.933 [0.787, 0.982]; v2 48/60 = 0.800 [0.682, 0.882];
+  GPU sort_language 54/74 = 0.730 [0.619, 0.818]. The v2 gain 0.667 -> 0.800 is +8 sentences on the SAME fixed
+  set, a within-set comparison and better determined than either absolute number. If one headline accuracy is
+  needed, use v1 0.934 (largest n).
+- Process claim a judge can re-run: before the leave-tail fix we predicted it would change NOTHING on the sealed
+  sets; comparing the raw resolver output for all 241 sentences (not the scores), 0 changed. Identical scores alone
+  would prove much less, since offsetting errors look the same.
 
 - All grasp numbers are sim. Real-robot friction is unmeasured (organiser answer).
 - Triangles stay the weakest shape (20 of 29 with pinch_v1). The organisers' own oracle also missed mainly on
