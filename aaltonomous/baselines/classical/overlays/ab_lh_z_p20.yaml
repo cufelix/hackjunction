@@ -1,0 +1,87 @@
+# ab_lh_z_p20: finals_r23 + grasp.left_hand_fix.shift_z 0.02 (left triangles only, sweep)
+name: ab_lh_z_p20
+flags:
+  hand.mirror_index_middle: true                # R42a  index == middle in every hand target (real DDS slot order contradicts INTERFACE.md)
+  instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
+                                                #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
+  policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)
+  scene.counter_z_prior: 0.15                   # prior  NO-DEPTH fallback table height (pelvis frame, m); measured plane height (apply_height) overrides
+  policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
+  policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
+  perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
+  perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
+  perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
+  perception.classify_shape: true              # Oliver #5/#7 shape from the top face
+  perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre
+  perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)
+  perception.no_blob_shape: false               # Oliver     no top face -> no shape (never the 2D blob)
+  perception.shape_diag: false                  # Oliver     passive [shape_diag] log lines
+  perception.hsv_set: robust   # r22 bisect
+  perception.split_blobs: true                 # real colour  split touching same-colour objects
+  grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
+  grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
+  grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)
+  policy.time_triage: false                     # Oliver #3  skip plans that do not fit, try the next object
+  policy.max_total_attempts: 18                 # safety cap: normal scene max is 5 objects * 3 varied tries = 15
+  policy.max_attempts: 2                        # stock 2    tries per object
+  policy.retry_pass: false                      # Oliver #3  once-per-episode retry pass (retry_extra_attempts 2)
+  policy.time_margin_s: 0.0                     # Oliver #3  e.g. 1.0; 0 = off
+  policy.episode_summary_log: false             # Oliver #3  one log line per episode end
+  policy.retry_vary_grasp: true                # retry-vary another grasp when the object remains in the next frame
+  policy.max_attempts_vary: 3                # retry-vary e.g. 3 (needs retry_vary_grasp), only with time left
+  grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture
+  policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
+  policy.verify_yellow_unknown: false           # Felix #6r  yellow in-bin detection = unknown (needs verify)
+  policy.max_corrections_per_episode: null      # Felix #6r  e.g. 1; set = counter picks first (needs verify)
+  grasp.drop_slots: true                       # Timi 23    standalone drop slots (no verify needed)
+  grasp.drop_slot_grid: true                   # bin capacity six object-separated slots for finals layouts up to 6
+  grasp.drop_slot_overflow: counter             # Felix #6r  counter | stack, when the slots are used up
+  policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
+  motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
+  motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
+  motion.lift_on_stall.enabled: false           # round 9    lift on finger stall (min close_hold_s, max timeout_s)
+  motion.lift_on_stall.timeout_s: 1.2           # round 9    stock 1.2
+  grasp.point_in_palm: [0.0862, -0.0864, 0.0143]  # pinch fix  ON 2026-11-14 = ab_pinch_v1; LEFT palm frame, right mirrored
+  grasp.close_posture: closed_tight                  # pinch fix  ON = ab_pinch_v1 (Modal 60/82 vs 52/82)
+  grasp.close_posture_by_shape: true           # hybrid     demo posture only for a confident metric triangle
+  grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
+  grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
+  hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
+  perception.color_gate.enabled: true          # Felix gate   A/B arm: cand_r17 + the color_gate post-filter
+  perception.online_pitch_cal: table            # Timi pitch per-episode camera pitch from the counter plane
+  perception.color_gate.live_bins: true        # Felix gate  footprint = live bin estimate, else nominal + 10 cm near
+  perception.color_gate.fk_mask: true          # Felix gate  FK arm/hand mask (dilated 15 px)
+  motion.arm_vel_cap: 0.90                       # Timi vel   rad/s cap (sim profile 0.97)
+  motion.output_caps: {arm_vel: 0.85, arm_acc: 4.0, hand_vel: 1.5, hand_acc: 8.0}  # M4: every planner/policy route, including home/abort
+  instruction.normalize: true                   # New H3/H4: context-safe box + ambiguous shape normalisation (existing finals flag)
+  perception.hue_guard.enabled: false   # r22 bisect
+  instruction.max_chars: 2000                   # r19 fuzz   cap absurd instruction length (clause boundary)
+  safety.nan_guard: true                        # r19 fuzz   non-finite arm_q/hand_q -> hold last emitted action
+  instruction.strict: true                      # H2: blank/error + ambiguous/multi-destination language truthily abstains, never FIXED
+  policy.safety_shell: false   # r22 bisect
+  bin.vote.enabled: true                         # C3/H4/H5 corrected signed, snapshot-consistent async vote pipeline
+  bin.vote.signed_rim_fit: true                  # C3  preserve physical +/-x,+/-y rim displacement through drop slots
+  bin.vote.async_extract: true                   # H5  copied frames compute in look worker; act() only polls/holds
+  bin.vote.frame_transform_snapshot: true        # H4  tape and rim share one non-zero-pitch transform per frame
+  bin.geometry_runtime: true                    # r20 R2  every bin consumer follows the voted shift
+  grasp.held_detector: finger_sum               # r20     bias-corrected held; empty close aborted early
+  calib.plane.apply_height: true                # r20 R9  runtime counter_z from the depth plane (real table +5..14 cm), clamp 0.20, nominal fallback
+  perception.color_gate.sat_floor: true
+  instruction.multilingual: true                # r22 FI/CZ + 10 languages (timi/multilang)
+  grasp.release_wait_s: 0.5                     # lag R44  hold >= 0.5 s after the open command before the retreat
+  grasp.release_confirm: true                   # lag R49  empty-hand check after the open; re-open once, else home + stop
+  perception.color_gate.fk_dilate_px: 3        # New H2     render-tested RGB/FK fringe; nearby spawn-object recall
+  perception.color_gate.near_margin_m: 0.10    # New H2/M1  prior/disagree union through full bin.vote.max_shift_m
+  policy.generation_workers: true               # H7: reset invalidates look workers immediately; stale generations never publish
+  grasp.held_calibration.enabled: true           # M3: e0 from steady empty close after home/settle; invalid disables abort
+  profile_auto.auto_detect: true
+  policy.fixed_instruction_first: true   # sort_fixed: instruction beats the venue map only when it maps every colour
+  policy.safety_shell: true   # real only: hold-last watchdog + 20 % velocity reserve (sim restores false)
+  perception.gate_below_bins: true   # r23 candidate
+  instruction.structured: true   # r23 candidate
+  instruction.hazard_guard: true   # r23 candidate
+  instruction.venue_colour_aliases: true   # real-only: venue colour words EN/FI/CS (orange->red, purple->blue)
+  planner.lift_from_contact: true   # real-only: table-resting start: vertical lift first, never go_to through the table
+  bin.vote.max_shift_m: 0.18   # real-only: real bins +8..+15 cm vs nominal (Oliver drop_2)
+  profile_auto.sim_overrides: {bin.geometry_runtime: false, bin.vote.async_extract: false, bin.vote.enabled: false, bin.vote.frame_transform_snapshot: false, bin.vote.max_shift_m: 0.1, bin.vote.signed_rim_fit: false, calib.plane.apply_height: false, grasp.drop_slot_grid: false, grasp.held_calibration.enabled: false, grasp.held_detector: stall, grasp.release_confirm: false, grasp.release_wait_s: null, hand.mirror_index_middle: false, instruction.max_chars: 0, instruction.multilingual: false, instruction.strict: false, instruction.venue_colour_aliases: false, motion.arm_vel_cap: null, motion.output_caps: null, perception.color_gate.enabled: false, perception.color_gate.fk_dilate_px: 0, perception.color_gate.fk_mask: false, perception.color_gate.live_bins: false, perception.color_gate.near_margin_m: 0.0, perception.color_gate.sat_floor: false, perception.gate_below_bins: false, perception.online_pitch_cal: false, planner.lift_from_contact: false, policy.fixed_instruction_first: false, policy.fixed_mapping: null, policy.generation_workers: false, policy.safety_shell: false, safety.nan_guard: false, scene.counter_z_prior: null}  # sim only: ALL 28 rc1-vs-r22 keys at rc1 values + gate_below_bins/fixed_instruction_first/safety_shell off -> sim = rc1 + lang (X8 A43); real robot keeps r23
+  grasp.left_hand_fix.shift_z: 0.02

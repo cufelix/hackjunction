@@ -179,6 +179,7 @@ FLAGS = {
                                     "extra bin-release height (capped at the carry height); IK failure uses the stock target"),
     "grasp.drop_lateral_margin_m": ("finals safe", 0.0,
                                       "move the bin release toward the bin centre (y only, footprint-checked); IK failure uses the stock target"),
+    "grasp.left_hand_fix.shift_z": ("left hand", 0.0, "left arm + triangle only: add this (m) to the grasp z before the fingertip-clearance raise; 0 = off"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
     "motion.output_caps": ("M4", None, "null = legacy output; dict = final per-joint arm/hand velocity and acceleration caps, with stateful limiting on every emitted route"),
@@ -355,6 +356,9 @@ def _apply_output_caps(cfg):
 
 def check_flag_values(cfg):
     """Hard limits on flag values (fail at load = at docker build): carry_scale in (0, 1], known overflow modes."""
+    lhz = _get(cfg, "grasp.left_hand_fix.shift_z")
+    if isinstance(lhz, bool) or not isinstance(lhz, (int, float)) or not np.isfinite(lhz) or abs(lhz) > 0.05:
+        raise ValueError(f"grasp.left_hand_fix.shift_z = {lhz!r}: want a finite number with |v| <= 0.05 m")
     for k, (lo, hi) in LIMITS.items():
         v = float(_get(cfg, k))
         if not lo < v <= hi:
