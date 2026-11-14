@@ -73,7 +73,8 @@ BRAIN_PARAMS = frozenset({"brain.backend", "brain.call_timeout_s", "brain.find_n
 # ... and the switches (ON only in finals_r24 / finals_r23_universal)
 BRAIN_SWITCHES = frozenset({"brain.closed_loop", "brain.enabled", "brain.ev_gate", "brain.find",
                             "brain.find_to_detection", "brain.grounded_picks", "brain.planner", "grasp.generic",
-                            "instruction.novel_objects", "perception.novel_objects", "policy.novel_obstacles"})
+                            "instruction.novel_objects", "perception.novel_objects", "policy.novel_obstacles",
+                            "grasp.novel_near_rim_retry"})
 # real-only perception recall flags (r24; false in profile_auto.sim_overrides)
 REALPERC_FLAGS = frozenset({"perception.color_gate.fk_silhouette", "perception.prism_speckle_floor",
                             "perception.real_merge_split"})
