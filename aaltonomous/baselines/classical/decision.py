@@ -218,6 +218,18 @@ def defer_touching(cands, dets, min_m):
     return [d for d, t in zip(cands, flags) if not t] + [d for d, t in zip(cands, flags) if t]
 
 
+def defer_touching_within(cands, dets, min_m, key):
+    """defer_touching inside each key group only: every group keeps the positions it had, so an ordering the key
+    stands for (D4 tier: centre bin first) always wins over isolated_first."""
+    out, groups = list(cands), {}
+    for i, d in enumerate(cands):
+        groups.setdefault(key(d), []).append(i)
+    for idx in groups.values():
+        for i, d in zip(idx, defer_touching([cands[i] for i in idx], dets, min_m)):
+            out[i] = d
+    return out
+
+
 # defaults mirror config.yaml `decision:` (used when a caller passes no cfg; load_config always supplies it)
 DEFAULTS = {
     "shape_prior": {"cube": 0.9, "cylinder": 0.8, "triangle": 0.6, "unknown": 0.75},

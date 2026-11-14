@@ -539,7 +539,9 @@ class ClassicalPolicy:
             cands.sort(key=lambda d: not self._is_centre(d))
         if self._isolated_on():   # decision.isolated_first: touching candidates go after the isolated ones (stable)
             try:
-                cands = dec.defer_touching(cands, dets, self._dcfg()["isolated_min_m"])
+                tiered = self.tier in (dec.DEGRADED, dec.PRIOR_ONLY)   # the tier order wins: reorder within its groups
+                cands = dec.defer_touching_within(cands, dets, self._dcfg()["isolated_min_m"],
+                                                  self._is_centre if tiered else (lambda d: 0))
             except Exception as e:
                 self._dec_fail("isolated_first", e)
         if extra:
