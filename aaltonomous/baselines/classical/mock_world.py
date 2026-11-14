@@ -169,12 +169,13 @@ class RenderMockBackend(MockBackend):
     name = "mock"
 
     def __init__(self, scene, cal, kin, postures, attach_radius=0.04, depth_noise_mm=1.0, hole_frac=0.02, seed=0,
-                 **kw):
+                 hand_tau=None, **kw):
         super().__init__(**kw)
         self.scene, self.kin, self.post = scene, kin, postures
         self.renderer = Renderer(scene, cal)
         self.attach_radius = attach_radius
         self.depth_noise_mm, self.hole_frac = depth_noise_mm, hole_frac
+        self.hand_tau = hand_tau   # optional first-order finger lag (s); None = the base backend's tau
         self.rng = np.random.default_rng(seed)
         self.objects, self.held = [], {"left": None, "right": None}
         self._cache = None
@@ -196,7 +197,10 @@ class RenderMockBackend(MockBackend):
         return float((self.hand_q[sl] - o) @ (c - o) / ((c - o) @ (c - o)))
 
     def advance(self, dt):
+        prev = self.hand_q.copy()
         super().advance(dt)
+        if self.hand_tau is not None:
+            self.hand_q = prev + (1.0 - np.exp(-dt / self.hand_tau)) * (self.hand_cmd - prev)
         for side in ("left", "right"):
             g, _ = self.kin.grasp_pose(side, self.arm_q)
             f = self._closure(side)

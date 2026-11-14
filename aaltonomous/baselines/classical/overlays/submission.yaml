@@ -55,6 +55,8 @@ flags:
   policy.max_attempts_vary: null                # retry-vary e.g. 3 (needs retry_vary_grasp), only with time left
   policy.first_object_speed_scale: null         # finals safe null | (0,1], arm speed of the first started pick only
   grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture
+  grasp.release_wait_s: null                    # lag R44  null = today (open_hold_s)
+  grasp.release_confirm: false                  # lag R49  off
   grasp.cylinder_no_yaw_vary: false             # cyl yaw    retry on a cylinder: no yaw variants (off = stock)
   policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
   policy.place_gate: false                      # EV gate    confidence-gated placement (off in shipped submission)

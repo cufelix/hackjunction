@@ -851,7 +851,8 @@ class Planner:
         cs = min(1.0, float(mo.get("carry_scale", 1.0)))  # motion.carry_scale <= 1: slower lift + carry only
         move("lift", up, scale=cs)
         move("carry", carry + lower, scale=cs)
-        hand("open", hand_rel, mo["open_hold_s"])  # widest posture: `open` alone left the cube wedged in the sim
+        rw = g.get("release_wait_s")  # grasp.release_wait_s: the retreat starts >= this long after the open command
+        hand("open", hand_rel, mo["open_hold_s"] if rw is None else max(mo["open_hold_s"], float(rw)))  # widest posture: `open` alone left the cube wedged in the sim
         move("retreat", retreat)
         move("home", [home], hand_to=hand_open)
         plan.arm, plan.hand, plan.phases = np.vstack(arm_parts), np.vstack(hand_parts), phases

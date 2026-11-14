@@ -289,6 +289,8 @@ class ClassicalPolicy:
         self._stab_last = None
         self._pend_out = None       # D3: the pick whose outcome the next look judges
         self._exec = None           # D2 T-8 s: the plan being executed {"plan", "n", "cut", "t8"}
+        self._rel = None            # grasp.release_confirm: the plan's release watcher
+        self._rel_fail = False      # release_confirm: the hand never read empty -> stop picking
         self._cap_logged = set()
         self._dec_warned = set()    # F7: decision helpers that already fell back to stock this episode
         self._prior_side = set()    # F1: side bins already attempted in PRIOR-ONLY
@@ -668,6 +670,10 @@ class ClassicalPolicy:
             self._grasp_diag(obs)
         if self._stall is not None:
             self._lift_on_stall(obs)
+        if self._rel is not None:
+            r = self._release_confirm(obs, t)
+            if r is not None:
+                return r
         if self._exec is not None and self.queue_a is not None and len(self.queue_a):
             try:
                 r = self._endgame(t)      # policy.object_time_cap: T-8 s release over the bin / retract (inert when off)
@@ -764,6 +770,10 @@ class ClassicalPolicy:
                 self.state = "done"
                 self._note(t, "operator stop")
             return self._hold(done=self.state == "done")
+        if self.state == "executing" and self._rel_fail:   # release_confirm: hand not empty after the re-open
+            self.state = "done"
+            self._note(t, "release not confirmed: stop picking")
+            return self._hold(done=True)
         if self.state == "executing":  # queue drained -> back home: look again after settling
             self.state = "settle"
             return self._act(obs)
@@ -1562,7 +1572,7 @@ class ClassicalPolicy:
             a, h = np.vstack([a1, a2]), np.vstack([h1, h2])
         else:
             a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
-        self._stall = self._gdiag = None
+        self._stall = self._gdiag = self._rel = None
         self._enqueue(a, h)
         return self._pop()
 
@@ -2167,6 +2177,11 @@ class ClassicalPolicy:
             self.log(f"[grasp_posture] t={t:.1f} {plan.color} {plan.side} label={label} conf={conf:.2f} path={path} "
                      f"posture={'pinch_demo' if nm == 'closed_demo' else 'pinch_v1'} ({nm})" + gate)
         ls = self.cfg["motion"].get("lift_on_stall") or {}
+        self._rel = None
+        if self.cfg["grasp"].get("release_confirm", False) and plan.side in ("left", "right"):
+            ph = {name: e for name, _, e in (plan.phases or [])}
+            if "open" in ph:
+                self._rel = {"plan": plan, "n": len(plan.arm), "open_end": ph["open"], "phase": "wait", "reopened": False}
         self._stall = None
         if ls.get("enabled", False) and plan.close_hold is not None and plan.side in ("left", "right"):
             self._stall = {"n": len(plan.arm), "hold": plan.close_hold, "sl": ArmKinematics.sl(plan.side),
@@ -2227,6 +2242,7 @@ class ClassicalPolicy:
         Standalone-slot bookkeeping is left to _settle_slot, which frees the slot when the object remains."""
         plan = g["plan"]
         self._gdiag = None
+        self._rel = None
         self._stall = self._exec = None      # per-plan watchers: their indices no longer match the queue
         if self._vary_on() and self.vary_hist:   # the entry _start appended for this plan
             self.vary_hist[-1]["held"] = False
@@ -2236,6 +2252,53 @@ class ClassicalPolicy:
         home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
         a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
         self._enqueue(a, h)
+
+    def _release_confirm(self, obs, t):
+        """grasp.release_confirm: at the end of the open hold stop the plan (retreat + home stashed) and poll the finger
+        state for release_confirm_s. Not empty: wiggle open -> release once and poll again; still not empty: go home
+        and stop picking (state done). Returns an action while it owns the tick, else None."""
+        r = self._rel
+        side, hq = r["plan"].side, obs.get("hand_q")
+        if r["phase"] == "wait":
+            if self.queue_a is None or self.queue_h is None or r["n"] - len(self.queue_a) < r["open_end"]:
+                return None
+            r.update(phase="check", rest=(self.queue_a, self.queue_h), t0=t)
+            self.queue_a = self.queue_h = None
+            self._exec = None     # ponytail: the T-8 s watcher is dropped once a release is being confirmed
+        if r["phase"] == "reopen":
+            if self.queue_a is not None and len(self.queue_a):
+                return None       # the wiggle is still being popped
+            r.update(phase="check", t0=t)
+        cmd = self._held_command()
+        ok = hq is not None and np.shape(hq) == (14,) and np.all(np.isfinite(hq)) and self.held_detector.empty(side, cmd, hq)
+        if ok:
+            self._rel = None
+            self.queue_a, self.queue_h = r["rest"]
+            self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: hand empty after {t - r['t0']:.2f} s"
+                     f"{' (re-opened)' if r['reopened'] else ''}")
+            return None
+        if t - r["t0"] < float(self.cfg["grasp"].get("release_confirm_s", 1.5)):
+            return self._hold()
+        arm = self.arm_cmd
+        if not r["reopened"]:
+            r["reopened"], r["phase"] = True, "reopen"
+            sl = ArmKinematics.sl(side)   # only this hand wiggles; the other keeps its posture
+            hv, h0 = self.cfg["motion"]["hand_max_vel"], self.hand_cmd.copy()
+            wide, rel = h0.copy(), h0.copy()
+            wide[sl] = self.post["open"][sl]
+            rel[sl] = self.post[self.cfg["grasp"].get("release_posture", "preshape")][sl]
+            wait = int(round(float(self.cfg["grasp"].get("release_wait_s") or 0.5) * HZ))
+            h = np.vstack([ramp(h0, wide, hv, 1.0 / HZ), ramp(wide, rel, hv, 1.0 / HZ), np.repeat(rel[None], wait, 0)])
+            self._enqueue(np.repeat(arm[None], len(h), 0), h)
+            self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: hand still not empty -> re-open once")
+            return self._pop()
+        self._rel, self._rel_fail = None, True
+        home = arm.copy()
+        home[ArmKinematics.sl(side)] = self.home[ArmKinematics.sl(side)]
+        a, h = self.planner.go_to(arm, self.hand_cmd, home, self.post["open"])
+        self._enqueue(a, h)
+        self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: still not empty after the re-open -> home, stop")
+        return self._pop()
 
     def _joint_offset_diag(self, obs, t):
         """debug.log_joint_offset (passive): cmd-minus-measured over the first second of steady holds, from the policy's
@@ -2383,6 +2446,8 @@ class ClassicalPolicy:
 
     def _pop(self):
         k = int(self.cfg["motion"]["chunk"])
+        if self._rel is not None and self._rel["phase"] == "wait":   # stop exactly at the end of the open hold
+            k = max(1, min(k, self._rel["open_end"] - (self._rel["n"] - len(self.queue_a))))
         if self._stall is not None and self._in_hold():
             k = 1  # lift_on_stall: one tick per request inside the close hold, so every tick's hand_q is seen
         a, h = self.queue_a[:k], self.queue_h[:k]
