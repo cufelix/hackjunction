@@ -64,6 +64,7 @@ flags:
   perception.split_by_solidity: false          # compact-single test and forced split for merged geometry
   perception.tape_value_cut: false             # S/V plus thin-geometry tape rejection
   perception.gate_below_bins: false            # image-space bin-mass gate when live geometry is untrusted
+  perception.bins_from_image: false            # bin masks from the taped rims found in the image (no nominal projection)
   perception.reject_log: false                 # per-colour rejection-stage diagnostics
   perception.still_vote: false                 # non-blocking vote across still frames
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)

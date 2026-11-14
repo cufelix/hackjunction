@@ -249,6 +249,10 @@ perception:
   gate_below_bins: false      # FLAG: untrusted live bins use the observed bin/tape mass instead of nominal projected geometry
   gate_below_bins_params: {h_max: 17, s_min: 77, v_min: 50, object_s_min: 140, object_v_min: 150,
                            open_px: 5, min_component_px: 2000, min_mass_px: 18000, margin_px: 3, trusted_bin_conf: 0.5}
+  bins_from_image: false      # FLAG: find the taped bin rims in the image (rim_detect); image bin masks replace the nominal
+                              # projected hull / in_bin when the runtime bin poses are untrusted, tape is never a target
+  bins_from_image_params: {hint: false, with_depth: true, hint_max_m: 0.25, hint_max_resid_px: 6.0, crosscheck_px: 12.0,
+                           rim_z_m: 0.0}   # hint: expose the rim-line bin distance as bin_rim_hint (planner/geometry hint)
   reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
   still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
   still_vote_params: {n_frames: 3, min_hits: 2, match_m: 0.02}
