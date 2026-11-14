@@ -28,6 +28,8 @@ flags:
   brain.enabled: false                          # brain    off: closed-set tool choice (stub = classical), not in the submission
   policy.fixed_mapping: null                    # organisers P0: null = sim FIXED_MAPPING
   brain.planner: false                          # planner  off: whole-instruction closed-set plan
+  brain.image_max_side_px: 0                    # brain speed off: full-size find/decide image
+  brain.find_n_predict: 400                     # brain speed off: the old find() token cap
   brain.find_to_detection: false                # brain agent off: novel Detection from a find() point
   brain.closed_loop: false                      # brain agent off: closed-loop agent re-planning
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)

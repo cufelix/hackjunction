@@ -399,6 +399,7 @@ class TestFlags(unittest.TestCase):
             self.assertTrue(agent["brain"][k], k)
             base["brain"][k] = True
         base["brain"]["backend"] = "llamacpp"
+        base["brain"]["image_max_side_px"], base["brain"]["find_n_predict"] = 448, 128   # BRAINSPEED.md
         base["overlay"] = "finals_r22_agent"
         self.assertEqual(agent, base)
 
