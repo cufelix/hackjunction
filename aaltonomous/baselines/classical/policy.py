@@ -467,9 +467,15 @@ class ClassicalPolicy:
         res = self._act_entry(obs)
         if self._mirror_im:   # hand.mirror_index_middle (R42a): last stop before the runner, every return path
             h = np.asarray(res["hand_q_target"], float)
-            res = dict(res, hand_q_target=np.stack([equalize_index_middle(r, closed=False) for r in h])
-                       if h.ndim == 2 else equalize_index_middle(h, closed=False))
+            res = dict(res, hand_q_target=np.stack([self._im_emit(r) for r in h]) if h.ndim == 2 else self._im_emit(h))
         return res
+
+    def _im_emit(self, r):
+        """Posture-aware index/middle repair at emission: a hand flexed past the open/closed midpoint keeps the more
+        closed value (closed_demo reaches its full -1.41, no under-grip on soft real fingers); otherwise the more open."""
+        f = np.r_[3:7, 10:14]
+        mid = (np.abs(self.post["open"][f]).mean() + np.abs(self.post["closed"][f]).mean()) / 2
+        return equalize_index_middle(r, closed=bool(np.abs(r[f]).mean() > mid))
 
     def _act_entry(self, obs):
         ng = bool((self.cfg.get("safety") or {}).get("nan_guard", False))

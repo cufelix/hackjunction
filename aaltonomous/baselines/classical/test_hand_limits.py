@@ -84,3 +84,17 @@ class TestHandLimits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPostureAwareEmission(unittest.TestCase):
+    def test_closed_demo_keeps_full_flexion_and_open_stays_open(self):
+        from .policy import ClassicalPolicy
+        pol = ClassicalPolicy(config=load_config(overlay="finals_r21"), log=None)
+        d = pol.post["closed_demo"].copy()
+        d[5:7] = [-0.49, -1.21]                       # an un-equalized ramp target: one pair less closed
+        np.testing.assert_allclose(pol._im_emit(d)[3:7], [-0.50, -1.41, -0.50, -1.41])
+        o = pol.post["open"].copy()
+        o[6] = o[4] - 0.2 * np.sign(o[4] or -1.0)     # one open finger slightly more curled
+        e = pol._im_emit(o)
+        self.assertLessEqual(abs(e[6]), abs(o[6]))    # open side takes the more open value
+        self.assertEqual(e[4], e[6])
