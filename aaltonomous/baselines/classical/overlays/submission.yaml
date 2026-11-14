@@ -42,6 +42,8 @@ flags:
   perception.color_gate.live_bins: false        # Felix gate  footprint follows the live bin estimate (else nominal + 10 cm near)
   perception.color_gate.sat_floor: false       # Felix gate  blue S<110 / yellow S<45 blobs rejected (shadow, sheen)
   perception.split_blobs: true                 # real colour  split touching same-colour objects
+  perception.prism_orientation: false           # prism orient standing vs lying prism (default off)
+  grasp.lying_prism: false                      # prism orient close across the ridge of a lying prism
   grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
   grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
   grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)

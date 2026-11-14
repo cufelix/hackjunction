@@ -72,6 +72,8 @@ FLAGS = {
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
+    "perception.prism_orientation": ("prism orient", False, "Detection.prism_orientation standing|lying from the footprint fill + top-band strip (+ height when it differs); lying -> shape triangle, ridge_yaw, prism_xy"),
+    "grasp.lying_prism": ("prism orient", False, "lying prism (needs perception.prism_orientation): jaw closes across the ridge (hand heading = ridge +- 90 deg), grasp at the triangle-section centroid height, configured close posture"),
     "grasp.yaw_align": ("Oliver #5", False, "triangle grasp: finger direction from apex yaw (needs shape+pose)"),
     "grasp.yaw_phi_deg": ("Oliver #5", STOCK, "yaw_align: finger heading = apex + phi (stock 105)"),
     "grasp.yaw_tri_shift": ("Oliver #5", STOCK, "yaw_align: grasp point to the pinch midpoint (stock true)"),
@@ -276,6 +278,13 @@ def check_flag_values(cfg):
     if not 0.0 <= float(hg.get("red_min_s", 110.0)) <= 255.0:
         raise ValueError(f"perception.hue_guard.red_min_s = {hg.get('red_min_s')}: want 0-255")
     g = cfg.get("grasp") or {}
+    if not 0.0 < float(g.get("lying_yaw_tol_deg", 10.0)) <= 45.0:
+        raise ValueError("grasp.lying_yaw_tol_deg must be in (0, 45]")
+    pp = (cfg.get("perception") or {}).get("prism_orientation_params") or {}
+    if not 0.5 < float(pp.get("fill_min", 0.75)) < 1.0:
+        raise ValueError("perception.prism_orientation_params.fill_min must be in (0.5, 1)")
+    if pp.get("length_m") is not None and not 0.01 <= float(pp["length_m"]) <= 0.2:
+        raise ValueError("perception.prism_orientation_params.length_m must be null or 0.01-0.2 m")
     for key in ("generic_shape_min_conf", "generic_min_confidence"):
         if not 0.0 <= float(g.get(key, 0.5)) <= 1.0:
             raise ValueError(f"grasp.{key} must be in [0, 1]")
