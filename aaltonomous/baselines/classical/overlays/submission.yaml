@@ -1,0 +1,94 @@
+# Submission flag overlay. submission.Dockerfile bakes this file into the image as
+# aaltonomous/baselines/classical/overlay.yaml; load_config() applies it after the `sim` profile.
+# The organisers run `docker run -d --gpus all -p <port>:8000 <image>` with no env/args, so THIS FILE is the switch.
+#
+# Only keys listed in config.FLAGS are accepted (typo -> the docker build fails).
+# Flags ON here (each only after its GPU A/B): instruction.resolve (2026-11-14). Everything else = its OFF value.
+# Flip a flag ONLY after its A/B run (knowledge/humanoid/21-submission-pipeline.md), then rebuild. Check: python3 tools/flags.py --overlay submission
+name: submission
+flags:
+  calib.plane.apply_height: false               # P0 table   runtime counter_z from head depth (ab_apply_height overlay turns it on)
+  calib.fk_xcheck: false                        # B2         passive RGB/FK head-pose cross-check (log-only)
+  policy.safety_shell: false                    # safety     hold-last + 20 % reserve + no blocking calls in act(); OFF until its A/B
+  skills.memory: false                         # persistent grasp-variant learning (A/B overlay: ab_skills)
+  skills.memory_path: null                     # SQLite path; unset = in-memory; AALTO_SKILLS_DB overrides
+  instruction.resolve: true                     # Felix #1   ON 2026-11-14: box A sort_language 54/74 vs 1/74, 0 wrong,
+                                                #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
+  instruction.normalize: false                  # Felix lang  typo/synonym normaliser (RC1 overlay turns it on)
+  instruction.strict: false                     # Felix strict never guess (rc1_strict overlay turns it on)
+  brain.backend: stub
+  brain.url: http://127.0.0.1:8080/completion
+  brain.find: false
+  brain.enabled: false                          # brain    off: closed-set tool choice (stub = classical), not in the submission
+  policy.fixed_mapping: null                    # organisers P0: null = sim FIXED_MAPPING
+  policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
+  policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
+  perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
+  perception.hue_guard.enabled: false           # tech lead  per-frame orange/yellow hue judge (hue_guard.py); OFF until its A/B
+  perception.principal_point: file             # Oliver lane 3: file | center (sim renders cx,cy at centre)
+  perception.online_pitch_cal: false            # Timi pitch per-episode optical-x fit from orange far rims
+  perception.hand_calibration.enabled: false    # Oliver     head-camera 6-DOF pose from the arms (ICP vs FK)
+  perception.y_affine: null                     # Timi 23    [a, b]: y -= a*y + b; e.g. [-0.0326, 0.0039]
+  perception.classify_shape: true              # Oliver #5/#7 shape from the top face
+  perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre
+  perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)
+  perception.no_blob_shape: false               # Oliver     no top face -> no shape (never the 2D blob)
+  perception.shape_diag: false                  # Oliver     passive [shape_diag] log lines
+  perception.shape_2d_v2: false                  # r17        yellow 2D cube/cylinder (top-edge quad_rms + n_vert); unproven
+  perception.hsv_set: robust                     # real colour  stock | robust (one HSV set for sim + real head cam)
+  perception.colour_kmeans: false               # EV gate    per-episode object-pixel HSV k=3 hue re-centering
+  perception.color_gate.enabled: false          # Felix gate   post-filter: area floor+ceiling, workspace, bin footprint/rim
+  perception.color_gate.fk_mask: false          # Felix gate  FK arm/hand mask before blob grouping (needs arm_q)
+  perception.color_gate.live_bins: false        # Felix gate  footprint follows the live bin estimate (else nominal + 10 cm near)
+  perception.color_gate.sat_floor: false       # Felix gate  blue S<110 / yellow S<45 blobs rejected (shadow, sheen)
+  perception.split_blobs: true                 # real colour  split touching same-colour objects
+  grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
+  grasp.yaw_phi_deg: 105                        # Oliver #5  stock 105 (param of yaw_align)
+  grasp.yaw_tri_shift: true                     # Oliver #5  stock true (param of yaw_align)
+  policy.time_triage: false                     # Oliver #3  skip plans that do not fit, try the next object
+  policy.max_total_attempts: null               # Oliver #3  e.g. 12; null = off
+  policy.max_attempts: 2                        # stock 2    tries per object
+  policy.retry_pass: false                      # Oliver #3  once-per-episode retry pass (retry_extra_attempts 2)
+  policy.time_margin_s: 0.0                     # Oliver #3  e.g. 1.0; 0 = off
+  policy.episode_summary_log: false             # Oliver #3  one log line per episode end
+  policy.retry_vary_grasp: false                # retry-vary another grasp when the object remains in the next frame
+  policy.max_attempts_vary: null                # retry-vary e.g. 3 (needs retry_vary_grasp), only with time left
+  policy.first_object_speed_scale: null         # finals safe null | (0,1], arm speed of the first started pick only
+  grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture
+  grasp.cylinder_no_yaw_vary: false             # cyl yaw    retry on a cylinder: no yaw variants (off = stock)
+  policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
+  policy.place_gate: false                      # EV gate    confidence-gated placement (off in shipped submission)
+  policy.place_gate_colour_min: 0.6             # EV gate    minimum HSV/blob colour confidence
+  policy.place_gate_bin_min: 0.5                # EV gate    minimum self-calibration/bin confidence
+  policy.object_time_budget_s: null             # EV gate    cumulative per-object motion budget; null = off
+  policy.verify_yellow_unknown: false           # Felix #6r  yellow in-bin detection = unknown (needs verify)
+  policy.max_corrections_per_episode: null      # Felix #6r  e.g. 1; set = counter picks first (needs verify)
+  grasp.drop_slots: false                       # Timi 23    standalone drop slots (no verify needed)
+  grasp.drop_slot_overflow: counter             # Felix #6r  counter | stack, when the slots are used up
+  grasp.drop_height_extra_m: 0.0                # finals safe extra release height; IK fallback to stock
+  grasp.drop_lateral_margin_m: 0.0              # finals safe release toward bin centre; IK fallback to stock
+  policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
+  grasp.held_detector: stall                   # real held  legacy diagnostic; ab_held_detector selects finger_sum
+  motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
+  motion.arm_vel_cap: null                      # Timi vel   rad/s arm speed cap (real robot margin); null = profile 0.97
+  motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
+  motion.lift_on_stall.enabled: false           # round 9    lift on finger stall (min close_hold_s, max timeout_s)
+  motion.lift_on_stall.timeout_s: 1.2           # round 9    stock 1.2
+  grasp.point_in_palm: [0.0862, -0.0864, 0.0143]  # pinch fix  ON 2026-11-14 = ab_pinch_v1; LEFT palm frame, right mirrored
+  grasp.close_posture: closed_tight                  # pinch fix  ON = ab_pinch_v1 (Modal 60/82 vs 52/82)
+  grasp.close_posture_by_shape: true           # hybrid     demo posture only for a confident metric triangle
+  grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
+  grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
+  grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
+  hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
+  debug.log_joint_offset: false                 # passive    first-second steady cmd-vs-measured diagnostic
+  policy.confidence_order: false                # D1/D2      order by 2*p/est_time, never the hardest first
+  policy.object_time_cap: false                 # D2         per-object cap, T-20 s / T-8 s rules
+  policy.speed_tiers: false                     # D3         first object 0.7 + clearance, tiers by outcome
+  policy.confidence_tiers: false                # D4         first-seconds calibration tiers
+  bin.geometry_runtime: false                   # bin geo    all bin consumers follow bin_geometry() (A/B: ab_bingeo)
+  bin.vote.enabled: false                       # bin vote  per-bin position from 3 votes (A/B: ab_binvote)
+  decision.isolated_first: false                # isolated   touching candidates after the isolated ones (isolated_min_m 0.06)
+  perception.inject_cam_error: null             # TEST ONLY [dpitch_deg, dyaw_deg, dx, dy, dz]: perturb the head extrinsics
+  instruction.max_chars: 0                      # fuzz fix   0 = off; N>0 caps the instruction text at N chars (boundary cut)
+  safety.nan_guard: false                       # fuzz fix   non-finite arm_q/hand_q -> hold last action, no planner tick

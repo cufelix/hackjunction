@@ -1,0 +1,254 @@
+"""Real-Dex3 held detection from synthetic traces based on REAL_DEX3_REPORT.md."""
+import unittest
+from types import SimpleNamespace
+
+import numpy as np
+
+from .held import HeldDetector
+from .policy import ClassicalPolicy
+from .test_retry_vary import det, make, obs
+
+
+def trace(side, index_sum, middle_sum, thumb0_native=0.0):
+    """(cmd, q) with requested closing-positive two-joint finger errors."""
+    cmd = np.zeros(14)
+    off = 0 if side == "left" else 7
+    sign = -1.0 if side == "left" else 1.0
+    cmd[off:off + 7] = -0.4 if side == "left" else 0.4
+    pairs = ({"middle": (3, 4), "index": (5, 6)} if side == "left"
+             else {"index": (3, 4), "middle": (5, 6)})
+    native = np.zeros(14)
+    for finger, total in (("index", index_sum), ("middle", middle_sum)):
+        native[off + np.asarray(pairs[finger])] = total / (2.0 * sign)
+    native[off] = thumb0_native
+    return cmd, cmd - native
+
+
+class TestFingerSumHeldDetector(unittest.TestCase):
+    def detector_with_reference(self, side, threshold=0.045):
+        det = HeldDetector("finger_sum", threshold)
+        det.start(0.0)
+        # Real free tracking bias: state is ~0.02 rad more closed per joint, so the
+        # closing-positive reference sum is -0.04 rad for each finger.
+        for tick in range(1, 31):
+            cmd, q = trace(side, -0.04, -0.04, thumb0_native=0.46)
+            det.observe(tick / 30.0, cmd, q)
+        return det
+
+    def test_left_order_middle_before_index_and_cube_is_held(self):
+        det = self.detector_with_reference("left")
+        cmd, q = trace("left", 0.19, 0.02, thumb0_native=0.70)
+        held, scores = det.held("left", cmd, q)
+        self.assertTrue(held)
+        self.assertAlmostEqual(scores["index"], 0.23)
+        self.assertAlmostEqual(scores["middle"], 0.06)
+        self.assertAlmostEqual(scores["finger_sum"], 0.23)
+
+    def test_right_order_index_before_middle_and_cube_is_held(self):
+        det = self.detector_with_reference("right")
+        cmd, q = trace("right", 0.19, 0.02, thumb0_native=0.70)
+        held, scores = det.held("right", cmd, q)
+        self.assertTrue(held)
+        self.assertAlmostEqual(scores["index"], 0.23)
+        self.assertAlmostEqual(scores["middle"], 0.06)
+        self.assertAlmostEqual(scores["finger_sum"], 0.23)
+
+    def test_open_and_empty_closed_are_not_held_but_cube_is(self):
+        for side in ("left", "right"):
+            det = self.detector_with_reference(side)
+            # Open/free repeats the reference; empty close is at most +0.03 rad
+            # after bias subtraction; the cube is ~0.23 rad after subtraction.
+            for sums, want in (((-0.04, -0.04), False), ((-0.01, -0.01), False), ((0.19, 0.02), True)):
+                cmd, q = trace(side, *sums, thumb0_native=0.70)
+                self.assertEqual(det.held(side, cmd, q)[0], want, (side, sums))
+
+    def test_thumb0_gap_is_excluded(self):
+        for side in ("left", "right"):
+            det = self.detector_with_reference(side)
+            cmd, q = trace(side, -0.01, -0.01, thumb0_native=0.70)
+            self.assertFalse(det.held(side, cmd, q)[0])
+
+    def test_threshold_is_configurable(self):
+        cmd, q = trace("right", 0.01, -0.04)
+        low = self.detector_with_reference("right", threshold=0.045)
+        high = self.detector_with_reference("right", threshold=0.055)
+        self.assertTrue(low.held("right", cmd, q)[0])   # 0.01 - (-0.04) = 0.05
+        self.assertFalse(high.held("right", cmd, q)[0])
+
+    def test_reference_averages_only_the_first_second(self):
+        det = HeldDetector("finger_sum", 0.045)
+        det.start(10.0)
+        for tick in range(1, 31):
+            cmd, q = trace("left", -0.02 if tick <= 15 else -0.06, -0.04)
+            det.observe(10.0 + tick / 30.0, cmd, q)
+        reference = det.reference
+        # Mean index sum is -0.04; middle is -0.04. A late outlier is ignored.
+        cmd, q = trace("left", 1.0, 1.0)
+        det.observe(11.1, cmd, q)
+        np.testing.assert_allclose(det.reference, reference)
+        cmd, q = trace("left", -0.04, -0.04)
+        held, scores = det.held("left", cmd, q)
+        self.assertFalse(held)
+        self.assertAlmostEqual(scores["index"], 0.0)
+        self.assertAlmostEqual(scores["middle"], 0.0)
+
+    def test_finger_sum_waits_at_least_point_eight_seconds(self):
+        det = HeldDetector("finger_sum", 0.045)
+        self.assertEqual(det.evaluation_tick(close_start=10, close_end=20, hz=30.0), 34)
+        stall = HeldDetector("stall", 0.045)
+        self.assertEqual(stall.evaluation_tick(close_start=10, close_end=20, hz=30.0), 20)
+
+
+class TestLegacyStallHeldDetector(unittest.TestCase):
+    def test_current_max_absolute_error_rule_is_unchanged(self):
+        det = HeldDetector("stall", 0.045)
+        cmd, q = np.zeros(14), np.zeros(14)
+        q[0] = 0.009999
+        self.assertFalse(det.held("left", cmd, q)[0])
+        q[0] = 0.010
+        self.assertTrue(det.held("left", cmd, q)[0])
+
+
+class TestEmptyGraspAbort(unittest.TestCase):
+    """grasp.held_detector=finger_sum: an empty close is aborted at the close check; unsure never aborts."""
+
+    def started(self, sums=(-0.01, -0.01), detector=None):
+        d = det("red", 0.30, shape="cube")
+        pol = make([d], overrides={"grasp.held_detector": "finger_sum"})
+        pol.held_detector = detector or TestPolicyHeldWiring.detector_with_reference("left")
+        pol._held_hand_lo, pol._held_hand_hi = np.full(14, -1.0), np.full(14, 1.0)
+        pol.planner.go_to = lambda *a, **k: (np.zeros((5, 14)), np.zeros((5, 14)))
+        cmd, q = trace("left", *sums, thumb0_native=0.70)
+        pol._start(pol._plan_pick(d, {}), 0.0)                  # 60-tick plan, close check at tick 34
+        pol.hand_cmd = cmd
+        pol.queue_a, pol.queue_h = np.zeros((60 - 34, 14)), np.zeros((60 - 34, 14))
+        return d, pol, q
+
+    def test_empty_close_is_aborted_and_the_retry_varies_the_grasp(self):
+        d, pol, q = self.started(sums=(-0.01, -0.01))
+        pol._grasp_diag({"hand_q": q})
+        self.assertIsNone(pol._gdiag)
+        self.assertIs(pol.vary_hist[-1]["held"], False)          # the miss the retry logic reads
+        self.assertEqual(pol._attempt_count(d.top[:2], d.color), 1)
+        pol.queue_a = pol.queue_h = None                         # the home path has finished
+        res = pol._choose([d], obs(), verify=False)
+        self.assertEqual(res[0], "plan")
+        self.assertTrue(pol.planner.calls[-1])                   # varied posture/yaw, not the stock grasp
+
+    def test_held_close_is_not_aborted(self):
+        _, pol, q = self.started(sums=(0.19, 0.02))
+        n = len(pol.queue_a)
+        pol._grasp_diag({"hand_q": q})
+        self.assertEqual(len(pol.queue_a), n)
+        self.assertIsNone(pol.vary_hist[-1]["held"])
+
+    def test_unsure_is_never_empty(self):
+        _, pol, q = self.started(detector=HeldDetector("finger_sum", 0.045))   # no bias reference yet
+        n = len(pol.queue_a)
+        pol._grasp_diag({"hand_q": q})
+        self.assertEqual(len(pol.queue_a), n)
+        self.assertIsNone(pol.vary_hist[-1]["held"])
+        for bad in (q[:7], np.where(np.arange(14) == 3, np.nan, q)):   # missing or non-finite joint data
+            _, pol, _ = self.started()
+            pol._gdiag["lift_end"] = 10 ** 6                       # lift sample never taken: no finalize on bad data
+            n = len(pol.queue_a)
+            pol._grasp_diag({"hand_q": bad})
+            self.assertEqual(len(pol.queue_a), n)
+            self.assertIsNotNone(pol._gdiag)
+            self.assertIsNone(pol.vary_hist[-1]["held"])
+
+    def test_stall_mode_never_aborts(self):
+        _, pol, q = self.started()
+        pol.held_detector = HeldDetector("stall", 0.045)
+        self.assertFalse(pol._held_abort_due({"plan": SimpleNamespace(side="left")}, q, pol.hand_cmd))
+
+
+class TestPolicyHeldWiring(unittest.TestCase):
+    @staticmethod
+    def policy_with_detector(side):
+        pol = ClassicalPolicy.__new__(ClassicalPolicy)
+        pol.held_detector = TestPolicyHeldWiring.detector_with_reference(side)
+        # Synthetic trace targets are already comfortably inside these bounds.
+        pol._held_hand_lo = np.full(14, -1.0)
+        pol._held_hand_hi = np.full(14, 1.0)
+        return pol
+
+    @staticmethod
+    def detector_with_reference(side):
+        det = HeldDetector("finger_sum", 0.045)
+        det.start(0.0)
+        for tick in range(1, 31):
+            cmd, q = trace(side, -0.04, -0.04, thumb0_native=0.46)
+            det.observe(tick / 30.0, cmd, q)
+        return det
+
+    def test_finger_sum_uses_last_policy_command_with_safety_position_clamp(self):
+        pol = ClassicalPolicy.__new__(ClassicalPolicy)
+        pol.hand_cmd = np.array([-2.0, -0.4, 0.5, 2.0])
+        spec = SimpleNamespace(hand_lower=np.array([-1.0, -0.5, 0.0, 0.0]),
+                               hand_upper=np.array([1.0, 0.5, 1.0, 0.1]))
+        # Wide joints use the configured 0.04 rad margin. The 0.1 rad range is
+        # capped at a quarter-range margin, exactly as SafetyFilter._shrink.
+        safety = SimpleNamespace(hand_pos_margin=0.04)
+        pol._held_hand_lo, pol._held_hand_hi = pol._safety_hand_limits(spec, safety)
+        pol.held_detector = HeldDetector("finger_sum", 0.045)
+        np.testing.assert_allclose(pol._held_command(), [-0.96, -0.4, 0.5, 0.075])
+        pol.held_detector = HeldDetector("stall", 0.045)
+        np.testing.assert_array_equal(pol._held_command(), pol.hand_cmd)
+
+    def test_grasp_diag_logs_finger_sum_held_value(self):
+        for sums, word in (((-0.01, -0.01), "no"), ((0.19, 0.02), "yes")):
+            pol = self.policy_with_detector("right")
+            pol.queue_a = pol.queue_h = None
+            pol.cfg = {"grasp": {"close_posture": "closed"}}
+            pol.post = {"closed": np.zeros(14)}
+            logs = []
+            pol.log = logs.append
+            cmd, q = trace("right", *sums, thumb0_native=0.70)
+            pol.hand_cmd = cmd
+            plan = SimpleNamespace(side="right", posture=None, color="red", target_bin="right")
+            samples = {key: (tick, q, cmd) for key, tick in (("close", 40), ("lift", 50))}
+            pol._gdiag = {"n": 0, "close_end": 40, "lift_end": 50, "t": 1.0,
+                          "plan": plan, "samples": samples}
+            pol._grasp_diag({"hand_q": q})
+            self.assertEqual(len(logs), 1)
+            self.assertIn(f"held={word}", logs[0])
+            self.assertIn("finger_sum=", logs[0])
+
+    def test_grasp_diag_headline_matches_close_decision_not_lift(self):
+        pol = self.policy_with_detector("right")
+        pol.queue_a = pol.queue_h = None
+        pol.cfg = {"grasp": {"close_posture": "closed"}}
+        pol.post = {"closed": np.zeros(14)}
+        logs = []
+        pol.log = logs.append
+        close_cmd, close_q = trace("right", -0.01, -0.01)
+        lift_cmd, lift_q = trace("right", 0.19, 0.02)
+        pol.hand_cmd = lift_cmd
+        plan = SimpleNamespace(side="right", posture=None, color="red", target_bin="right")
+        pol._gdiag = {"n": 0, "close_end": 40, "lift_end": 50, "t": 1.0, "plan": plan,
+                      "samples": {"close": (40, close_q, close_cmd), "lift": (50, lift_q, lift_cmd)}}
+        pol._grasp_diag({"hand_q": lift_q})
+        self.assertIn("held=no", logs[0])
+        self.assertIn("sample_held=no", logs[0])
+        self.assertIn("sample_held=yes", logs[0])
+
+    def test_grasp_diag_does_not_finish_before_point_eight_second_close_sample(self):
+        pol = self.policy_with_detector("right")
+        pol.cfg = {"grasp": {"close_posture": "closed"}}
+        pol.post = {"closed": np.zeros(14)}
+        pol.log = lambda _: None
+        pol.queue_a = np.zeros((20, 14))
+        plan = SimpleNamespace(side="right", posture=None, color="red", target_bin="right")
+        pol._gdiag = {"n": 50, "close_end": 40, "lift_end": 30, "t": 1.0,
+                      "plan": plan, "samples": {}}
+        cmd, q = trace("right", 0.19, 0.02)
+        pol.hand_cmd = cmd
+        pol._grasp_diag({"hand_q": q})
+        self.assertIsNotNone(pol._gdiag)
+        self.assertIn("lift", pol._gdiag["samples"])
+        self.assertNotIn("close", pol._gdiag["samples"])
+
+
+if __name__ == "__main__":
+    unittest.main()

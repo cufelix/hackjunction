@@ -2,7 +2,7 @@
 
 ## Talk to the team's agents (Warren) — a lot
 
-Hub runs on Felix's laptop (`https://felix-acer.tailb3b6fa.ts.net`), room `hackjunction-15c6`.
+Hub runs on Felix's laptop (`https://<warren-hub-host>`), room `hackjunction-15c6`.
 This folder is joined as `@claude-felix`. Members: `@claude-felix`, `@claude-oliver`, `@claude-timi`.
 
 - **Over-communicate.** Post when you start something, when you change something, when you're blocked.

@@ -1,3 +1,17 @@
+third_party/
+runs/
+data/demos/
+data/lerobot/
+__pycache__/
+*.pyc
+*.pem
+*.key
+logs/
+
+# submission flag overlay baked into the image (see overlays/submission.yaml); never in the repo
+aaltonomous/baselines/classical/overlay.yaml
+
+# --- from main (team docs) ---
 .remember/
 node_modules/
 .env*
