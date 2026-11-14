@@ -12,6 +12,8 @@ target while you compute. Return "done": True to end the episode early. Everythi
 from __future__ import annotations
 
 import logging
+import signal
+import threading
 import traceback
 
 import numpy as np
@@ -56,6 +58,10 @@ def handle(policy: Policy, msg: dict) -> dict:
     return {"type": "error", "message": f"unknown message type {t!r}"}
 
 
+def _stop_clean(signum, frame):
+    raise SystemExit(0)  # same clean exit as Ctrl-C; PID 1 in Docker ignores SIGTERM without a handler
+
+
 def serve(policy: Policy, port: int = P.PORT, host: str = "0.0.0.0", ready=None):
     """Blocking. `ready` (threading.Event) is set once the socket is listening."""
     from websockets.sync.server import serve as ws_serve
@@ -72,6 +78,8 @@ def serve(policy: Policy, port: int = P.PORT, host: str = "0.0.0.0", ready=None)
                 out = {"type": "error", "message": f"{type(e).__name__}: {e}"}
             ws.send(P.pack(out))
 
+    if threading.current_thread() is threading.main_thread():  # signal.signal is main-thread only
+        signal.signal(signal.SIGTERM, _stop_clean)
     with ws_serve(conn, host, port, max_size=None, compression=None) as server:
         log.info("policy server '%s' listening on %s:%d", policy.name, host, port)
         if ready is not None:
