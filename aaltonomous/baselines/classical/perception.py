@@ -116,6 +116,11 @@ class Detection:
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
     sat_med: float | None = None  # perception.color_gate.sat_floor only: median HSV S (0-255) over the blob mask
+    novel: bool = False  # brain.find_to_detection only: built from a depth blob at a find() point, never by detect()
+    label: str | None = None  # novel only: the query phrase
+    footprint: tuple | None = None  # novel only: (major, minor) extents of the blob in m
+    height_m: float | None = None  # novel only: top height above the counter plane in m
+    ungraspable: bool = False  # novel only: too wide / flat / unsupported -> the policy skips it
 
     def __repr__(self):
         x, y, z = self.top

@@ -207,7 +207,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_real", "rc1", "rc1_strict",
+                                      "finals_r21", "finals_r22_agent", "finals_real", "rc1", "rc1_strict",
                                       "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
@@ -281,6 +281,19 @@ class TestFlags(unittest.TestCase):
         base["brain"]["planner"] = True
         base["overlay"] = "ab_planner"
         self.assertEqual(planner, base)
+
+    def test_agent_flags_registered_and_finals_r22_agent_is_r21_plus_the_brain(self):
+        for k in ("brain.find_to_detection", "brain.closed_loop"):
+            self.assertIn(k, FLAGS)
+        base = load_config(overlay="finals_r21")
+        agent = load_config(overlay="finals_r22_agent")
+        self.assertEqual(agent["brain"]["url"], "http://127.0.0.1:8080/completion")   # one container: loopback
+        for k in ("enabled", "planner", "find", "find_to_detection", "closed_loop"):
+            self.assertTrue(agent["brain"][k], k)
+            base["brain"][k] = True
+        base["brain"]["backend"] = "llamacpp"
+        base["overlay"] = "finals_r22_agent"
+        self.assertEqual(agent, base)
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm
