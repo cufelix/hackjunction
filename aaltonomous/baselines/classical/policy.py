@@ -3041,10 +3041,12 @@ class ClassicalPolicy:
                     if key == "close" and not g.get("skill_only") \
                             and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
                         self._abort_empty_grasp(g)   # queue replaced; _act pops it on this same tick
+                        self._log_aborted_diag(g)
                         return
                     if key == "lift" and read_through and not g.get("skill_only") \
                             and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
                         self._abort_empty_grasp(g, "post-lift")
+                        self._log_aborted_diag(g)
                         return
             if read_through:
                 carry_start, carry_end = g["carry"]
@@ -3059,6 +3061,21 @@ class ClassicalPolicy:
             return
         self._gdiag = None
         plan = g["plan"]
+        held, parts = self._diag_body(g)
+        pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
+        if pend is not None and pend["color"] == plan.color:
+            pend["held"] = None if held is None else bool(held)
+            if pend["hist"] is not None:
+                pend["hist"]["held"] = pend["held"]
+        if not g.get("skill_only"):
+            self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
+                     f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
+
+    def _diag_body(self, g):
+        """Formats the [grasp_diag] fields for a watched pick: (headline held, field parts). Shared by the normal
+        line and the aborted line; reads only, so it never changes a command or the detector state."""
+        plan = g["plan"]
+        read_through = "carry" in g and self.held_detector.mode == "finger_sum"
         sl = ArmKinematics.sl(plan.side)
         closed = self.post[(plan.posture[0] if plan.posture else self.cfg["grasp"].get("close_posture", "closed"))][sl]
         parts = []
@@ -3091,14 +3108,20 @@ class ClassicalPolicy:
                 parts.append(f"carry_max@n={len(post)}: finger_sum={scores['finger_sum']:.3f} "
                              f"threshold={self.held_detector.threshold_rad:.3f} "
                              f"sample_held={'yes' if held else 'no'}")
-        pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
-        if pend is not None and pend["color"] == plan.color:
-            pend["held"] = None if held is None else bool(held)
-            if pend["hist"] is not None:
-                pend["hist"]["held"] = pend["held"]
-        if not g.get("skill_only"):
+        return held, parts
+
+    def _log_aborted_diag(self, g):
+        """policy.grasp_diag_log: an aborted pick still gets its [grasp_diag] line (same formatter, aborted=1).
+        Logging only; called after the abort has queued its recovery and never raises into the control path."""
+        if g.get("skill_only"):
+            return
+        try:
+            held, parts = self._diag_body(g)
+            plan = g["plan"]
             self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
-                     f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
+                     f"held={'n/a' if held is None else ('yes' if held else 'no')} aborted=1 " + " ".join(parts))
+        except Exception as exc:   # diagnostics only
+            self.log(f"[grasp_diag] aborted=1 format_error={type(exc).__name__}")
 
     def _settle_skill_attempt(self, dets, t):
         """The object still on the counter = that try failed; gone = it was held (or the release is judged later)."""
