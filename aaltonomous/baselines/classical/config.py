@@ -119,6 +119,7 @@ FLAGS = {
     "perception.split_by_solidity": ("gate fix", False, "classify compact blobs as single objects and force-split merged geometry"),
     "perception.tape_value_cut": ("gate fix", False, "reject thin orange candidates without a strong S/V core"),
     "perception.bins_from_image": ("gate fix", False, "bin masks from the taped rims found in the image (no depth / untrusted bin poses)"),
+    "perception.prism_speckle_floor": ("prism floor", False, "color_gate speckle floor: orange/red blobs with a triangular outline (minEnclosingTriangle fill) use prism_speckle_floor_params.area_frac instead of color_gate.area_frac"),
     "perception.gate_below_bins": ("gate fix", False, "when live bins are untrusted, gate candidates below observed bin mass in image space"),
     "perception.reject_log": ("gate fix", False, "log and retain per-colour rejection-stage counts"),
     "perception.still_vote": ("gate fix", False, "non-blocking N-frame vote over policy-declared still frames"),
@@ -400,7 +401,7 @@ def check_flag_values(cfg):
                 raise ValueError(f"motion.output_caps.{key} = {caps[key]} exceeds finals cap {maximum}")
     p = cfg.get("perception") or {}
     for key in ("sim_center_principal_point", "split_by_solidity", "tape_value_cut", "gate_below_bins",
-                "bins_from_image", "reject_log", "still_vote"):
+                "bins_from_image", "reject_log", "still_vote", "prism_speckle_floor"):
         if not isinstance(p.get(key), bool):
             raise ValueError(f"perception.{key}: want true or false")
     aim = p.get("aim_z_frac", 0.25)
@@ -430,6 +431,11 @@ def check_flag_values(cfg):
         v = _get(cfg, k)
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not np.isfinite(v) or v <= 0.0:
             raise ValueError(f"{k} = {v!r}: want a finite float > 0")
+    pp = p.get("prism_speckle_floor_params") or {}
+    for key, default in (("area_frac", 0.08), ("min_fill", 0.75), ("min_solidity", 0.85)):
+        v = pp.get(key, default)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0.0 <= float(v) <= 1.0:
+            raise ValueError(f"perception.prism_speckle_floor_params.{key} = {v!r}: want a fraction in [0, 1]")
     for k in ("policy.chunk_ticks", "policy.hold_ticks"):
         v = _get(cfg, k)
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
