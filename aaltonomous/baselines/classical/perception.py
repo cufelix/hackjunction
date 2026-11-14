@@ -74,6 +74,7 @@ class PitchCalibration:
     camera_height_m: float = np.nan
     plane_height_m: float = np.nan
     n_inliers: int = 0
+    T: object = field(default=None, repr=False, compare=False)  # corrected extrinsic when success
 
 
 class Perception:
@@ -140,21 +141,22 @@ class Perception:
 
     def _T(self):
         """Episode-corrected camera pose, or the untouched nominal calibration."""
-        return self.pitch_T if self.pitch_T is not None else self.cal._T(self.cam)
+        T = self.pitch_T
+        return T if T is not None else self.cal._T(self.cam)
 
     def _pixel_to_pelvis(self, u, v, depth_mm):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.pixel_to_pelvis.
-        if self.pitch_T is None:
+        T = self.pitch_T  # read once: a worker thread may swap it in
+        if T is None:
             return self.cal.pixel_to_pelvis(self.cam, u, v, depth_mm)
         p = self.cal.deproject(self.cam, u, v, depth_mm)
-        T = self.pitch_T
         return p @ T[:3, :3].T + T[:3, 3]
 
     def _project(self, p_pelvis):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.project.
-        if self.pitch_T is None:
-            return self.cal.project(self.cam, p_pelvis)
         T = self.pitch_T
+        if T is None:
+            return self.cal.project(self.cam, p_pelvis)
         p = (np.asarray(p_pelvis, float) - T[:3, 3]) @ T[:3, :3]
         K = self.cal.cams[self.cam].K
         z = p[..., 2]
@@ -180,16 +182,37 @@ class Perception:
 
     def pitch_calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch the nominal extrinsic after an unexpected optional-calibration error."""
-        self.pitch_T = None
-        self.pitch_calibration = PitchCalibration(False, True, 0.0, 0, np.inf, float(elapsed_ms), str(reason),
-                                                  mode=self._pitch_mode())
-        return self.pitch_calibration
+        return self.commit_pitch(self.make_pitch_failure(reason, elapsed_ms))
 
-    def calibrate_pitch(self, rgb, depth):
-        """Dispatch the configured per-episode camera calibration mode."""
+    def make_pitch_failure(self, reason, elapsed_ms=0.0):
+        """Pure: a failed result (nominal extrinsic) without touching any state."""
+        return PitchCalibration(False, True, 0.0, 0, np.inf, float(elapsed_ms), str(reason), mode=self._pitch_mode())
+
+    def commit_pitch(self, out):
+        """Install a result: the extrinsic first, then the record (single attribute stores, atomic under the GIL)."""
+        self.pitch_T = None if not out.success else np.asarray(out.T, float).copy()
+        self.pitch_calibration = out
+        return out
+
+    def pitch_frame_valid(self, rgb, depth):
+        """Cheap main-thread check that a frame is worth starting the (once-per-episode) fit on."""
+        if depth is None or np.ndim(depth) != 2:
+            return False
+        if rgb is None or np.ndim(rgb) != 3 or rgb.shape[:2] != depth.shape or rgb.shape[2] < 3:
+            return False
+        c = self.cfg.get("table_pitch_calibration" if self.online_pitch_cal == "table" else "pitch_calibration") or {}
+        dlo, dhi = self.cfg["depth_range_mm"]
+        return float(((depth >= dlo) & (depth <= dhi)).mean()) >= float(c.get("min_valid_frac", self.cfg["min_valid_frac"]))
+
+    def compute_pitch(self, rgb, depth):
+        """Pure fit (no state written): safe to run in a worker thread. Result carries the extrinsic in ``.T``."""
         if self.online_pitch_cal == "table":
             return self._calibrate_table(rgb, depth)
         return self._calibrate_bin_rims(rgb, depth)
+
+    def calibrate_pitch(self, rgb, depth):
+        """Synchronous fit + install (tests / tools). The policy uses compute_pitch in a background thread."""
+        return self.commit_pitch(self.compute_pitch(rgb, depth))
 
     def _calibrate_bin_rims(self, rgb, depth):
         """Fit ``T_nominal @ Rx(dtheta)`` from the orange bins' far top rim.
@@ -203,12 +226,9 @@ class Perception:
         c = self.cfg.get("pitch_calibration") or {}
 
         def result(success, valid, pitch, n_points, residual, reason, T=None):
-            self.pitch_T = None if not success else np.asarray(T, float).copy()
-            out = PitchCalibration(bool(success), bool(valid), float(pitch), int(n_points), float(residual),
-                                   (time.perf_counter() - started) * 1000.0, str(reason), mode="bin_rim",
-                                   n_inliers=int(n_points))
-            self.pitch_calibration = out
-            return out
+            return PitchCalibration(bool(success), bool(valid), float(pitch), int(n_points), float(residual),
+                                    (time.perf_counter() - started) * 1000.0, str(reason), mode="bin_rim",
+                                    n_inliers=int(n_points), T=T)
 
         if not self.online_pitch_cal:
             return result(False, True, 0.0, 0, np.inf, "disabled")
@@ -374,6 +394,36 @@ class Perception:
         return result(True, True, estimate, len(columns), residual,
                       f"accepted; support={fit_support.tolist()}", corrected)
 
+    def _bin_footprint_mask(self, rgb, shape, c, pad):
+        """uint8 mask of the bin boxes (footprint + margin, counter to rim) projected through the NOMINAL camera,
+        plus orange pixels: the bins must not enter the counter-plane fit (they are not the plane)."""
+        import cv2
+        mask = np.zeros(shape, np.uint8)
+        b = self.scene.cfg["bins"]
+        half = np.asarray(b["outer_size"], float) / 2.0 + float(c.get("bin_mask_margin_m", 0.02))
+        wall = float(b["wall_height"])
+        # the unknown pitch error shifts the projection: union hulls over a small sweep around nominal
+        sweep = float(c.get("bin_mask_pitch_sweep_deg", 4.0))
+        nominal = np.asarray(self.cal._T(self.cam), float)
+        K = self.cal.cams[self.cam].K
+        for deg in (0.0, -sweep, sweep):
+            T = nominal.copy()
+            T[:3, :3] = nominal[:3, :3] @ self._optical_rx(deg)
+            for cx, cy in b["centers"].values():
+                corners = np.array([[cx + sx * half[0], cy + sy * half[1], z]
+                                    for sx in (-1, 1) for sy in (-1, 1) for z in (0.0, wall)])
+                q = (self.scene.mat_to_pelvis(corners) - T[:3, 3]) @ T[:3, :3]
+                if np.any(q[:, 2] <= 1e-6):
+                    continue
+                uv = np.stack([K[0, 0] * q[:, 0] / q[:, 2] + K[0, 2], K[1, 1] * q[:, 1] / q[:, 2] + K[1, 2]], axis=1)
+                cv2.fillConvexPoly(mask, cv2.convexHull(np.round(uv).astype(np.int32)), 1)
+        hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+        orange = cv2.inRange(hsv, np.array([8, 100, 70], np.uint8), np.array([18, 255, 255], np.uint8))
+        mask |= (orange > 0).astype(np.uint8)
+        if pad:
+            mask = cv2.dilate(mask, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8))
+        return mask
+
     def _calibrate_table(self, rgb, depth):
         """Fit the counter plane without using the nominal positions of the bins.
 
@@ -386,14 +436,11 @@ class Perception:
         c = self.cfg.get("table_pitch_calibration") or {}
 
         def result(success, valid, pitch, roll, camera_height, n_points, n_inliers, residual, reason, T=None):
-            self.pitch_T = None if not success else np.asarray(T, float).copy()
-            out = PitchCalibration(bool(success), bool(valid), float(pitch), int(n_points), float(residual),
-                                   (time.perf_counter() - started) * 1000.0, str(reason), mode="table",
-                                   roll_deg=float(roll), camera_height_m=float(camera_height),
-                                   plane_height_m=float(self.scene.counter_z) if success else np.nan,
-                                   n_inliers=int(n_inliers))
-            self.pitch_calibration = out
-            return out
+            return PitchCalibration(bool(success), bool(valid), float(pitch), int(n_points), float(residual),
+                                    (time.perf_counter() - started) * 1000.0, str(reason), mode="table",
+                                    roll_deg=float(roll), camera_height_m=float(camera_height),
+                                    plane_height_m=float(self.scene.counter_z) if success else np.nan,
+                                    n_inliers=int(n_inliers), T=T)
 
         if self.online_pitch_cal != "table":
             return result(False, True, 0.0, 0.0, np.nan, 0, 0, np.inf, "disabled")
@@ -426,6 +473,7 @@ class Perception:
         pad = max(0, int(c.get("object_mask_pad_px", 5)))
         if pad:
             coloured = cv2.dilate(coloured, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8))
+        coloured |= self._bin_footprint_mask(rgb, (height, width), c, pad)
         candidate = valid_depth & roi & (coloured == 0)
 
         stride = max(1, int(c.get("pixel_stride", 3)))
@@ -512,9 +560,9 @@ class Perception:
         corrected = nominal.copy()
         corrected[:3, :3] = nominal[:3, :3] @ correction
         # With an upward unit normal, the fitted plane offset is the optical-origin distance to the counter. The
-        # plane cannot observe camera x/y, so retain those nominal translations and correct only pelvis z.
+        # plane cannot observe camera x/y, and z is confounded with the (uncalibrated) counter height and depth scale,
+        # so only pitch and roll are applied; the height delta is reported, never written to the extrinsic.
         camera_height = float(offset)
-        corrected[2, 3] = float(self.scene.counter_z) + camera_height
         nominal_height = float(nominal[2, 3]) - float(self.scene.counter_z)
         height_delta = camera_height - nominal_height
 
@@ -523,18 +571,18 @@ class Perception:
         max_roll = float(c.get("max_abs_roll_deg", 5.0))
         if not np.isfinite(residual) or residual > max_rms:
             return result(False, True, pitch, roll, camera_height, n_points, n_inliers, residual,
-                          f"high plane RMS; height delta={height_delta * 1000.0:+.1f} mm")
+                          f"high plane RMS; height delta={height_delta * 1000.0:+.1f} mm (not applied)")
         if abs(pitch) > max_pitch:
             return result(False, True, pitch, roll, camera_height, n_points, n_inliers, residual,
-                          f"pitch outside guard; height delta={height_delta * 1000.0:+.1f} mm")
+                          f"pitch outside guard; height delta={height_delta * 1000.0:+.1f} mm (not applied)")
         if abs(roll) > max_roll:
             return result(False, True, pitch, roll, camera_height, n_points, n_inliers, residual,
-                          f"roll outside guard; height delta={height_delta * 1000.0:+.1f} mm")
+                          f"roll outside guard; height delta={height_delta * 1000.0:+.1f} mm (not applied)")
         if not np.isfinite(camera_height) or camera_height <= 0.0:
             return result(False, True, pitch, roll, camera_height, n_points, n_inliers, residual,
                           "invalid camera height")
         return result(True, True, pitch, roll, camera_height, n_points, n_inliers, residual,
-                      f"accepted; height delta={height_delta * 1000.0:+.1f} mm", corrected)
+                      f"accepted; height delta={height_delta * 1000.0:+.1f} mm (not applied)", corrected)
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""

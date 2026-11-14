@@ -228,3 +228,19 @@ def home_arm(cfg, spec: JointSpec | None = None):
         raise ValueError(f"home_arm_q too close to the joint limits: {bad}")
     return q
 
+
+
+def pitch_cal_conflicts(cfg):
+    """Release-gate rule: online_pitch_cal ON + a non-zero perception.y_affine / perception.xy_offset is a FAIL.
+    Those offsets were fitted against the NOMINAL extrinsics; correcting the camera on top double-corrects."""
+    p = cfg.get("perception") or {}
+    if not p.get("online_pitch_cal", False):
+        return []
+    out = []
+    ya = p.get("y_affine")
+    if ya is not None and any(abs(float(x)) > 0.0 for x in ya):
+        out.append(f"perception.online_pitch_cal is ON together with y_affine={list(ya)} (fitted against nominal extrinsics)")
+    xo = p.get("xy_offset")
+    if xo is not None and any(abs(float(x)) > 0.0 for x in xo):
+        out.append(f"perception.online_pitch_cal is ON together with xy_offset={list(xo)} (fitted against nominal extrinsics)")
+    return out

@@ -144,11 +144,17 @@ class ClassicalPolicy:
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
-        self.perception.reset_calibration()
+        # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
+        # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
+        lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
+        with lock:
+            self._pitch_token = getattr(self, "_pitch_token", 0) + 1
+            self.perception.reset_calibration()
+            self.pitch_calibration = None
+            self._pitch_calibration_done = False   # = the worker was started this episode
+        self._pitch_thread = None
         self.calibration = None
         self._calibration_done = False
-        self.pitch_calibration = None
-        self._pitch_calibration_done = False
         self.last_bin_detections = []
         self.used_drop_slots = {name: set() for name in self.scene.bin_names}
         self.reserved_drop_slots = {name: set() for name in self.scene.bin_names}
@@ -158,6 +164,43 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+
+    def _start_pitch_worker(self, rgb, depth):
+        """Run the camera-pitch fit ONCE per episode in a daemon thread, started on the first valid frame."""
+        self._pitch_calibration_done = True
+        token, rgb, depth = self._pitch_token, np.array(rgb), np.array(depth)
+
+        def work():
+            started = time.perf_counter()
+            try:
+                out = self.perception.compute_pitch(rgb, depth)
+            except Exception as exc:  # optional calibration must never hurt the episode
+                out = self.perception.make_pitch_failure(f"{type(exc).__name__}: {exc}",
+                                                         (time.perf_counter() - started) * 1000.0)
+            with self._pitch_lock:
+                if token != self._pitch_token:
+                    return
+                self.perception.commit_pitch(out)   # atomic swap; every tick before this used nominal extrinsics
+                self.pitch_calibration = out
+            self._log_pitch(out)
+
+        self._pitch_thread = threading.Thread(target=work, name="pitch_cal", daemon=True)
+        self._pitch_thread.start()
+
+    def _log_pitch(self, pitch_cal):
+        if pitch_cal.mode == "table":
+            state = "accepted" if pitch_cal.success else "rejected"
+            self.log(f"[pitch_cal] mode=table {state}: dpitch={pitch_cal.pitch_deg:+.2f} deg, "
+                     f"droll={pitch_cal.roll_deg:+.2f} deg, height={pitch_cal.camera_height_m:.3f} m, "
+                     f"inliers={pitch_cal.n_inliers}/{pitch_cal.n_points}, "
+                     f"rms={pitch_cal.residual_m * 1000.0:.1f} mm, "
+                     f"time={pitch_cal.elapsed_ms:.1f} ms ({pitch_cal.reason})")
+        else:
+            state = "accepted" if pitch_cal.success else "fallback"
+            self.log(f"[pitch_cal] {state}: dtheta={pitch_cal.pitch_deg:+.2f} deg, "
+                     f"residual={pitch_cal.residual_m * 1000.0:.1f} mm, "
+                     f"points={pitch_cal.n_points}, time={pitch_cal.elapsed_ms:.1f} ms "
+                     f"({pitch_cal.reason})")
 
     def confirm(self):
         self._decision = "go"
@@ -176,31 +219,9 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
-        if not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False):
-            started = time.perf_counter()
-            try:
-                pitch_cal = self.perception.calibrate_pitch(obs.get("head_rgb"), obs.get("head_depth"))
-            except Exception as exc:  # optional calibration must never terminate the control loop
-                elapsed_ms = (time.perf_counter() - started) * 1000.0
-                pitch_cal = self.perception.pitch_calibration_failure(
-                    f"{type(exc).__name__}: {exc}", elapsed_ms=elapsed_ms)
-            if pitch_cal.valid_frame:
-                self._pitch_calibration_done = True
-                self.pitch_calibration = pitch_cal
-                if pitch_cal.mode == "table":
-                    state = "accepted" if pitch_cal.success else "rejected"
-                    self.log(f"[pitch_cal] mode=table {state}: dpitch={pitch_cal.pitch_deg:+.2f} deg, "
-                             f"droll={pitch_cal.roll_deg:+.2f} deg, height={pitch_cal.camera_height_m:.3f} m, "
-                             f"inliers={pitch_cal.n_inliers}/{pitch_cal.n_points}, "
-                             f"rms={pitch_cal.residual_m * 1000.0:.1f} mm, "
-                             f"time={pitch_cal.elapsed_ms:.1f} ms ({pitch_cal.reason})")
-                else:
-                    # Preserve the established bin-rim mode and its log format.
-                    state = "accepted" if pitch_cal.success else "fallback"
-                    self.log(f"[pitch_cal] {state}: dtheta={pitch_cal.pitch_deg:+.2f} deg, "
-                             f"residual={pitch_cal.residual_m * 1000.0:.1f} mm, "
-                             f"points={pitch_cal.n_points}, time={pitch_cal.elapsed_ms:.1f} ms "
-                             f"({pitch_cal.reason})")
+        if (not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False)
+                and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
+            self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
         if not self._calibration_done and (self.cfg["perception"].get("self_calibration") or {}).get("enabled", False):
             started = time.perf_counter()
             try:
