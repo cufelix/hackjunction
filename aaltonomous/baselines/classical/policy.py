@@ -27,7 +27,7 @@ import time
 import numpy as np
 
 from aaltonomous.interface.calibration import Calibration
-from aaltonomous.interface.tasks import FIXED_MAPPING
+from aaltonomous.interface.tasks import COLORS, FIXED_MAPPING
 from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene
 
@@ -209,7 +209,8 @@ class ClassicalPolicy:
         if self.plan_brain is not None:
             self.plan_brain.reset()
         self._planner_needed = (self.plan_brain is not None and
-                                instruction_needs_plan(self._instruction, self._brain_abstain))
+                                (instruction_needs_plan(self._instruction, self._brain_abstain)
+                                 or self._strict_leaves_colour()))
         self._planner_place_cache = {}
         self._planner_pending = None
         self._planner_execution = None
@@ -1943,11 +1944,22 @@ class ClassicalPolicy:
                 return dict(self.mapping), "fixed"
             if not (self.cfg.get("instruction") or {}).get("resolve", False):
                 return {}, "unresolved"
+            if (self.cfg.get("instruction") or {}).get("strict", False):   # brain authority == the strict mapping
+                strict = self._instruction_mapping(info)
+                return (dict(strict), "strict") if strict else ({}, "unresolved")
             from .instruction import resolve
             parsed = resolve(str(self._cap_text((info or {}).get("instruction") or "")), fallback={}) or {}
             return dict(parsed), "resolver" if parsed else "unresolved"
         except Exception:
             return {}, "unresolved"
+
+    def _strict_leaves_colour(self):
+        """instruction.strict + brain.planner: a scene colour the strict mapping does not bind (and no catch-all
+        default) is an abstention the planner must see. False unless strict."""
+        if not (self.cfg.get("instruction") or {}).get("strict", False):
+            return False
+        m = self._brain_mapping
+        return m.get("default") is None and any(m.get(c) is None for c in COLORS)
 
     @staticmethod
     def _resolver_abstains(mapping):
