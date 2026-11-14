@@ -316,7 +316,7 @@ class TestLatency(unittest.TestCase):
 
 
 class TestKnownTaskNoRegression(unittest.TestCase):
-    """finals_r23_universal with the brain UNAVAILABLE (closed loopback port) == finals_r22: same picks, same outcomes."""
+    """finals_r23_universal with the brain UNAVAILABLE (closed loopback port) == finals_r23: same picks, same outcomes."""
 
     @staticmethod
     def episode(overlay, seed, extra=None):
@@ -343,11 +343,11 @@ class TestKnownTaskNoRegression(unittest.TestCase):
                 break
         return starts, env.backend.outcomes(pol.mapping), max(dts)
 
-    def test_same_picks_and_outcomes_as_finals_r22(self):
+    def test_same_picks_and_outcomes_as_finals_r23(self):
         down = {"brain.url": "http://127.0.0.1:9/completion", "brain.request_timeout_s": 0.2, "brain.prefetch": False}
         for seed in range(4):
             with self.subTest(seed=seed):
-                a = self.episode("finals_r22", seed)
+                a = self.episode("finals_r23", seed)
                 b = self.episode(OVERLAY, seed, down)
                 self.assertEqual(a[0], b[0], f"picks differ at seed {seed}")
                 self.assertEqual(a[1], b[1])

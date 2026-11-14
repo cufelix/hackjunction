@@ -19,15 +19,39 @@ import numpy as np
 PALETTE = ("black", "white", "grey", "red", "orange", "yellow", "green", "blue", "purple", "brown")
 SHAPE_WORDS = {
     "round": ("ball", "sphere", "orb", "round"),
-    "elongated": ("marker", "pen", "pencil", "rod", "stick", "wand"),
-    "with-handle": ("pan", "cup", "mug", "handled", "handle"),
-    "box-like": ("box", "carton", "packet", "block"),
+    "elongated": ("marker", "pen", "pencil", "rod", "stick", "wand", "spoon", "spatula", "bar"),
+    "with-handle": ("pan", "cup", "mug", "handled", "handle", "skillet", "saucepan", "pot", "jug", "kettle", "ladle"),
+    "box-like": ("box", "carton", "packet"),
 }
-_GENERIC_NOUNS = {"object", "item", "thing", "piece", "one"}
+_GENERIC_NOUNS = {"object", "item", "thing", "piece", "one", "ones", "objects", "items", "things", "pieces",
+                  "blocks", "block", "shapes", "shape", "stuff", "cube", "cubes", "cylinder", "cylinders",
+                  "triangle", "triangles", "prism", "prisms"}
 _KNOWN_FAMILY = ("red", "orange", "yellow", "blue", "purple")   # known-task colours the existing detector owns
 _KNOWN_SHAPES = ("cube", "cylinder", "triangle")
-_BIN = re.compile(r"\b(left|centre|center|right)(?:\s+(?:hand\s+)?bin)?\b", re.I)
+_BIN = re.compile(r"\b(left|centre|center|middle|mid|central|right)(?:[- ]hand)?(?:\s+bin)?\b", re.I)
+_BIN_ALIAS = {"centre": "center", "middle": "center", "mid": "center", "central": "center"}
 _WORDS = re.compile(r"[a-z]+", re.I)
+# One filler/reserved vocabulary for match_instruction and unknown_words.
+_FILLER = frozenset(set(PALETTE) | _GENERIC_NOUNS | {
+    "put", "place", "move", "pick", "take", "drop", "sort", "the", "a", "an",
+    "in", "into", "to", "on", "bin", "left", "right", "center", "centre", "middle", "mid", "central", "hand",
+    "please", "up", "and", "small", "little", "large", "big", "toy", "cube", "cylinder", "prism",
+    "can", "could", "would", "you", "kindly", "it", "of", "with", "onto", "inside", "over", "there", "that",
+    "this", "now", "then", "go", "should", "frying", "sauce", "metal", "wooden", "plastic", "kitchen", "my", "its"})
+_RESERVED = _FILLER | frozenset(w for ws in SHAPE_WORDS.values() for w in ws)
+
+
+def novel_noun_named(text):
+    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) or an unknown word."""
+    low = str(text or "").lower().replace("gray", "grey")
+    words = set(_WORDS.findall(low))
+    named = any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
+    return named or bool(_unknown(words))
+
+
+def _unknown(words):
+    """Words that are neither reserved nor a plural of a reserved word (e.g. "pans", "mugs")."""
+    return sorted(w for w in words if w not in _RESERVED and not (w.endswith("s") and w[:-1] in _RESERVED))
 
 
 @dataclass(frozen=True)
@@ -285,7 +309,7 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
 
 def _target_bin(low, colour):
     """Bin for one object: the first bin named after that colour in the sentence, else the first bin named at all."""
-    bins = [(m.start(), "center" if m.group(1) in ("center", "centre") else m.group(1)) for m in _BIN.finditer(low)]
+    bins = [(m.start(), _BIN_ALIAS.get(m.group(1), m.group(1))) for m in _BIN.finditer(low)]
     if not bins:
         return None
     anchor = re.search(rf"\b{re.escape(colour)}\b", low) if colour else None
@@ -303,17 +327,11 @@ def match_instruction(text, candidates):
     recognised shape noun.  Ambiguity and unknown nouns never choose an object.
     The latter returns only the visible novel set for an optional async brain.
     """
-    low = str(text or "").lower()
+    low = str(text or "").lower().replace("gray", "grey")
     target = _target_bin(low, None)
     colours = [c for c in PALETTE if re.search(rf"\b{re.escape(c)}\b", low)]
-    shapes = [shape for shape, words in SHAPE_WORDS.items() if any(re.search(rf"\b{w}\b", low) for w in words)]
-    words = set(_WORDS.findall(low))
-    reserved = set(PALETTE) | {"put", "place", "move", "pick", "take", "drop", "sort", "the", "a", "an",
-                               "in", "into", "to", "on", "bin", "left", "right", "center", "centre", "please",
-                               "up", "and", "small", "little", "large", "big", "toy", "cube", "cylinder",
-                               "prism"} | _GENERIC_NOUNS
-    recognised = {w for ws in SHAPE_WORDS.values() for w in ws}
-    unknown = sorted(words - reserved - recognised)
+    shapes = [shape for shape, words in SHAPE_WORDS.items() if any(re.search(rf"\b{w}s?\b", low) for w in words)]
+    unknown = _unknown(set(_WORDS.findall(low)))
     pool = [d for d in candidates if getattr(d, "novel", False)]
     matches = [d for d in pool if (not colours or d.color in colours) and (not shapes or d.shape in shapes)]
     deterministic = target is not None and (colours or shapes) and not unknown and len(matches) == 1
@@ -326,20 +344,14 @@ def match_instruction(text, candidates):
 
 def unknown_words(text):
     """Words of the instruction that are neither colours, bins, shape synonyms nor filler: an open-vocabulary instruction."""
-    low = str(text or "").lower()
-    words = set(_WORDS.findall(low))
-    reserved = set(PALETTE) | {"put", "place", "move", "pick", "take", "drop", "sort", "the", "a", "an",
-                               "in", "into", "to", "on", "bin", "left", "right", "center", "centre", "please",
-                               "up", "and", "small", "little", "large", "big", "toy", "cube", "cylinder",
-                               "prism"} | _GENERIC_NOUNS
-    recognised = {w for ws in SHAPE_WORDS.values() for w in ws}
-    return sorted(words - reserved - recognised)
+    low = str(text or "").lower().replace("gray", "grey")
+    return _unknown(set(_WORDS.findall(low)))
 
 
 def named_noun(text):
     """-> (noun, colour_named): the first recognised shape/category noun of the instruction (e.g. "ball") and whether a
     colour word is also present.  Used by the universal VLM cross-check of a shape-noun-only deterministic match."""
-    low = str(text or "").lower()
+    low = str(text or "").lower().replace("gray", "grey")
     words = _WORDS.findall(low)
     noun = next((w for w in words if any(w in ws for ws in SHAPE_WORDS.values())), None)
     return noun, any(c in words for c in PALETTE)
