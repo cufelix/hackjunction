@@ -655,6 +655,55 @@ class Planner:
         plan.reason = f"{name}: no joint-space path above the bin rim"
         return None
 
+    def _carry_corridor_on(self):
+        return bool((self.cfg.get("planner") or {}).get("carry_corridor", False))
+
+    def _bin_outer_pelvis(self, name):
+        """(xlo, xhi, ylo, yhi) of the OUTER footprint of bin `name` in pelvis xy, bin.vote shift included."""
+        g = self.bin_geometry(name)
+        (x0, y0), (x1, y1) = g["outer_lo"][:2], g["outer_hi"][:2]
+        corners = self.scene.mat_to_pelvis(np.array([[x, y, 0.0] for x in (x0, x1) for y in (y0, y1)]))
+        return corners[:, 0].min(), corners[:, 0].max(), corners[:, 1].min(), corners[:, 1].max()
+
+    def _carry_crosses_foreign_bin(self, bin_name, p0_xy, p1_xy, margin):
+        """True when the pelvis xy segment p0 -> p1 (50 samples) lies inside the outer footprint (+margin) of a bin other
+        than `bin_name`."""
+        p0, p1 = np.asarray(p0_xy, float), np.asarray(p1_xy, float)
+        pts = p0 + np.linspace(0.0, 1.0, 50)[:, None] * (p1 - p0)
+        for n in self.scene.bin_names:
+            if n == bin_name:
+                continue
+            xlo, xhi, ylo, yhi = self._bin_outer_pelvis(n)
+            if np.any((pts[:, 0] >= xlo - margin) & (pts[:, 0] <= xhi + margin)
+                      & (pts[:, 1] >= ylo - margin) & (pts[:, 1] <= yhi + margin)):
+                return True
+        return False
+
+    def _carry_via(self, side, bin_name, points, up, plan):
+        """planner.carry_corridor: lift -> via (in front of the bin row, in line with the target bin) -> above_bin, only
+        when the straight carry would clip a foreign bin. None -> the caller runs the stock carry."""
+        if not up or bin_name not in self.scene.bin_names:
+            return None
+        margin = float((self.cfg.get("planner") or {}).get("carry_corridor_margin_m", 0.03))
+        lift, above = points["lift"], points["above_bin"]
+        if not self._carry_crosses_foreign_bin(bin_name, lift[:2], above[:2], margin):
+            return None
+        x_front = min(self._bin_outer_pelvis(n)[0] for n in self.scene.bin_names) - margin
+        via = np.r_[min(x_front, float(lift[0])), float(above[1]), float(lift[2])]
+        reason0 = plan.reason
+        leg_a = self._cartesian(side, lift, via, up[-1], "carry", plan)
+        leg_b = leg_a and self._cartesian(side, via, above, leg_a[-1], "carry_via", plan)
+        if leg_b:
+            plan.waypoints["carry"] = np.asarray(above, float).copy()   # the carry still ends above the bin
+            plan.waypoints["carry_via"] = via
+            return leg_a + leg_b
+        for key in ("carry", "carry_via"):
+            plan.ik.pop(key, None)
+            plan.waypoints.pop(key, None)
+        plan.reason = reason0
+        (self.log or print)("[carry_corridor] via failed, stock carry")
+        return None
+
     def _in_bin_footprint(self, name, xy):
         """True when pelvis-frame xy lies inside the inner footprint of bin `name`, bin.vote shift included."""
         xlo, xhi, ylo, yhi = self.bin_geometry(name)["inner_pelvis"]
@@ -1305,9 +1354,11 @@ class Planner:
             if self._carry_hint is not None:   # retry heading variant: the wrist may turn back while carrying
                 self.kin.hint, self.kin.w_hint = self._carry_hint
             try:
-                carry_ = up and (self._cartesian(side, points["lift"], points["above_bin"], up[-1], "carry", plan)
-                                 or self._joint_carry(side, up[-1], points["lift"], points["above_bin"],
-                                                      points["drop"][2], "carry", plan))
+                carry_ = (self._carry_via(side, bin_name, points, up, plan)
+                          if place_xy is None and self._carry_corridor_on() else None)
+                carry_ = carry_ or (up and (self._cartesian(side, points["lift"], points["above_bin"], up[-1], "carry", plan)
+                                            or self._joint_carry(side, up[-1], points["lift"], points["above_bin"],
+                                                                 points["drop"][2], "carry", plan)))
                 lower_ = carry_ and self._cartesian(side, points["above_bin"], points["drop"], carry_[-1],
                                                     "lower", plan)
                 retreat_ = lower_ and self._cartesian(side, points["drop"], points["retreat"], lower_[-1],
@@ -1320,7 +1371,7 @@ class Planner:
         if not retreat and adjusted:
             # Endpoint IK cannot prove a continuous lower/retreat path: retry the complete stock drop leg, so an
             # adjusted release can never reject a pick that the flag-off planner could execute.
-            for key in ("carry", "carry_mid", "lower", "retreat"):
+            for key in ("carry", "carry_mid", "carry_via", "lower", "retreat"):
                 plan.ik.pop(key, None)
                 plan.waypoints.pop(key, None)
             plan.reason = ""

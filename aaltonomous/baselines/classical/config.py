@@ -51,6 +51,8 @@ FLAGS = {
     "calib.wide_counter_window": ("counter-z", False, "counter-z estimation window nominal -8 .. +22 cm (dominant-layer seed, then the usual +-3 cm plane fit with tilt/inlier gates; estimate outside = nominal), runtime height estimated even without calib.plane.apply_height, mat z follows the runtime counter; see COUNTERZ.md"),
     "planner.lift_from_contact": ("real-only", False, "startup from a table-resting start: pure vertical lift (hand unchanged, half speed, never below start clearance) before the home route; no joint-space go_to fallback (real-only)"),
     "planner.bin_wall_extra_m": ("counter-z", 0.0, "extra bin wall height (m) on the release/carry height and the rim keepout (planner)"),
+    "planner.carry_corridor": ("real-only", False, "carry lift -> bin via a point in front of the bin row when the straight carry would clip a foreign bin's outer footprint (planner)"),
+    "planner.carry_corridor_margin_m": ("real-only", 0.03, "clearance (m) from a foreign bin's outer footprint for planner.carry_corridor, and the front via x (planner)"),
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
@@ -482,7 +484,7 @@ def check_flag_values(cfg):
     first_scale = _get(cfg, "policy.first_object_speed_scale")
     if first_scale is not None and not 0.0 < float(first_scale) <= 1.0:
         raise ValueError("policy.first_object_speed_scale must be null or in (0, 1]")
-    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m", "planner.bin_wall_extra_m"):
+    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m", "planner.bin_wall_extra_m", "planner.carry_corridor_margin_m"):
         v = float(_get(cfg, k))
         if not np.isfinite(v) or v < 0.0:
             raise ValueError(f"{k} must be a finite non-negative distance")
