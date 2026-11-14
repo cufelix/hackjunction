@@ -370,7 +370,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_first_object_speed_scale", "ab_fk_xcheck", "ab_frozen_rgb",
                                       "ab_generic_fallback", "ab_hand_calib", "ab_held_detector",
                                       "ab_hue_guard", "ab_hue_v2", "ab_inj_p4", "ab_inj_p7",
-                                      "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_isolated_first",
+                                      "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_insert", "ab_insert_pg", "ab_isolated_first",
                                       "ab_lh_face", "ab_lh_face_both", "ab_lh_face_y",
                                       "ab_lh_retryxy", "ab_lh_retryxy2", "ab_lh_z_m10", "ab_lh_z_m20", "ab_lh_z_p10", "ab_lh_z_p20",
                                       "ab_log_joint_offset", "ab_neutral_obstacles",
