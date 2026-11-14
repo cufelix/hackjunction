@@ -137,6 +137,8 @@ class Planner:
         self.vary = None       # policy.retry_vary_grasp: {"posture": name | None, "yaw": rad | None} for the next plan()
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
         self.object_speed_scale = None  # policy.first_object_speed_scale: arm phase speed x this (a copy, per plan)
+        self.reuse = None      # grasp.pregrasp_relocalise: {"arm","hand","phases","q0","hand0","waypoints","ik","join_tol",
+                               # "max_join"} = the drop leg of an earlier plan to append after the lift (None = plan it)
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
@@ -275,8 +277,11 @@ class Planner:
         return float((pts[over, 2] - self.scene.counter_z).min())
 
     # ------------------------------------------------------------------ IK helpers
-    def _ik(self, side, p, seed, name, plan):
-        q, ok, err, tilt = self.kin.solve(side, p, seed, top_down=True, extra_seeds=[self.home[ArmKinematics.sl(side)]])
+    def _ik(self, side, p, seed, name, plan, warm=False):
+        """warm: `seed` is the solution of a neighbouring, already solved target (grasp.pregrasp reuse): no home /
+        random restarts (a failure fails the plan; the caller re-plans from scratch)."""
+        q, ok, err, tilt = self.kin.solve(side, p, seed, top_down=True, restarts=not warm,
+                                          extra_seeds=[] if warm else [self.home[ArmKinematics.sl(side)]])
         plan.ik[name] = (ok, err, float(np.degrees(tilt)))
         plan.waypoints[name] = np.asarray(p, float)
         return q, ok
@@ -707,6 +712,7 @@ class Planner:
                     source_bin=source_bin, drop_slot=drop_slot if place_xy is None else None,
                     corrective=source_bin is not None)
         sl = ArmKinematics.sl(side)
+        reuse = self.reuse if (self.reuse is not None and place_xy is None and source_bin is None) else None
         H, post = self._object_height(det), self.post
         if self._generic_on(det):
             hlo, hhi = cfg["perception"].get("height_range", (0.4, 2.0))
@@ -722,7 +728,8 @@ class Planner:
         xy = det.top[:2] + np.asarray((g.get("arm_xy_offset") or {}).get(side, [0.0, 0.0]), float)  # per-arm, TUNE
         z = (det.top[2] - H / 2) if source_bin is not None else (zc + g["height_frac"] * H)
         for _ in range(4):
-            qg, ok = self._ik(side, np.r_[xy, z], arm_q, "grasp", plan)
+            qg, ok = self._ik(side, np.r_[xy, z], arm_q if reuse is None else reuse["q_grasp"], "grasp", plan,
+                                warm=reuse is not None)
             if not ok:
                 plan.reason = f"IK grasp {side}"
                 return plan
@@ -751,13 +758,14 @@ class Planner:
         drop_adjustment_on, adjusted = False, False
         if place_xy is not None:  # relocation: put it down on the counter (release just above the grasp height)
             bxy, z_drop = np.asarray(place_xy, float), z + 0.005
-        elif g.get("drop_height_extra_m", 0.0) or g.get("drop_lateral_margin_m", 0.0):
+        elif reuse is None and (g.get("drop_height_extra_m", 0.0) or g.get("drop_lateral_margin_m", 0.0)):
             drop_adjustment_on = True
             bxy, z_drop, adjusted = self._adjusted_drop_target(side, bin_name, bxy, z_drop, qg, z_max=z_carry)
         P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry) + float(g.get("approach_extra_m", 0.0))], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],
              "above_bin": np.r_[bxy, z_carry], "drop": np.r_[bxy, z_drop], "retreat": np.r_[bxy, z_drop + g["retreat_up"]]}
 
-        q_pre, ok = self._ik(side, P["pregrasp"], qg, "pregrasp", plan)  # same IK branch as the grasp
+        q_pre, ok = self._ik(side, P["pregrasp"], qg if reuse is None else reuse["q_pre"], "pregrasp", plan,
+                           warm=reuse is not None)  # same IK branch as the grasp
         if not ok:
             plan.reason = f"IK pregrasp {side}"
             return plan
@@ -781,7 +789,10 @@ class Planner:
             finally:
                 self.kin.hint, self.kin.w_hint = hint_saved
 
-        carry, lower, retreat = drop_leg(P)
+        if reuse is not None:   # the drop leg of the plan being corrected is appended after the lift (not re-planned)
+            carry = lower = retreat = bool(up)
+        else:
+            carry, lower, retreat = drop_leg(P)
         if not retreat and adjusted:
             # Endpoint IK cannot prove a continuous lower/retreat path: retry the complete stock drop leg, so an
             # adjusted release can never reject a pick that the flag-off planner could execute.
@@ -799,7 +810,7 @@ class Planner:
         if not retreat:
             plan.reason = plan.reason or f"IK failed on {[k for k, v in plan.ik.items() if not v[0]]} ({side})"
             return plan
-        plan.waypoints["drop"] = P["drop"]
+        plan.waypoints["drop"] = P["drop"] if reuse is None else reuse["waypoints"]["drop"]
 
         vmax, amax, hv = mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"]
         home = arm_q.copy(); home[sl] = self.home[sl]
@@ -849,12 +860,37 @@ class Planner:
             close_hold_s = max(close_hold_s, float(ls.get("timeout_s", 1.2)))
         hand("close", hand_cls, close_hold_s)
         cs = min(1.0, float(mo.get("carry_scale", 1.0)))  # motion.carry_scale <= 1: slower lift + carry only
+        n_new = None   # ticks planned here (everything when the whole plan is); the rest is a reused drop leg
+        if reuse is not None:
+            r_other = np.ones(len(cur_a), bool); r_other[sl] = False
+            q_end = np.asarray(up[-1], float) if up else cur_a
+            if (np.abs(q_end - reuse["q0"])[r_other].max(initial=0.0) > 1e-6
+                    or not np.allclose(cur_h, reuse["hand0"], atol=1e-6)):
+                plan.reason = "reuse: the other arm / the closed hand differs from the plan being corrected"
+                return plan
+            jd = float(np.abs(q_end - reuse["q0"])[sl].max())
+            if jd > float(reuse["max_join"]):
+                plan.reason = f"reuse: lift end {jd:.2f} rad from the original lift end"
+                return plan
+            if jd > float(reuse["join_tol"]):   # the lift ends at the original lift end (carry height): its last Cartesian
+                up = list(up[:-1]) + [reuse["q0"]]   # waypoint (one cart_step lower) leads straight there, no stop
         move("lift", up, scale=cs)
-        move("carry", carry + lower, scale=cs)
-        hand("open", hand_rel, mo["open_hold_s"])  # widest posture: `open` alone left the cube wedged in the sim
-        move("retreat", retreat)
-        move("home", [home], hand_to=hand_open)
+        if reuse is not None:
+            n_new = sum(len(x) for x in arm_parts)
+            for k, v in reuse["waypoints"].items():
+                plan.waypoints.setdefault(k, v)
+            for k, v in reuse["ik"].items():
+                plan.ik.setdefault(k, v)
+            for name, s_, e_ in reuse["phases"]:
+                phases.append((name, s_ + n_new, e_ + n_new))
+            arm_parts.append(reuse["arm"]); hand_parts.append(reuse["hand"])
+        else:
+            move("carry", carry + lower, scale=cs)
+            hand("open", hand_rel, mo["open_hold_s"])  # widest posture: `open` alone left the cube wedged in the sim
+            move("retreat", retreat)
+            move("home", [home], hand_to=hand_open)
         plan.arm, plan.hand, plan.phases = np.vstack(arm_parts), np.vstack(hand_parts), phases
+        n_chk = len(plan.arm) if n_new is None else n_new   # checks run on what is new
 
         # clearance over the whole trajectory (grasp phases use the fingertip margin)
         grasp_ticks = np.zeros(len(plan.arm), bool)
@@ -865,7 +901,7 @@ class Planner:
         closing = np.zeros(len(plan.arm), bool)
         for name, s, e in phases:
             closing[s:e] |= name == "close" or (place_xy is not None and name == "open")
-        for k in range(0, len(plan.arm), 3):
+        for k in range(0, n_chk, 3):
             # closing: the thumb swings through its lowest point; touching the mat lightly is acceptable
             need = 0.003 if closing[k] else g["fingertip_clearance"] if grasp_ticks[k] else mo["counter_clearance"]
             c = self.clearance(side, plan.arm[k], plan.hand[k])
@@ -878,7 +914,7 @@ class Planner:
         for name, s_, e in phases:
             drop[s_:e] |= name in ("open",)
         source_phases = {"descend", "close", "lift"} if source_bin is not None else set()
-        for k in range(0, len(plan.arm), 3):
+        for k in range(0, n_chk, 3):
             name = next(n for n, s_, e in phases if s_ <= k < e)
             if drop[k]:
                 continue
@@ -891,7 +927,11 @@ class Planner:
             if c < 0.003:
                 plan.reason = f"hand {100 * c:.1f} cm above a bin rim during {name}"
                 return plan
-        plan.safety_clips = self.dry_run_safety(arm_q, hand_q, plan.arm, plan.hand)
+        if n_new is None:
+            plan.safety_clips = self.dry_run_safety(arm_q, hand_q, plan.arm, plan.hand)
+        else:   # the new ticks + the first second of the reused leg (it was dry-run whole when it was planned)
+            n_dry = min(len(plan.arm), n_new + int(1.0 / self.dt))
+            plan.safety_clips = self.dry_run_safety(arm_q, hand_q, plan.arm[:n_dry], plan.hand[:n_dry])
         if plan.safety_clips:
             plan.reason = f"{plan.safety_clips} safety clips in dry run"
             return plan

@@ -286,7 +286,18 @@ grasp:
     hidden_frac: 0.6          # predicted footprint covered by the arm mask >= this: unobserved -> keep the plan
     min_visible_frac: 0.15    # visible area below this fraction of the first look: unobserved -> keep the plan
     arm_dilate_px: 6          # extra dilation of the FK arm mask for this re-detection
+    max_aborts_total: 4       # pre-grasp aborts per episode, then the stock pick (an abort is not a try: max_total_attempts never sees it)
     max_aborts_per_object: 2  # retreat + re-look this often per object, then it is left on the counter
+    hold_ticks: 1             # hold chunk (ticks) during the pause: the result is picked up within 33 ms (motion.hold_ticks is 0.2 s)
+    reuse_drop_leg: true      # corrected pick: plan approach/close/lift only, append the original carry/lower/retreat/home
+    reuse_join_tol_rad: 0.02  # corrected lift end this close (max joint) to the original: joined directly, no connector
+    reuse_max_join_rad: 1.0   # further than this: no reuse, the whole pick is re-planned
+    pos_sigma_m: 0.02         # target match: score = dist / pos_sigma + size + yaw (+ shape) mismatch
+    size_sigma: 0.25          #   ln(area / first-look area) tolerance (one-sided: a blob cut by the hand is smaller, not wrong)
+    yaw_sigma_deg: 15.0       #   cube yaw tolerance (mod 90 deg), only for an unoccluded blob
+    miss_cost: 4.0            # a same-colour neighbour with no blob (or the target with none): this cost (= 8 cm of distance)
+    amb_margin: 1.25          # best and second-best total cost closer than this (2.5 cm of distance): ambiguous -> no new target
+    keep_consistent_m: 0.015  # ambiguous: the original plan stays if a candidate is within this of its predicted position, else retreat + re-look
   approach_extra_m: 0.0       # added to the pregrasp height (policy.speed_tiers sets 0.015 for the first object only)
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)

@@ -1086,7 +1086,7 @@ class Perception:
 
     # ------------------------------------------------------------------ grasp.pregrasp_relocalise
     def relocalise(self, rgb, depth, prior, robot_q=None, gate_m=0.06, occluded_frac=0.75, hidden_frac=0.6,
-                   min_visible_frac=0.15, arm_dilate_px=6):
+                   min_visible_frac=0.15, arm_dilate_px=6, neighbours=None, match=None):
         """Re-detect `prior` (a first-look Detection) near its predicted position, with the hand over it.
 
         Returns {"kind": "found" | "gone" | "hidden" | "unsupported", ...}. "found": top (3,), yaw (or None), n_px,
@@ -1121,7 +1121,8 @@ class Perception:
         prior_px = max(float(prior.n_px), 1.0)
         min_px = max(20, int(0.12 * prior_px))
         pred = np.asarray(prior.top[:2], float)
-        frags = []   # (det, blob, area, centroid) of every colour fragment inside the gate
+        nbs = [np.asarray(q, float)[:2] for q in (neighbours or [])]
+        frags = []   # (det, blob, area, centroid) of every colour fragment inside the gate (the target's or a neighbour's)
         for i in range(1, n):
             area = int(stats[i, cv2.CC_STAT_AREA])
             if area < min_px:
@@ -1132,26 +1133,46 @@ class Perception:
                 dets, rej = [], []
                 self._detect_blob(color, part, p_area, p_cent, depth, False, dets, rej, None)
                 for d in dets:
-                    if np.linalg.norm(d.top[:2] - pred) <= gate_m:
+                    if (np.linalg.norm(d.top[:2] - pred) <= gate_m
+                            or any(np.linalg.norm(d.top[:2] - q) <= gate_m for q in nbs)):
                         frags.append((d, part, p_area, p_cent))
         if not frags:
             return {"kind": "hidden" if self._footprint_covered(prior, arm, hidden_frac) else "gone"}
-        seed = min(frags, key=lambda f: np.linalg.norm(f[0].top[:2] - pred))
-        blob, area = seed[1].copy(), seed[2]
-        for f in frags:   # fragments of one object cut by the hand: same colour, within one object size of the seed
-            if f is seed:
+        # one candidate per object: the fragments of one object cut by the hand (same colour, within one object size,
+        # together no bigger than the first look) are merged; a second object stays a candidate of its own
+        cands, used = [], set()
+        for i in sorted(range(len(frags)), key=lambda j: np.linalg.norm(frags[j][0].top[:2] - pred)):
+            if i in used:
                 continue
-            if np.linalg.norm(f[0].top[:2] - seed[0].top[:2]) <= 1.2 * self.size and area + f[2] <= 1.3 * prior_px:
-                blob |= f[1]
-                area += f[2]
-        det = seed[0]
-        if len(frags) > 1 and area != seed[2]:
-            dets, rej = [], []
-            ys, xs = np.nonzero(blob)
-            self._detect_blob(color, blob, area, (float(xs.mean()), float(ys.mean())), depth, False, dets, rej, None)
-            if not dets:
-                return {"kind": "gone"}
-            det = dets[0]
+            used.add(i)
+            seed = frags[i]
+            blob, area = seed[1].copy(), seed[2]
+            for j, f in enumerate(frags):   # fragments of one object cut by the hand
+                if j in used:
+                    continue
+                if np.linalg.norm(f[0].top[:2] - seed[0].top[:2]) <= 1.2 * self.size and area + f[2] <= 1.3 * prior_px:
+                    blob |= f[1]
+                    area += f[2]
+                    used.add(j)
+            det = seed[0]
+            if area != seed[2]:
+                dets, rej = [], []
+                ys, xs = np.nonzero(blob)
+                self._detect_blob(color, blob, area, (float(xs.mean()), float(ys.mean())), depth, False, dets, rej, None)
+                if not dets:
+                    continue
+                det = dets[0]
+            cands.append({"det": det, "blob": blob, "area": area})
+        if not cands:
+            return {"kind": "gone"}
+        if neighbours is not None or match is not None:
+            pick = self._reloc_match(cands, prior, pred, prior_px, neighbours, match or {}, occluded_frac, gate_m)
+            if pick["kind"] != "ok":
+                return pick
+            cand = pick["cand"]
+        else:
+            cand = cands[0]   # nearest to the prediction (stock behaviour)
+        blob, area, det = cand["blob"], cand["area"], cand["det"]
         ratio = float(area) / prior_px
         if ratio < min_visible_frac and self._footprint_covered(prior, arm, hidden_frac):
             return {"kind": "hidden", "ratio": ratio}
@@ -1169,6 +1190,52 @@ class Perception:
                 top[:2], yaw = fit, None   # yaw of a cut face is not observable: the planner keeps the first-look yaw
         return {"kind": "found", "top": top, "yaw": yaw, "n_px": int(area), "occluded": bool(occluded),
                 "ratio": ratio, "det": det}
+
+    def _reloc_match(self, cands, prior, pred, prior_px, neighbours, m, occluded_frac, gate_m):
+        """Which candidate blob is `prior`? The target and its same-colour neighbours (`neighbours`: their first-look
+        xy) are matched to the candidates together, one object per blob, at the lowest total cost, so a blob that is
+        clearly another object's is never taken for the target. The target's cost is its distance to the predicted
+        position + size + yaw (+ shape) mismatch, each in units of its tolerance; a neighbour's is its distance.
+        Two blobs that both fit the target (best-vs-second total cost closer than amb_margin) -> "ambiguous": no new
+        target is chosen. Returns {"kind": "ok", "cand"} | {"kind": "ambiguous" | "gone", ...}."""
+        sp, sz, sy = (float(m.get("pos_sigma_m", 0.02)), float(m.get("size_sigma", 0.25)),
+                      np.radians(float(m.get("yaw_sigma_deg", 15.0))))
+        margin, miss = float(m.get("amb_margin", 1.25)), float(m.get("miss_cost", 4.0))
+        nb = sorted((np.asarray(q, float)[:2] for q in (neighbours or [])), key=lambda q: np.linalg.norm(q - pred))[:4]
+        ct = []
+        for c in cands:
+            d, top = c["det"], c["det"].top[:2]
+            dp = float(np.linalg.norm(top - pred))
+            ratio = float(c["area"]) / prior_px
+            score = dp / sp + max(0.0, np.log(max(ratio, 1e-3)) / sz) + max(0.0, np.log(0.5 / max(ratio, 1e-3)) / 0.5)
+            if (d.yaw is not None and prior.yaw is not None and ratio >= occluded_frac
+                    and getattr(prior, "shape", None) in (None, "cube") and getattr(d, "shape", None) in (None, "cube")):
+                dy = abs((d.yaw - prior.yaw + np.pi / 4) % (np.pi / 2) - np.pi / 4)
+                score += min(dy / sy, 3.0)
+            if getattr(prior, "shape", None) and getattr(d, "shape", None) and d.shape != prior.shape:
+                score += 3.0
+            c["score"], c["dist"], c["ratio"] = score, dp, ratio
+            ct.append(score if dp <= gate_m else 1e3)   # outside the target's gate: only a neighbour's blob
+        cn = [[float(np.linalg.norm(c["det"].top[:2] - q)) / sp for c in cands] for q in nb]
+
+        def rest(j, free):   # cheapest assignment of neighbours j.. to the free candidates (None = unseen: miss)
+            if j == len(nb):
+                return 0.0
+            best = miss + rest(j + 1, free)
+            for i in free:
+                best = min(best, cn[j][i] + rest(j + 1, free - {i}))
+            return best
+        every = frozenset(range(len(cands)))
+        total = {i: ct[i] + rest(0, every - {i}) for i in every}
+        none = miss + rest(0, every)               # the target has no blob at all: the blobs are its neighbours'
+        order = sorted(every, key=lambda i: total[i])
+        if nb and none < total[order[0]]:
+            return {"kind": "gone", "claimed": len(cands)}
+        info = [{"top": cands[i]["det"].top.copy(), "score": total[i], "dist": cands[i]["dist"]} for i in order]
+        if len(order) > 1 and total[order[1]] - total[order[0]] < margin:
+            return {"kind": "ambiguous", "cands": info, "gap": total[order[1]] - total[order[0]],
+                    "nearest": min(c["dist"] for c in cands)}
+        return {"kind": "ok", "cand": cands[order[0]]}
 
     def _footprint_covered(self, prior, arm, frac):
         """True when the predicted object footprint (corners + centre at the top plane) lies mostly under the arm

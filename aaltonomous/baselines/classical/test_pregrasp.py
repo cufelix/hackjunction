@@ -69,7 +69,7 @@ class Run:
     """One pick at the pre-grasp pose. `off` = first-look estimate minus truth (pelvis xy, m)."""
 
     def __init__(self, scene=YELLOW, off=(0.0, 0.0), overlay=ON, overrides=None, truth_frame=None, mask=None,
-                 gone=False, shape="cube", max_ticks=4000):
+                 gone=False, shape="cube", max_ticks=4000, time_limit=120):
         self.color, mat = scene
         self.env = make_mock_env(seed=0)
         self.base = self.env.reset()
@@ -77,7 +77,7 @@ class Run:
         ov.update(overrides or {})
         self.pol = ClassicalPolicy(config=load_config(overlay=overlay, overrides=ov), safety=self.env.filter.cfg,
                                    log=None)
-        self.pol.reset({"instruction": "", "time_limit": 120})
+        self.pol.reset({"instruction": "", "time_limit": time_limit})
         self.true_p = SC.mat_to_pelvis([mat[0], mat[1], H / 2])
         first = _frame(self.color, self.true_p + np.array([off[0], off[1], 0.0]), shape=shape)
         truth = truth_frame or _frame(self.color, None if gone else self.true_p, shape=shape)
@@ -219,6 +219,10 @@ class TestGone(unittest.TestCase):
         sl = slice(0, 7)                               # yellow -> left arm
         np.testing.assert_allclose(pol.arm_cmd[sl], pol.home[sl], atol=1e-6)
         self.assertGreaterEqual(len([1 for _, m in pol.events if "to home" in m or "retreat" in m]), 1)
+        with mock.patch.object(type(pol.planner), "go_to", autospec=True,
+                               side_effect=type(pol.planner).go_to) as go:
+            Run(YELLOW, (0.0, 0.0), gone=True, max_ticks=1500)
+        self.assertGreaterEqual(go.call_count, 1)      # the retreat is really queued (a go_to to home), not just logged
 
     def test_repeated_aborts_leave_the_object_on_the_counter(self):
         r = Run(YELLOW, (0.0, 0.0), gone=True, max_ticks=8000)
@@ -329,7 +333,8 @@ class TestTime(unittest.TestCase):
                 total = p0.phases[0][2] / HZ + (t1 - t0 - p0.phases[0][2] / HZ) + p1.duration
                 added.append(total - ref)
                 with self.subTest(scene=scene[0], off=off):
-                    self.assertLess(total - ref, 0.8, f"{total - ref:.2f} s")
+                    # + the joint-space step to the original lift end that the reused drop leg starts from
+                    self.assertLess(total - ref, 1.0, f"{total - ref:.2f} s")
         self.assertLess(float(np.median(added)), 0.6)
 
 
@@ -349,8 +354,8 @@ class TestRealtime(unittest.TestCase):
             for _ in range(20000):
                 job = getattr(pol, "_job", None)
                 pgj = None if pol._pg is None else pol._pg["job"]
-                if (job is not None and job.get("result") is None) or (pgj is not None and pgj["result"] is None):
-                    time.sleep(0.002)                  # look / re-localisation thread busy: virtual clock paused
+                if job is not None and job.get("result") is None:
+                    time.sleep(0.002)                  # look thread busy: virtual clock paused
                     continue
                 rgb, dep = truth if pol._pg is not None else first
                 a_q = base["arm_q"] if pol.arm_cmd is None else pol.arm_cmd
@@ -363,6 +368,8 @@ class TestRealtime(unittest.TestCase):
                 if paused:
                     pause_lat.append(dt)
                 t += len(res["arm_q_target"]) / HZ
+                if pgj is not None and pgj["result"] is None:
+                    time.sleep(len(res["arm_q_target"]) / HZ)   # act() IS called while the worker plans, at the real pace
                 if pol.n_started and pol._pg is None and any("corrected" in m for _, m in pol.events):
                     finished = True
                     break
@@ -404,6 +411,225 @@ class TestRelocalise(unittest.TestCase):
         fk.assert_called_once()
         self.assertEqual(r["kind"], "found")
         self.assertTrue(r["occluded"])
+
+
+def _two_cubes(d, shift, direction=(0.0, 1.0), color="yellow", mat=(0.45, 0.16), only_target=False, max_ticks=3000):
+    """Two same-colour cubes `d` m (centre to centre) apart. The first look sees both displaced by `shift` (a
+    systematic localisation error; only_target: the picked one alone), the pre-grasp frames the truth.
+    -> (policy, starts, A, B, picked prior xy list)."""
+    env = make_mock_env(seed=0)
+    base = env.reset()
+    pol = ClassicalPolicy(config=load_config(overlay=ON, overrides={"policy.safety_shell": False}),
+                          safety=env.filter.cfg, log=None)
+    pol.reset({"instruction": "", "time_limit": 120})
+    A = SC.mat_to_pelvis([mat[0], mat[1], H / 2])
+    u = np.asarray(direction, float) / np.linalg.norm(direction)
+    B = A + np.r_[u * d, 0.0]
+    s = np.r_[shift, 0.0]
+
+    def frame(ps):
+        return REND.render([dict(color=color, shape="cube", yaw=0.0, size=SC.size, height=H, pos=p) for p in ps])
+    truth, first = frame([A, B]), frame([A + s, B + s])
+    starts, pgs = [], []
+    begin, bpg = pol._start, pol._pg_begin
+
+    def rec(plan, t, **kw):
+        starts.append((t, plan, kw))
+        return begin(plan, t, **kw)
+
+    def rb(plan, t):
+        pgs.append(np.asarray(plan.pg_ctx["det"].top[:2], float).copy())
+        return bpg(plan, t)
+    pol._start, pol._pg_begin = rec, rb
+    t = 0.0
+    with mock.patch.object(pol.perception, "_fk_arm_mask", side_effect=lambda *a, **k: EMPTY):
+        for _ in range(max_ticks):
+            rgb, dep = truth if pol._pg is not None else first
+            a_q = base["arm_q"] if pol.arm_cmd is None else pol.arm_cmd
+            h_q = base["hand_q"] if pol.hand_cmd is None else pol.hand_cmd
+            res = pol.act(dict(base, head_rgb=rgb, head_depth=dep, t=t, arm_q=a_q, hand_q=h_q))
+            t += len(res["arm_q_target"]) / HZ
+            if any(k.get("pregrasp_done") for _, _, k in starts) or pol.state == "done" or len(starts) >= 8:
+                break
+    return pol, starts, A, B, pgs
+
+
+class TestNeighbours(unittest.TestCase):
+    """Neighbour confusion: two same-colour cubes 4 / 6 / 8 cm apart (centre to centre; 4 cm overlaps by 5 mm, the
+    cubes are 4.5 cm), with and without a first-look shift. Never a correction onto the other cube, never a grasp
+    that lands on no cube; where the geometry cannot tell the two apart no new target is chosen."""
+    SHIFTS = ((0.0, 0.0), (0.03, 0.0), (0.0, 0.03), (0.0, -0.03))
+
+    def _check(self, d, shift, **kw):
+        pol, starts, A, B, pgs = _two_cubes(d, shift, **kw)
+        fin = [p for _, p, k in starts if k.get("pregrasp_done")]
+        notes = [m for _, m in pol.events if "[pregrasp]" in m]
+        self.assertTrue(pgs, notes)
+        s = np.asarray(shift, float)
+        picked = pgs[-1]
+        target = A if np.linalg.norm(picked - (A[:2] + s)) < np.linalg.norm(picked - (B[:2] + s)) else B
+        if fin:
+            g = fin[0].waypoints["grasp"][:2]
+            near = min(np.linalg.norm(g - A[:2]), np.linalg.norm(g - B[:2]))
+            self.assertLess(near, 0.015, notes)                    # it lands on a cube
+            if any("corrected grasp" in n for n in notes):         # a new target was chosen: the right one
+                self.assertLess(np.linalg.norm(g - target[:2]), 0.010, notes)
+        return fin, target, notes
+
+    def test_6_and_8_cm_are_resolved_and_land_on_the_picked_cube(self):
+        for d in (0.06, 0.08):
+            for shift in self.SHIFTS:
+                with self.subTest(d=d, shift=shift):
+                    fin, target, notes = self._check(d, shift)
+                    self.assertTrue(fin, notes)
+                    self.assertLess(np.linalg.norm(fin[0].waypoints["grasp"][:2] - target[:2]), 0.010, notes)
+
+    def test_4_cm_never_picks_a_new_target_unless_it_is_the_right_one(self):
+        for shift in self.SHIFTS:
+            with self.subTest(shift=shift):
+                self._check(0.04, shift)
+
+    def test_ambiguity_keeps_the_plan_or_retreats_and_never_corrects(self):
+        fin, _, notes = self._check(0.04, (0.0, -0.03))        # the prediction sits next to the OTHER cube
+        self.assertTrue(any("same-colour objects fit" in n for n in notes), notes)
+        self.assertFalse(any("corrected grasp" in n for n in notes))
+        pol, starts, *_ = _two_cubes(0.04, (0.0, 0.03), max_ticks=6000)
+        notes = [m for _, m in pol.events if "[pregrasp]" in m]
+        self.assertTrue(any("retreat + re-look" in n and "same-colour" in n for n in notes), notes)
+
+    def test_target_only_shift(self):
+        # the neighbour is measured right, the picked cube is off by 3 cm: still the picked cube, never the neighbour
+        for d in (0.06, 0.08):
+            with self.subTest(d=d):
+                self._check(d, (0.03, 0.0), only_target=True)
+
+    def test_yaw_and_size_decide_between_two_blobs(self):
+        from .perception import Perception
+        perc = Perception(load_config(overlay=ON), SC, CAL, log=None)
+        pos = SC.mat_to_pelvis([YELLOW[1][0], YELLOW[1][1], H / 2])
+        rgb, dep = _frame("yellow", pos)
+        prior = perc.detect(rgb, dep)[0]
+        mk = lambda dx, dy, yaw, area: {"det": type("D", (), {"top": prior.top + [dx, dy, 0], "yaw": yaw, "shape": None})(),
+                                       "area": area, "blob": None}
+        near_wrong = mk(0.012, 0.0, prior.yaw + np.radians(40), prior.n_px)    # nearer, but turned by 40 deg
+        far_right = mk(0.020, 0.0, prior.yaw, prior.n_px)
+        r = perc._reloc_match([near_wrong, far_right], prior, prior.top[:2], float(prior.n_px), [], {}, 0.75, 0.075)
+        self.assertEqual((r["kind"], r["cand"]), ("ok", far_right))
+        big = mk(0.005, 0.0, prior.yaw, 2.0 * prior.n_px)                      # two objects merged: not one cube
+        r = perc._reloc_match([big, far_right], prior, prior.top[:2], float(prior.n_px), [], {}, 0.75, 0.075)
+        self.assertEqual((r["kind"], r["cand"]), ("ok", far_right))
+
+
+class TestDropLegReuse(unittest.TestCase):
+    def test_corrected_plan_reuses_the_original_drop_leg_and_is_safe(self):
+        for scene in (YELLOW, RED, BLUE):
+            for off in ((0.02, 0.0), (0.0, 0.04), (0.0, -0.06)):
+                with self.subTest(scene=scene[0], off=off):
+                    r = Run(scene, off)
+                    p0, p1 = r.starts[0][1], r.final[1]
+                    lift0 = next(e for n, s, e in p0.phases if n == "lift")
+                    n_tail = len(p0.arm) - lift0
+                    np.testing.assert_array_equal(p1.arm[-n_tail:], p0.arm[lift0:])     # carry/open/retreat/home as planned
+                    np.testing.assert_array_equal(p1.hand[-n_tail:], p0.hand[lift0:])
+                    self.assertEqual([n for n, _, _ in p1.phases[-4:]], ["carry", "open", "retreat", "home"])
+                    self.assertTrue(p1.ok and p1.safety_clips == 0)
+                    self.assertLess(r.grasp_err(), 0.010)
+                    step = np.abs(np.diff(p1.arm, axis=0)).max()                         # no jump at the join
+                    self.assertLess(step, 0.2)
+
+    def test_checks_run_on_the_new_part_only_but_do_run(self):
+        from .planner import Planner
+        lens = []
+        orig = Planner.dry_run_safety
+
+        def spy(self, a_q, h_q, arm, hand):
+            lens.append(len(arm))
+            return orig(self, a_q, h_q, arm, hand)
+        with mock.patch.object(Planner, "dry_run_safety", spy):
+            r = Run(YELLOW, (0.0, 0.04))
+        self.assertGreaterEqual(len(lens), 2)
+        self.assertLess(lens[-1], len(r.final[1].arm))      # the corrected plan: not the whole trajectory
+        self.assertGreater(lens[-1], r.final[1].phases[3][2])   # but through the whole lift (+ the start of the carry)
+
+    def test_unreachable_join_falls_back_to_a_full_re_plan(self):
+        r = Run(YELLOW, (0.0, 0.04), overrides={"grasp.pregrasp.reuse_max_join_rad": 1e-4})
+        p0, p1 = r.starts[0][1], r.final[1]
+        self.assertTrue(p1.ok)
+        self.assertLess(r.grasp_err(), 0.010)
+        lift0 = next(e for n, s, e in p0.phases if n == "lift")
+        self.assertFalse(len(p1.arm) >= len(p0.arm) - lift0 and
+                         np.array_equal(p1.arm[-(len(p0.arm) - lift0):], p0.arm[lift0:]))
+
+    def test_reuse_off_plans_everything(self):
+        r = Run(YELLOW, (0.0, 0.04), overrides={"grasp.pregrasp.reuse_drop_leg": False})
+        self.assertLess(r.grasp_err(), 0.010)
+        self.assertTrue(r.final[1].ok)
+
+    def test_planner_reuse_attribute_defaults_none(self):
+        self.assertIsNone(Run(YELLOW, (0.0, 0.0), overlay=OFF).pol.planner.reuse)
+
+
+class TestWallClock(unittest.TestCase):
+    def test_corrected_pick_median_wall_time_is_at_most_half_a_second(self):
+        """Threaded, real clock, planning included (not the paused sim clock): first paused tick -> pick started."""
+        from .bench_pregrasp import one
+        for scene in (YELLOW, RED):
+            walls = [one(scene, (0.0, 0.04))["wall"] for _ in range(3)]
+            with self.subTest(scene=scene[0]):
+                self.assertNotIn(None, walls)
+                self.assertLessEqual(float(np.median(walls)), 0.5, walls)
+
+
+class TestReviewFixes(unittest.TestCase):
+    def test_reset_joins_the_worker_and_a_stale_job_does_not_plan(self):
+        import threading
+        r = Run(YELLOW, (0.0, 0.0), overlay=ON)
+        pol = r.pol
+        gen = pol._pg_gen
+        t = threading.Thread(target=time.sleep, args=(0.3,))
+        t.start()
+        pol._pg_thread = t
+        pol.reset({"instruction": "", "time_limit": 120})
+        self.assertFalse(t.is_alive())                       # joined before the next episode can plan
+        self.assertEqual(pol._pg_gen, gen + 1)
+        job = {"result": None}
+        with mock.patch.object(ClassicalPolicy, "_pg_run", side_effect=AssertionError("planned")):
+            pol._pg_job({}, job, gen)                        # a worker of the previous episode
+        self.assertEqual(job["result"]["why"], "stale")
+
+    def test_pause_and_motion_are_inside_the_time_limit(self):
+        ref = Run(YELLOW, (0.0, 0.0))
+        t0, p0, _ = ref.starts[0]
+        limit = t0 + p0.duration + 0.05                     # the look accepts the plan; the 0.2 s pause eats the slack
+        r = Run(YELLOW, (0.0, 0.0), time_limit=limit, max_ticks=1500)         # the plan as made: tail + pause > limit
+        self.assertIsNone(r.final, r.notes())
+        self.assertEqual(r.pol.state, "done")
+        self.assertTrue(any("does not fit the time left" in n for n in r.notes()), r.notes())
+        r = Run(YELLOW, (0.0, 0.04), time_limit=limit, max_ticks=1500)        # the corrected one does not, the tail does
+        self.assertTrue(any("does not fit the time left" in n for n in r.notes()), r.notes())
+        t1, p1 = r.final
+        self.assertLessEqual(t1 + p1.duration, limit)
+
+    def test_total_aborts_are_capped_per_episode(self):
+        r = Run(YELLOW, (0.0, 0.0), gone=True, max_ticks=6000, overrides={"grasp.pregrasp.max_aborts_total": 1,
+                                                                          "grasp.pregrasp.max_aborts_per_object": 9})
+        self.assertEqual(sum("retreat + re-look" in n for n in r.notes()), 1)
+        self.assertEqual(r.pol._pg_abort_total, 1)
+
+    def test_a_blob_of_another_shape_is_not_the_target(self):
+        from .perception import Perception
+        orig = Perception.relocalise
+
+        def other_shape(self, rgb, depth, prior, **kw):
+            prior.shape = "cube"
+            r = orig(self, rgb, depth, prior, **kw)
+            if r["kind"] == "found":
+                r["det"].shape = "cylinder"            # the nearest blob is a cylinder
+            return r
+        with mock.patch.object(Perception, "relocalise", other_shape):
+            r = Run(YELLOW, (0.0, 0.04), max_ticks=1500)
+        self.assertIsNone(r.final)
+        self.assertTrue(any("another object" in n and "retreat + re-look" in n for n in r.notes()), r.notes())
 
 
 if __name__ == "__main__":

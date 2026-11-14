@@ -247,7 +247,13 @@ class ClassicalPolicy:
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
+        self._pg_gen = getattr(self, "_pg_gen", 0) + 1      # a worker of the previous episode returns without planning
+        th = getattr(self, "_pg_thread", None)
+        if th is not None and th.is_alive():                # ... and is joined: it shares the planner / Pinocchio data
+            th.join(timeout=5.0)
+        self._pg_thread = None
         self._pg = None             # grasp.pregrasp_relocalise: the pick paused at its pre-grasp pose
+        self._pg_abort_total = 0    # pre-grasp aborts this episode (grasp.pregrasp.max_aborts_total)
         self._pg_aborts = []        # (colour, xy) of picks aborted at the pre-grasp pose
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
@@ -1184,6 +1190,8 @@ class ClassicalPolicy:
                     n_long += 1
                     continue
             others = [o.top[:2] for o in dets if o is not d]
+            if self._pg_on():   # grasp.pregrasp_relocalise: the other objects of this colour (the re-detection's rivals)
+                self._pg_same = [o.top[:2].copy() for o in dets if o is not d and o.color == d.color]
             mine = forced is not None and d is forced[0]
             target_bin = forced[1] if mine else self._bin_of(d)
             pfn = self._variant_plan_fn(forced[2]) if mine else None
@@ -1649,7 +1657,8 @@ class ClassicalPolicy:
     def _plan_pick(self, d, kw, plan_fn=None):
         p = self._plan_pick_inner(d, kw, plan_fn)
         if plan_fn is None and self._pg_on() and p.ok:
-            p.pg_ctx = {"det": d, "kw": dict(kw)}   # grasp.pregrasp_relocalise: what a corrected re-plan needs
+            p.pg_ctx = {"det": d, "kw": dict(kw), "same": list(getattr(self, "_pg_same", None) or [])}
+            # grasp.pregrasp_relocalise: what a corrected re-plan needs + the same-colour neighbours of the target
         return p
 
     def _plan_pick_inner(self, d, kw, plan_fn=None):
@@ -2241,6 +2250,8 @@ class ClassicalPolicy:
             return False
         if self._dflag("object_time_cap"):   # its T-8 s watcher indexes the whole plan
             return False
+        if self._pg_abort_total >= int(self.cfg["grasp"]["pregrasp"]["max_aborts_total"]):
+            return False   # the pre-grasp pause keeps aborting this episode: stock picks from here on
         names = [n for n, _, _ in plan.phases]
         return len(names) > 1 and names[0] == "to_pregrasp" and "descend" in names and plan.phases[0][2] > 0
 
@@ -2260,7 +2271,7 @@ class ClassicalPolicy:
         if pg["job"] is None:
             waited = t - pg["t0"]
             if waited < float(p["wait_s"]):
-                return self._hold()
+                return self._hold(ticks=int(p["hold_ticks"]))
             fr = pg["frames"]
             if not fr or t > fr[-1]["t"]:   # a fresh frame: a new observation time
                 fr.append({"t": t, "rgb": None if obs.get("head_rgb") is None else np.array(obs["head_rgb"]),
@@ -2268,24 +2279,28 @@ class ClassicalPolicy:
                            "arm_q": None if obs.get("arm_q") is None else np.array(obs["arm_q"], float),
                            "hand_q": None if obs.get("hand_q") is None else np.array(obs["hand_q"], float)})
             if len(fr) < int(p["frames"]) and waited < self.PG_MAX_WAIT_S:
-                return self._hold()
+                return self._hold(ticks=int(p["hold_ticks"]))
             pg["t_job"] = t
             pg["job"] = {"result": None}
             if self.threaded:
-                threading.Thread(target=self._pg_job, args=(pg, pg["job"]), daemon=True).start()
+                self._pg_thread = threading.Thread(target=self._pg_job, args=(pg, pg["job"], self._pg_gen), daemon=True)
+                self._pg_thread.start()
             else:
-                self._pg_job(pg, pg["job"])
+                self._pg_job(pg, pg["job"], self._pg_gen)
         res = pg["job"]["result"]
         if res is None:
             if t - pg["t_job"] > self.PG_MAX_JOB_S:
                 res = {"kind": "timeout"}
             else:
-                return self._hold()
+                return self._hold(ticks=int(p["hold_ticks"]))
         return self._pg_finish(res, t)
 
-    def _pg_job(self, pg, job):
+    def _pg_job(self, pg, job, gen=None):
         if self.threaded:
             _lower_thread_priority()
+        if gen is not None and gen != self._pg_gen:   # reset() came first: nothing of this episode is left to do
+            job["result"] = {"kind": "error", "why": "stale"}
+            return
         try:
             job["result"] = self._pg_run(pg)
         except Exception as e:   # never kill the control loop: the plan the look made still runs
@@ -2293,7 +2308,9 @@ class ClassicalPolicy:
 
     def _pg_run(self, pg):
         p, prior, plan = self.cfg["grasp"]["pregrasp"], pg["det"], pg["plan"]
-        ests, kinds = [], []
+        ests, kinds, amb = [], [], []
+        nb = [np.asarray(o, float)[:2] for o in pg["plan"].pg_ctx.get("same", [])]
+        match = {k: p[k] for k in ("pos_sigma_m", "size_sigma", "yaw_sigma_deg", "miss_cost", "amb_margin") if k in p}
         for f in pg["frames"]:
             if f["rgb"] is None or f["depth"] is None:
                 kinds.append("unsupported")
@@ -2302,10 +2319,18 @@ class ClassicalPolicy:
             r = self.perception.relocalise(
                 f["rgb"], f["depth"], prior, robot_q=rq, gate_m=float(p["gate_m"]),
                 occluded_frac=float(p["occluded_frac"]), hidden_frac=float(p["hidden_frac"]),
-                min_visible_frac=float(p["min_visible_frac"]), arm_dilate_px=int(p["arm_dilate_px"]))
+                min_visible_frac=float(p["min_visible_frac"]), arm_dilate_px=int(p["arm_dilate_px"]),
+                neighbours=nb, match=match)
             kinds.append(r["kind"])
             if r["kind"] == "found":
                 ests.append(r)
+            elif r["kind"] == "ambiguous":
+                amb.append(r)
+        if amb:   # two objects fit the target: never choose between them. The plan as made stays if its own target is
+            # still where it was, else retreat + re-look
+            near = min(a["nearest"] for a in amb)
+            return {"kind": "ambiguous_keep" if near <= float(p["keep_consistent_m"]) else "ambiguous", "near": near,
+                    "n": max(len(a["cands"]) for a in amb), "gap": min(a["gap"] for a in amb)}
         if not ests:
             return {"kind": "gone" if kinds and all(k == "gone" for k in kinds) else "hidden"}
         xy = np.median([e["top"][:2] for e in ests], axis=0)
@@ -2331,6 +2356,12 @@ class ClassicalPolicy:
         if prior.shape == "triangle" and d0.shape == "triangle" and d0.apex_yaw is not None \
                 and not out["occluded"] and d0.apex_conf >= (prior.apex_conf or 0.0):
             det2.apex_yaw, det2.apex_conf = d0.apex_yaw, d0.apex_conf
+        if prior.shape and d0.shape and d0.shape != prior.shape:   # another kind of object, not the target
+            out["kind"], out["why"] = "mismatch", f"shape {d0.shape} != {prior.shape}"
+            return out
+        if d0.shape and lookup_detection_bin(self.cfg, self.mapping, d0) != plan.target_bin:
+            out["kind"], out["why"] = "mismatch", "its bin differs from the planned one"
+            return out
         new = self._pg_plan(pg, det2)
         if new.ok:
             out["kind"], out["plan"] = "corrected", new
@@ -2347,10 +2378,18 @@ class ClassicalPolicy:
             if self.cfg["policy"].get("first_object_speed_scale") is not None and self.n_started == 0:
                 pl = copy.copy(pl)
                 pl.object_speed_scale = float(self.cfg["policy"]["first_object_speed_scale"])
+            pl = copy.copy(pl)   # never set vary / reuse on the planner the look thread may use
             pl.vary = getattr(plan, "pg_vary", None)
+            reuse = self._pg_reuse(plan, det2)
+            if reuse is not None:    # only approach / close / lift (+ a connector) are planned; the drop leg is reused
+                pl.reuse = reuse
             try:
                 new = pl._plan_side_hints(det2, plan.side, plan.target_bin, self.arm_cmd.copy(), self.hand_cmd.copy(),
                                           drop_slot=plan.drop_slot)
+                if reuse is not None and not new.ok:   # connector / posture mismatch: plan the whole pick as before
+                    pl.reuse = None
+                    new = pl._plan_side_hints(det2, plan.side, plan.target_bin, self.arm_cmd.copy(),
+                                              self.hand_cmd.copy(), drop_slot=plan.drop_slot)
             finally:
                 pl.vary = None
         if new.ok:
@@ -2360,6 +2399,24 @@ class ClassicalPolicy:
             if self._vary_on():
                 new.grasp_key = self._grasp_key(new)
         return new
+
+    def _pg_reuse(self, plan, det2):
+        """The original plan's drop leg (carry, lower, open, retreat, home) as a Planner.reuse dict, or None (flag
+        grasp.pregrasp.reuse_drop_leg off, a plan without a lift phase, or a generic-fallback pick)."""
+        p = self.cfg["grasp"]["pregrasp"]
+        if not p.get("reuse_drop_leg", True) or getattr(det2, "generic_required", False):
+            return None
+        lift = next((e for n, s, e in plan.phases if n == "lift"), None)
+        if lift is None or lift >= len(plan.arm) or not any(n == "carry" and s == lift for n, s, e in plan.phases):
+            return None
+        desc = next((e for n, s, e in plan.phases if n == "descend"), None)
+        if desc is None:
+            return None
+        return {"arm": plan.arm[lift:], "hand": plan.hand[lift:], "q0": plan.arm[lift - 1], "hand0": plan.hand[lift - 1],
+                "q_pre": plan.arm[plan.phases[0][2] - 1], "q_grasp": plan.arm[desc - 1],   # IK seed of the corrected grasp: the solution it replaces (same branch)
+                "phases": [(n, s - lift, e - lift) for n, s, e in plan.phases if s >= lift],
+                "waypoints": plan.waypoints, "ik": plan.ik, "join_tol": float(p["reuse_join_tol_rad"]),
+                "max_join": float(p["reuse_max_join_rad"])}
 
     def _pg_tail(self, plan, split):
         """The rest of the original plan after its to_pregrasp move (same trajectory ticks, indices shifted)."""
@@ -2380,28 +2437,56 @@ class ClassicalPolicy:
             head += (f" dx={mm(res['dx']):+.1f} mm dy={mm(res['dy']):+.1f} mm dyaw={np.degrees(res['dyaw']):+.1f} deg "
                      f"shift={mm(res['shift']):.1f} mm{' occluded' if res['occluded'] else ''}")
         if kind == "corrected":
+            if not self._pg_fits(res["plan"], t):
+                tail = self._pg_tail(plan, pg["split"])
+                if not self._pg_fits(tail, t):
+                    return self._pg_giveup(pg, t, f"{head} -> corrected grasp does not fit the time left")
+                self._note(t, f"{head} -> corrected grasp ({res['plan'].duration:.1f} s) does not fit the time left: "
+                              f"grasp as planned")
+                return self._start(tail, t, pregrasp_done=True)
             self._note(t, f"{head} -> corrected grasp ({res['plan'].duration:.1f} s)")
             return self._start(res["plan"], t, pregrasp_done=True)
-        if kind in ("gone", "too_far", "infeasible"):
-            why = {"gone": "target not found at its predicted position", "too_far":
+        if kind in ("gone", "too_far", "infeasible", "ambiguous", "mismatch"):
+            why = {"gone": "target not found at its predicted position",
+                   "ambiguous": f"{res.get('n')} same-colour objects fit the target (gap {res.get('gap', 0.0):.2f}), "
+                                f"none within {mm(float(p['keep_consistent_m'])):.0f} mm of its predicted position",
+                   "too_far":
                    f"correction above max {mm(float(p['max_shift_m'])):.0f} mm",
-                   "infeasible": f"corrected grasp infeasible ({res.get('why')})"}[kind]
+                   "infeasible": f"corrected grasp infeasible ({res.get('why')})",
+                   "mismatch": f"the blob is another object ({res.get('why')})"}[kind]
             return self._pg_abort(pg, t, f"{head} -> abort: {why}; retreat + re-look")
         note = {"keep": "within tolerance: grasp as planned", "hidden": "target under the hand, not observable: grasp as planned",
                 "unsupported": "no re-detection possible: grasp as planned",
+                "ambiguous_keep": f"{res.get('n')} same-colour objects fit (gap {res.get('gap', 0.0):.2f}), the planned "
+                                  f"target is still there ({mm(res.get('near', 0.0)):.0f} mm): grasp as planned",
                 "keep_infeasible": f"corrected grasp infeasible ({res.get('why')}), shift small: grasp as planned",
                 "timeout": "re-localisation timed out: grasp as planned",
                 "error": f"re-localisation failed ({res.get('why')}): grasp as planned"}[kind]
+        tail = self._pg_tail(plan, pg["split"])
+        if not self._pg_fits(tail, t):
+            return self._pg_giveup(pg, t, f"{head} -> {note}, but it does not fit the time left")
         self._note(t, f"{head} -> {note}")
-        return self._start(self._pg_tail(plan, pg["split"]), t, pregrasp_done=True)
+        return self._start(tail, t, pregrasp_done=True)
+
+    def _pg_fits(self, plan, t):
+        """The pause and the new motion are counted against the episode limit (the look only checked the original)."""
+        return t + plan.duration + self._time_reserve(False) <= self.time_limit
+
+    def _pg_giveup(self, pg, t, msg):
+        """No time for any pick from here: leave the object, end the episode (holding at the pre-grasp pose)."""
+        self._note(t, msg)
+        self.failed.append(np.asarray(pg["det"].top[:2], float).copy())
+        self.state = "done"
+        return self._hold(done=True)
 
     def _pg_abort(self, pg, t, msg):
         """Retreat the arm and look again. Not a try (nothing was started); after max_aborts_per_object the object is
         left on the counter (failed list) so the loop is bounded."""
         plan, prior = pg["plan"], pg["det"]
         self._note(t, msg)
+        self._pg_abort_total += 1
         xy = np.asarray(prior.top[:2], float)
-        rad = self._attempt_radius()
+        rad = max(self._attempt_radius(), float(self.cfg["policy"]["same_object_radius"]))
         self._pg_aborts.append((prior.color, xy))
         n = sum(1 for c, q in self._pg_aborts if c == prior.color and np.linalg.norm(q - xy) < rad)
         if n >= int(self.cfg["grasp"]["pregrasp"]["max_aborts_per_object"]):
@@ -2410,6 +2495,9 @@ class ClassicalPolicy:
         home = self.arm_cmd.copy()
         home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
         a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
+        if t + len(a) / HZ > self.time_limit:   # the retreat would run past the limit: stay where the arm is
+            self.state = "done"
+            return self._hold(done=True)
         self._enqueue(a, h)
         return self._pop()
 
@@ -2599,11 +2687,11 @@ class ClassicalPolicy:
         self._popped = (a, h) if self._shell else None
         return self._remember_policy_action(a, h, False)
 
-    def _hold(self, done=False):
+    def _hold(self, done=False, ticks=None):
         """Hold the last target. While waiting (planning / operator) the hold is `motion.hold_ticks` ticks long, so a
         remote runner needs one request per hold chunk instead of one per tick: the command rate stays at 30 Hz
         even when the planner thread and other processes (sims) load the CPU."""
-        k = 1 if done else max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
+        k = 1 if done else max(1, int(self.cfg["motion"].get("hold_ticks", 1) if ticks is None else ticks))
         if done and not self._summary_logged and self.cfg["policy"].get("episode_summary_log", False):
             # passive end-of-episode summary (log only, once)
             self._summary_logged = True
