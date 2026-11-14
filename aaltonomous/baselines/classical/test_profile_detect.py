@@ -65,16 +65,40 @@ class TestDetectProfile(unittest.TestCase):
         self.assertEqual(profile, "sim")
         self.assertEqual(info["palette"], "inconclusive")
 
-    def test_one_bad_frame_of_five_is_none(self):
-        # unanimity: a single moving-arm / odd-depth frame (counter std 3 mm) sends the whole decision to none
-        bad = _frame(SIM_OBJS, depth_fn=lambda: _plane_mm(np.random.default_rng(3)))
-        profile, info = detect_profile([sim_frame(), sim_frame(), bad, sim_frame(), sim_frame()])
-        self.assertEqual(profile, "none")
-        self.assertEqual(info["votes"], 4)
+    def test_plane_std_noise_alone_does_not_veto(self):
+        # plane std is log-only: a 0-hole frame with 3 mm counter noise still votes sim
+        noisy = _frame(SIM_OBJS, depth_fn=lambda: _plane_mm(np.random.default_rng(3)))
+        profile, info = detect_profile([noisy] * 5)
+        self.assertEqual(profile, "sim")
+        self.assertEqual(info["votes"], 5)
+        self.assertGreater(info["plane_std_mm"], 1.0)
 
-    def test_four_sim_plus_one_noisy_frame_is_none(self):
-        bad = _frame(SIM_OBJS, depth_fn=lambda: _plane_mm(np.random.default_rng(3)))
-        self.assertEqual(detect_profile([sim_frame()] * 4 + [bad])[0], "none")
+    def test_sim_frame_with_raised_objects_and_large_plane_std_is_sim(self):
+        # objects / arm raised over the counter leak into the plane fit (X8: 19.4 mm); holes stay 0 -> still sim
+        def arm_depth():
+            z = _plane_mm()
+            z[300:470, 180:460] -= 150.0
+            return z
+        f = _frame(SIM_OBJS, depth_fn=arm_depth)
+        profile, info = detect_profile([f] * 5)
+        self.assertGreater(info["plane_std_mm"], 5.0)
+        self.assertEqual(info["depth_holes"], 0.0)
+        self.assertEqual(profile, "sim")
+
+    def test_two_sim_three_holed_is_none(self):
+        # 3 % holes is above HOLE_SIM_MAX (0.5 %): not sim; 2 of 5 is not a majority
+        holed = [_frame(SIM_OBJS, depth_fn=lambda i=i: _plane_mm(np.random.default_rng(i), holes=0.03))
+                 for i in range(3)]
+        profile, info = detect_profile([sim_frame(), sim_frame()] + holed)
+        self.assertEqual(profile, "none")
+        self.assertEqual(info["votes"], 2)
+
+    def test_three_sim_two_holed_is_sim(self):
+        holed = [_frame(SIM_OBJS, depth_fn=lambda i=i: _plane_mm(np.random.default_rng(i), holes=0.03))
+                 for i in range(2)]
+        profile, info = detect_profile([sim_frame(), sim_frame(), sim_frame()] + holed)
+        self.assertEqual(profile, "sim")
+        self.assertEqual(info["votes"], 3)
 
     def test_real_like_frames_are_none(self):
         profile, info = detect_profile([real_frame(i) for i in range(5)])
@@ -106,6 +130,7 @@ class TestDetectProfile(unittest.TestCase):
 
     def test_no_frames_is_none(self):
         self.assertEqual(detect_profile([])[0], "none")
+        self.assertEqual(detect_profile([])[1]["votes"], 0)
 
     def test_rgb_noise_separates_flat_from_noisy_and_does_not_vote(self):
         flat = np.full((H, W, 3), 60, np.uint8)

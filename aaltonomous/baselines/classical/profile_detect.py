@@ -8,9 +8,9 @@ Gate: flag profile_auto.auto_detect (default OFF; ClassicalServerPolicy). Two si
           red / blue / yellow, real ones orange / purple / yellow. Bands from config.yaml perception.hsv (sim DR red H
           0-7 / 170-179, blue H 100-116; real purple H 108-127). Yellow (22-35) is shared and orange (9-21) is neutral:
           sim bins are H ~12 as well, so only purple counts as a real vote. Raised, object-sized blobs only.
-Per-frame vote: sim iff the depth signal says sim (palette is computed for the log only: real purple measures H110,
-inside the sim blue band, so a palette veto never fired on real frames). Missing depth votes none.
-Decision: sim iff EVERY inspected frame votes sim (unanimity, N >= 1), else none.
+Per-frame vote: sim iff depth holes <= HOLE_SIM_MAX only. Plane std and palette are log-only (X8: plane std 19.4 mm
+in sim, objects/arm leak into the fit; real purple measures H110, inside the sim blue band). Missing depth votes none.
+Decision: sim iff a MAJORITY of inspected frames vote sim (votes * 2 > N), else none; empty list -> none.
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ import numpy as np
 
 # ponytail: thresholds are tuned on the mock renderer and config.yaml notes, not on real D435i frames (none on this
 # machine). Re-check with tools/profile_detect_eval.py on drop_2 ep<40 before trusting it on the robot.
-HOLE_SIM_MAX = 0.01          # sim: ~0 invalid px; real D435i 2-5 %. Above 1 % is not sim.
-PLANE_STD_SIM_MAX_MM = 1.0   # sim: uint16-mm quantisation only (mock: 0.43 mm incl. edge bleed); D435i 1-3 mm at 0.5-1 m
+HOLE_SIM_MAX = 0.005         # sim renders 0.0000 invalid px; a real D435i always has a shadow band > 1 %
+PLANE_STD_SIM_MAX_MM = 1.0   # sim: uint16-mm quantisation only (mock: 0.43 mm incl. edge bleed); D435i 1-3 mm at 0.5-1 m; LOG-ONLY (X8: 19.4 mm in sim, objects/arm leak into the fit)
 TRIM_FLOOR_MM = 3.0          # residual clip floor for the trimmed fit (object edges out, real noise in)
 PLANE_MIN_PX = 500           # counter-region px needed for a plane fit
 RAISED_MM = 10.0             # px at least this far in front of the counter plane count as objects
@@ -111,7 +111,7 @@ def _frame(obs):
         depth = np.asarray(depth, float)
         out["holes"] = _holes(depth)
         coef, norm, out["plane_std_mm"] = _plane(depth)
-        out["depth_sim"] = out["holes"] <= HOLE_SIM_MAX and out["plane_std_mm"] <= PLANE_STD_SIM_MAX_MM
+        out["depth_sim"] = out["holes"] <= HOLE_SIM_MAX   # holes only; plane_std is log-only
     if rgb is not None and np.ndim(rgb) == 3 and (depth is None or np.ndim(depth) != 2 or np.shape(rgb)[:2] == np.shape(depth)):
         out["palette"], out["sim_px"], out["real_px"] = _palette(
             rgb, depth if depth is not None and np.ndim(depth) == 2 else None, coef, norm)
@@ -131,4 +131,4 @@ def detect_profile(frames):
     info = {"frames": len(per), "votes": votes, "depth_holes": max(p["holes"] for p in per),
             "plane_std_mm": max(p["plane_std_mm"] for p in per), "palette": palette,
             "rgb_noise": [p["rgb_noise"] for p in per], "per_frame": per}   # rgb_noise: log-only, no vote
-    return ("sim" if votes == len(per) > 0 else "none"), info   # empty list -> none   # unanimity: any non-sim frame -> none
+    return ("sim" if votes * 2 > len(per) else "none"), info   # majority (> N/2); empty list -> none
