@@ -262,6 +262,11 @@ class Perception:
         self._below_bin_row = None
         self._image_bin_gate_active = False
         self.reject_log = bool(self.cfg.get("reject_log", False))
+        self.bins_from_image = bool(self.cfg.get("bins_from_image", False))
+        self.bins_img_cfg = dict(self.cfg.get("bins_from_image_params") or {})
+        self.bin_rims = None          # last RimResult (bins_from_image); diagnostics / tests
+        self.bin_rim_hint = {}        # {bin: (dx, dy)} pelvis shift estimated from the rim line (param hint)
+        self._below_bin_margin = float(self.gate_below_cfg.get("margin_px", 3))
         self.reject_tally = {}
         self.still_vote = bool(self.cfg.get("still_vote", False))
         self.still_vote_cfg = dict(self.cfg.get("still_vote_params") or {})
@@ -1072,15 +1077,34 @@ class Perception:
         self._image_bin_gate_active = False
         self._below_bin_row = None
         early_hsv = None
-        if self.gate_below_bins and not self._live_bins_trusted():
+        rim_tape = None
+        if self.bins_from_image:
+            self.bin_rims, trusted = None, self._live_bins_trusted()
             early_hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+            rims = self._detect_rims(early_hsv)
+            if rims is not None:
+                rim_tape = rims.tape if rims.tape is not None and rims.tape.any() else None
+                if trusted or (not self.bins_img_cfg.get("with_depth", True) and self._depth_ok(depth)):
+                    self._crosscheck_rims(rims)           # depth / runtime bin poses win; the image only cross-checks
+                elif rims.row_limit is not None:
+                    self._below_bin_row, self._below_bin_margin = rims.row_limit, 0.0
+                    self._image_bin_gate_active = True
+        if self.gate_below_bins and not self._image_bin_gate_active and not self._live_bins_trusted():
+            if early_hsv is None:
+                early_hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
             self._below_bin_row = self._observed_bin_bottom(early_hsv)
+            self._below_bin_margin = float(self.gate_below_cfg.get("margin_px", 3))
             self._image_bin_gate_active = self._below_bin_row is not None
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
         blocked_by_image_gate = None
         keep_before_image_gate = None
+        if rim_tape is not None:
+            keep[rim_tape > 0] = 0                          # rim tape is never an object
+            if debug or self.reject_log:
+                for area, cen in self.bin_rims.tape_blobs:
+                    rejected.append((self._blob_placeholder("orange", area, cen), "rim_tape"))
         if self._image_bin_gate_active:
-            margin = float(self.gate_below_cfg.get("margin_px", 3))
+            margin = self._below_bin_margin
             below = np.arange(keep.shape[0])[:, None] > self._below_bin_row[None, :] + margin
             keep_before_image_gate = keep.astype(bool)
             blocked_by_image_gate = ~below
@@ -1094,7 +1118,7 @@ class Perception:
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
         need_hsv = (self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor or
-                    self.tape_value_cut or self.split_by_solidity or self.gate_below_bins)
+                    self.tape_value_cut or self.split_by_solidity or self.gate_below_bins or self.bins_from_image)
         hsv = early_hsv if early_hsv is not None else cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None
         if self.colour_kmeans and not self._colour_kmeans_done and arm_clear:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
@@ -1208,6 +1232,87 @@ class Perception:
         core = (px[:, 1] >= float(p.get("min_s", 140))) & (px[:, 2] >= float(p.get("min_v", 140)))
         weak = float(core.mean()) < float(p.get("min_core_frac", 0.20))
         return bool(thin and weak)
+
+    def _depth_ok(self, depth):
+        if depth is None:
+            return False
+        dlo, dhi = self.cfg["depth_range_mm"]
+        d = np.asarray(depth)
+        return float(((d >= dlo) & (d <= dhi)).mean()) >= self.cfg["min_valid_frac"]
+
+    def _nominal_bin_px(self):
+        """[(name, centre_u, width_px, near_row)] of the nominal bins (near wall at counter height), by name."""
+        out = []
+        for n, g in bin_geometry(self.scene, {}).items():
+            cx, cy = g["centre_mat"]
+            h = np.asarray(self.scene.cfg["bins"]["outer_size"], float) / 2
+            pts = np.array([[cx - h[0], cy - h[1], 0.0], [cx + h[0], cy - h[1], 0.0], [cx, cy - h[1], 0.0]])
+            uvz = self._project(self.scene.mat_to_pelvis(pts))
+            if np.any(uvz[:, 2] <= 0):
+                continue
+            out.append((n, float(uvz[2, 0]), float(abs(uvz[1, 0] - uvz[0, 0])), float(uvz[2, 1])))
+        return out
+
+    def _detect_rims(self, hsv):
+        """bins_from_image: find the taped bin rims in the picture (rim_detect), name them, set the optional hint."""
+        from . import rim_detect
+        try:
+            nom = self._nominal_bin_px()
+        except ValueError:      # no extrinsics: nominal projection unavailable, detect without the width hint
+            nom = []
+        w_nom = float(np.median([w for _n, _u, w, _r in nom])) if nom else None
+        res = rim_detect.detect_bin_rims(hsv, self.bins_img_cfg.get("detect"), expect_w_px=w_nom)
+        if not res.bins:
+            return None
+        for rb in res.bins:
+            if nom:
+                uc = 0.5 * (rb.u0 + rb.u1)
+                rb.name = min(nom, key=lambda t: abs(t[1] - uc))[0]
+        self.bin_rims = res
+        self.bin_rim_hint = self._rim_hint(res) if self.bins_img_cfg.get("hint", False) else {}
+        return res
+
+    def _rim_hint(self, res):
+        """Bin-distance estimate from each front-rim line: ray through the rim-line pixel at the bin centre column
+        intersected with the counter plane (scene.counter_z_prior if present) gives the near edge's pelvis x; the
+        hint is (dx, 0) against the nominal near edge.  Bins clipped by the image or with a ragged line are skipped."""
+        sc = self.scene
+        z_plane = float(getattr(sc, "counter_z_prior", None) or sc.counter_z) + float(
+            self.bins_img_cfg.get("rim_z_m", 0.0))
+        T = self._T()
+        K = self.cal.cams[self.cam].K
+        out = {}
+        max_dx = float(self.bins_img_cfg.get("hint_max_m", 0.25))
+        for rb in res.bins:
+            if rb.name is None or rb.clipped or rb.resid_px > float(self.bins_img_cfg.get("hint_max_resid_px", 6.0)):
+                continue
+            u = 0.5 * (rb.u0 + rb.u1)
+            d_cam = np.array([(u - K[0, 2]) / K[0, 0], (float(rb.v_at(u)) - K[1, 2]) / K[1, 1], 1.0])
+            d = T[:3, :3] @ d_cam
+            if d[2] >= -1e-6:
+                continue
+            p = T[:3, 3] + d * ((z_plane - T[2, 3]) / d[2])
+            g = bin_geometry(self.scene, {}).get(rb.name)
+            if g is None:
+                continue
+            half = float(np.asarray(sc.cfg["bins"]["outer_size"], float)[1]) / 2
+            nominal_near_x = float(sc.mat_to_pelvis(np.array([g["centre_mat"][0], g["centre_mat"][1] - half, 0.0]))[0])
+            dx = float(p[0]) - nominal_near_x
+            if abs(dx) <= max_dx:
+                out[rb.name] = (dx, 0.0)
+        return out
+
+    def _crosscheck_rims(self, res):
+        """Runtime bin poses are trusted: keep them, only log where the image rim disagrees with the projected one."""
+        try:
+            nom = {n: r for n, _u, _w, r in self._nominal_bin_px()}
+        except ValueError:
+            return
+        for rb in res.bins:
+            if rb.name in nom:
+                dv = float(rb.v_at(0.5 * (rb.u0 + rb.u1))) - nom[rb.name]
+                if abs(dv) > float(self.bins_img_cfg.get("crosscheck_px", 12.0)):
+                    self.log(f"[bins_from_image] {rb.name}: rim line {dv:+.0f} px from the trusted projected rim")
 
     def _live_bins_trusted(self):
         """The image gate is unnecessary only when all live bin positions have trusted evidence."""
@@ -1534,6 +1639,8 @@ class Perception:
         bin.geometry_runtime is on; flag off: only under bin.vote (gate=False) / color_gate.live_bins (gate=True) as before."""
         on = self.geometry_runtime or (self.live_bins if gate else self.bin_vote_on)
         shift = dict(getattr(self.bin_shift_src, "bin_shift", None) or {}) if on else {}
+        if not shift and self.bin_rim_hint and self.bins_from_image and self.bins_img_cfg.get("hint", False):
+            shift = dict(self.bin_rim_hint)   # image rim estimate, only without any runtime estimate
         return bin_geometry(self.scene, shift)
 
     def _bin_centres_mat(self):

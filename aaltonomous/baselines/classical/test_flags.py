@@ -153,6 +153,7 @@ class TestFlags(unittest.TestCase):
             "perception.split_by_solidity", "perception.color_gate.sat_floor_params.blue",
             "perception.color_gate.fk_silhouette", "perception.color_gate.fk_dilate_px",
             "perception.sim_center_principal_point", "perception.aim_z_frac", "perception.still_vote"}
+        expect["finals_r22_bins"] = expect["finals_r22_gate"] | {"perception.bins_from_image"}
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -161,7 +162,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21",
-                  "finals_r22_gate"):
+                  "finals_r22_gate", "finals_r22_bins"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
@@ -213,7 +214,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_r22_gate", "finals_real", "rc1", "rc1_strict",
+                                      "finals_r21", "finals_r22_gate", "finals_r22_bins", "finals_real", "rc1", "rc1_strict",
                                       "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
