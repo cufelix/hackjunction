@@ -69,6 +69,8 @@ FLAGS = {
     "perception.color_gate.live_bins": ("Felix gate", False, "bin footprint = the policy's current bin estimate (bin.vote shift / calibrate_bins); none -> nominal + near_margin_m towards the robot"),
     "perception.color_gate.fk_mask": ("Felix gate", False, "mask the FK-posed arms + hands (dilated) out of the image before blob grouping"),
     "perception.color_gate.sat_floor": ("Felix gate", False, "reject blue (purple) blobs with median HSV S < sat_floor_params.blue and yellow < .yellow (shadow / sheen); red and orange unchanged"),
+    "perception.color_gate.workspace_fail_open": ("recall", False, "workspace rule (2b) fails open on the nominal-counter-z bias: while the counter height is unmeasured (no depth / plane fit fallback) a plane-method top is re-projected along its ray to workspace_assumed_counter_z before the test; measured / depth tops: unchanged"),
+    "perception.hue_guard.yellow_fix": ("recall", False, "hue_guard: a red-labelled candidate whose own top-face hue is in the yellow range is re-labelled yellow before the low_s_red floor"),
     "perception.color_gate.enabled": ("Felix gate", False, "post-filter: area floor + ceiling by distance, workspace mask, bin footprint/rim rejects, degraded when > max_cands (no truncation), shape None for non-depth triangles"),
     "perception.inject_cam_error": ("inject", None, "TEST ONLY: [dpitch_deg, dyaw_deg, dx, dy, dz] perturbs the head "
                                                     "T_pelvis_optical perception uses (simulates a mis-calibrated head)"),
