@@ -554,6 +554,7 @@ class ClassicalPolicy:
         self._occ_prev = None       # verify_landing: {bin: occupancy} of the previous look
         self.landing_events = []    # verify_landing: (kind, colour, bin) per classified release
         self.landing_regrants = 0
+        self._late_rg = {"n": 0}    # policy.late_regrant: regrants used (a dict: the look worker shares it in place)
         self.landing_refunds = 0
         self.bounce_count = {}
         self._landing_excl_logged = set()
@@ -1859,7 +1860,49 @@ class ClassicalPolicy:
             return ("partial", None, len(dets))
         if res[0] == "none" and choose_dets and self._landing_on():
             res = self._landing_regrant(res, choose_dets, obs)
+        if res[0] == "none" and choose_dets and pol.get("late_regrant", False):
+            res = self._late_regrant(res, choose_dets, obs, verify)
         return res
+
+    def _late_regrant(self, res, dets, obs, verify):
+        """policy.late_regrant (default off): nothing is pickable but a counter object that was tried (or given up on:
+        `failed`, attempt limit) is still visible with a full pick+place cycle of time left. Its attempt count, its
+        `failed` entry and its grasp history are cleared so it gets a fresh run of tries (stock grasp, then the
+        retry-vary variants). At most late_regrants_max per episode, late_regrant_min_s of time left; max_total_attempts
+        still caps the episode. Never touches an object that was never attempted (unmapped / abstain stays on the counter)."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        rg = getattr(self, "_late_rg", None)
+        if rg is None:
+            rg = self._late_rg = {"n": 0}
+        if rg["n"] >= int(pol.get("late_regrants_max", 2)) or self.time_limit - t < float(pol.get("late_regrant_min_s", 25.0)):
+            return res
+        rad = self._attempt_radius()
+        same = float(pol["same_object_radius"])
+        stuck = []
+        for d in dets:
+            if getattr(d, "tentative", False):
+                continue
+            xy = np.asarray(d.top[:2], float)
+            failed = any(np.linalg.norm(xy - np.asarray(f, float)) < same for f in self.failed)
+            if failed or self._attempt_count(xy, d.color) >= 1:
+                stuck.append((d.color, xy))
+        if not stuck:
+            return res
+        rg["n"] += 1
+
+        def near(color, xy, c, q):
+            return c == color and np.linalg.norm(xy - np.asarray(q, float)) < rad
+        self.failed[:] = [f for f in self.failed if not any(np.linalg.norm(xy - np.asarray(f, float)) < rad for _, xy in stuck)]
+        self.attempts = [(q, c) for q, c in self.attempts
+                         if not any(np.linalg.norm(xy - q) < rad for _, xy in stuck)]
+        self.attempt_tracks = [tr for tr in self.attempt_tracks
+                               if not any(near(color, xy, tr["color"], tr["xy"]) for color, xy in stuck)]
+        self.vary_hist[:] = [h for h in self.vary_hist
+                             if h["held"] is True or not any(near(color, xy, h["color"], h["xy"]) for color, xy in stuck)]
+        self._note(t, f"late regrant {rg['n']}: {len(stuck)} object(s) left on the counter get a fresh run of attempts "
+                      f"({self.time_limit - t:.0f} s left)")
+        return self._choose(dets, obs, verify)
 
     # ------------------------------------------------------------------ policy.verify_landing
     def _landing_on(self):
@@ -2982,6 +3025,11 @@ class ClassicalPolicy:
         if p.ok:
             p.grasp_key = self._grasp_key(p)
             if any(self._same_grasp(p.grasp_key, h) for h in hist):
+                lim = self._max_attempts_vary() or int(self.cfg["policy"]["max_attempts"])
+                if self.cfg["policy"].get("retry_repeat_ok", False) and len(hist) < lim:
+                    # policy.retry_repeat_ok: no other grasp is feasible; the same grasp again beats giving the object up
+                    self.log(f"[retry_vary] {d.color}: no other feasible grasp, repeating the tried one (try {len(hist) + 1})")
+                    return self._tag_skill_plan(p, d, "stock")
                 return Plan(False, color=d.color, reason="retry_vary: every grasp repeats a tried (point, yaw, posture)")
         return self._tag_skill_plan(p, d, "stock")
 
