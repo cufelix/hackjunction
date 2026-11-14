@@ -6,10 +6,12 @@ Run from the repository root:
 from __future__ import annotations
 
 import argparse
+import itertools
 
 import numpy as np
 
 from aaltonomous.interface.calibration import Calibration
+from aaltonomous.interface.tasks import sample_layout
 from aaltonomous.scene.scene import Scene
 
 from .config import load_config
@@ -18,20 +20,30 @@ from .perception import Perception
 
 
 def _scene_objects(scene, rng, n=3):
-    layout = scene.cfg["layout"]
-    objects, used = [], []
-    colors = list(rng.permutation(["red", "yellow", "blue"]))[:n]
-    shapes = ("cube", "cylinder")
-    while len(objects) < n:
-        x, y = rng.uniform(*layout["region_x"]), rng.uniform(*layout["region_y"])
-        if any(np.hypot(x - a, y - b) < 0.09 for a, b in used):
+    kwargs = scene.layout_kwargs()
+    kwargs.update(n_min=n, n_max=n, shapes=tuple(scene.cfg["objects"]["shapes"]))
+    layout = sample_layout(rng, **kwargs)
+    return [{"color": obj["color"], "shape": obj["shape"], "yaw": obj["yaw"], "size": scene.size,
+             "height": scene.object_height(obj["shape"]),
+             "pos": scene.mat_to_pelvis(scene.cube_spawn_mat(obj))} for obj in layout]
+
+
+def _matched_errors(detections, objects):
+    """Return optimal same-colour XY errors, or None when a colour's detection count is wrong."""
+    errors = []
+    for color in ("red", "yellow", "blue"):
+        truth = [obj["pos"][:2] for obj in objects if obj["color"] == color]
+        found = [det.top[:2] for det in detections if det.color == color]
+        if len(truth) != len(found):
+            return None
+        if not truth:
             continue
-        used.append((x, y))
-        height = scene.object_height()
-        objects.append({"color": colors[len(objects)], "shape": shapes[len(objects) % len(shapes)],
-                        "yaw": rng.uniform(-0.8, 0.8), "size": scene.size, "height": height,
-                        "pos": scene.mat_to_pelvis([x, y, height / 2])})
-    return objects
+        candidates = []
+        for order in itertools.permutations(range(len(found))):
+            err = [float(np.linalg.norm(found[j] - point)) for j, point in zip(order, truth)]
+            candidates.append(err)
+        errors.extend(min(candidates, key=sum))
+    return errors
 
 
 def _rotvec_matrix(rotvec):
@@ -65,33 +77,27 @@ def run_sweep(trials=100, seed=2026, depth_noise_mm=2.0, hole_frac=0.05):
         translation = rng.uniform(-0.01, 0.01, 3)
         rotvec = rng.uniform(-np.radians(1.0), np.radians(1.0), 3)
         actual = jittered_camera(nominal, translation, rotvec)
-        objects = _scene_objects(scene, rng, n=3)
+        objects = _scene_objects(scene, rng, n=int(rng.integers(3, 6)))
         rgb, depth = Renderer(scene, cal, T_pelvis_optical=actual).render(
             objects, rng, depth_noise_mm=depth_noise_mm, hole_frac=hole_frac)
         perception = Perception(cfg, scene, cal)
 
         raw = perception.detect(rgb, depth)
-        raw_by_color = {d.color: d for d in raw}
         calibration = perception.calibrate_bins(depth)
         calibrated = perception.detect(rgb, depth)
-        calibrated_by_color = {d.color: d for d in calibrated}
         if not calibration.success:
             calibration_failures += 1
         else:
             offsets.append(calibration.xy_offset.copy())
         times.append(calibration.elapsed_ms)
 
-        complete = True
-        for obj in objects:
-            color = obj["color"]
-            if color not in raw_by_color or color not in calibrated_by_color:
-                complete = False
-                continue
-            truth = obj["pos"][:2]
-            before.append(float(np.linalg.norm(raw_by_color[color].top[:2] - truth)))
-            after.append(float(np.linalg.norm(calibrated_by_color[color].top[:2] - truth)))
-        if not complete:
+        raw_errors = _matched_errors(raw, objects)
+        calibrated_errors = _matched_errors(calibrated, objects)
+        if raw_errors is None or calibrated_errors is None:
             detection_failures += 1
+        else:
+            before.extend(raw_errors)
+            after.extend(calibrated_errors)
 
     def stats(values):
         values = np.asarray(values, float) * 1000.0

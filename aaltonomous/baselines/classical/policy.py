@@ -108,7 +108,13 @@ class ClassicalPolicy:
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
         if not self._calibration_done:
-            cal = self.perception.calibrate_bins(obs.get("head_depth"))
+            started = time.perf_counter()
+            try:
+                cal = self.perception.calibrate_bins(obs.get("head_depth"))
+            except Exception as exc:  # calibration is optional; never let it terminate the control loop
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                cal = self.perception.calibration_failure(
+                    f"{type(exc).__name__}: {exc}", elapsed_ms=elapsed_ms)
             if cal.valid_frame:
                 self._calibration_done = True
                 self.calibration = cal

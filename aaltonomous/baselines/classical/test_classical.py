@@ -107,6 +107,45 @@ class TestSelfCalibration(unittest.TestCase):
         self.assertLess(out["after"]["p95_mm"], 7.0)
         self.assertLess(out["calibration_time_p95_ms"], 500.0)
 
+    def test_policy_retries_invalid_frame_latches_valid_and_resets(self):
+        env = make_mock_env(seed=3)
+        policy = ClassicalPolicy(log=None, safety=env.filter.cfg)
+        obs = env.reset()
+        policy.reset({"instruction": obs["instruction"]})
+        invalid = dict(obs, head_depth=np.zeros_like(obs["head_depth"]))
+
+        policy.act(invalid)
+        self.assertFalse(policy._calibration_done)
+        policy.act(obs)
+        self.assertTrue(policy._calibration_done)
+        self.assertTrue(policy.calibration.success, policy.calibration)
+        accepted = policy.calibration
+        policy.act(invalid)
+        self.assertIs(policy.calibration, accepted)
+
+        policy.reset({"instruction": obs["instruction"]})
+        self.assertFalse(policy._calibration_done)
+        self.assertIsNone(policy.calibration)
+        np.testing.assert_allclose(policy.perception.xy_offset, policy.perception.base_xy_offset)
+
+    def test_policy_calibration_exception_uses_fallback(self):
+        cfg = load_config(overrides={"perception.xy_offset": [0.004, -0.003]})
+        env = make_mock_env(seed=4, cfg=cfg)
+        policy = ClassicalPolicy(config=cfg, log=None, safety=env.filter.cfg)
+        obs = env.reset()
+        policy.reset({"instruction": obs["instruction"]})
+
+        def broken_calibration(_depth):
+            raise RuntimeError("synthetic calibration failure")
+
+        policy.perception.calibrate_bins = broken_calibration
+        action = policy.act(obs)
+        self.assertFalse(action["done"])
+        self.assertTrue(policy._calibration_done)
+        self.assertFalse(policy.calibration.success)
+        self.assertIn("synthetic calibration failure", policy.calibration.reason)
+        np.testing.assert_allclose(policy.perception.xy_offset, [0.004, -0.003])
+
 
 class TestPostures(unittest.TestCase):
     def test_mirror_and_limits(self):

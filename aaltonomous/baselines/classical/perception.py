@@ -65,6 +65,13 @@ class Perception:
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
 
+    def calibration_failure(self, reason, elapsed_ms=0.0):
+        """Latch a safe failed result after an unexpected calibration error."""
+        self.xy_offset = self.base_xy_offset.copy()
+        self.calibration = BinCalibration(False, True, 0.0, self.xy_offset.copy(), 0, np.inf,
+                                          float(elapsed_ms), str(reason))
+        return self.calibration
+
     def calibrate_bins(self, depth):
         """Estimate a single XY correction by aligning elevated depth points to the fixed bin walls.
 
