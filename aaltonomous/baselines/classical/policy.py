@@ -221,10 +221,11 @@ class ClassicalPolicy:
         self._hc_job = job
         self._hc_still = 0
         cam, solver = self.perception.cam, self.hand_calib
+        lock = bool(self.cfg["perception"].get("online_pitch_cal"))   # A owns pitch/roll: B1 only yaw + xyz
 
         def work():
             try:
-                job["res"] = solver.solve(start, cam, depth, q, hq)
+                job["res"] = solver.solve(start, cam, depth, q, hq, lock_tilt=lock)
             except Exception as e:   # solve() never raises; belt and braces
                 job["res"] = e
             finally:

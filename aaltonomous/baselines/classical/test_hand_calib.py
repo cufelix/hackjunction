@@ -105,6 +105,22 @@ class TestSolver(unittest.TestCase):
         self.assertFalse(r.success)
         self.assertTrue(np.array_equal(r.T, T0))
 
+    def test_lock_tilt_keeps_pitch_roll_and_fixes_yaw_xyz(self):
+        z = np.array([0.0, 0.0, 1.0])
+        T_true = hc.perturb(T0, [0.006, -0.007, 0.005], [0.0, 0.0, 0.0])
+        T_true = T_true.copy()
+        # pitch 2 deg (camera x) then yaw 1 deg about the pelvis z axis, plus the 1 cm class translation above
+        T_true[:3, :3] = hc._rodrigues(np.radians(1.0) * z) @ T0[:3, :3] @ hc._rodrigues(np.array([np.radians(2.0), 0, 0]))
+        r = solver().solve(CAL, "head", scene_depth(T_true), HOME, HAND, lock_tilt=True)
+        self.assertTrue(r.success, r.summary())
+        self.assertLess(np.abs(r.T[:3, :3].T @ z - T0[:3, :3].T @ z).max(), 1e-9)       # pitch/roll untouched
+        yaw = lambda R: np.degrees(np.arctan2(R[1, 0], R[0, 0]))                       # noqa: E731
+        self.assertLess(abs(yaw(r.T[:3, :3] @ T0[:3, :3].T) - 1.0), 0.5, r.summary())  # camera yaw moved ~ +1 deg
+        self.assertLess(np.linalg.norm(r.T[:3, 3] - T_true[:3, 3]), 0.012)
+        r6 = solver().solve(CAL, "head", scene_depth(T_true), HOME, HAND)               # unlocked: unchanged path
+        self.assertTrue(r6.success, r6.summary())
+        self.assertGreater(np.abs(r6.T[:3, :3].T @ z - T0[:3, :3].T @ z).max(), 1e-4)
+
     def test_correction_cap(self):
         T_true = hc.perturb(T0, [0.04, -0.03, 0.02], [0, 0, 0])      # 5.4 cm: beyond the 3 cm cap
         r = solver().solve(CAL, "head", scene_depth(T_true), HOME, HAND)
@@ -171,6 +187,18 @@ class TestPolicyFlag(unittest.TestCase):
         self.assertTrue(pol.hand_calibration.success, pol.hand_calibration.summary())
         self.assertLess(np.linalg.norm(pol.perception.pitch_T[:3, 3] - T_true[:3, 3]), 0.003)
         self.assertLess(hc._rot_deg(T_true[:3, :3].T @ pol.perception.current_T()[:3, :3]), 0.3)
+
+    def test_policy_locks_tilt_when_online_pitch_cal_is_on(self):
+        from .policy import ClassicalPolicy
+        pol = ClassicalPolicy(log=None, overrides={"perception.hand_calibration.enabled": True})
+        pol.cfg["perception"]["online_pitch_cal"] = "table"
+        z = np.array([0.0, 0.0, 1.0])
+        T_true = T0.copy()
+        T_true[:3, :3] = hc._rodrigues(np.radians(1.0) * z) @ T0[:3, :3]
+        settle(pol, self.obs(T_true))
+        self.assertTrue(pol.hand_calibration.success, pol.hand_calibration.summary())
+        Tn = pol.perception.cal.cams["head"].T_pelvis_optical
+        self.assertLess(np.abs(Tn[:3, :3].T @ z - T0[:3, :3].T @ z).max(), 1e-9)
 
     def test_flag_on_gives_up_on_bad_frames(self):
         from .policy import ClassicalPolicy
