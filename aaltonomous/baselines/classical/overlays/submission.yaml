@@ -79,6 +79,7 @@ flags:
   policy.object_time_cap: false                 # D2         per-object cap, T-20 s / T-8 s rules
   policy.speed_tiers: false                     # D3         first object 0.7 + clearance, tiers by outcome
   policy.confidence_tiers: false                # D4         first-seconds calibration tiers
+  bin.geometry_runtime: false                   # bin geo    all bin consumers follow bin_geometry() (A/B: ab_bingeo)
   bin.vote.enabled: false                       # bin vote  per-bin position from 3 votes (A/B: ab_binvote)
   decision.isolated_first: false                # isolated   touching candidates after the isolated ones (isolated_min_m 0.06)
   perception.inject_cam_error: null             # TEST ONLY [dpitch_deg, dyaw_deg, dx, dy, dz]: perturb the head extrinsics

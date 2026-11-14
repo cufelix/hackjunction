@@ -18,6 +18,7 @@ import time
 import cv2
 import numpy as np
 
+from .bin_vote import bin_geometry
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
 from .hue_guard import AMBIGUOUS_CONF, Cand, classify_hue, judge, top_face_hsv
@@ -263,6 +264,7 @@ class Perception:
         self.fk_mask_px = 0        # pixels the last fk mask removed (diagnostics)
         self.live_bins = bool(self.color_gate_cfg.get("live_bins", False))   # perception.color_gate.live_bins (FLAG)
         self.bin_shift_src = None  # live_bins: object with .bin_shift {bin: pelvis dxy} (the policy's planner, bin.vote)
+        self.geometry_runtime = False   # bin.geometry_runtime flag, set by policy.py: every bin consumer follows bin_shift_src.bin_shift
         self.bin_vote_on = False   # bin.vote flag, set by policy.py: bin footprints follow bin_shift_src.bin_shift
 
     def reset_calibration(self):
@@ -1209,17 +1211,16 @@ class Perception:
             out.append((full, int(p.sum()), np.array([x + uu.mean(), y + vv.mean()])))
         return out
 
+    def bin_geometry(self, gate=False):
+        """Runtime bin geometry (bin_vote.bin_geometry). Shift source = the policy's bin_shift (bin.vote), taken when
+        bin.geometry_runtime is on; flag off: only under bin.vote (gate=False) / color_gate.live_bins (gate=True) as before."""
+        on = self.geometry_runtime or (self.live_bins if gate else self.bin_vote_on)
+        shift = dict(getattr(self.bin_shift_src, "bin_shift", None) or {}) if on else {}
+        return bin_geometry(self.scene, shift)
+
     def _bin_centres_mat(self):
-        """{bin: mat-frame centre}. bin.vote on and a shift for that bin: nominal + the planner's pelvis shift
-        (x, y) -> mat (y, x). Otherwise the nominal scene.yaml centres."""
-        centres = {name: np.asarray(ctr, float) for name, ctr in self.scene.cfg["bins"]["centers"].items()}
-        if not self.bin_vote_on:
-            return centres
-        shift = getattr(self.bin_shift_src, "bin_shift", None) or {}
-        for name in centres:
-            if name in shift:
-                centres[name] = centres[name] + np.asarray(shift[name], float)[::-1]
-        return centres
+        """{bin: mat-frame centre}: nominal scene.yaml centres + the runtime shift (see bin_geometry)."""
+        return {n: g["centre_mat"] for n, g in self.bin_geometry().items()}
 
     def _keep_mask(self, depth, exclude_bins=True):
         """uint8 mask of pixels that may belong to an object: no valid depth (unknown), or a 3D point at object
@@ -1564,15 +1565,11 @@ class Perception:
         estimate (bin.vote shift; a calibrate_bins success already moves the DETECTIONS onto the nominal bins), and with
         no estimate at all the nominal box grown near_margin_m towards the robot (mat -y = pelvis -x, the drop_2 shift)."""
         sc = self.scene
-        half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2
         shift = dict(getattr(self.bin_shift_src, "bin_shift", None) or {}) if self.live_bins else {}
         estimate = bool(shift) or (self.calibration is not None and self.calibration.success)
         out = []
-        for name, ctr in sc.cfg["bins"]["centers"].items():
-            c = np.asarray(ctr, float)
-            if name in shift:
-                c = c + np.asarray(shift[name], float)[::-1]   # pelvis (dx, dy) -> mat (dy, dx)
-            lo, hi = c - half, c + half
+        for g_ in self.bin_geometry(gate=True).values():
+            lo, hi = g_["outer_lo"], g_["outer_hi"]
             if hedge and self.live_bins and not estimate:
                 lo = lo - np.array([0.0, float(g.get("near_margin_m", 0.10))])
             out.append((lo, hi))

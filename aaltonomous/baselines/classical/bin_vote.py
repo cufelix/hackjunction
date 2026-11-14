@@ -10,6 +10,33 @@ TAPE_AMBIG_RATIO = 0.5   # two tape blobs on one bin, the 2nd at least half the 
 CONF_AGREE, CONF_PRIOR, CONF_DISAGREE = 1.0, 0.5, 0.3   # bin confidence: 2-of-3 / 3 agree, prior only, full disagreement
 
 
+def bin_geometry(scene, shift=None, name=None):
+    """THE runtime bin geometry (flag bin.geometry_runtime): scene.yaml nominal + a per-bin pelvis xy `shift`
+    ({bin: (dx, dy)}, e.g. planner.bin_shift from bin.vote; None/{} = nominal). -> {bin: g} (or g if `name`), g keys:
+    shift (pelvis xy | None), centre_mat / centre_pelvis (xy), outer_lo / outer_hi (mat xy), inner_lo / inner_hi (mat xyz),
+    inner_pelvis (xlo, xhi, ylo, yhi). Mat <-> pelvis: pelvis (x, y) = mat (y, x) + origin, so shift (dx, dy) -> mat (dy, dx)."""
+    shift = shift or {}
+    b = scene.cfg["bins"]
+    half = np.asarray(b["outer_size"], float) / 2
+    out = {}
+    for n in ([name] if name is not None else scene.bin_names):
+        sh = np.asarray(shift[n], float) if n in shift else None
+        c = np.asarray(b["centers"][n], float)
+        cp = scene.mat_to_pelvis(np.r_[c, 0.0])[:2]
+        lo, hi = scene.bin_inner_box(n)
+        corners = scene.mat_to_pelvis(np.array([[x, y, 0.0] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])]))
+        s2 = sh if sh is not None else np.zeros(2)
+        if sh is not None:   # the whole bin moves: centre, outer + inner walls
+            c, cp = c + sh[::-1], cp + sh
+            sm = np.r_[sh[::-1], 0.0]
+            lo, hi = lo + sm, hi + sm
+        out[n] = {"shift": sh, "centre_mat": c, "centre_pelvis": cp, "outer_lo": c - half, "outer_hi": c + half,
+                  "inner_lo": lo, "inner_hi": hi,
+                  "inner_pelvis": (corners[:, 0].min() + s2[0], corners[:, 0].max() + s2[0],
+                                   corners[:, 1].min() + s2[1], corners[:, 1].max() + s2[1])}
+    return out if name is None else out[name]
+
+
 def _agree_mean(pts, agree_m):
     """(mean of the closest pair, n_agree) over pts; n_agree 3 if all pairs agree, 2 if only a pair, 0 if none."""
     best = None

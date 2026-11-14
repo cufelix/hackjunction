@@ -25,6 +25,7 @@ from aaltonomous.interface.safety import JointSpec, SafetyConfig, SafetyFilter
 from aaltonomous.interface.tasks import FIXED_MAPPING
 from aaltonomous.scene.scene import resolve_bin
 
+from .bin_vote import bin_geometry
 from .kinematics import ArmKinematics
 
 
@@ -146,13 +147,17 @@ class Planner:
     def _bin_xy0(self, name):
         return self.scene.mat_to_pelvis(np.r_[self.scene.cfg["bins"]["centers"][name], 0.0])[:2]
 
+    def bin_geometry(self, name=None, shift=None):
+        """Runtime bin geometry (bin_vote.bin_geometry) of the planner's current bin_shift; `shift` overrides (tests)."""
+        return bin_geometry(self.scene, self.bin_shift if shift is None else shift, name)
+
     def bin_xy(self, name):
-        c = self._bin_xy0(name)
-        return c + self.bin_shift[name] if name in self.bin_shift else c
+        return self.bin_geometry(name)["centre_pelvis"]
 
     def drop_xy(self, name):
         c = self._drop_xy0(name)
-        return c + self.bin_shift[name] if name in self.bin_shift else c
+        sh = self.bin_geometry(name)["shift"]
+        return c + sh if sh is not None else c
 
     def _drop_xy0(self, name):
         """Release point (pelvis xy) in bin `name`: the point of the inner footprint nearest the pelvis, `grasp.drop_inset`
@@ -169,7 +174,8 @@ class Planner:
 
     def drop_slots(self, name):
         out = self._drop_slots0(name)
-        return [p + self.bin_shift[name] for p in out] if name in self.bin_shift else out
+        sh = self.bin_geometry(name)["shift"]
+        return [p + sh for p in out] if sh is not None else out
 
     def _drop_slots0(self, name):
         """Reach-biased release points in the near-inner-wall band of a bin.
@@ -218,8 +224,7 @@ class Planner:
 
     def _mat_centre(self, name, c):
         """Bin centre in MAT coords, moved by bin.vote's shift (pelvis x = mat y, pelvis y = mat x) if the bin has one."""
-        c = np.asarray(c, float)
-        return c + np.asarray(self.bin_shift[name], float)[::-1] if name in self.bin_shift else c
+        return self.bin_geometry(name)["centre_mat"]
 
     def bin_clearance(self, side, arm_q, hand_q, margin=0.01):
         """Lowest height (m) above the bin rims of the hand points over a bin's outer footprint (+margin), inf if none.
@@ -251,10 +256,8 @@ class Planner:
         for name, ctr in b["centers"].items():
             over = np.all(np.abs(pm[:, :2] - self._mat_centre(name, ctr)) <= half, axis=1)
             if name == allowed_inside:
-                lo, hi = self.scene.bin_inner_box(name)
-                if name in self.bin_shift:   # the cavity moves with the bin
-                    sm = np.r_[np.asarray(self.bin_shift[name], float)[::-1], 0.0]
-                    lo, hi = lo + sm, hi + sm
+                g = self.bin_geometry(name)   # the cavity moves with the bin
+                lo, hi = g["inner_lo"], g["inner_hi"]
                 cavity = np.all((pm[:, :2] >= lo[:2]) & (pm[:, :2] <= hi[:2]), axis=1)
                 over &= ~cavity
             if np.any(over & below):
@@ -334,11 +337,7 @@ class Planner:
 
     def _in_bin_footprint(self, name, xy):
         """True when pelvis-frame xy lies inside the inner footprint of bin `name`, bin.vote shift included."""
-        lo, hi = self.scene.bin_inner_box(name)
-        corners = self.scene.mat_to_pelvis(np.array([[x, y, 0.0] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])]))
-        sh = np.asarray(self.bin_shift.get(name, (0.0, 0.0)), float)
-        xlo, xhi = corners[:, 0].min() + sh[0], corners[:, 0].max() + sh[0]
-        ylo, yhi = corners[:, 1].min() + sh[1], corners[:, 1].max() + sh[1]
+        xlo, xhi, ylo, yhi = self.bin_geometry(name)["inner_pelvis"]
         return bool(xlo <= xy[0] <= xhi and ylo <= xy[1] <= yhi)
 
     def _adjusted_drop_target(self, side, bin_name, xy, z, seed, z_max=None):
