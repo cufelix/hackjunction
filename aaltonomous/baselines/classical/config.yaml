@@ -376,7 +376,7 @@ policy:
   speed_tiers: false          # FLAG (D3). 1st object 0.7 + 1.5 cm clearance; clean 0.85/0.9; failure 0.6 + centre bin
   confidence_tiers: false     # FLAG (D4). Hold still, calibration confidence C -> CONFIDENT / DEGRADED / PRIOR-ONLY
 
-# Decision layer numbers (knowledge/humanoid/40-ARCHITECTURE-v4.md sections 2-3). Only read when a policy.* decision flag is on.
+# Decision layer numbers (knowledge/humanoid/40-ARCHITECTURE-v4.md sections 2-3). Only read when a decision flag is on.
 decision:
   shape_prior: {cube: 0.9, cylinder: 0.8, triangle: 0.6, unknown: 0.75}   # p_grasp shape prior (triangle = prism)
   hue_full_margin_deg: 15.0   # hue margin (deg) from the HSV range edge that counts as fully confident
@@ -406,6 +406,8 @@ decision:
   c_weights: {pitch: 0.4, bin: 0.35, depth: 0.25}   # missing components drop out, weights renormalised
   depth_lo: 0.2               # valid depth fraction -> 0 at this, 1 at depth_hi
   depth_hi: 0.6
+  isolated_first: false       # FLAG (decision.isolated_first). Candidates within isolated_min_m of another detection (touching) go after the isolated ones
+  isolated_min_m: 0.06        # xy distance (m) to the nearest OTHER detection below which a candidate counts as touching
 
 # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
 # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.

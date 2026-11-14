@@ -5,6 +5,7 @@ Everything here is only reached from policy.py behind four flags (all default of
   policy.object_time_cap    D2     per-object cap, T-20 s no new object, T-8 s release over the bin / retract
   policy.speed_tiers        D3     first object 0.7 + clearance, clean -> 0.85/0.9, failure -> 0.6 + centre bin
   policy.confidence_tiers   D4     hold still, calibration confidence C -> CONFIDENT / DEGRADED / PRIOR-ONLY
+  decision.isolated_first   --     candidates within isolated_min_m of another detection (touching) go after the isolated ones
 Numbers live in config.yaml `decision:` (architecture v4 sections 2 and 3). Tested with synthetic lists / clocks in
 test_decision.py.
 """
@@ -205,6 +206,18 @@ def tier_of(C, d=None):
     return CONFIDENT if C >= float(d["confident_c"]) else DEGRADED
 
 
+# ---------------------------------------------------------------------------------------------------- isolated first
+def defer_touching(cands, dets, min_m):
+    """decision.isolated_first: a candidate whose xy is closer than min_m to any OTHER detection (touching, pushed
+    together) moves after every isolated candidate. Each group keeps its order; nothing is dropped. dets = all current
+    detections (not only candidates)."""
+    def touching(d):
+        xy = np.asarray(d.top[:2], float)
+        return any(o is not d and float(np.hypot(*(xy - np.asarray(o.top[:2], float)))) < float(min_m) for o in dets)
+    flags = [touching(d) for d in cands]
+    return [d for d, t in zip(cands, flags) if not t] + [d for d, t in zip(cands, flags) if t]
+
+
 # defaults mirror config.yaml `decision:` (used when a caller passes no cfg; load_config always supplies it)
 DEFAULTS = {
     "shape_prior": {"cube": 0.9, "cylinder": 0.8, "triangle": 0.6, "unknown": 0.75},
@@ -217,4 +230,5 @@ DEFAULTS = {
     "hold_s": 4.0, "hold_frames": 4, "confident_c": 0.6, "degraded_c": 0.3,
     "degraded_scale": 0.6, "degraded_min_p": 0.85,
     "c_weights": {"pitch": 0.4, "bin": 0.35, "depth": 0.25}, "depth_lo": 0.2, "depth_hi": 0.6,
+    "isolated_min_m": 0.06,
 }

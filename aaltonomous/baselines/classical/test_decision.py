@@ -4,6 +4,7 @@ lists and clocks, scripted perception + planner (no IK, no sim). Run:
 Mapping (FIXED_MAPPING): red -> left bin, yellow -> centre bin, blue -> right bin.
 """
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -646,3 +647,61 @@ class TestReviewFixes(unittest.TestCase):
         pol2._over_target_bin = boom
         pol2._hand_xyz = lambda p: np.zeros(3)
         pol2.act(obs(115.0))                                # T-8 with a raising endgame helper: no exception
+
+
+# ----------------------------------------------------------------------------------------------- decision.isolated_first
+def _order(pol, dets):
+    """Candidate order _choose hands to the planner: every plan fails, so each candidate is tried once, in order."""
+    pol.planner.durations = {k: None for k in pol.planner.durations}
+    pol._choose(dets, obs(0.0), False)
+    return list(pol.planner.calls)
+
+
+class TestIsolatedFirst(unittest.TestCase):
+    ON = {"decision.isolated_first": True}
+    LARGEST = {"policy.order": "largest"}
+
+    def _touching_and_isolated(self):
+        a = det("red", x=0.30, y=0.0, shape="cube", n_px=900)
+        b = det("yellow", x=0.33, y=0.0, shape="cube", n_px=800)   # 3 cm from a: touching
+        c = det("blue", x=0.30, y=0.20, shape="cube", n_px=300)    # 20 cm from both: isolated
+        return [a, b, c]
+
+    def test_isolated_object_first_touching_pair_after(self):
+        pol = make(DUR, self._touching_and_isolated(), (), **self.LARGEST, **self.ON)
+        self.assertEqual(_order(pol, self._touching_and_isolated()), ["blue", "red", "yellow"])
+
+    def test_all_far_apart_order_unchanged_vs_flag_off(self):
+        def far():
+            return [det("red", x=0.30, y=0.0, n_px=900), det("yellow", x=0.30, y=0.20, n_px=800),
+                    det("blue", x=0.30, y=-0.20, n_px=700)]
+        off = _order(make(DUR, far(), (), **self.LARGEST), far())
+        on = _order(make(DUR, far(), (), **self.LARGEST, **self.ON), far())
+        self.assertEqual(off, ["red", "yellow", "blue"])
+        self.assertEqual(on, off)
+
+    def test_flag_off_touching_order_unchanged_and_code_path_not_run(self):
+        dets = self._touching_and_isolated()
+        with mock.patch.object(dec, "defer_touching", side_effect=AssertionError("must not run when off")):
+            off = _order(make(DUR, dets, (), **self.LARGEST), self._touching_and_isolated())
+        self.assertEqual(off, ["red", "yellow", "blue"])     # stock largest order, touching pair included
+
+    def test_deferred_object_is_still_picked(self):
+        dets = self._touching_and_isolated()
+        durations = {"red": 8.0, "yellow": 8.0, "blue": None}   # the isolated blue plan fails
+        pol = make(durations, dets, (), **self.LARGEST, **self.ON)
+        self.assertEqual(first_color(pol), "red")                # blue tried first, then the deferred red
+        self.assertEqual(pol.planner.calls, ["blue", "red"])
+        self.assertEqual(len(pol.failed), 1)                     # blue skipped for its own reason, not dropped by the flag
+
+    def test_only_touching_candidates_still_one_is_picked(self):
+        a, b = det("red", x=0.30, y=0.0, n_px=900), det("yellow", x=0.33, y=0.0, n_px=800)
+        pol = make(DUR, [a, b], (), **self.LARGEST, **self.ON)
+        self.assertIn(first_color(pol), ("red", "yellow"))
+
+    def test_defer_touching_keeps_relative_order(self):
+        t1, t2 = det("red", x=0.0, y=0.0), det("yellow", x=0.03, y=0.0)   # touching pair
+        i1, i2 = det("blue", x=0.5, y=0.0), det("red", x=0.9, y=0.9)       # isolated
+        cands = [t1, i1, t2, i2]
+        out = dec.defer_touching(cands, cands, 0.06)
+        self.assertEqual([id(d) for d in out], [id(i1), id(i2), id(t1), id(t2)])

@@ -910,6 +910,11 @@ class ClassicalPolicy:
             cands.sort(key=base)
         if decision and self.tier == dec.DEGRADED and not self._dflag("confidence_order"):   # D4: centre bin first
             cands.sort(key=lambda d: not self._is_centre(d))
+        if self._isolated_on():   # decision.isolated_first: touching candidates go after the isolated ones (stable)
+            try:
+                cands = dec.defer_touching(cands, dets, self._dcfg()["isolated_min_m"])
+            except Exception as e:
+                self._dec_fail("isolated_first", e)
         if extra:
             extra.sort(key=base)
             cands += extra
@@ -1048,6 +1053,9 @@ class ClassicalPolicy:
 
     def _decision_on(self):
         return any(self._dflag(f) for f in ("confidence_order", "object_time_cap", "speed_tiers", "confidence_tiers"))
+
+    def _isolated_on(self):
+        return bool((self.cfg.get("decision") or {}).get("isolated_first", False))
 
     def _dcfg(self):
         d = dict(dec.DEFAULTS)
