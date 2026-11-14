@@ -129,6 +129,8 @@ class TestFlags(unittest.TestCase):
         expect["ab_fk_xcheck"] = nopp | {"calib.fk_xcheck"}   # rebased on cand_r17: log-only B2 arm
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
         expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
+        expect["finals_r19"] = expect["finals_r18"] | {"perception.hue_guard.enabled", "instruction.max_chars", "safety.nan_guard",
+                                                        "instruction.strict"}   # r18 + hue + fuzz + strict
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -182,8 +184,8 @@ class TestFlags(unittest.TestCase):
                                       "ab_retry_vary", "ab_retry_vary_slots", "ab_robust_input",
                                       "ab_safety", "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm",
                                       "cand_r16", "cand_r16_nopp", "cand_r17", "cand_r18",
-                                      "finals_r18", "finals_real", "rc1", "rc1_strict",
-                                      "safe_profile"})
+                                      "finals_r18", "finals_r19", "finals_real", "rc1",
+                                      "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
