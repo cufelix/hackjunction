@@ -50,6 +50,10 @@ class TestStrictMapping(unittest.TestCase):
         self.assertIsNone(m.get(("red", "cube")))
         self.assertEqual(m["yellow"], "right")
 
+    def test_one_object_with_two_simultaneous_destinations_abstains(self):
+        m = strict("Put the yellow object into both the left bin and the right bin at the same time.")
+        self.assertIsNone(m.get("yellow"))
+
     def test_catch_all_keeps_default(self):
         self.assertEqual(strict("Red goes left, yellow goes right, everything else goes centre."),
                          {"red": "left", "yellow": "right", "default": "center"})
@@ -87,34 +91,39 @@ class TestStrictMapping(unittest.TestCase):
 
 
 class TestStrictFlag(unittest.TestCase):
+    @staticmethod
+    def _policy_mapping(cfg, text):
+        from .policy import ClassicalPolicy
+        pol = ClassicalPolicy.__new__(ClassicalPolicy)
+        pol.cfg, pol.log = cfg, lambda *_: None
+        pol._cap_text = ClassicalPolicy._cap_text.__get__(pol)
+        return ClassicalPolicy._instruction_mapping(pol, {"instruction": text})
+
     def test_flag_off_is_the_normalize_path_and_flag_on_is_strict(self):
         from .config import load_config
-        from .policy import ClassicalPolicy
         text = "Put the cans in the right receptacle and the bricks in the left receptacle."
         for overlay, flag in (("rc1", False), ("rc1_strict", True)):
             cfg = load_config(overlay=overlay)
             self.assertEqual(cfg["instruction"]["strict"], flag)
-            m = ClassicalPolicy(config=cfg, log=None)._instruction_mapping({"instruction": text})
+            m = self._policy_mapping(cfg, text)
             n = normalize(text)
             self.assertEqual(m, strict_mapping(n, resolve(n, fallback={})) if flag else resolve(n))
 
     def test_flag_off_policy_mapping_identical_to_rc1(self):
         from .config import load_config
-        from .policy import ClassicalPolicy
         texts = ["Put all red cubes in the left bin.", "Put it somewhere.", "Red goes left, but not blue."]
         base = load_config(overlay="rc1")
         off = load_config(overlay="rc1")
         off["instruction"]["strict"] = False
         for t in texts:
-            a = ClassicalPolicy(config=base, log=None)._instruction_mapping({"instruction": t})
-            b = ClassicalPolicy(config=off, log=None)._instruction_mapping({"instruction": t})
+            a = self._policy_mapping(base, t)
+            b = self._policy_mapping(off, t)
             self.assertEqual(a, b, t)
 
-    def test_empty_text_is_unchanged_fixed_behaviour(self):
+    def test_empty_text_truthily_abstains_in_strict_mode(self):
         from .config import load_config
-        from .policy import ClassicalPolicy
         cfg = load_config(overlay="rc1_strict")
-        self.assertIsNone(ClassicalPolicy(config=cfg, log=None)._instruction_mapping({"instruction": ""}))
+        self.assertEqual(self._policy_mapping(cfg, ""), {"default": None})
 
 
 if __name__ == "__main__":

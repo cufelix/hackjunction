@@ -52,11 +52,11 @@ flags:
   perception.color_gate.live_bins: true        # Felix gate  footprint = live bin estimate, else nominal + 10 cm near
   perception.color_gate.fk_mask: true          # Felix gate  FK arm/hand mask (dilated 15 px)
   motion.arm_vel_cap: 0.90                       # Timi vel   rad/s cap (sim profile 0.97)
-  instruction.normalize: true                   # Felix lang   rc1 language layer (Modal 106/117, 0 wrong)
+  instruction.normalize: true                   # New H3/H4: context-safe box + ambiguous shape normalisation (existing finals flag)
   perception.hue_guard.enabled: true            # r19 Felix  cross-label hue gap + top-face hue + red_min_s: orange/yellow abstain, never swap
   instruction.max_chars: 2000                   # r19 fuzz   cap absurd instruction length (clause boundary)
   safety.nan_guard: true                        # r19 fuzz   non-finite arm_q/hand_q -> hold last emitted action
-  instruction.strict: true                      # r19 Felix  never guess a bin: abstain (0) instead of FIXED/inferred (-1); Timi OK
+  instruction.strict: true                      # H2: blank/error + ambiguous/multi-destination language truthily abstains, never FIXED
   policy.safety_shell: true                     # r19b P0 Hz
   bin.vote.enabled: false                        # r20 R2  per-bin position vote (depth rim, tape, prior)   # OFF: Codex C3 rim vote mirrors the shift (nominal - delta)
   bin.geometry_runtime: true                    # r20 R2  every bin consumer follows the voted shift

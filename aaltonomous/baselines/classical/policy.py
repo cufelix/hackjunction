@@ -150,8 +150,8 @@ class ClassicalPolicy:
         self.log = log or (lambda *a: None)
         bc = self.cfg.get("brain") or {}
         self.brain = BrainLayer(bc, log=self.log) if bc.get("enabled", False) else None   # FLAG brain.enabled
-        fm = (self.cfg.get("policy") or {}).get("fixed_mapping")   # FLAG policy.fixed_mapping (validated at load)
-        self.fixed_mapping = dict(fm) if fm else dict(FIXED_MAPPING)   # the ONE fallback accessor (real robot vs sim)
+        fm = (self.cfg.get("policy") or {}).get("fixed_mapping")   # FLAG: explicit finals scene metadata
+        self.fixed_mapping = dict(fm) if fm else dict(FIXED_MAPPING)   # used only by an identified sort_fixed reset
         self.skill_memory = None   # skills.memory (FLAG, default OFF): learned order of the retry-vary arms
         if (self.cfg.get("skills") or {}).get("memory", False):
             try:
@@ -175,30 +175,31 @@ class ClassicalPolicy:
         return text[:cut]
 
     def _instruction_mapping(self, info):
-        """Instruction text -> mapping for `scene.resolve_bin`, or None to fall back to FIXED.
+        """Instruction text -> mapping for `scene.resolve_bin`, or a truthy fail-closed abstain.
 
         Off unless `instruction.resolve` is true in config.yaml, so the reference measurement is
         unchanged by default. NEVER raises: reset() is under a 1.0 s watchdog (safety.py:69) and an
         exception here would end the episode as a BAD_END, which is worse than any wrong mapping.
         The resolver is pure stdlib and measured at ~0.13 ms per sentence.
         """
+        strict = bool((self.cfg.get("instruction") or {}).get("strict", False))
         try:                                        # the WHOLE body, not just the resolve call
             if not (self.cfg.get("instruction") or {}).get("resolve", False):
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
-            if not str(text).strip():               # empty / whitespace: no instruction -> the fixed fallback
-                return None
+            if not str(text).strip():               # fixed mapping is reserved for an identified sort_fixed task
+                return {"default": None}
             from .instruction import resolve
             if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
                 from .normalize import normalize
                 text = normalize(text)
-            if (self.cfg.get("instruction") or {}).get("strict", False):   # never guess: abstain (Felix strict)
+            if strict:                              # never guess: abstain (Felix strict)
                 from .normalize import strict_mapping
                 return strict_mapping(text, resolve(text, fallback={}))
-            return resolve(text, fallback=getattr(self, "fixed_mapping", None)) or None
+            return resolve(text, fallback={}) or {"default": None}
         except Exception as e:                      # a parse bug must not cost the whole episode
-            self.log(f"instruction resolve failed ({e}), using FIXED_MAPPING")
-            return None
+            self.log(f"instruction resolve failed ({e}), abstaining")
+            return {"default": None}
 
     def _insert_guard_mapping(self, info):
         """policy.insert_guard: rung 3 (insert_shapes) -> {"default": "abstain"}, i.e. pick nothing; else None.
@@ -220,16 +221,25 @@ class ClassicalPolicy:
             self.log(f"insert_guard failed ({e})")
             return None
 
+    def _episode_mapping(self, info):
+        """Return (mapping, insert_guard_mapping) for one reset without touching motion/perception state."""
+        # Episode mapping precedence is explicit and task-scoped. A reset-supplied mapping is authoritative; otherwise
+        # only sort_fixed may consume the configured venue scene mapping. Language blank/errors stay on the counter.
+        given = info.get("mapping")
+        if not given and info.get("task") == "sort_fixed":
+            given = dict(self.fixed_mapping)
+        guarded = None if given else self._insert_guard_mapping(info)
+        resolved = None if given or guarded else self._instruction_mapping(info)
+        legacy = dict(FIXED_MAPPING) if not (self.cfg.get("instruction") or {}).get("resolve", False) else {"default": None}
+        return (dict(given) if given else guarded or resolved or legacy), guarded
+
     def reset(self, info=None):
         if isinstance(info, str):
             info = {"instruction": info}
         info = info or {}
         if self.skill_memory is not None:
             self.skill_memory.reseed(info.get("seed", 0))   # seed: reproducible skill sampling
-        given = info.get("mapping")
-        guarded = None if given else self._insert_guard_mapping(info)
-        resolved = None if given or guarded else self._instruction_mapping(info)
-        self.mapping = given or guarded or resolved or dict(self.fixed_mapping)
+        self.mapping, guarded = self._episode_mapping(info)
         self.planner.mapping = self.mapping
         self._task, self._instruction = info.get("task"), info.get("instruction")
         self._brain_looks = 0

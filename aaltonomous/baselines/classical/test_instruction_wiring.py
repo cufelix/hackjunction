@@ -49,11 +49,11 @@ class TestWiring(unittest.TestCase):
 
     def test_no_text_no_mapping(self):
         for info in ({}, None, {"instruction": ""}, {"instruction": None}):
-            self.assertIsNone(call(True, info)[0], info)
+            self.assertEqual(call(True, info)[0], {"default": None}, info)
 
-    def test_garbage_still_yields_a_mapping_so_the_robot_has_somewhere_to_put_things(self):
+    def test_garbage_abstains_instead_of_using_fixed_mapping(self):
         got, _ = call(True, {"instruction": "do the needful"})
-        self.assertTrue(got and all(v in ("left", "center", "right") for v in got.values()), got)
+        self.assertEqual(got, {"default": None})
 
     def test_a_resolver_that_raises_costs_nothing(self):
         """reset() is under a 1.0 s watchdog; an exception here would be a BAD_END."""
@@ -69,7 +69,7 @@ class TestWiring(unittest.TestCase):
             def get(self, *a, **k):
                 raise RuntimeError("parser bug")
 
-        self.assertIsNone(ClassicalPolicy._instruction_mapping(s, Evil(instruction="x")))
+        self.assertEqual(ClassicalPolicy._instruction_mapping(s, Evil(instruction="x")), {"default": None})
         self.assertTrue(any("instruction resolve failed" in m for m in s.logged), s.logged)
 
 
