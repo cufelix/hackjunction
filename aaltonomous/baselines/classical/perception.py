@@ -1084,6 +1084,186 @@ class Perception:
             dets = self._color_gate(dets, rejected)
         return (dets, rejected) if debug else dets
 
+    # ------------------------------------------------------------------ grasp.pregrasp_relocalise
+    def relocalise(self, rgb, depth, prior, robot_q=None, gate_m=0.06, occluded_frac=0.75, hidden_frac=0.6,
+                   min_visible_frac=0.15, arm_dilate_px=6):
+        """Re-detect `prior` (a first-look Detection) near its predicted position, with the hand over it.
+
+        Returns {"kind": "found" | "gone" | "hidden" | "unsupported", ...}. "found": top (3,), yaw (or None), n_px,
+        occluded, ratio (visible / first-look area). "gone": nothing of that colour inside the gate although the
+        predicted footprint is in view (the object is not there). "hidden": the footprint is under the robot's own
+        arm / hand (or only a sliver is visible): no verdict, the caller keeps its plan.
+
+        Same pipeline as detect() (HSV class of the prior only, depth keep mask, FK arm mask, _detect_blob), so the
+        estimate carries the same xy_offset / y_affine as the first look. A blob cut by the hand is completed with
+        the known object footprint: the visible top points are re-intersected with a plane fitted to them (depth
+        noise along the ray drops out), the side that is not cut gives the true edge, the cut side is not trusted."""
+        import cv2
+        color = prior.color
+        if depth is None or color not in self.hsv:
+            return {"kind": "unsupported"}
+        c = self.cfg
+        keep = self._keep_mask(depth, exclude_bins=True)
+        arm = None
+        if robot_q is not None:
+            arm = self._fk_arm_mask(keep.shape, *robot_q)
+            if arm is not None:
+                if arm_dilate_px > 0:
+                    k = 2 * int(arm_dilate_px) + 1
+                    arm = cv2.dilate(arm.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))) > 0
+                keep[arm] = 0
+        hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+        m = self._masks_hsv(hsv, {color: self.hsv[color]})[color] & keep
+        k = int(c["open_px"])
+        if k > 0:
+            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        n, lab, stats, cent = cv2.connectedComponentsWithStats(m, connectivity=8)
+        prior_px = max(float(prior.n_px), 1.0)
+        min_px = max(20, int(0.12 * prior_px))
+        pred = np.asarray(prior.top[:2], float)
+        frags = []   # (det, blob, area, centroid) of every colour fragment inside the gate
+        for i in range(1, n):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area < min_px:
+                continue
+            blob = (lab == i).astype(np.uint8)
+            parts = self.split_blob(blob, area, cent[i], depth) if self.split_blobs else [(blob, area, cent[i])]
+            for part, p_area, p_cent in parts:
+                dets, rej = [], []
+                self._detect_blob(color, part, p_area, p_cent, depth, False, dets, rej, None)
+                for d in dets:
+                    if np.linalg.norm(d.top[:2] - pred) <= gate_m:
+                        frags.append((d, part, p_area, p_cent))
+        if not frags:
+            return {"kind": "hidden" if self._footprint_covered(prior, arm, hidden_frac) else "gone"}
+        seed = min(frags, key=lambda f: np.linalg.norm(f[0].top[:2] - pred))
+        blob, area = seed[1].copy(), seed[2]
+        for f in frags:   # fragments of one object cut by the hand: same colour, within one object size of the seed
+            if f is seed:
+                continue
+            if np.linalg.norm(f[0].top[:2] - seed[0].top[:2]) <= 1.2 * self.size and area + f[2] <= 1.3 * prior_px:
+                blob |= f[1]
+                area += f[2]
+        det = seed[0]
+        if len(frags) > 1 and area != seed[2]:
+            dets, rej = [], []
+            ys, xs = np.nonzero(blob)
+            self._detect_blob(color, blob, area, (float(xs.mean()), float(ys.mean())), depth, False, dets, rej, None)
+            if not dets:
+                return {"kind": "gone"}
+            det = dets[0]
+        ratio = float(area) / prior_px
+        if ratio < min_visible_frac and self._footprint_covered(prior, arm, hidden_frac):
+            return {"kind": "hidden", "ratio": ratio}
+        touches = False
+        cut = None
+        if arm is not None:
+            near_arm = cv2.dilate(arm.astype(np.uint8), np.ones((15, 15), np.uint8)) > 0
+            cut = (blob > 0) & near_arm
+            touches = bool(cut.any())
+        occluded = ratio < occluded_frac or touches
+        top, yaw = det.top.copy(), det.yaw
+        if occluded and det.method == "depth" and det.shape != "triangle" and prior.shape != "triangle":
+            fit = self._complete_top_face(blob, cut, depth, prior)
+            if fit is not None:
+                top[:2], yaw = fit, None   # yaw of a cut face is not observable: the planner keeps the first-look yaw
+        return {"kind": "found", "top": top, "yaw": yaw, "n_px": int(area), "occluded": bool(occluded),
+                "ratio": ratio, "det": det}
+
+    def _footprint_covered(self, prior, arm, frac):
+        """True when the predicted object footprint (corners + centre at the top plane) lies mostly under the arm
+        mask or outside the image: the camera cannot see the object, so absence is no evidence."""
+        if arm is None:
+            return False
+        h = self.size / 2
+        pts = np.array([[dx, dy] for dx in (-h, 0.0, h) for dy in (-h, 0.0, h)]) + np.asarray(prior.top[:2], float)
+        P = np.c_[pts, np.full(len(pts), prior.top[2])]
+        uvz = self._project(P)
+        H, W = arm.shape
+        hid = 0
+        for u, v, z in uvz:
+            if not (np.isfinite(u) and np.isfinite(v)) or z <= 0:
+                hid += 1
+                continue
+            ui, vi = int(round(u)), int(round(v))
+            hid += int(not (0 <= ui < W and 0 <= vi < H) or bool(arm[vi, ui]))
+        return hid / len(uvz) >= frac
+
+    def _complete_top_face(self, blob, cut, depth, prior):
+        """Centre xy of an object whose top face is partly hidden. Visible top points -> plane fit -> their rays
+        re-intersected with that plane -> extents along the object axes (first-look yaw). An axis whose visible
+        extent is a full object width gives the centre directly. A short axis is cut on one side: the uncut side is a
+        true edge (centre = that edge -/+ size/2); if the cut cannot be told apart, the centre inside the feasible
+        interval nearest the first-look position (no correction beyond what the visible part proves)."""
+        import cv2
+        c = self.cfg
+        e = int(c["erode_px"])
+        core = cv2.erode(blob, np.ones((2 * e + 1, 2 * e + 1), np.uint8)) if e > 0 else blob
+        if core.sum() < 0.25 * blob.sum():
+            core = blob
+        v, u = np.nonzero(core)
+        d = depth[v, u].astype(float)
+        dlo, dhi = c["depth_range_mm"]
+        ok = (d >= dlo) & (d <= dhi)
+        if ok.sum() < 30:
+            return None
+        u, v, d = u[ok], v[ok], d[ok]
+        P = self._pixel_to_pelvis(u, v, d)
+        z_top = np.percentile(P[:, 2], c["top_percentile"])
+        top = P[:, 2] >= z_top - c["top_band"]
+        if top.sum() < 20:
+            return None
+        Pt, ut, vt = P[top], u[top], v[top]
+        A = np.c_[Pt[:, 0], Pt[:, 1], np.ones(len(Pt))]
+        try:
+            (a, b, c0), *_ = np.linalg.lstsq(A, Pt[:, 2], rcond=None)
+        except np.linalg.LinAlgError:
+            return None
+        if not (abs(a) < 0.1 and abs(b) < 0.1):    # a tilted fit on a sliver: horizontal plane at the median top z
+            a, b, c0 = 0.0, 0.0, float(np.median(Pt[:, 2]))
+        T = self._T()
+        K = self.cal.cams[self.cam].K
+        ray = np.c_[(ut - K[0, 2]) / K[0, 0], (vt - K[1, 2]) / K[1, 1], np.ones(len(ut))] @ T[:3, :3].T
+        o = T[:3, 3]
+        den = ray[:, 2] - a * ray[:, 0] - b * ray[:, 1]
+        good = den < -1e-6
+        if good.sum() < 20:
+            return None
+        s = (c0 + a * o[0] + b * o[1] - o[2]) / den[good]
+        xy = (o + s[:, None] * ray[good])[:, :2] + self.xy_offset
+        if self.y_affine is not None:
+            xy = np.array([self._y_affine(p) for p in xy])
+        yaw = prior.yaw if prior.yaw is not None else 0.0
+        cs, sn = np.cos(yaw), np.sin(yaw)
+        R = np.array([[cs, sn], [-sn, cs]])          # world -> object axes
+        q = xy @ R.T
+        pc = np.asarray(prior.top[:2], float) @ R.T
+        cut_q = None
+        if cut is not None and cut[vt[good], ut[good]].any():
+            # top points next to the arm mask: where the object is cut
+            cq = q[cut[vt[good], ut[good]]]
+            cut_q = cq.mean(0)
+        half = self.size / 2
+        tol = 0.012
+        out = np.zeros(2)
+        for ax in range(2):
+            lo, hi = np.percentile(q[:, ax], [1, 99])
+            if hi - lo >= self.size - tol:
+                out[ax] = 0.5 * (lo + hi)
+                continue
+            lo_c, hi_c = hi - half, lo + half        # feasible centre interval given the visible extent
+            if lo_c > hi_c:
+                out[ax] = 0.5 * (lo + hi)
+                continue
+            mid = 0.5 * (lo + hi)
+            if cut_q is not None and abs(cut_q[ax] - mid) > max(0.1 * (hi - lo), 0.001):
+                out[ax] = lo + half if cut_q[ax] > mid else hi - half   # cut on the high side -> the low edge is true
+            elif hi - lo < 0.35 * self.size:
+                return None   # a sliver of the top face and no way to tell which side is cut: not observable
+            else:
+                out[ax] = float(np.clip(pc[ax], lo_c, hi_c))
+        return out @ R   # object axes -> world (R orthonormal)
+
     def _hue_guard_items(self, masks, hsv):
         """perception.hue_guard layer 3: red and yellow pixels form one component per object, so an object whose side
         faces fall in the red range and whose top is yellow is a single candidate. Its colour is the class of the top
