@@ -48,6 +48,8 @@ FLAGS = {
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
     "brain.planner": ("brain", False, "whole-instruction closed-set primitive plan for resolver abstention/relations"),
+    "brain.image_max_side_px": ("brain speed", 0, "downscale the head RGB to this longest side before encoding it for find()/decide (boxes are scaled back to original pixels); 0 = full size"),
+    "brain.find_n_predict": ("brain speed", 400, "find() output token cap (box JSON); 400 = the old hard-coded cap"),
     "brain.find_to_detection": ("brain agent", False, "find() point that matches no detection -> a novel Detection from the depth blob there (region grow above the counter plane, generic_grasp, ungraspable -> skip); needs brain.find"),
     "brain.timeout_s": ("brain", 2.0, "decision deadline (s): later decisions are dropped, the classical planner decides (stock config.yaml 2.0)"),
     "brain.request_timeout_s": ("brain", 1.5, "absolute llamacpp HTTP deadline (s) (stock config.yaml 1.5)"),

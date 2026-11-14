@@ -205,9 +205,11 @@ class TestFlags(unittest.TestCase):
             "perception.still_vote"}   # gatefix A/B
         expect["finals_r22_chunk"] = expect["finals_r22"] | {"policy.chunk_ticks", "policy.hold_ticks"}   # handin rate A/B
         expect["finals_r22_lyingprism"] = expect["finals_r22"] | {"perception.prism_orientation", "grasp.lying_prism"}   # prism A/B
-        expect["finals_r22_brain"] = expect["finals_r22"] | {"brain.enabled", "brain.backend", "brain.timeout_s", "brain.request_timeout_s"}
+        expect["finals_r22_brain"] = expect["finals_r22"] | {"brain.enabled", "brain.backend", "brain.timeout_s", "brain.request_timeout_s",
+                                                          "brain.image_max_side_px", "brain.find_n_predict"}
         expect["finals_r22_agent"] = expect["finals_r22"] | {"brain.enabled", "brain.backend", "brain.planner", "brain.find",
-                                                           "brain.find_to_detection", "brain.closed_loop", "brain.timeout_s", "brain.request_timeout_s"}
+                                                           "brain.find_to_detection", "brain.closed_loop", "brain.timeout_s", "brain.request_timeout_s",
+                                                           "brain.image_max_side_px", "brain.find_n_predict"}
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -404,6 +406,7 @@ class TestFlags(unittest.TestCase):
             base["brain"][k] = True
         base["brain"]["backend"] = "llamacpp"
         base["brain"]["timeout_s"] = base["brain"]["request_timeout_s"] = 1.0
+        base["brain"]["image_max_side_px"], base["brain"]["find_n_predict"] = 448, 128   # BRAINSPEED.md
         base["overlay"] = "finals_r22_agent"
         self.assertEqual(agent, base)
 
