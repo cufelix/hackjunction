@@ -45,6 +45,21 @@ class Detection:
                 f"[{self.method}]")
 
 
+def perturb_extrinsics(T, err):
+    """T_pelvis_optical with an injected error [dpitch_deg, dyaw_deg, dx, dy, dz]: the camera is rotated about its own
+    position by Rz(dyaw) @ Ry(dpitch) in the PELVIS frame (positive pitch = nose down, x fwd / z up) and translated by
+    (dx, dy, dz) m. Object points deprojected with the result move accordingly (a -7 deg pitch error at 0.6 m range
+    puts objects ~7 cm off)."""
+    dp, dy, dx, dyy, dz = (float(v) for v in err)
+    a, b = np.radians(dp), np.radians(dy)
+    Ry = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]])
+    Rz = np.array([[np.cos(b), -np.sin(b), 0], [np.sin(b), np.cos(b), 0], [0, 0, 1]])
+    out = np.array(T, float).copy()
+    out[:3, :3] = Rz @ Ry @ out[:3, :3]
+    out[:3, 3] += (dx, dyy, dz)
+    return out
+
+
 @dataclass
 class BinCalibration:
     """Result of one episode's depth-only alignment to the fixed bin geometry."""
@@ -80,6 +95,16 @@ class Perception:
             self.cal = copy.copy(calibration)
             self.cal.cams = dict(calibration.cams)
             self.cal.cams[self.cam] = dataclasses.replace(cam, K=K)
+        # perception.inject_cam_error (TEST ONLY): the head T_pelvis_optical perception uses is perturbed, so the object
+        # estimate is wrong the way it is on a mis-calibrated real robot. Own copy, nothing outside perception changes.
+        inj = self.cfg.get("inject_cam_error")
+        if inj is not None:
+            import copy
+            import dataclasses
+            cam = self.cal.cams[self.cam]
+            self.cal = copy.copy(self.cal)
+            self.cal.cams = dict(self.cal.cams)
+            self.cal.cams[self.cam] = dataclasses.replace(cam, T_pelvis_optical=perturb_extrinsics(cam.T_pelvis_optical, inj))
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.

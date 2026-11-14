@@ -49,3 +49,4 @@ flags:
   grasp.posture_by_shape_min_conf: 0.5          # hybrid     min shape confidence for it
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
+  perception.inject_cam_error: null             # TEST ONLY [dpitch_deg, dyaw_deg, dx, dy, dz]: perturb the head extrinsics

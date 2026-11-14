@@ -83,6 +83,7 @@ class TestFlags(unittest.TestCase):
         r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
         expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
+        expect["ab_inj_p7"] = expect["ab_inj_p4"] = expect["ab_inj_p7_yl"] = expect["ab_inj_p7_yr"] = expect["ab_retry_vary_slots"] | {"perception.inject_cam_error"}
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
