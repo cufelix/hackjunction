@@ -45,6 +45,7 @@ FLAGS = {
     "instruction.normalize": ("Felix lang", False, "typo/synonym normaliser before the resolver: resolve(normalize(text)) (needs instruction.resolve)"),
     "instruction.strict": ("Felix strict", False, "never guess: unparsed text abstains all; clauses with negation/condition/placement/relation/swap/quantity abstain their keys; unnamed keys dropped (needs instruction.resolve)"),
     "instruction.structured": ("langzip", False, "complete deterministic zip/colon/positional/conditional lists before the strict filter (needs instruction.resolve + strict)"),
+    "instruction.venue_colour_aliases": ("T10 coloralias", False, "venue colour words (purple/violet/lilac/lavender/magenta, orange/amber/tangerine, yellow/gold, FI/CS red+blue and inflections) named before normalize; amber = orange (needs instruction.resolve)"),
     "policy.safety_shell": ("safety", False, "act(): hold-last on exception / deadline miss, all heavy work in the look thread; plans slowed to (1-policy.safety_shell_vel_reserve) x the filter velocity only if that is > 0"),
     "policy.fixed_mapping": ("organisers P0", None, "explicit sort_fixed scene metadata passed by server reset (null = shared FIXED_MAPPING; finals venue: yellow left, blue center, red right); never a language fallback"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
