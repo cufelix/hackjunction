@@ -186,7 +186,8 @@ class ClassicalPolicy:
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
         bv = (self.cfg.get("bin") or {}).get("vote") or {}
         self._async_bin_vote = bool(bv.get("enabled", False) and bv.get("async_extract", False))
-        if self._async_bin_vote:
+        # A detector deadline can only be non-blocking when the look runs away from act().
+        if self._async_bin_vote or self.cfg["perception"].get("look_timeout_s") is not None:
             threaded = True
         if self._shell:   # policy.safety_shell: all heavy work off the 30 Hz loop (look/plan thread), plans within the reserve
             threaded = True
@@ -210,6 +211,40 @@ class ClassicalPolicy:
         self.reset()
 
     # ------------------------------------------------------------------ API
+    @staticmethod
+    def _perception_snapshot(perception):
+        """Stable episode state captured before a deadline-controlled detector starts."""
+        state = {}
+        for name in ("cal", "pitch_calibration", "calibration", "_ah_tries", "_colour_kmeans_done",
+                     "_colour_kmeans_tries", "colour_kmeans_info", "color_gate_degraded"):
+            if hasattr(perception, name):
+                state[name] = copy.deepcopy(getattr(perception, name))
+        for name in ("pitch_T", "xy_offset", "_ah_est", "hsv"):
+            if hasattr(perception, name):
+                state[name] = copy.deepcopy(getattr(perception, name))
+        scene = getattr(perception, "scene", None)
+        if scene is not None:
+            state["counter_z_runtime"] = scene.counter_z_runtime
+        return state
+
+    def _replace_stale_perception(self, state=None):
+        """Give an unfinished detector sole ownership of its mutable perception state."""
+        scene = copy.copy(self.scene)
+        self.scene = scene
+        self.planner.scene = scene
+        self.perception = Perception(self.cfg, scene, self.cal, log=self.log)
+        state = state or {}
+        for name, value in state.items():
+            if name != "counter_z_runtime" and hasattr(self.perception, name):
+                setattr(self.perception, name, value)
+        if "counter_z_runtime" in state:
+            scene.counter_z_runtime = state["counter_z_runtime"]
+        self.perception.bin_shift_src = self.planner
+        self.perception.geometry_runtime = bool((self.cfg.get("bin") or {}).get("geometry_runtime"))
+        self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))
+        if self.fk_xcheck_enabled:
+            self._fk_xcheck.perception = self.perception
+
     def _cap_text(self, text):
         """instruction.max_chars: cut a long instruction at the last boundary within the cap (logged). Unchanged when off."""
         mc = int((self.cfg.get("instruction") or {}).get("max_chars", 0) or 0)
@@ -292,6 +327,11 @@ class ClassicalPolicy:
             # Invalidate first.  No lock/join: reset is constant-time with respect
             # to stale work, which can only publish to its detached job object.
             self._look_generation = getattr(self, "_look_generation", 0) + 1
+            current = getattr(self, "_job", None)
+            if current is not None and current.get("result") is None and "deadline_lock" in current:
+                with current["deadline_lock"]:
+                    current["cancelled"] = True
+                self._stale_detect_jobs = [*getattr(self, "_stale_detect_jobs", []), current]
             self._job = None
         if isinstance(info, str):
             info = {"instruction": info}
@@ -331,8 +371,26 @@ class ClassicalPolicy:
         self.waiting = False
         self.events = []
         self.plans = []
+        stale_detect_jobs = [job for job in getattr(self, "_stale_detect_jobs", []) if job["result"] is None]
+        active_detect_job = getattr(self, "_job", None)
+        if active_detect_job is not None and active_detect_job.get("result") is None \
+                and "deadline_lock" in active_detect_job:
+            with active_detect_job["deadline_lock"]:
+                active_detect_job["cancelled"] = True
+            stale_detect_jobs.append(active_detect_job)
         if not generation_workers:
             self._job = None
+        # Preserve unfinished calls across episode reset. The next detector uses an isolated copy until these exit.
+        self._stale_detect_jobs = stale_detect_jobs
+        owner = next((job for job in stale_detect_jobs if job.get("detector") is self.perception), None)
+        if owner is not None:
+            # reset_calibration mutates perception and scene state. Do not touch either while a cancelled native call
+            # still owns them; move the new episode to fresh state instead.
+            self._replace_stale_perception(owner.get("perception_state"))
+        self._clear_looks = 0
+        self._clear_since = None
+        self._target_cooldowns = []     # [{color, xy, until}], planner.per_target_guard only
+        self._latest_t = 0.0            # newest episode clock seen by act(); planning workers use it for cooldown start
         # A stale generation owns its detached snapshot and may finish in the
         # background.  The new episode gets a fresh worker slot immediately.
         self._look_thread = None
@@ -1020,6 +1078,7 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        self._latest_t = t
         if first:
             self._ep_t0 = t
         held_cal_on = bool((self.cfg["grasp"].get("held_calibration") or {}).get("enabled", False))
@@ -1178,30 +1237,68 @@ class ClassicalPolicy:
                     self.tier, r = dec.CONFIDENT, None
                 if r is not None:
                     return r
+            robust_look = (self.cfg["policy"].get("done_confirm", False)
+                           or self.cfg["perception"].get("look_timeout_s") is not None
+                           or (self.cfg.get("planner") or {}).get("per_target_guard", False))
+            if robust_look and t >= self.time_limit:
+                self._note(t, "episode time limit reached")
+                self.state = "done"
+                return self._hold(done=True)
             cap = self.cfg["policy"].get("max_total_attempts")
             if cap is not None and self.n_started >= int(cap):   # knocked objects reappear as 'new': hard stop
                 self._note(t, f"attempt cap reached ({self.n_started} >= max_total_attempts {int(cap)}): done")
                 self.state = "done"
                 return self._hold(done=True)
             if self.threaded:
+                self._stale_detect_jobs = [job for job in self._stale_detect_jobs if job["result"] is None]
+                max_inflight = int(self.cfg["perception"].get("detect_max_inflight", 2))
+                if self.cfg["perception"].get("look_timeout_s") is not None \
+                        and len(self._stale_detect_jobs) >= max_inflight:
+                    return self._hold()
                 if self._job is None:
                     if self.cfg["policy"].get("generation_workers", False):
                         # A detached stale worker owns its snapshot.  Do not start
                         # another planner user until it exits; act() only polls.
-                        if self._look_thread is not None and self._look_thread.is_alive():
+                        # With look_timeout_s a wedged thread is bounded by detect_max_inflight (checked above).
+                        if self._look_thread is not None and self._look_thread.is_alive() \
+                                and self.cfg["perception"].get("look_timeout_s") is None:
                             return self._hold()
                         generation = self._look_generation
                         worker, logs = self._look_snapshot()
                         job_obs = {k: (np.asarray(v).copy() if isinstance(v, np.ndarray) else copy.deepcopy(v))
                                    for k, v in obs.items()}
                         self._job = {"generation": generation, "obs": job_obs, "result": None}
+                        if self.cfg["perception"].get("look_timeout_s") is not None:
+                            # The snapshot isolates perception/scene, so a timed-out call needs no perception replacement.
+                            self._job.update(started_wall=time.monotonic(), phase="detect", cancelled=False,
+                                             deadline_lock=threading.Lock())
                         self._look_thread = threading.Thread(target=self._look_job,
                                                              args=(self._job, worker, logs), daemon=True)
                         self._look_thread.start()
                     else:
-                        self._job = {"obs": obs, "result": None}
+                        self._job = {"obs": obs, "result": None, "detector": self.perception}
+                        if self.cfg["perception"].get("look_timeout_s") is not None:
+                            self._job.update(started_wall=time.monotonic(), phase="detect", cancelled=False,
+                                             deadline_lock=threading.Lock(),
+                                             perception_state=self._perception_snapshot(self.perception))
                         threading.Thread(target=self._look_job, args=(self._job,), daemon=True).start()
                 if self._job["result"] is None:
+                    deadline = self.cfg["perception"].get("look_timeout_s")
+                    job = self._job
+                    timed_out = False
+                    if deadline is not None and time.monotonic() - job["started_wall"] >= float(deadline):
+                        with job["deadline_lock"]:
+                            if job["phase"] == "detect":
+                                job["cancelled"] = timed_out = True
+                    if timed_out:
+                        self._job = None
+                        self._stale_detect_jobs.append(job)
+                        if job.get("detector") is self.perception:
+                            # Retire perception + scene together. The retry then updates the same fresh scene used by
+                            # planning, while the unkillable native call keeps exclusive ownership of the old pair.
+                            self._replace_stale_perception(job.get("perception_state"))
+                        res = ("error", f"detector deadline exceeded ({float(deadline):g} s)")
+                        return self._after_look(res, t)
                     return self._hold()
                 res, self._job = self._job["result"], None
                 if self.cfg["policy"].get("generation_workers", False):
@@ -1318,9 +1415,12 @@ class ClassicalPolicy:
             return
         try:
             if worker is None:
-                job["result"] = self._look(job["obs"])
+                if self.cfg["perception"].get("look_timeout_s") is None:
+                    job["result"] = self._look(job["obs"])
+                else:
+                    job["result"] = self._look(job["obs"], deadline_job=job, detector=job["detector"])
                 return
-            outcome = worker._look(job["obs"])
+            outcome = worker._look(job["obs"], deadline_job=job) if "deadline_lock" in job else worker._look(job["obs"])
             state = tuple((name, getattr(worker, name)) for name in self._LOOK_COMMIT_FIELDS if hasattr(worker, name))
             perception_state = tuple((name, getattr(worker.perception, name))
                                      for name in self._LOOK_PERCEPTION_FIELDS if hasattr(worker.perception, name))
@@ -1421,18 +1521,31 @@ class ClassicalPolicy:
             return {}
         return {"calibration_frame": self._calibration_frame(obs)}
 
-    def _look(self, obs):
+    @staticmethod
+    def _detector_finished(deadline_job):
+        if deadline_job is None:
+            return False
+        with deadline_job["deadline_lock"]:
+            deadline_job["phase"] = "plan"
+            return bool(deadline_job.get("cancelled"))
+
+    def _look(self, obs, deadline_job=None, detector=None):
+        detector = self.perception if detector is None else detector
         verify = self._verify_on()
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
-            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs),
-                                          **self._counter_kw(obs))
+            dets = detector.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs),
+                                   **self._counter_kw(obs))
+            if self._detector_finished(deadline_job):
+                return ("error", "late detector result discarded")
             if dets is None:
                 return ("still_vote_pending",)
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
             return self._choose_retry(dets, obs, verify=False)
-        dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
-                                                   **self._detect_kw(), **self._fk_kw(obs), **self._counter_kw(obs))
+        dets, rejected = detector.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
+                                         **self._detect_kw(), **self._fk_kw(obs), **self._counter_kw(obs))
+        if self._detector_finished(deadline_job):
+            return ("error", "late detector result discarded")
         if dets is None:
             return ("still_vote_pending",)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
@@ -1448,10 +1561,15 @@ class ClassicalPolicy:
         # stale corrective targets are never retained between camera frames.
         self.scheduled_corrections = corrections
         cap = self.cfg["policy"].get("max_corrections_per_episode")
+        guarded_corrections = False
         if cap is None:  # stock #6: corrections first; none plannable -> stop
             if corrections:
-                res = self._plan_corrections(corrections, dets)
-                return res if res is not None else ("uncorrectable", corrections, len(dets))
+                res = self._plan_corrections(corrections, dets, t)
+                if res is not None:
+                    return res
+                if not self._target_guard_on():
+                    return ("uncorrectable", corrections, len(dets))
+                guarded_corrections = True
         # max_corrections_per_episode set (Felix review): a correction never blocks a new pick while a pickable
         # object is on the counter -> counter picks first, corrections (within the cap) only when nothing else is
         # left; an unplannable correction no longer ends the episode.
@@ -1471,18 +1589,25 @@ class ClassicalPolicy:
                 self.verify_relooks_remaining -= 1
                 return ("relook", None, len(dets))
         res = self._choose_retry(dets, obs, verify=True)
+        if guarded_corrections and res[0] == "none":
+            return ("relook", None, len(dets))
         if cap is not None and corrections and res[0] in ("none", "notime") and self.n_corrections < int(cap):
-            alt = self._plan_corrections(corrections, dets)
+            alt = self._plan_corrections(corrections, dets, t)
             if alt is not None:
                 return alt
+            if self._target_guard_on() and res[0] == "none":
+                return ("relook", None, len(dets))
         return res
 
-    def _plan_corrections(self, corrections, dets):
+    def _plan_corrections(self, corrections, dets, t=0.0):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
         for d, source_bin, target_bin in corrections:
             if getattr(d, "tentative", False):
                 continue  # partial_ok_near_hand: never grasp an FK-boundary fragment directly
+            if self._target_guarded(d, t):
+                continue
             budget_blocked = False
+            target_blocked = False
             if self._vary_on():   # no place gate: the object is already in a bin
                 n = self._attempt_count(d.top[:2], d.color)
                 limit = self._attempt_limit(d.top[:2])
@@ -1491,27 +1616,47 @@ class ClassicalPolicy:
                     self.log(f"[classical] correction attempt limit reached for {d.color} in {source_bin}")
                     continue
             for slot in self._free_drop_slots(target_bin) or self._overflow_slots(target_bin):
-                p = self._plan_pick(d, dict(bin_name=target_bin, relocate=False,
-                                            drop_slot=slot, source_bin=source_bin))
+                try:
+                    p = self._plan_pick(d, dict(bin_name=target_bin, relocate=False,
+                                                drop_slot=slot, source_bin=source_bin))
+                except Exception as exc:
+                    if not self._target_guard_on():
+                        raise
+                    self._cool_target(d, t, f"{type(exc).__name__}: {exc}")
+                    target_blocked = True
+                    break
                 self.plans.append(p)
                 if p.ok and not self._object_time_allows(d, p.duration):
                     budget_blocked = True
                     break
                 if p.ok:
                     return ("plan", p, len(dets))
+                if self._target_guard_on():
+                    self._cool_target(d, t, p.reason or "infeasible")
+                    target_blocked = True
+                    break
                 self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
-            if budget_blocked:
+            if budget_blocked or target_blocked:
                 continue
             def cleanup(det, arm, hand, planner=None, **_):
                 return (planner or self.planner).plan_to_counter(det, arm, hand, source_bin,
                                                     obstacles=[o.top[:2] for o in dets])
-            p = self._plan_pick(d, {}, plan_fn=cleanup)
+            try:
+                p = self._plan_pick(d, {}, plan_fn=cleanup)
+            except Exception as exc:
+                if not self._target_guard_on():
+                    raise
+                self._cool_target(d, t, f"{type(exc).__name__}: {exc}")
+                continue
             self.plans.append(p)
             if p.ok and not self._object_time_allows(d, p.duration):
                 continue
             if p.ok:
                 return ("plan", p, len(dets))
-            self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
+            if self._target_guard_on():
+                self._cool_target(d, t, p.reason or "infeasible")
+            else:
+                self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
         return None
 
     def _overflow_slots(self, bin_name):
@@ -1712,6 +1857,8 @@ class ClassicalPolicy:
         pol = self.cfg["policy"]
         for d in dets:
             xy = d.top[:2]
+            if self._target_guarded(d, float(obs.get("t", 0.0))):
+                continue
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
                 continue
             if pol.get("place_gate", False):
@@ -1881,6 +2028,7 @@ class ClassicalPolicy:
         left = self.time_limit - t - self._time_reserve(corrective=False)
         n_long, shortest = 0, None
         cap_s, over_cap = None, []
+        guarded_failure = False
         if self._dflag("object_time_cap"):   # D2: per-object cap (remaining - 15 s) / objects left, 15..35 s
             cap_s = dec.object_cap(self.time_limit - t, len(cands) - len(extra) or len(cands), self._dcfg())
         for d in cands:
@@ -1897,26 +2045,33 @@ class ClassicalPolicy:
                 continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
             if not self._place_gate_allows(d, target_bin):
                 continue
-            if verify:  # #6: explicit target bin + a free, verified drop slot
-                slot = self._next_drop_slot(target_bin)
-                if slot is None:
-                    slot = next(iter(self._overflow_slots(target_bin)), None)
-                if slot is None:
-                    self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
-                    continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
-            elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
-                free = [i for i in range(len(self.planner.drop_slots(target_bin)))
-                        if i not in self.slot_used[target_bin]]
-                slot = free[0] if free else next(iter(self._overflow_slots(target_bin)), None)
-                if slot is None:
-                    self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
-                    continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
-            elif mine:   # brain override: the classical planner still checks reach
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others), pfn)
-            else:
-                p = self._plan_pick(d, dict(obstacles=others))
+            try:
+                if verify:  # #6: explicit target bin + a free, verified drop slot
+                    slot = self._next_drop_slot(target_bin)
+                    if slot is None:
+                        slot = next(iter(self._overflow_slots(target_bin)), None)
+                    if slot is None:
+                        self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
+                        continue
+                    p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
+                elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
+                    free = [i for i in range(len(self.planner.drop_slots(target_bin)))
+                            if i not in self.slot_used[target_bin]]
+                    slot = free[0] if free else next(iter(self._overflow_slots(target_bin)), None)
+                    if slot is None:
+                        self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
+                        continue
+                    p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
+                elif mine:   # brain override: the classical planner still checks reach
+                    p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others), pfn)
+                else:
+                    p = self._plan_pick(d, dict(obstacles=others))
+            except Exception as exc:
+                if not self._target_guard_on():
+                    raise
+                self._cool_target(d, t, f"{type(exc).__name__}: {exc}")
+                guarded_failure = True
+                continue
             self.plans.append(p)
             if p.ok and not self._object_time_allows(d, p.duration):
                 continue
@@ -1940,8 +2095,12 @@ class ClassicalPolicy:
                     self.log(f"[classical] {d.color} takes {p.duration:.1f} s > {left:.1f} s left: trying the next candidate")
                     continue
                 return ("plan", p, len(dets))
-            self.failed.append(d.top[:2])
-            self.log(f"[classical] skip {d}: {p.reason}")
+            if self._target_guard_on():
+                self._cool_target(d, t, p.reason or "infeasible")
+                guarded_failure = True
+            else:
+                self.failed.append(d.top[:2])
+                self.log(f"[classical] skip {d}: {p.reason}")
         if over_cap:   # nothing within the cap: the quickest over-cap plan beats leaving points on the counter
             best = min(over_cap, key=lambda q: q.duration)
             if not triage or best.duration <= left:
@@ -1952,7 +2111,32 @@ class ClassicalPolicy:
             return ("relook", None, len(dets))
         if n_long:
             return ("notime", shortest, len(dets))
+        cooling = self._target_guard_on() and any(self._target_guarded(d, t) for d in dets)
+        if guarded_failure or cooling:
+            return ("relook", None, len(dets))
         return ("none", None, len(dets))
+
+    def _target_guard_on(self):
+        return bool((self.cfg.get("planner") or {}).get("per_target_guard", False))
+
+    def _target_guarded(self, d, t):
+        if not self._target_guard_on():
+            return False
+        self._target_cooldowns = [x for x in self._target_cooldowns if x["until"] > t]
+        radius = float(self.cfg["policy"]["same_object_radius"])
+        xy = np.asarray(d.top[:2], float)
+        return any(x["color"] == d.color and np.linalg.norm(x["xy"] - xy) < radius
+                   for x in self._target_cooldowns)
+
+    def _cool_target(self, d, t, reason):
+        cooldown = float(self.cfg["planner"]["per_target_cooldown_s"])
+        t = max(float(t), float(self._latest_t))
+        xy = np.asarray(d.top[:2], float).copy()
+        self._target_cooldowns = [x for x in self._target_cooldowns
+                                  if not (x["color"] == d.color and np.linalg.norm(x["xy"] - xy) <
+                                          float(self.cfg["policy"]["same_object_radius"]))]
+        self._target_cooldowns.append({"color": d.color, "xy": xy, "until": t + cooldown})
+        self.log(f"[plan_guard] {d.color} target cooled for {cooldown:g} s: {reason}")
 
     # ------------------------------------------------------------------ decision layer D1-D4 (decision.py)
     def _resolve_time_alias(self):
@@ -2828,7 +3012,20 @@ class ClassicalPolicy:
                 self._note(t, f"release of {pending['color']} not verified in {pending['target_bin']}; retry")
             self.last_verification = None
         kind = res[0]
+        confirm = bool(self.cfg["policy"].get("done_confirm", False))
+        retry_failed = confirm or self.cfg["perception"].get("look_timeout_s") is not None
+        if (confirm or retry_failed or self._target_guard_on()) and t >= self.time_limit:
+            self._clear_looks, self._clear_since = 0, None
+            self._note(t, "episode time limit reached")
+            self.state = "done"
+            return self._hold(done=True)
+        if confirm and kind != "none":
+            self._clear_looks, self._clear_since = 0, None
         if kind == "error":
+            if retry_failed:
+                self._note(t, f"look failed ({res[1]}); retrying while time remains")
+                self.state = "settle"
+                return self._hold()
             self._note(t, f"look/plan error {res[1]}: stopping")
             self.state = "done"
             return self._hold(done=True)
@@ -2841,6 +3038,10 @@ class ClassicalPolicy:
             return self._begin_retracted_relook(t, "tentative FK-boundary candidate",
                                                 f"partial relook {self._partial_relooks}")
         if kind == "uncorrectable":
+            if confirm:   # a visible known-bin object is never a reason to finish: keep looking until time runs out
+                self._note(t, "known wrong-bin object has no safe corrective or cleanup plan yet; retrying")
+                self.state = "settle"
+                return self._hold()
             self._note(t, "known wrong-bin object has no safe corrective or cleanup plan; stopping")
             self.state = "done"
             return self._hold(done=True)
@@ -2848,6 +3049,23 @@ class ClassicalPolicy:
             if self.cfg["perception"].get("relook_before_done", False) and not self._final_relook_used:
                 self._final_relook_used = True
                 return self._begin_retracted_relook(t, "nothing-left guard", "final relaxed relook")
+            if confirm:
+                n_dets = int(res[2])
+                if n_dets:
+                    self._clear_looks, self._clear_since = 0, None
+                    self._note(t, f"{n_dets} detection(s), but no plan; retrying")
+                    self.state = "settle"
+                    return self._hold()
+                if self._clear_since is None:
+                    self._clear_since = float(t)
+                self._clear_looks += 1
+                need = int(self.cfg["policy"]["done_confirm_looks"])
+                span = float(t) - self._clear_since
+                min_span = float(self.cfg["policy"]["done_confirm_span_s"])
+                if self._clear_looks < need or span < min_span:
+                    self._note(t, f"clear look {self._clear_looks}/{need}, span {span:.1f}/{min_span:g} s; confirming")
+                    self.state = "settle"
+                    return self._hold()
             self._note(t, f"nothing left to sort ({res[2]} detections)")
             self.state = "done"
             return self._hold(done=True)

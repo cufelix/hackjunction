@@ -206,6 +206,8 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_chunk"] = expect["finals_r22"] | {"policy.chunk_ticks", "policy.hold_ticks"}   # handin rate A/B
         expect["finals_r22_cage"] = expect["finals_r22"] | {"grasp.cage_mode", "grasp.tri_vertex_align"}   # cage A/B
         expect["finals_r22_order"] = expect["finals_r22"] | {"policy.score_order"}   # EV/s pick order A/B
+        expect["finals_r22_done"] = expect["finals_r22"] | {
+            "policy.done_confirm", "perception.look_timeout_s", "planner.per_target_guard"}   # done hardening A/B
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -215,7 +217,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
         for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
                   "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk",
-                  "finals_r22_cage", "finals_r22_order"):
+                  "finals_r22_cage", "finals_r22_order", "finals_r22_done"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_cage"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
             expect[n] = expect[n] | {"scene.counter_z_prior"}
@@ -286,7 +288,7 @@ class TestFlags(unittest.TestCase):
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
                                       "finals_r21", "finals_r22", "finals_r22_cage",
-                                      "finals_r22_cal", "finals_r22_chunk", "finals_r22_gate",
+                                      "finals_r22_cal", "finals_r22_chunk", "finals_r22_done", "finals_r22_gate",
                                       "finals_r22_grasp", "finals_r22_order", "finals_r22_recall",
                                       "finals_real", "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
@@ -328,6 +330,20 @@ class TestFlags(unittest.TestCase):
                          ("relook_before_done", False)):
             recall["perception"][key] = off
         self.assertEqual(recall, base)
+    def test_done_hardening_defaults_off_and_r22_adds_only_three_flags(self):
+        stock = load_config(overlay="none")
+        self.assertFalse(stock["policy"]["done_confirm"])
+        self.assertIsNone(stock["perception"]["look_timeout_s"])
+        self.assertFalse(stock["planner"]["per_target_guard"])
+        self.assertEqual(stock["policy"]["done_confirm_looks"], 2)
+        self.assertEqual(stock["policy"]["done_confirm_span_s"], 10.0)
+
+        old, new = load_config(overlay="finals_r22"), load_config(overlay="finals_r22_done")
+        old["overlay"] = new["overlay"]
+        old["policy"]["done_confirm"] = True
+        old["perception"]["look_timeout_s"] = 5.0
+        old["planner"]["per_target_guard"] = True
+        self.assertEqual(new, old)
 
     def test_finals_r22_cage_is_r22_plus_only_the_two_cage_flags(self):
         r22 = load_config(overlay="finals_r22")
