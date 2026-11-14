@@ -9,6 +9,28 @@
 # --profile is given. Re-tune the sim values on the real robot before using them there (M8).
 profile: sim
 
+calib:
+  fk_xcheck: false            # FLAG (B2): RGB-only head pitch/yaw confidence check against Dex3 hand FK
+  fk_xcheck_config:
+    period_s: 0.5             # worker-thread cadence; act() never waits for the search
+    pitch_range_deg: 12.0
+    yaw_range_deg: 4.0
+    fine_step_deg: 0.25
+    max_v: 105                # OpenCV HSV-equivalent V/S thresholds for the dark, low-saturation Dex3 shell
+    max_s: 100
+    open_px: 3
+    min_area_px: 25
+    max_area_px: 14000
+    association_px: 170       # covers the full +/-12 deg pitch search at fx~605
+    score_truncate_px: 80
+    match_px: 8
+    min_points: 3
+    good_points: 6
+    min_coverage: 0.5
+    depth_range_m: [0.15, 2.0]
+    min_valid_depth_px: 20
+    depth_tolerance_m: 0.15   # optional rejection cue only; invalid/missing depth is ignored
+
 perception:
   camera: head
   # OpenCV HSV (H 0-180, S/V 0-255). Each colour = list of [lo, hi] ranges (red wraps around H=0).
@@ -254,10 +276,10 @@ policy:
   retry_extra_attempts: 2
   episode_summary_log: false  # FLAG (#3, Oliver). One passive log line per episode end (attempts/failed/too_long/started)
   # Retry with a different grasp (r14 failure analysis: 5 misses repeated the identical posture/yaw/point).
-  retry_vary_grasp: false     # FLAG (retry-vary, Timi). After a pick that did not hold the object (held=no / unknown):
-                              # the next try at it changes the grasp (posture v1<->demo for triangle / label None, finger
-                              # heading +-retry_yaw_deg), never repeats a tried (point, heading, posture); held=no right
-                              # after the close -> skip the carry, lift + straight home (plan.abort, same speed limits)
+  retry_vary_grasp: false     # FLAG (retry-vary, Timi). If the object remains in the next camera frame, the next try
+                              # changes the grasp (posture v1<->demo for triangle / label None, finger heading
+                              # +-retry_yaw_deg) and never repeats a tried (point, heading, posture). Servo tracking
+                              # error is diagnostic only; it never aborts a carry or opens the hand above the source.
   max_attempts_vary: null     # FLAG (retry-vary). With retry_vary_grasp: tries per object up to this (e.g. 3); the extra
                               # tries come after every other candidate and only if the plan fits the time left (_has_time)
   retry_yaw_deg: {triangle: 60, cube: 90, cylinder: 90, none: 90, default: 90}   # heading change per label

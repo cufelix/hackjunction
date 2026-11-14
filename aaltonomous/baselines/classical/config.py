@@ -29,6 +29,7 @@ VECTORS = {"grasp.point_in_palm": 3, "hand.closed_tight": 7, "perception.y_affin
 # Every opt-in feature of the integration branch: dotted config key -> (owner, value that means OFF, what it does).
 # All defaults in config.yaml are the OFF value, so with no overlay the policy is the stock classical baseline.
 FLAGS = {
+    "calib.fk_xcheck": ("Timi B2", False, "RGB-only head pitch/yaw confidence cross-check from Dex3 FK"),
     "instruction.resolve": ("Felix #1", False, "instruction text -> colour/shape->bin mapping (else FIXED_MAPPING)"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
     "policy.bin_lookup": ("round 8", "colour", "colour (stock) | resolve_bin: (colour,shape)->colour->shape->default"),
@@ -52,8 +53,8 @@ FLAGS = {
     "policy.retry_pass": ("Oliver #3", False, "once per episode: max_attempts-skipped objects get retry_extra_attempts"),
     "policy.time_margin_s": ("Oliver #3", 0.0, "plans must end this long before the time limit"),
     "policy.episode_summary_log": ("Oliver #3", False, "one log line per episode end"),
-    "policy.retry_vary_grasp": ("retry-vary", False, "retry after held=no with another grasp (posture/heading), "
-                                                     "never an identical one; held=no -> abort the carry"),
+    "policy.retry_vary_grasp": ("retry-vary", False, "retry after the object remains in the next frame with another "
+                                                     "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
     "policy.grasp_diag_log": ("Felix grasp", False, "passive [grasp_diag] line per pick: stall vs closed, held"),
