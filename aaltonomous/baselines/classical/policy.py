@@ -496,6 +496,7 @@ class ClassicalPolicy:
         self.calibration = None
         self._calibration_done = False
         self._empty_recovery = None
+        self._stg = None                # no-deadlock staging state (init / empty recovery)
         self.hand_calibration = None    # HeadCalibResult of this episode (perception.hand_calibration)
         self._hc_done = self.hand_calib is None
         self._hc_tries = 0
@@ -1216,23 +1217,18 @@ class ClassicalPolicy:
             self.state = "look"
         if self.state == "init":
             if (self.cfg.get("calib") or {}).get("plane", {}).get("apply_height", False):
-                if "startup_route" not in self._jobs:
-                    r = self._bg("startup_route", self.planner.safe_home_route,
-                                 self.arm_cmd.copy(), self.hand_cmd.copy(), ("left", "right"), None)
+                if self._stg is None:
+                    self._stg = {"phase": "safe", "t0": t, "why": []}
+                route, reason = self._stage_route(t, self._stg, "startup_route", self.arm_cmd.copy(),
+                                                  self.hand_cmd.copy(), ("left", "right"), None)
+                if route is None and reason is None:
+                    return self._hold()
+                self._stg = None
+                if route is None:   # never deadlock: the rc6 home route replaces a forever staging_hold
+                    self._note(t, f"[staging] fallback rc6 home route: {reason}")
+                    a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
                 else:
-                    r = self._bg("startup_route", self.planner.safe_home_route, None, None)
-                if r is None:
-                    return self._hold()
-                if r[0] == "err":
-                    self.state = "staging_hold"
-                    self._note(t, f"height-safe staging unproved: {type(r[1]).__name__}: {r[1]}; holding")
-                    return self._hold()
-                route = r[1]
-                if not route.ok:
-                    self.state = "staging_hold"
-                    self._note(t, f"height-safe staging unproved: {route.reason}; holding")
-                    return self._hold()
-                a, h = route.arm, route.hand
+                    a, h = route.arm, route.hand
             else:
                 a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
             self._home_move = (a, h)
@@ -3789,23 +3785,47 @@ class ClassicalPolicy:
         self._empty_recovery = {"arm": self.arm_cmd.copy(), "hand": self.hand_cmd.copy(), "side": plan.side,
                                 "source_bin": plan.source_bin, "t": g["t"]}
 
+    STAGING_BUDGET_S = 1.5   # episode time to prove a height-safe route before the rc6 home route takes over
+
+    def _stage_route(self, t, rec, key, arm, hand, sides, allowed_inside):
+        """No-deadlock staging: (a) proved open-lift-home, (b) lift-first-then-open, (c) fallback after the budget.
+        Returns (route, None) when proved, (None, None) while a proof runs, (None, reason) for the fallback."""
+        while True:
+            ph = rec["phase"]
+            jobkey = f"{key}_{ph}"
+            if ph != "fallback" and t - rec["t0"] > self.STAGING_BUDGET_S:
+                self._jobs.pop(jobkey, None)
+                rec["why"].append(f"{ph} proof over {self.STAGING_BUDGET_S:.1f} s budget")
+                rec["phase"] = ph = "fallback"
+            if ph == "fallback":
+                return None, "; ".join(rec["why"]) or "staging unproved"
+            r = self._bg(jobkey, self.planner.safe_home_route, arm, hand, sides, allowed_inside, ph == "safe")
+            if r is None:
+                return None, None
+            if r[0] == "ok" and r[1].ok:
+                if ph == "lift":
+                    self._note(t, f"[staging] open-first route unproved ({'; '.join(rec['why'])}); lift-first route proved")
+                return r[1], None
+            rec["why"].append(f"{ph}: " + (f"{type(r[1]).__name__}: {r[1]}" if r[0] == "err" else r[1].reason))
+            rec["phase"] = "lift" if ph == "safe" else "fallback"
+
     def _empty_recovery_step(self, t):
         """Poll only; route generation/IK/dry-run stays off the control loop."""
         rec = self._empty_recovery
-        if "empty_recovery" not in self._jobs:
-            r = self._bg("empty_recovery", self.planner.safe_home_route, rec["arm"], rec["hand"],
-                         (rec["side"],), rec["source_bin"])
-        else:
-            r = self._bg("empty_recovery", self.planner.safe_home_route, None, None)
-        if r is None:
+        if self._stg is None:
+            self._stg = {"phase": "safe", "t0": t, "why": []}
+        route, reason = self._stage_route(t, self._stg, "empty_recovery", rec["arm"], rec["hand"],
+                                          (rec["side"],), rec["source_bin"])
+        if route is None and reason is None:
             return self._hold()
-        if r[0] == "err" or not r[1].ok:
-            reason = f"{type(r[1]).__name__}: {r[1]}" if r[0] == "err" else r[1].reason
+        self._stg = None
+        if route is None:   # never hold forever: rc6-style open + joint-space home
             self._empty_recovery = None
-            self.state = "empty_hold"
-            self._note(t, f"empty-grasp recovery unproved: {reason}; holding")
-            return self._hold()
-        route = r[1]
+            a, h = self.planner.go_to(rec["arm"], rec["hand"], self.home, self.post["open"])
+            self._enqueue(a, h)
+            self.state = "executing"
+            self._note(t, f"[staging] fallback rc6 home route: empty-grasp recovery: {reason}")
+            return self._pop() if len(a) else self._hold()
         self._empty_recovery = None
         self._enqueue(route.arm, route.hand)
         self.state = "executing"

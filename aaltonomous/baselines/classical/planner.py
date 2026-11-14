@@ -433,8 +433,9 @@ class Planner:
                 return False
         return True
 
-    def safe_home_route(self, arm_from, hand_from, sides=("left", "right"), allowed_inside=None):
+    def safe_home_route(self, arm_from, hand_from, sides=("left", "right"), allowed_inside=None, open_first=True):
         """Prove an open-hand, vertical escape above the runtime table/rims, then a dry-run-safe route home.
+        open_first=False: lift-first-then-open (hand as-is during lift + home, opened at home, same keepout proof).
 
         This is deliberately fail closed: no joint-space fallback is returned when IK, runtime keepouts, bin walls,
         or the final SafetyFilter replay cannot be proved clip-free.
@@ -462,12 +463,13 @@ class Planner:
         for side in sides:
             sl = ArmKinematics.sl(side)
             hand_open[sl] = self.post["open"][sl]
-        h = ramp(cur_h, hand_open, mo["hand_max_vel"], self.dt)
-        a = np.repeat(cur_a[None], len(h), 0)
-        for k in range(len(h)):
-            if not self._route_pose_safe(a[k], h[k], sides, 0.003, allowed_inside):
-                return SafeRoute(False, reason="opening hand enters runtime table/bin keepout")
-        add("open", a, h)
+        if open_first:
+            h = ramp(cur_h, hand_open, mo["hand_max_vel"], self.dt)
+            a = np.repeat(cur_a[None], len(h), 0)
+            for k in range(len(h)):
+                if not self._route_pose_safe(a[k], h[k], sides, 0.003, allowed_inside):
+                    return SafeRoute(False, reason="opening hand enters runtime table/bin keepout")
+            add("open", a, h)
 
         wall = float(self.scene.cfg["bins"]["wall_height"])
         safe_z = self.counter_keepout_z + max(float(g["carry_height"]), wall + self.height + 0.03)
@@ -505,6 +507,13 @@ class Planner:
             if not self._route_pose_safe(a[k], h[k], sides, mo["counter_clearance"]):
                 return SafeRoute(False, reason="route home enters runtime table/bin keepout")
         add("home", a, h)
+        if not open_first:   # lift-first-then-open: open at home, proved with the same keepout check
+            h = ramp(cur_h, hand_open, mo["hand_max_vel"], self.dt)
+            a = np.repeat(cur_a[None], len(h), 0)
+            for k in range(len(h)):
+                if not self._route_pose_safe(a[k], h[k], sides, 0.003, allowed_inside):
+                    return SafeRoute(False, reason="opening hand at home enters runtime table/bin keepout")
+            add("open_at_home", a, h)
         if not arm_parts:
             return SafeRoute(True, np.empty((0, 14)), np.empty((0, 14)), phases)
         arm, hand = np.vstack(arm_parts), np.vstack(hand_parts)
