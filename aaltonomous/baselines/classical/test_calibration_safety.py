@@ -213,9 +213,12 @@ class TestEmptyGraspRecovery(unittest.TestCase):
                                     "side": "left", "source_bin": None, "t": 4.0}
         self.pol._jobs = {}
         self.pol._bg = mock.Mock(return_value=("ok", SafeRoute(False, reason="keepout")))
-        held = self.pol._empty_recovery_step(4.1)
-        self.assertEqual(self.pol.state, "empty_hold")
-        np.testing.assert_array_equal(held["arm_q_target"][0], self.pol.arm_cmd)
+        self.pol._stg = None
+        moved = self.pol._empty_recovery_step(4.1)   # open-first, then lift-first unproved: never hold forever
+        self.assertIsNone(self.pol._empty_recovery)
+        self.assertEqual(self.pol.state, "executing")
+        self.assertTrue(any("[staging] fallback rc6 home route" in m for _, m in self.pol.events))
+        self.assertGreater(len(moved["arm_q_target"]), 0)
 
     def test_planner_route_orders_open_vertical_lift_home_and_dry_runs(self):
         cfg, scene = load_config(), Scene.load()
