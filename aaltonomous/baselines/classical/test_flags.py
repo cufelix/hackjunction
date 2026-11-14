@@ -201,7 +201,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_log_joint_offset", "ab_object_time_budget_s",
                                       "ab_place_gate", "ab_plane_b1_inj_p7", "ab_plane_cgate",
                                       "ab_plane_cgate_live", "ab_plane_cgate_live_fk",
-                                      "ab_plane_cgate_live_vote", "ab_plane_inj_p7",
+                                      "ab_plane_cgate_live_vote", "ab_plane_inj_p7", "ab_planner",
                                       "ab_retry_vary", "ab_retry_vary_slots", "ab_robust_input",
                                       "ab_safety", "ab_sat_floor", "ab_shape2d", "ab_skills",
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
@@ -273,6 +273,14 @@ class TestFlags(unittest.TestCase):
             expected["overlay"] = overlay
             expected[section][key] = value
             self.assertEqual(load_config(overlay=overlay), expected, overlay)
+
+    def test_ab_planner_is_brain_llm_plus_the_planner_flag(self):
+        base = load_config(overlay="brain_llm")
+        planner = load_config(overlay="ab_planner")
+        self.assertFalse(base["brain"]["planner"])
+        base["brain"]["planner"] = True
+        base["overlay"] = "ab_planner"
+        self.assertEqual(planner, base)
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm
