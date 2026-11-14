@@ -67,7 +67,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-step "1/7 checking the git tree"
+step "1/8 checking the git tree"
 [ -f "$REPO/$SRC_REL" ] || die "no overlay '$OVERLAY': $SRC_REL does not exist"
 bad=()
 while IFS= read -r line; do
@@ -99,7 +99,7 @@ else
   SNAP=1
 fi
 
-step "2/7 writing $SUB_REL from $OVERLAY"
+step "2/8 writing $SUB_REL from $OVERLAY"
 SRC="$ROOT/$SRC_REL"
 if grep -q '^placeholder:' "$SRC"; then
   die "$SRC_REL is a placeholder: fill in its values and drop 'placeholder: true' first"
@@ -121,7 +121,7 @@ fi
 mv "$ROOT/$SUB_REL.tmp" "$ROOT/$SUB_REL"
 echo "  wrote $SUB_REL"
 
-step "3/7 release gate: submission must carry exactly the flags of $OVERLAY"
+step "3/8 release gate: submission must carry exactly the flags of $OVERLAY"
 if ! GATE=$(cd "$ROOT" && "$PYTHON" tools/release_gate.py "$OVERLAY" --write-expected "$EXP_REL" 2>&1); then
   echo "$GATE"
   die "release gate FAILED: $SUB_REL does not match $OVERLAY, or $OVERLAY has a flag conflict (see above)"
@@ -129,7 +129,18 @@ fi
 echo "$GATE"
 echo "  wrote $EXP_REL"
 
-step "4/7 flags.py --overlay submission --json"
+step "4/8 reviewed finals allow-list"
+if [[ "$OVERLAY" == finals* ]]; then
+  if ! CHECK=$(cd "$ROOT" && "$PYTHON" tools/check_release_flags.py --overlay submission 2>&1); then
+    echo "$CHECK"
+    die "reviewed finals allow-list FAILED"
+  fi
+  echo "$CHECK"
+else
+  echo "  skipped (candidate '$OVERLAY' is not a finals overlay)"
+fi
+
+step "5/8 flags.py --overlay submission --json"
 if ! (cd "$ROOT" && "$PYTHON" tools/flags.py --overlay submission --json) > "$SCRATCH/flags.json" 2> "$SCRATCH/flags.err"; then
   cat "$SCRATCH/flags.err" >&2
   die "tools/flags.py failed"
@@ -137,7 +148,7 @@ fi
 sed "s#$ROOT#.#g" "$SCRATCH/flags.json" > "$OUT/RELEASE.flags.json"
 echo "  saved $OUT/RELEASE.flags.json"
 
-step "5/7 equivalence_check.py"
+step "6/8 equivalence_check.py"
 if [ "$NO_EQUIV" = 1 ]; then
   rm -f "$OUT/RELEASE.equivalence.txt"
   echo "  skipped (--no-equiv)"
@@ -151,7 +162,7 @@ else
   cat "$OUT/RELEASE.equivalence.txt"
 fi
 
-step "6/7 writing RELEASE.md"
+step "7/8 writing RELEASE.md"
 if [ "$NO_EQUIV" = 1 ]; then EQUIV_SRC=SKIPPED; else EQUIV_SRC="$OUT/RELEASE.equivalence.txt"; fi
 R_ROOT="$ROOT" R_OUT="$OUT" R_OVERLAY="$OVERLAY" R_SHA="$SHA" R_SHA_FULL="$SHA_FULL" R_DATE="$DATE" \
 R_GATE="$GATE" R_EQUIV="$EQUIV_SRC" "$PYTHON" - > "$OUT/RELEASE.md" <<'PY'
@@ -235,7 +246,7 @@ print("\n".join(lines))
 PY
 echo "  wrote $OUT/RELEASE.md"
 
-step "7/7 done"
+step "8/8 done"
 if [ "$DRY" = 1 ]; then
   echo "dry-run output dir: $OUT"
   echo "RELEASE.md: $OUT/RELEASE.md"

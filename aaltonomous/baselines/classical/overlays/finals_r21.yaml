@@ -54,6 +54,7 @@ flags:
   perception.color_gate.fk_dilate_px: 3        # New H2     render-tested RGB/FK fringe; nearby spawn-object recall
   perception.color_gate.near_margin_m: 0.10    # New H2/M1  prior/disagree union through full bin.vote.max_shift_m
   motion.arm_vel_cap: 0.90                       # Timi vel   rad/s cap (sim profile 0.97)
+  motion.output_caps: {arm_vel: 0.85, arm_acc: 4.0, hand_vel: 1.5, hand_acc: 8.0}  # M4: every planner/policy route, including home/abort
   instruction.normalize: true                   # New H3/H4: context-safe box + ambiguous shape normalisation (existing finals flag)
   perception.hue_guard.enabled: true            # r19 Felix  cross-label hue gap + top-face hue + red_min_s: orange/yellow abstain, never swap
   instruction.max_chars: 2000                   # r19 fuzz   cap absurd instruction length (clause boundary)

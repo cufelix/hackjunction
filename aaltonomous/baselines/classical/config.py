@@ -113,6 +113,7 @@ FLAGS = {
                                       "move the bin release toward the bin centre (y only, footprint-checked); IK failure uses the stock target"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
+    "motion.output_caps": ("M4", None, "null = legacy output; dict = final per-joint arm/hand velocity and acceleration caps, with stateful limiting on every emitted route"),
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),
     "motion.lift_on_stall.timeout_s": ("round 9", STOCK, "lift_on_stall: longest close hold (stock 1.2 s)"),
@@ -236,6 +237,7 @@ def load_config(path=None, overrides=None, profile=None, overlay=None):
         _set(cfg, k, v)
     check_flag_values(cfg)
     _apply_arm_vel_cap(cfg)
+    _apply_output_caps(cfg)
     return cfg
 
 
@@ -251,6 +253,18 @@ def _apply_arm_vel_cap(cfg):
     v = float(mo["arm_max_vel"])
     if cap < v:
         mo["arm_max_vel"], mo["arm_max_acc"] = cap, float(mo["arm_max_acc"]) * cap / v
+
+
+def _apply_output_caps(cfg):
+    """Clamp planner limits to motion.output_caps; the policy also enforces these at its final output boundary."""
+    mo = cfg.get("motion") or {}
+    caps = mo.get("output_caps")
+    if caps is None:
+        return
+    mo["arm_max_vel"] = min(float(mo["arm_max_vel"]), float(caps["arm_vel"]))
+    mo["arm_max_acc"] = min(float(mo["arm_max_acc"]), float(caps["arm_acc"]))
+    mo["hand_max_vel"] = min(float(mo["hand_max_vel"]), float(caps["hand_vel"]))
+    mo["hand_max_acc"] = float(caps["hand_acc"])
 
 
 def check_flag_values(cfg):
@@ -281,6 +295,19 @@ def check_flag_values(cfg):
                 "grasp.drop_slot_grid"):
         if not isinstance(_get(cfg, key), bool):
             raise ValueError(f"{key}: want true or false")
+    caps = _get(cfg, "motion.output_caps")
+    if caps is not None:
+        keys = {"arm_vel", "arm_acc", "hand_vel", "hand_acc"}
+        if not isinstance(caps, dict) or set(caps) != keys:
+            raise ValueError(f"motion.output_caps = {caps!r}: want null or exactly {sorted(keys)}")
+        for key in sorted(keys):
+            value = caps[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) or value <= 0.0:
+                raise ValueError(f"motion.output_caps.{key} = {value!r}: want a finite positive number")
+        hard = {"arm_vel": 0.85, "arm_acc": 4.0, "hand_vel": 1.5}
+        for key, maximum in hard.items():
+            if float(caps[key]) > maximum:
+                raise ValueError(f"motion.output_caps.{key} = {caps[key]} exceeds finals cap {maximum}")
     for k in ("policy.place_gate_colour_min", "policy.place_gate_bin_min"):
         v = float(_get(cfg, k))
         if not 0.0 <= v <= 1.0:

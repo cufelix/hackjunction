@@ -125,13 +125,70 @@ def time_scale(Qs, vmax, amax, dt):
     return out
 
 
-def ramp(a, b, vmax, dt):
-    """Linear move a -> b (excluding a) with every component at most vmax."""
+def ramp(a, b, vmax, dt, amax=None):
+    """Move a -> b (excluding a); legacy linear ramp, or acceleration-shaped when ``amax`` is supplied."""
     a, b = np.asarray(a, float), np.asarray(b, float)
+    if amax is not None:
+        return time_scale([a, b], float(vmax), float(amax), dt)
     n = int(np.ceil(np.abs(b - a).max() / (vmax * dt) + 1e-9))
     if n == 0:
         return np.empty((0, len(a)))
     return a + (b - a) * (np.arange(1, n + 1) / n)[:, None]
+
+
+class MotionOutputLimiter:
+    """Cheap stateful per-joint velocity/acceleration limiter for the policy's final command stream.
+
+    Planner trajectories are normally already within the same limits.  Keeping this second, stateful boundary is
+    what makes queue replacement (home/endgame/empty-grasp abort) obey them too.  ``now`` accounts for a delayed
+    policy request; samples within an action chunk remain spaced by the runner's fixed control period.
+    """
+
+    def __init__(self, arm_vmax, arm_amax, hand_vmax, hand_amax, dt):
+        self.arm_vmax, self.arm_amax = float(arm_vmax), float(arm_amax)
+        self.hand_vmax, self.hand_amax = float(hand_vmax), float(hand_amax)
+        self.dt = float(dt)
+        self.reset()
+
+    def reset(self):
+        self.arm_q = self.hand_q = None
+        self.arm_v = self.hand_v = None
+        self.last_time = None
+
+    @staticmethod
+    def _step(target, q, velocity, vmax, amax, dt):
+        desired_v = (target - q) / dt
+        velocity = np.clip(desired_v, velocity - amax * dt, velocity + amax * dt)
+        velocity = np.clip(velocity, -vmax, vmax)
+        return q + velocity * dt, velocity
+
+    def limit(self, arm, hand, arm_start, hand_start, now):
+        arm, hand = np.asarray(arm, float), np.asarray(hand, float)
+        if not len(arm):
+            return arm.copy(), hand.copy()
+        if arm.shape != hand.shape or arm.ndim != 2 or arm.shape[1] != 14:
+            raise ValueError(f"motion output wants matching (n,14) paths, got arm={arm.shape} hand={hand.shape}")
+        now = float(now)
+        if self.arm_q is None:
+            self.arm_q, self.hand_q = np.asarray(arm_start, float).copy(), np.asarray(hand_start, float).copy()
+            self.arm_v, self.hand_v = np.zeros(14, float), np.zeros(14, float)
+            self.last_time = now
+        # The previous chunk's last command is due at last_time.  A late request grants the first new target the
+        # actual extra elapsed time; normal 30 Hz chunks use exactly dt.
+        first_time = max(float(self.last_time) + self.dt, now + self.dt)
+        first_dt = first_time - float(self.last_time)
+        out_a, out_h = np.empty_like(arm), np.empty_like(hand)
+        sample_time = float(self.last_time)
+        for i in range(len(arm)):
+            step_dt = first_dt if i == 0 else self.dt
+            self.arm_q, self.arm_v = self._step(
+                arm[i], self.arm_q, self.arm_v, self.arm_vmax, self.arm_amax, step_dt)
+            self.hand_q, self.hand_v = self._step(
+                hand[i], self.hand_q, self.hand_v, self.hand_vmax, self.hand_amax, step_dt)
+            out_a[i], out_h[i] = self.arm_q, self.hand_q
+            sample_time = first_time if i == 0 else sample_time + step_dt
+        self.last_time = sample_time
+        return out_a, out_h
 
 
 class Planner:
@@ -161,6 +218,12 @@ class Planner:
     def commit_counter_height(self, z):
         """Commit the accepted episode height before planning any motion (single shared source of truth)."""
         self.scene.counter_z_runtime = None if z is None else float(z)
+
+    def hand_ramp(self, start, target):
+        """Velocity-only legacy ramp, acceleration-shaped only when motion.output_caps is enabled."""
+        mo = self.cfg["motion"]
+        amax = mo.get("hand_max_acc") if mo.get("output_caps") is not None else None
+        return ramp(start, target, mo["hand_max_vel"], self.dt, amax=amax)
 
     # ------------------------------------------------------------------ geometry helpers
     def _bin_xy0(self, name):
@@ -939,7 +1002,7 @@ class Planner:
             a = time_scale([cur_a] + list(Qs), vmax * scale, amax * scale, self.dt)
             h = np.repeat(cur_h[None], len(a), 0)
             if hand_to is not None:  # hand moves during the arm move (ends no later than the arm)
-                hr = ramp(cur_h, hand_to, hv, self.dt)
+                hr = self.hand_ramp(cur_h, hand_to)
                 if len(hr) > len(a):
                     a = np.vstack([a, np.repeat((a[-1] if len(a) else cur_a)[None], len(hr) - len(a), 0)])
                     h = np.repeat(cur_h[None], len(a), 0)
@@ -950,7 +1013,7 @@ class Planner:
 
         def hand(name, to, hold_s):
             nonlocal cur_h
-            h = ramp(cur_h, to, hv, self.dt)
+            h = self.hand_ramp(cur_h, to)
             n_ramp = len(h)
             h = np.vstack([h, np.repeat(np.asarray(to, float)[None], int(round(hold_s / self.dt)), 0)])
             if name == "close":
@@ -1036,7 +1099,7 @@ class Planner:
         """Joint-space move (both arms + hands) at the configured speeds, e.g. start pose -> home."""
         mo = self.cfg["motion"]
         a = time_scale([arm_from, arm_to], mo["arm_max_vel"], mo["arm_max_acc"], self.dt)
-        h = ramp(hand_from, hand_to, mo["hand_max_vel"], self.dt)
+        h = self.hand_ramp(hand_from, hand_to)
         n = max(len(a), len(h))
         a = np.vstack([a, np.repeat(np.asarray(arm_to, float)[None], n - len(a), 0)]) if len(a) < n else a
         h = np.vstack([h, np.repeat(np.asarray(hand_to, float)[None], n - len(h), 0)]) if len(h) < n else h

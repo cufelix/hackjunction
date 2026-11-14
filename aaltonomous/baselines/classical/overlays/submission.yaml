@@ -80,6 +80,7 @@ flags:
   grasp.held_calibration.enabled: false         # M3         steady empty-close e0 after home/settle
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.arm_vel_cap: null                      # Timi vel   rad/s arm speed cap (real robot margin); null = profile 0.97
+  motion.output_caps: null                      # M4         stateful arm+hand accel caps (finals opt-in)
   motion.close_hold_s: 1.2                      # Felix      stock sim profile 0.25; e.g. 0.6 / 1.2
   motion.lift_on_stall.enabled: false           # round 9    lift on finger stall (min close_hold_s, max timeout_s)
   motion.lift_on_stall.timeout_s: 1.2           # round 9    stock 1.2

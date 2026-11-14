@@ -73,7 +73,7 @@ class TestFlags(unittest.TestCase):
         def on(name):
             return {k for k, _, is_on, _, _ in effective_flags(load_config(overlay=name)) if is_on}
         self.assertEqual(on("ab_safety"), on("cand_r17") | {"policy.safety_shell"})
-        self.assertNotIn("policy.safety_shell", on("submission"))
+        self.assertNotIn("policy.safety_shell", on("cand_r17"))
         self.assertEqual(load_config(overlay="ab_safety")["policy"]["safety_shell_vel_reserve"], 0.0)
 
     def test_overlay_flips_only_its_flags(self):
@@ -121,9 +121,9 @@ class TestFlags(unittest.TestCase):
                   "ab_realcolour": {"instruction.resolve", "policy.bin_lookup", "grasp.point_in_palm",
                                     "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
                                     "perception.hsv_set", "perception.split_blobs"}}
-        r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary",
-                                            "policy.max_total_attempts"}
+        r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r14")) if is_on}
+        expect["ab_retry_vary"] = r14 | {"policy.insert_guard", "policy.retry_vary_grasp",
+                                         "policy.max_attempts_vary", "policy.max_total_attempts"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
         nopp = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r17")) if is_on}
         expect["ab_shape2d"] = nopp | {"perception.shape_2d_v2"}
@@ -168,7 +168,8 @@ class TestFlags(unittest.TestCase):
                                                           "calib.plane.apply_height", "grasp.drop_slot_grid"}
         expect["finals_r21"] = expect["finals_r20"] | {"perception.color_gate.fk_dilate_px",
                                                          "perception.color_gate.near_margin_m",
-                                                         "policy.generation_workers", "grasp.held_calibration.enabled"}   # R29 + fixfk + H7/M3
+                                                         "policy.generation_workers", "grasp.held_calibration.enabled",
+                                                         "motion.output_caps"}   # R29 + fixfk + H7/M3 + M4
         expect["finals_r22"] = (expect["finals_r21"] | {"bin.vote.enabled", "bin.vote.signed_rim_fit", "bin.vote.async_extract",
                                                        "bin.vote.frame_transform_snapshot", "instruction.multilingual"}) \
             - {"perception.hue_guard.enabled", "policy.safety_shell"}   # r22: fixvote ON, bisect rc1->r19c
@@ -351,7 +352,8 @@ class TestFlags(unittest.TestCase):
         """Overlays can never make anything faster than the stock sim profile."""
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
                           ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
-                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap")])   # arm_vel_cap: min() only
+                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap",
+                           "motion.output_caps")])   # cap flags only reduce motion
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",

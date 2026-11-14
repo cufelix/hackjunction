@@ -69,6 +69,7 @@ class TestFixedMapping(unittest.TestCase):
 
         class Stub:
             _job = None
+            cfg = {"policy": {}}
             fixed_mapping = REAL
 
             def reset(self, info):
