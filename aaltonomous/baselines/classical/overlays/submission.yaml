@@ -16,6 +16,10 @@ flags:
                                                 #            gates PASS (twice; resolver v2 82f30b09, colour lookup)
   instruction.normalize: false                  # Felix lang  typo/synonym normaliser (RC1 overlay turns it on)
   instruction.strict: false                     # Felix strict never guess (rc1_strict overlay turns it on)
+  instruction.empty_abstain: false              # fault drill  empty text keeps the fixed-mapping fallback
+  grasp.abort_lift_first: false                 # fault drill  empty-grasp abort retreat (finals_r22_robust turns it on)
+  policy.no_objects_relook: false               # fault drill  nothing seen -> done (finals_r22_robust: look again)
+  perception.flood_guard: 0.0                   # fault drill  frame-filling colour = no detections (finals_r22_robust: 0.6)
   brain.backend: stub
   brain.url: http://127.0.0.1:8080/completion
   brain.find: false

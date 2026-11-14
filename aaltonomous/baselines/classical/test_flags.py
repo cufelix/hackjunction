@@ -148,6 +148,8 @@ class TestFlags(unittest.TestCase):
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.geometry_runtime", "grasp.held_detector",
                                                           "calib.plane.apply_height"}
         expect["finals_r21"] = expect["finals_r20"]   # R29: same flags, rc6 code
+        expect["finals_r22_robust"] = expect["finals_r21"] | {"grasp.abort_lift_first", "policy.no_objects_relook",
+                                                              "perception.flood_guard"}   # r21 + the fault-drill fixes
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -155,7 +157,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
-        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21"):
+        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22_robust"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
@@ -166,6 +168,17 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(load_config(overlay="ab_maxatt4")["policy"]["max_attempts"], 4)
         self.assertEqual(load_config(overlay="ab_triage")["policy"]["max_total_attempts"], 10)
         self.assertEqual(load_config(overlay="ab_pitch_cal_table")["perception"]["online_pitch_cal"], "table")
+
+    def test_fault_drill_flags_default_off_and_are_validated(self):
+        cfg = load_config(overlay="none")
+        self.assertEqual((cfg["instruction"]["empty_abstain"], cfg["grasp"]["abort_lift_first"],
+                          cfg["policy"]["no_objects_relook"], cfg["perception"]["flood_guard"]), (False, False, False, 0.0))
+        for bad in ({"grasp.abort_lift_first": 1}, {"policy.no_objects_relook": "yes"}, {"instruction.empty_abstain": None},
+                    {"perception.flood_guard": 0.05}, {"perception.flood_guard": True}, {"perception.flood_guard": 1.5}):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                load_config(overrides=bad)
+        self.assertEqual(load_config(overlay="finals_r22_robust")["perception"]["flood_guard"], 0.6)
+        self.assertFalse(load_config(overlay="finals_r22_robust")["instruction"]["empty_abstain"])
 
     def test_finals_real_loads_as_cand_r16_with_calibrated_intrinsics(self):
         from aaltonomous.interface.calibration import Calibration
@@ -207,7 +220,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_real", "rc1", "rc1_strict",
+                                      "finals_r21", "finals_r22_robust", "finals_real", "rc1", "rc1_strict",
                                       "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)

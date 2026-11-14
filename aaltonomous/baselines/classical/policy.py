@@ -159,6 +159,9 @@ class ClassicalPolicy:
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
             if not str(text).strip():               # empty / whitespace: no instruction -> the fixed fallback
+                if (self.cfg.get("instruction") or {}).get("empty_abstain", False):   # FLAG: never guess on no text
+                    self.log("[instruction] empty instruction: abstain on every object")
+                    return {"default": "abstain"}
                 return None
             from .instruction import resolve
             if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
@@ -247,6 +250,7 @@ class ClassicalPolicy:
         self.retry_pass_used = False
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
         self._summary_logged = False
+        self._relook_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
         # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
@@ -2099,6 +2103,9 @@ class ClassicalPolicy:
             self._note(t, "known wrong-bin object has no safe corrective or cleanup plan; stopping")
             self.state = "done"
             return self._hold(done=True)
+        if kind == "none" and self._relook_blind(res, t):
+            self.state = "settle"
+            return self._hold()
         if kind == "none":
             self._note(t, f"nothing left to sort ({res[2]} detections)")
             self.state = "done"
@@ -2119,6 +2126,18 @@ class ClassicalPolicy:
             self._note(t, f"waiting for confirm: {plan.summary()}")
             return self._hold()
         return self._start(plan, t)
+
+    def _relook_blind(self, res, t):
+        """policy.no_objects_relook: nothing seen at all and nothing picked yet this episode = a blind or empty-looking
+        frame, not a finished sort. Look again (after a settle) while the time limit has not run out. Off = stock."""
+        if not self.cfg["policy"].get("no_objects_relook", False) or self.n_started or res[2]:
+            return False
+        if t - getattr(self, "_ep_t0", 0.0) >= float(self.time_limit) - 1.0:
+            return False
+        if not getattr(self, "_relook_logged", False):
+            self._relook_logged = True
+            self._note(t, "no object seen and nothing picked: holding and looking again until the time limit")
+        return True
 
     def _verify_on(self):
         return bool(self.cfg["policy"].get("verify_placement", False))
@@ -2234,8 +2253,38 @@ class ClassicalPolicy:
                  f"close sample empty: carry skipped, object remains")
         home = self.arm_cmd.copy()
         home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
+        if self.cfg["grasp"].get("abort_lift_first", False):   # FLAG: never sweep the fingers through the counter
+            try:
+                a, h = self._abort_path_lift_first(plan, home)
+                self._enqueue(a, h)
+                return
+            except Exception as e:                       # fall back to the stock path
+                self.log(f"[held_abort] lift-first path failed ({type(e).__name__}: {e}); stock retreat")
         a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
         self._enqueue(a, h)
+
+    def _abort_path_lift_first(self, plan, home):
+        """grasp.abort_lift_first: open the hand in place, replay the plan's own lift (its Cartesian lift was clearance-
+        checked at plan time, and the abort fires with the arm still at the end of the close), then go home from the top
+        of the lift. The stock path is one joint-space line from the grasp pose to home, which dips the fingertips
+        ~16 mm below the counter surface (and across a bin wall) for some grasps."""
+        lift = next(((s, e) for name, s, e in plan.phases if name == "lift"), None)
+        if lift is None or lift[1] <= lift[0]:
+            raise ValueError("plan has no lift phase")
+        s0, s1 = lift
+        lo = max(s0 - 40, 0)             # the abort fires a chunk after close_end: the arm may already be a few ticks into the lift
+        d = np.abs(np.asarray(plan.arm[lo:s1], float) - self.arm_cmd).max(axis=1)
+        j = lo + int(d.argmin())
+        if d.min() > 0.05:
+            raise ValueError("arm is not on the plan's close/lift path")
+        s0 = max(j, s0)
+        a0, h0 = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.arm_cmd, self.post["open"])   # open in place
+        up = np.asarray(plan.arm[s0:s1], float)
+        top = up[-1] if len(up) else self.arm_cmd
+        a1, h1 = np.asarray(up), np.repeat(np.asarray(self.post["open"], float)[None], len(up), 0)
+        a2, h2 = self.planner.go_to(top, self.post["open"], home, self.post["open"])
+        return (np.vstack([np.asarray(a0, float).reshape(-1, 14), a1, np.asarray(a2, float).reshape(-1, 14)]),
+                np.vstack([np.asarray(h0, float).reshape(-1, 14), h1, np.asarray(h2, float).reshape(-1, 14)]))
 
     def _joint_offset_diag(self, obs, t):
         """debug.log_joint_offset (passive): cmd-minus-measured over the first second of steady holds, from the policy's

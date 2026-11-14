@@ -246,6 +246,7 @@ class Perception:
         hs = self.cfg.get("hsv_set", "stock")
         self.hsv = self.cfg["hsv_robust_v2"] if hs == "robust_v2" else self.cfg["hsv_robust"] if hs == "robust" else self.cfg["hsv"]
         self.split_blobs = bool(self.cfg.get("split_blobs", False))
+        self.flood_guard = float(self.cfg.get("flood_guard", 0.0) or 0.0)   # perception.flood_guard (FLAG, default OFF)
         self.place_gate = bool((cfg.get("policy") or {}).get("place_gate", False))
         # perception.hue_guard (default OFF): abstain on orange/yellow hues near the red|yellow boundary (hue_guard.py)
         hg = self.cfg.get("hue_guard") or {}
@@ -1059,6 +1060,10 @@ class Perception:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
             self._fit_colour_kmeans(hsv, kkeep)
         masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
+        if self.flood_guard > 0.0 and any(float(m.mean()) / 255.0 > self.flood_guard for m in masks.values()):
+            self.log(f"[flood_guard] one colour class covers > {self.flood_guard:.0%} of the frame: no colour information, "
+                     f"no detections")
+            return ([], []) if debug else []
         items = self._hue_guard_items(masks, hsv) if self.hue_guard else masks.items()
         for color, m in items:
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives

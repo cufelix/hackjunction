@@ -176,6 +176,8 @@ perception:
     enabled: false
     min_gap_deg: 6.0
     red_min_s: 110             # layer 2b: red-labelled candidate with top-face S below this -> abstain (0-255)
+  flood_guard: 0.0           # FLAG (fault drill). >0: a frame where ONE colour class covers more than this fraction of the image
+                              # (e.g. tape over the lens, 0.6) has no colour information: no detections, never a pick. 0 = off
   colour_kmeans: false       # FLAG (EV gate). Once per episode, bounded k=3 on robust object-blob HSV pixels;
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
@@ -225,6 +227,8 @@ grasp:
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
   held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
+  abort_lift_first: false     # FLAG (fault drill). An empty-grasp abort opens the hand IN PLACE, lifts along the plan's own
+                              # clearance-checked lift, then goes home; off = straight joint-space line home (dips below the counter)
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
   # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
   # gates, not independently switchable features. The classifier is consulted even when classify_shape is off.
@@ -326,6 +330,8 @@ instruction:
   resolve: false
   normalize: false            # FLAG (Felix). resolve(normalize(text)): fixes typos/synonyms; needs resolve
   strict: false               # FLAG (Felix strict). never guess: abstain instead of FIXED / inferred keys; needs resolve
+  empty_abstain: false        # FLAG (fault drill). With resolve: an empty / whitespace-only instruction abstains (0) instead of the
+                              # fixed-mapping fallback. NOT in finals_r22_robust: the real-robot fixed mapping is the organisers' P0
   max_chars: 0                # FLAG (fuzz). >0: cap the text at this many chars, cut at the last sentence/clause boundary
                               # (. ; ! ? newline) else the last space; the resolver is quadratic (50k chars = 19 s). 0 = off
 
@@ -403,6 +409,8 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
 policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)
   safety_shell_vel_reserve: 0.0  # with safety_shell: >0 slows every plan to <= (1 - this) x the SafetyFilter velocity limit (e.g. 0.2); 0 = plans untouched
+  no_objects_relook: false    # FLAG (fault drill). Nothing detected and nothing picked yet: hold and look again (every settle_s)
+                              # until the time limit instead of ending the episode (a blind camera / empty-looking frame is not "done")
   max_attempts: 2             # same object re-detected after this many tries -> skip it
   fixed_mapping: null         # FLAG (organisers P0). colour->bin when the instruction is empty/missing; null = sim FIXED_MAPPING
   insert_guard: false         # FLAG (insert). insert_shapes (task id or 'hole ... lid' sentence): abstain on every
