@@ -9,6 +9,9 @@
 # --profile is given. Re-tune the sim values on the real robot before using them there (M8).
 profile: sim
 
+scene:
+  counter_z_prior: null       # FLAG: no-depth fallback table height (m, pelvis frame, 0..0.3); null = nominal scene.yaml z
+
 calib:
   plane:
     apply_height: false       # FLAG (P0 table): runtime counter_z from the head-depth counter plane (perception.update_counter_height)

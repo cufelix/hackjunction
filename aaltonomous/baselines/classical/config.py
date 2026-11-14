@@ -36,6 +36,7 @@ FLAGS = {
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
     "calib.plane.apply_height": ("P0 table", False, "runtime counter_z from the head-depth counter-plane fit (median of the first calib.plane.looks looks, clamped to +-max_dz_m, nominal on bad depth / tilt > max_tilt_deg); every consumer reads scene.counter_z"),
+    "scene.counter_z_prior": ("prior", None, "null | table height in the pelvis frame (m, 0..0.3) used while no depth plane fit is available (apply_height overrides); null = nominal scene.yaml z"),
     "calib.fk_xcheck": ("Timi B2", False, "log-only RGB head-pose cross-check: residual pitch/yaw of the pose in use vs Dex3 FK hand blob"),
     "skills.memory": ("skill memory", False, "persist grasp-variant outcomes and reorder retry-vary arms"),
     "skills.memory_path": ("skill memory", None, "SQLite path, unset = in-memory (AALTO_SKILLS_DB overrides)"),
@@ -256,6 +257,9 @@ def check_flag_values(cfg):
         budget = float(budget)
         if not np.isfinite(budget) or budget <= 0.0:
             raise ValueError(f"policy.object_time_budget_s = {budget}: want null or a finite positive number of seconds")
+    zp = _get(cfg, "scene.counter_z_prior")
+    if zp is not None and not (isinstance(zp, (int, float)) and not isinstance(zp, bool) and 0.0 <= zp <= 0.3):
+        raise ValueError(f"scene.counter_z_prior = {zp!r}: want null or a number in [0, 0.3] (m, pelvis frame)")
     ice = _get(cfg, "perception.inject_cam_error")
     if ice is not None and not (isinstance(ice, (list, tuple)) and len(ice) == 5
                                 and all(isinstance(x, (int, float)) for x in ice)):

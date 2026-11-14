@@ -204,6 +204,7 @@ class Perception:
         # what reset_calibration() restores: AFTER every construction step above (principal_point copy), so a reset never
         # reverts perception to the file K. perception.hand_calibration swaps self.cal for a corrected COPY per episode.
         self.cal_nominal = self.cal
+        scene.counter_z_prior = (cfg.get("scene") or {}).get("counter_z_prior")   # None = nominal
         self.ah = (cfg.get("calib") or {}).get("plane") or {}   # calib.plane.apply_height (FLAG, default OFF)
         self._ah_est, self._ah_tries = [], 0
         self.size = float(self.cfg.get("object_size") or scene.size)
