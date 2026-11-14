@@ -297,6 +297,142 @@ def _box_objects(sentence: str) -> str:
         new = "cubes" if m.group(0).lower() == "boxes" else "cube"
         return new.capitalize() if m.group(0)[0].isupper() else new
     return _BOX.sub(sub, sentence)
+# instruction.multilingual: conservative Finnish / Czech -> plain English before resolve().  This
+# is deliberately separate from the older, broad name_foreign() token aliases above: those aliases
+# are part of the existing instruction.normalize path and must remain byte-for-byte unchanged when
+# this new flag is off.  The multilingual path accepts a closed vocabulary and a small command
+# grammar instead of translating isolated words.  Therefore strict mode cannot accidentally turn a
+# half-understood foreign sentence into a confident placement.
+_ML_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
+_ML_UNPARSED = "unparsed multilingual instruction"
+
+
+def _ml_words(spec: dict[str, tuple[str, str]], kind: str, value: str, words: str) -> None:
+    for word in words.split():
+        spec[word] = (kind, value)
+
+
+_FI: dict[str, tuple[str, str]] = {}
+_ml_words(_FI, "verb", "put", "laita pane siirrä siirra")
+_ml_words(_FI, "color", "purple", "violetti violetit violetin purppura purppurat purppuran")
+_ml_words(_FI, "color", "orange", "oranssi oranssit oranssin")
+_ml_words(_FI, "color", "yellow", "keltainen keltaiset keltaisen")
+_ml_words(_FI, "shape", "cube", "kuutio kuutiot kuution kuutioita")
+_ml_words(_FI, "shape", "cylinder", "sylinteri sylinterit sylinterin sylintereitä sylintereita")
+_ml_words(_FI, "shape", "triangle", "prisma prismat prisman kolmio kolmiot kolmion")
+_ml_words(_FI, "direction", "left", "vasen vasemmalle vasempaan vasemmassa")
+_ml_words(_FI, "direction", "right", "oikea oikealle oikeaan oikeassa")
+_ml_words(_FI, "direction", "center", "keski keskelle keskimmäiseen keskimmainen keskimmäinen")
+_ml_words(_FI, "bin", "bin", "laatikko laatikkoon laatikossa lokero lokeroon lokerossa kori koriin")
+_ml_words(_FI, "and", "and", "ja")
+_ml_words(_FI, "filler", "", "kaikki ne nämä nama esine esineet kappale kappaleet objekti objektit")
+_ml_words(_FI, "filler", "", "menee menevät menevat kuuluu kuuluvat värinen väriset varinen variset")
+_ml_words(_FI, "filler", "", "ole hyvä hyva kiitos kohteeseen")
+
+_CZ: dict[str, tuple[str, str]] = {}
+_ml_words(_CZ, "verb", "put", "dej polož poloz přesuň presun hoď hod")
+_ml_words(_CZ, "color", "purple", "fialový fialovy fialové fialove fialovou fialová fialova")
+_ml_words(_CZ, "color", "orange", "oranžový oranzovy oranžové oranzove oranžovou oranzovou")
+_ml_words(_CZ, "color", "yellow", "žlutý zluty žluté zlute žlutou zlutou")
+_ml_words(_CZ, "shape", "cube", "kostka kostky kostku kostek")
+_ml_words(_CZ, "shape", "cylinder", "válec valec válce valce válců valcu")
+_ml_words(_CZ, "shape", "triangle", "hranol hranoly hranolů hranolu trojúhelník trojuhelnik")
+_ml_words(_CZ, "shape", "triangle", "trojúhelníky trojuhelniky")
+_ml_words(_CZ, "direction", "left", "doleva vlevo levý levy levé leve levého leveho")
+_ml_words(_CZ, "direction", "right", "doprava vpravo pravý pravy pravé prave pravého praveho")
+_ml_words(_CZ, "direction", "center", "doprostřed doprostred střed stredu středu prostřední prostredni")
+_ml_words(_CZ, "bin", "bin", "koš kos koše kose přihrádka prihradka přihrádky prihradky")
+_ml_words(_CZ, "bin", "bin", "krabice box boxu kontejner kontejneru")
+_ml_words(_CZ, "and", "and", "a")
+_ml_words(_CZ, "filler", "", "do na všechny vsechny vše vse objekty objekt předměty predmety předmět predmet")
+_ml_words(_CZ, "filler", "", "patří patri prosím prosim barvy barva kus kusy")
+
+# Only semantic words identify the language. Filler words and conjunctions are unsafe signals:
+# Czech "do" / "a", Finnish "ne", and the command word "pane" are all ordinary English words.
+_FI_SIGNAL = frozenset(w for w, (kind, _) in _FI.items()
+                       if kind in {"verb", "color", "shape", "direction", "bin"} and w != "pane")
+_CZ_SIGNAL = frozenset(w for w, (kind, _) in _CZ.items()
+                       if kind in {"verb", "color", "shape", "direction", "bin"} and w != "box")
+_ML_KEY = re.compile(r"^(?:C(?:S)?|S)(?:A(?:C(?:S)?|S))*$")
+
+
+def _ml_language(words: list[str]) -> dict[str, tuple[str, str]] | None | bool:
+    """Return a language table, None for non-FI/CZ, or False for mixed/ambiguous language."""
+    fi = sum(w in _FI_SIGNAL for w in words)
+    cz = sum(w in _CZ_SIGNAL for w in words)
+    if not fi and not cz:
+        return None
+    if fi and cz:
+        return False
+    return _FI if fi else _CZ
+
+
+def _ml_split(tokens: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+    """Split `X left and Y right`, but retain `X and Y left` as a many-to-one clause."""
+    for i, (kind, _) in enumerate(tokens):
+        if kind != "and":
+            continue
+        before, after = tokens[:i], tokens[i + 1:]
+        if (any(k == "direction" for k, _ in before)
+                and any(k == "direction" for k, _ in after)):
+            return _ml_split(before) + _ml_split(after)
+    return [tokens]
+
+
+def _ml_clause(tokens: list[tuple[str, str]]) -> str | None:
+    # Verbs and fully understood filler words carry no resolver meaning. At most one command verb
+    # is accepted per clause; repeated verbs are normally a missing clause boundary.
+    if sum(k == "verb" for k, _ in tokens) > 1:
+        return None
+    core = [(k, v) for k, v in tokens if k not in ("verb", "filler")]
+    dirs = [(i, v) for i, (k, v) in enumerate(core) if k == "direction"]
+    bins = [i for i, (k, _) in enumerate(core) if k == "bin"]
+    if len(dirs) != 1 or len(bins) > 1:
+        return None
+    di, direction = dirs[0]
+    if bins and abs(bins[0] - di) != 1:
+        return None
+    key_items = [(i, k, v) for i, (k, v) in enumerate(core) if k not in ("direction", "bin")]
+    if not key_items or any(i < di for i, _, _ in key_items) and any(i > di for i, _, _ in key_items):
+        return None
+    kinds = "".join({"color": "C", "shape": "S", "and": "A"}.get(k, "?") for _, k, _ in key_items)
+    if not _ML_KEY.fullmatch(kinds):
+        return None
+    keys = " ".join("and" if k == "and" else v for _, k, v in key_items)
+    return f"put {keys} in the {direction} bin"
+
+
+def canonicalize_multilingual(sentence: str) -> str:
+    """Conservatively map supported Finnish/Czech commands to resolver English.
+
+    Common commands cover verb-first, object-first and destination-first orders; singular/plural
+    colour and shape selectors; adjective or adverb destinations; shared destinations; and lists
+    joined by Finnish ``ja`` / Czech ``a``. Any detected foreign instruction outside that grammar
+    becomes an opaque unparsed marker. With instruction.strict this resolves to ``default: None``.
+    English and other non-detected text is returned byte-identically.
+    """
+    words = [m.group(0).casefold() for m in _ML_WORD.finditer(sentence)]
+    language = _ml_language(words)
+    if language is None:
+        return sentence
+    residue = _ML_WORD.sub("", sentence)
+    if (language is False or not words or any(w not in language for w in words)
+            or re.search(r"[^\s,;:.!?-]", residue)):
+        return _ML_UNPARSED
+
+    # Punctuation separates the common comma/semicolon/full-stop instruction lists. Conjunctions
+    # are handled after lexical classification because they may either join selectors or clauses.
+    raw_parts = [p for p in re.split(r"[,;:.!?]+", sentence) if p.strip()]
+    clauses: list[str] = []
+    for part in raw_parts:
+        part_words = [m.group(0).casefold() for m in _ML_WORD.finditer(part)]
+        classified = [language[w] for w in part_words]
+        for clause in _ml_split(classified):
+            canonical = _ml_clause(clause)
+            if canonical is None:
+                return _ML_UNPARSED
+            clauses.append(canonical)
+    return "; ".join(clauses) if clauses else _ML_UNPARSED
 
 
 _LIFT_LR = re.compile(r"\(\s*lift\s+to\s+(right|left)\s*\)", re.I)   # "first bin (lift to right)": a left/right typo

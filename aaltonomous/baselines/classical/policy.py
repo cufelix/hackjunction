@@ -155,23 +155,30 @@ class ClassicalPolicy:
         exception here would end the episode as a BAD_END, which is worse than any wrong mapping.
         The resolver is pure stdlib and measured at ~0.13 ms per sentence.
         """
+        strict = False
         try:                                        # the WHOLE body, not just the resolve call
-            if not (self.cfg.get("instruction") or {}).get("resolve", False):
+            instruction_cfg = self.cfg.get("instruction") or {}
+            strict = instruction_cfg.get("strict", False)
+            if not instruction_cfg.get("resolve", False):
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
             if not str(text).strip():               # empty / whitespace: no instruction -> the fixed fallback
                 return None
             from .instruction import resolve
-            if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
+            multilingual = instruction_cfg.get("multilingual", False)
+            if multilingual:
+                from .normalize import canonicalize_multilingual
+                text = canonicalize_multilingual(text)
+            if instruction_cfg.get("normalize", False):   # typo/synonym normaliser (Felix)
                 from .normalize import normalize
                 text = normalize(text)
-            if (self.cfg.get("instruction") or {}).get("strict", False):   # never guess: abstain (Felix strict)
+            if strict:   # never guess: abstain (Felix strict)
                 from .normalize import strict_mapping
                 return strict_mapping(text, resolve(text, fallback={}))
             return resolve(text, fallback=getattr(self, "fixed_mapping", None)) or None
         except Exception as e:                      # a parse bug must not cost the whole episode
-            self.log(f"instruction resolve failed ({e}), using FIXED_MAPPING")
-            return None
+            self.log(f"instruction resolve failed ({e}), " + ("abstaining" if strict else "using FIXED_MAPPING"))
+            return {"default": None} if strict else None
 
     def _insert_guard_mapping(self, info):
         """policy.insert_guard: rung 3 (insert_shapes) -> {"default": "abstain"}, i.e. pick nothing; else None.

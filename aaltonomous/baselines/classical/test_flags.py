@@ -220,6 +220,8 @@ class TestFlags(unittest.TestCase):
 
     def test_instruction_normalize_flag_is_off_by_default_and_rc1_adds_only_it(self):
         self.assertFalse(load_config(overlay="none")["instruction"]["normalize"])
+        self.assertFalse(load_config(overlay="none")["instruction"]["multilingual"])
+        self.assertFalse(load_config(overlay="submission")["instruction"]["multilingual"])
         self.assertFalse(load_config(overlay="cand_r17")["instruction"]["normalize"])
         base = load_config(overlay="cand_r17")
         rc1 = load_config(overlay="rc1")
