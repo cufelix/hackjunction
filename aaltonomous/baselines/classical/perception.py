@@ -244,10 +244,12 @@ class Perception:
         confidence_min = float(c.get("min_confidence", 0.30))
         if support_x < support_min or support_y < support_min:
             return result(False, True, confidence, self.xy_offset.copy(), len(Q), residual,
-                          f"weak axis support x={support_x} y={support_y}")
+                          f"weak axis support x={support_x} y={support_y}; rejected estimate "
+                          f"({1000 * estimate[0]:+.1f},{1000 * estimate[1]:+.1f}) mm")
         if inlier_ratio < float(c.get("min_inlier_ratio", 0.35)) or confidence < confidence_min:
             return result(False, True, confidence, self.xy_offset.copy(), len(Q), residual,
-                          f"low confidence (inliers={inlier_ratio:.2f})")
+                          f"low confidence (inliers={inlier_ratio:.2f}); rejected estimate "
+                          f"({1000 * estimate[0]:+.1f},{1000 * estimate[1]:+.1f}) mm")
 
         self.xy_offset = estimate.copy()
         return result(True, True, confidence, estimate, len(Q), residual,

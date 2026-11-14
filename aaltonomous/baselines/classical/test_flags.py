@@ -42,7 +42,7 @@ class TestFlags(unittest.TestCase):
                   "ab_triage": {"policy.time_triage", "policy.max_total_attempts"},
                   "ab_hold06": {"motion.close_hold_s"}, "ab_hold12": {"motion.close_hold_s"},
                   "ab_slots": {"grasp.drop_slots"}, "ab_hold12_slots": {"motion.close_hold_s", "grasp.drop_slots"},
-                  "ab_carry05": {"motion.carry_scale"},
+                  "ab_carry05": {"motion.carry_scale"}, "ab_calib": {"perception.self_calibration.enabled"},
                   "ab_verify_lang": {"policy.verify_placement", "policy.verify_yellow_unknown",
                                      "policy.max_corrections_per_episode"}}
         for name, keys in expect.items():

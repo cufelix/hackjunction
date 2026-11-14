@@ -672,6 +672,22 @@ class TestRound3Flags(unittest.TestCase):
                     n_yaw += "yaw-aligned" in (p.reason or "")
         self.assertGreater(n_yaw, 0)
 
+    def test_calib_overlays_log_offset_and_confidence_every_episode(self):
+        for name in ("ab_calib", "ab_pinch_v1_calib"):
+            cfg = load_config(overlay=name)
+            self.assertTrue(cfg["perception"]["self_calibration"]["enabled"])
+            env = make_mock_env(seed=3, cfg=cfg)
+            logs = []
+            pol = ClassicalPolicy(config=cfg, log=logs.append, safety=env.filter.cfg)
+            for _ in range(2):                                   # two episodes = two resets
+                obs = env.reset()
+                pol.reset({"instruction": obs["instruction"]})
+                for _ in range(3):
+                    obs, info = env.step(pol.act(obs))
+            lines = [m for m in logs if "head calibration" in m]
+            self.assertEqual(len(lines), 2, lines)
+            self.assertTrue(all("xy=(" in m and "confidence=" in m for m in lines), lines)
+
 
 if __name__ == "__main__":
     unittest.main()
