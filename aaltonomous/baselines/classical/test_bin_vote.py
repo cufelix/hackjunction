@@ -1,9 +1,12 @@
 """bin.vote: the 2-of-3 rule, failure modes, planner integration, tape blobs. Pure / synthetic."""
+import threading
+import time
 import unittest
+from unittest import mock
 
 import numpy as np
 
-from .bin_vote import _bin_blob_vote, _blob_vote, combine, resolve, rim_votes, vote_bins
+from .bin_vote import _bin_blob_vote, _blob_vote, combine, resolve, rim_votes, tape_votes, vote_bins
 from .config import load_config
 from .planner import Planner
 
@@ -123,6 +126,184 @@ class TestDriver(unittest.TestCase):
             self.assertTrue(all(e == 0.04 for e in ex.values()))
             self.assertTrue(all(c in (CONF_PRIOR, CONF_DISAGREE, CONF_AGREE) for c in cf.values()))
         self.assertTrue(all(v is None for v in rim_votes(pol.perception, None, {"left": Z}, pol.cfg["bin"]["vote"]).values()))
+
+
+def _edge_points(center, half, n=100):
+    """Dense samples of both axes of one rectangle in pelvis xy."""
+    t = np.linspace(-1.0, 1.0, n)
+    return np.vstack((np.c_[np.full(n, center[0] - half[0]), center[1] + t * half[1]],
+                      np.c_[np.full(n, center[0] + half[0]), center[1] + t * half[1]],
+                      np.c_[center[0] + t * half[0], np.full(n, center[1] - half[1])],
+                      np.c_[center[0] + t * half[0], np.full(n, center[1] + half[1])]))
+
+
+class _SyntheticRimPerception:
+    def __init__(self, planner, delta, cfg):
+        self.scene, self.cfg = planner.scene, cfg["perception"]
+        b = self.scene.cfg["bins"]
+        outer = np.asarray(b["outer_size"], float)[::-1] / 2
+        inner = outer - float(b["wall_thickness"])
+        points = []
+        for name in self.scene.bin_names:
+            center = np.asarray(planner.bin_xy(name), float) + delta
+            q = np.vstack((_edge_points(center, outer), _edge_points(center, inner)))
+            points.append(np.c_[q, np.full(len(q), self.scene.counter_z + float(b["wall_height"]))])
+        self.points = np.vstack(points)
+        self.transforms = []
+
+    def _counter_plane(self, depth, cfg, z0=None, transform_snapshot=None):
+        self.transforms.append(transform_snapshot)
+        return self.points, np.array([0.0, 0.0, self.scene.counter_z]), None
+
+
+class TestSignedRimFit(unittest.TestCase):
+    def test_signed_xy_rim_displacements_reach_final_drop_slots(self):
+        from .policy import ClassicalPolicy
+        cfg = load_config(overrides={"bin.vote.signed_rim_fit": True})
+        planner = ClassicalPolicy(config=cfg, log=lambda *_: None).planner
+        priors = {n: np.asarray(planner.bin_xy(n), float) for n in planner.scene.bin_names}
+        v = cfg["bin"]["vote"]
+        for delta in (xy(0.024, 0.0), xy(-0.024, 0.0), xy(0.0, 0.024), xy(0.0, -0.024)):
+            with self.subTest(delta=delta):
+                base_slots = {n: [p.copy() for p in planner.drop_slots(n)] for n in planner.scene.bin_names}
+                perception = _SyntheticRimPerception(planner, delta, cfg)
+                rims = rim_votes(perception, np.ones((2, 2)), priors, v)
+                for name in planner.scene.bin_names:
+                    np.testing.assert_allclose(rims[name], priors[name] + delta, atol=0.001)
+                shift, _, _ = resolve(priors, rims, rims, v)
+                planner.bin_shift = shift
+                expected = 2.0 * delta / 3.0  # prior + agreeing rim+tape: mean of all three votes
+                for name in planner.scene.bin_names:
+                    np.testing.assert_allclose(shift[name], expected, atol=0.001)
+                    for actual, nominal in zip(planner.drop_slots(name), base_slots[name]):
+                        np.testing.assert_allclose(actual, nominal + expected, atol=0.001)
+                planner.bin_shift = {}
+
+    def test_legacy_rim_sign_is_unchanged_when_flag_is_off(self):
+        from .policy import ClassicalPolicy
+        cfg = load_config(overlay="none")
+        planner = ClassicalPolicy(config=cfg, log=lambda *_: None).planner
+        priors = {n: np.asarray(planner.bin_xy(n), float) for n in planner.scene.bin_names}
+        delta = xy(0.02, -0.015)
+        rims = rim_votes(_SyntheticRimPerception(planner, delta, cfg), np.ones((2, 2)), priors,
+                         cfg["bin"]["vote"])
+        for name in planner.scene.bin_names:
+            np.testing.assert_allclose(rims[name], priors[name] - delta, atol=0.001)
+
+
+class _SnapshotPerception(_SyntheticRimPerception):
+    def __init__(self, planner, delta, cfg, expected_T, target):
+        super().__init__(planner, delta, cfg)
+        self.expected_T, self.target = expected_T, np.asarray(target, float)
+
+    def _pixel_to_pelvis(self, u, v, depth, transform_snapshot=None):
+        self.transforms.append(transform_snapshot)
+        if transform_snapshot is not self.expected_T:
+            raise AssertionError("tape did not receive the frame's transform snapshot")
+        u, v = np.asarray(u), np.asarray(v)
+        return np.c_[self.target[0] + (u - 7.5) * 0.0001,
+                     self.target[1] + (v - 7.5) * 0.0001,
+                     np.full(len(u), self.scene.counter_z + self.scene.cfg["bins"]["wall_height"])]
+
+
+class TestFrameTransformSnapshot(unittest.TestCase):
+    def test_nonzero_pitch_tape_and_rim_agree_on_one_snapshot(self):
+        from .policy import ClassicalPolicy
+        cfg = load_config(overrides={"bin.vote.signed_rim_fit": True,
+                                     "bin.vote.frame_transform_snapshot": True,
+                                     "bin.vote.min_tape_px": 20})
+        planner = ClassicalPolicy(config=cfg, log=lambda *_: None).planner
+        name = "center"
+        prior = np.asarray(planner.bin_xy(name), float)
+        delta = xy(0.018, -0.012)
+        a = np.radians(6.0)
+        T = np.array([[1, 0, 0, 0], [0, np.cos(a), -np.sin(a), 0],
+                      [0, np.sin(a), np.cos(a), 0], [0, 0, 0, 1]], float)
+        T.setflags(write=False)
+        perception = _SnapshotPerception(planner, delta, cfg, T, prior + delta)
+        rgb = np.zeros((24, 24, 3), np.uint8)
+        rgb[3:13, 3:13] = [150, 52, 32]  # OpenCV HSV approximately [5, 201, 150], inside tape_hsv
+        depth = np.full((24, 24), 500, np.uint16)
+        centers = {n: np.asarray(planner.bin_xy(n), float) for n in planner.scene.bin_names}
+        rim = rim_votes(perception, depth, centers, cfg["bin"]["vote"], T)[name]
+        tape = tape_votes(perception, rgb, depth, centers, cfg["bin"]["vote"], T)[name]
+        np.testing.assert_allclose(rim, prior + delta, atol=0.001)
+        np.testing.assert_allclose(tape, prior + delta, atol=0.002)
+        self.assertTrue(perception.transforms)
+        self.assertTrue(all(snapshot is T for snapshot in perception.transforms))
+
+
+class TestAsyncBinVote(unittest.TestCase):
+    @staticmethod
+    def _policy_and_obs():
+        from .policy import ClassicalPolicy
+        cfg = load_config(overrides={"bin.vote.enabled": True, "bin.vote.async_extract": True,
+                                     "bin.vote.frame_transform_snapshot": True, "bin.vote.n_frames": 1})
+        policy = ClassicalPolicy(config=cfg, log=lambda *_: None)
+        policy.state = "look"
+        policy.arm_cmd, policy.hand_cmd = policy.home.copy(), policy.post["open"].copy()
+        obs = {"arm_q": policy.home.copy(), "hand_q": policy.post["open"].copy(), "t": 1.0,
+               "head_rgb": np.zeros((32, 32, 3), np.uint8), "head_depth": np.full((32, 32), 500, np.uint16)}
+        return policy, obs
+
+    def test_act_latency_under_5ms_while_vote_computes_on_copied_frame(self):
+        policy, obs = self._policy_and_obs()
+        started, release, seen = threading.Event(), threading.Event(), []
+        job = None
+
+        def slow_vote(perception, planner, frames, cfg, log):
+            seen.append(frames)
+            started.set()
+            release.wait(2.0)
+            names = planner.scene.bin_names
+            return ({n: np.zeros(2) for n in names}, {n: 0.0 for n in names}, {n: 1.0 for n in names})
+
+        try:
+            with mock.patch("aaltonomous.baselines.classical.policy.vote_bins", side_effect=slow_vote):
+                policy.act(obs)
+                self.assertTrue(started.wait(1.0))
+                job = policy._bv_job
+                self.assertIsNot(seen[0][0]["head_depth"], obs["head_depth"])
+                self.assertFalse(np.shares_memory(seen[0][0]["head_depth"], obs["head_depth"]))
+                self.assertFalse(seen[0][0]["head_depth"].flags.writeable)
+                self.assertFalse(seen[0][0]["transform_snapshot"].flags.writeable)
+                elapsed = []
+                for _ in range(5):
+                    t0 = time.perf_counter()
+                    policy.act(obs)
+                    elapsed.append(time.perf_counter() - t0)
+                self.assertLess(max(elapsed), 0.005, elapsed)
+        finally:
+            release.set()
+            if policy._bv_job is not None:
+                policy._bv_job["done"].wait(2.0)
+        self.assertIsNotNone(job["result"])
+        self.assertIsInstance(job["result"].shift, tuple)
+        with self.assertRaises(AttributeError):
+            job["result"].generation = -1
+
+    def test_reset_generation_discards_stale_vote_result(self):
+        policy, obs = self._policy_and_obs()
+        started, release = threading.Event(), threading.Event()
+
+        def stale_vote(perception, planner, frames, cfg, log):
+            started.set()
+            release.wait(2.0)
+            names = planner.scene.bin_names
+            return ({n: np.array([0.08, 0.08]) for n in names},
+                    {n: 0.0 for n in names}, {n: 1.0 for n in names})
+
+        with mock.patch("aaltonomous.baselines.classical.policy.vote_bins", side_effect=stale_vote):
+            policy.act(obs)
+            self.assertTrue(started.wait(1.0))
+            old_job = policy._bv_job
+            policy.reset()
+            release.set()
+            self.assertTrue(old_job["done"].wait(2.0))
+        self.assertIsNone(old_job["result"])
+        self.assertIsNone(policy._bv_job)
+        self.assertEqual(policy.planner.bin_shift, {})
+        self.assertFalse(policy._bv_done)
 
 
 def _plan(pl, bin_name="center"):

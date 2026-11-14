@@ -23,6 +23,8 @@ import re
 import sys
 import threading
 import time
+from dataclasses import dataclass
+from types import MappingProxyType
 
 import numpy as np
 
@@ -33,7 +35,7 @@ from aaltonomous.scene.scene import Scene
 
 from . import decision as dec
 from .bin_vote import vote_bins
-from .config import equalize_index_middle, hand_postures, home_arm, load_config
+from .config import hand_postures, home_arm, load_config
 from .held import HeldDetector
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
@@ -48,6 +50,28 @@ _HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence n
 _LID = re.compile(r"\blids?\b")
 _TRUNC_CUT = ".;!?\n"   # instruction.max_chars: sentence / clause boundaries, then whitespace
 _WS = " \t\r\n"
+
+
+@dataclass(frozen=True)
+class _BinVoteResult:
+    """Thread result with no mutable arrays/dicts; only the matching episode may publish it."""
+    generation: int
+    shift: tuple
+    extra: tuple
+    confidence: tuple
+    messages: tuple
+
+    @classmethod
+    def freeze(cls, generation, raw, messages):
+        shift, extra, confidence = raw
+        vecs = tuple((str(k), tuple(float(x) for x in np.asarray(v, float))) for k, v in sorted(shift.items()))
+        return cls(int(generation), vecs,
+                   tuple((str(k), float(v)) for k, v in sorted(extra.items())),
+                   tuple((str(k), float(v)) for k, v in sorted(confidence.items())),
+                   tuple(str(m) for m in messages))
+
+    def mutable_copies(self):
+        return ({k: np.asarray(v, float) for k, v in self.shift}, dict(self.extra), dict(self.confidence))
 
 
 def _lower_thread_priority(nice=10):
@@ -74,7 +98,6 @@ class ClassicalPolicy:
         self.cal = calibration if isinstance(calibration, Calibration) else Calibration.load(calibration)
         self.spec = JointSpec()
         self.post = hand_postures(self.cfg, self.spec)
-        self._mirror_im = bool(self.cfg["hand"].get("mirror_index_middle", False))
         self.home = home_arm(self.cfg, self.spec)
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
@@ -113,6 +136,10 @@ class ClassicalPolicy:
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
         self.require_confirm = require_confirm
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
+        bv = (self.cfg.get("bin") or {}).get("vote") or {}
+        self._async_bin_vote = bool(bv.get("enabled", False) and bv.get("async_extract", False))
+        if self._async_bin_vote:
+            threaded = True
         if self._shell:   # policy.safety_shell: all heavy work off the 30 Hz loop (look/plan thread), plans within the reserve
             threaded = True
             self._shell_init()
@@ -155,30 +182,23 @@ class ClassicalPolicy:
         exception here would end the episode as a BAD_END, which is worse than any wrong mapping.
         The resolver is pure stdlib and measured at ~0.13 ms per sentence.
         """
-        strict = False
         try:                                        # the WHOLE body, not just the resolve call
-            instruction_cfg = self.cfg.get("instruction") or {}
-            strict = instruction_cfg.get("strict", False)
-            if not instruction_cfg.get("resolve", False):
+            if not (self.cfg.get("instruction") or {}).get("resolve", False):
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
             if not str(text).strip():               # empty / whitespace: no instruction -> the fixed fallback
                 return None
             from .instruction import resolve
-            multilingual = instruction_cfg.get("multilingual", False)
-            if multilingual:
-                from .normalize import canonicalize_multilingual
-                text = canonicalize_multilingual(text)
-            if instruction_cfg.get("normalize", False):   # typo/synonym normaliser (Felix)
+            if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
                 from .normalize import normalize
                 text = normalize(text)
-            if strict:   # never guess: abstain (Felix strict)
+            if (self.cfg.get("instruction") or {}).get("strict", False):   # never guess: abstain (Felix strict)
                 from .normalize import strict_mapping
                 return strict_mapping(text, resolve(text, fallback={}))
             return resolve(text, fallback=getattr(self, "fixed_mapping", None)) or None
         except Exception as e:                      # a parse bug must not cost the whole episode
-            self.log(f"instruction resolve failed ({e}), " + ("abstaining" if strict else "using FIXED_MAPPING"))
-            return {"default": None} if strict else None
+            self.log(f"instruction resolve failed ({e}), using FIXED_MAPPING")
+            return None
 
     def _insert_guard_mapping(self, info):
         """policy.insert_guard: rung 3 (insert_shapes) -> {"default": "abstain"}, i.e. pick nothing; else None.
@@ -239,6 +259,10 @@ class ClassicalPolicy:
         self.events = []
         self.plans = []
         self._job = None
+        look_lock = self.__dict__.setdefault("_look_lock", threading.Lock())
+        with look_lock:
+            self._look_generation = getattr(self, "_look_generation", 0) + 1
+            self._bv_job = None
         self._decision = None
         self.last_detections = []
         self.mapping_conf = dict(info.get("mapping_conf") or {})   # colour -> confidence (default 1.0), triage tie-break
@@ -471,14 +495,6 @@ class ClassicalPolicy:
         self._decision = "stop"
 
     def act(self, obs):
-        res = self._act_entry(obs)
-        if self._mirror_im:   # hand.mirror_index_middle (R42a): last stop before the runner, every return path
-            h = np.asarray(res["hand_q_target"], float)
-            res = dict(res, hand_q_target=np.stack([equalize_index_middle(r, closed=False) for r in h])
-                       if h.ndim == 2 else equalize_index_middle(h, closed=False))
-        return res
-
-    def _act_entry(self, obs):
         ng = bool((self.cfg.get("safety") or {}).get("nan_guard", False))
         if ng:
             obs, hold = self._nan_guard(obs)
@@ -724,29 +740,28 @@ class ClassicalPolicy:
             self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
             self.state = "look"
             return self._pop()
-        if self.state == "look" and not self._bv_done and (self.cfg.get("bin") or {}).get("vote", {}).get("enabled"):
+        vote_cfg = (self.cfg.get("bin") or {}).get("vote", {})
+        if (self.state == "look" and not self._bv_done and vote_cfg.get("enabled") and
+                vote_cfg.get("frame_transform_snapshot", False) and self._await_pitch_cal(t)):
+            # H4: do not capture the vote's immutable per-frame pose while the first pitch commit is pending.
+            return self._hold()
+        if self.state == "look" and not self._bv_done and vote_cfg.get("enabled"):
             # bin.vote: first n_frames looks at home, before any pick; then freeze the median, never again
-            v = self.cfg["bin"]["vote"]
-            if len(self._bv_frames) < int(v["n_frames"]):
-                self._bv_frames.append({"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth")})
-            if len(self._bv_frames) < int(v["n_frames"]):
-                return self._hold()
-            if self._shell:   # rim/tape extraction is much slower than the 50 ms control-loop budget
-                r = self._bg("bin_vote", vote_bins, self.perception, self.planner, self._bv_frames, self.cfg,
-                             lambda m: self._note(t, m))
-                if r is None:
+            if self._async_bin_vote:
+                if self._async_bin_vote_step(obs, t):
                     return self._hold()
-                if r[0] == "err":
-                    self._note(t, f"[bin.vote] worker failed ({type(r[1]).__name__}: {r[1]}); prior positions")
-                    shift, extra, conf = {}, {}, {}
-                else:
-                    shift, extra, conf = r[1]
             else:
+                frame = {"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth")}
+                if vote_cfg.get("frame_transform_snapshot", False):
+                    frame["transform_snapshot"] = self.perception.projection_snapshot()
+                self._bv_frames.append(frame)
+                if len(self._bv_frames) < int(vote_cfg["n_frames"]):
+                    return self._hold()
+                self._bv_done = True
                 shift, extra, conf = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg,
                                                 log=lambda m: self._note(t, m))
-            self._bv_done = True
-            self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = shift, extra, conf
-            self._bv_frames = []
+                self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = shift, extra, conf
+                self._bv_frames = []
         if self.state == "look" and self._await_pitch_cal(t):
             return self._hold()
         if self.state == "look":
@@ -817,10 +832,75 @@ class ClassicalPolicy:
     # ------------------------------------------------------------------ look + plan
     def _look_job(self, job):
         _lower_thread_priority()  # planning must not starve act() (the control loop's thread)
+        if job.get("kind") == "bin_vote":
+            self._bin_vote_look_job(job)
+            return
         try:
             job["result"] = self._look(job["obs"])
         except Exception as e:  # never kill the control loop
             job["result"] = ("error", repr(e))
+
+    def _copy_bin_vote_frame(self, obs):
+        """Copy camera buffers before returning to the runner; the worker never observes reused frame storage."""
+        frame = {}
+        for key in ("head_rgb", "head_depth"):
+            value = obs.get(key)
+            if value is None:
+                frame[key] = None
+            else:
+                value = np.asarray(value).copy()
+                value.setflags(write=False)
+                frame[key] = value
+        if self.cfg["bin"]["vote"].get("frame_transform_snapshot", False):
+            frame["transform_snapshot"] = self.perception.projection_snapshot()
+        return MappingProxyType(frame)
+
+    def _async_bin_vote_step(self, obs, t):
+        """Collect/start/poll only. Return True while act() must hold; extraction runs in the look worker."""
+        job = self._bv_job
+        if job is not None:
+            if not job["done"].is_set():
+                return True
+            result = job["result"]
+            if result is None or result.generation != self._look_generation:
+                return True
+            self._bv_job = None
+            self._bv_done = True
+            self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = result.mutable_copies()
+            for message in result.messages:
+                self._note(t, message)
+            return False
+
+        self._bv_frames.append(self._copy_bin_vote_frame(obs))
+        if len(self._bv_frames) < int(self.cfg["bin"]["vote"]["n_frames"]):
+            return True
+        job = {"kind": "bin_vote", "generation": self._look_generation,
+               "frames": tuple(self._bv_frames), "result": None, "done": threading.Event()}
+        self._bv_frames = []
+        with self._look_lock:
+            if job["generation"] != self._look_generation:
+                return True
+            self._bv_job = job
+        threading.Thread(target=self._look_job, args=(job,), name="bin-vote", daemon=True).start()
+        return True
+
+    def _bin_vote_look_job(self, job):
+        messages = []
+        try:
+            raw = vote_bins(self.perception, self.planner, job["frames"], self.cfg, log=messages.append)
+            result = _BinVoteResult.freeze(job["generation"], raw, messages)
+        except Exception as exc:  # vote_bins is defensive; keep the worker boundary defensive too
+            names = self.scene.bin_names
+            v = self.cfg["bin"]["vote"]
+            raw = ({}, {n: float(v["low_conf_extra_m"]) for n in names}, {n: 0.5 for n in names})
+            messages.append(f"[bin.vote] worker failed ({type(exc).__name__}: {exc}); prior positions")
+            result = _BinVoteResult.freeze(job["generation"], raw, messages)
+        try:
+            with self._look_lock:
+                if job["generation"] == self._look_generation and self._bv_job is job:
+                    job["result"] = result
+        finally:
+            job["done"].set()
 
     def _detect_kw(self):
         """Only with perception.colour_kmeans: tell detect() whether the arm is out of view (parked at home)."""

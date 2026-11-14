@@ -296,8 +296,18 @@ class Perception:
         T = self.pitch_T
         return T if T is not None else self.cal._T(self.cam)
 
-    def _pixel_to_pelvis(self, u, v, depth_mm):
+    def projection_snapshot(self):
+        """Read-only T_pelvis_optical for all consumers of one copied frame."""
+        T = self.current_T()
+        T.setflags(write=False)
+        return T
+
+    def _pixel_to_pelvis(self, u, v, depth_mm, transform_snapshot=None):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.pixel_to_pelvis.
+        if transform_snapshot is not None:
+            T = np.asarray(transform_snapshot, float)
+            p = self.cal.deproject(self.cam, u, v, depth_mm)
+            return p @ T[:3, :3].T + T[:3, 3]
         T = self.pitch_T  # read once: a worker thread may swap it in
         if T is None:
             return self.cal.pixel_to_pelvis(self.cam, u, v, depth_mm)
@@ -764,7 +774,7 @@ class Perception:
                                           float(elapsed_ms), str(reason))
         return self.calibration
 
-    def _counter_plane(self, depth, c, z0=None):
+    def _counter_plane(self, depth, c, z0=None, transform_snapshot=None):
         """Pelvis points of `depth` (stride-subsampled) and the counter plane z = ax + by + c fitted to them.
         (P, coef, None) or (None, None, reason). Shared by calibrate_bins and the bin.vote rim vote."""
         dlo, dhi = self.cfg["depth_range_mm"]
@@ -775,7 +785,8 @@ class Perception:
         stride = max(1, int(c.get("pixel_stride", 3)))
         vv, uu = np.nonzero(valid[::stride, ::stride])
         vv, uu = vv * stride, uu * stride
-        P = self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float))
+        P = (self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float)) if transform_snapshot is None else
+             self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float), transform_snapshot))
         sc = self.scene
 
         # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.

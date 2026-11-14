@@ -92,6 +92,9 @@ flags:
   policy.confidence_tiers: false                # D4         first-seconds calibration tiers
   bin.geometry_runtime: false                   # bin geo    all bin consumers follow bin_geometry() (A/B: ab_bingeo)
   bin.vote.enabled: false                       # bin vote  per-bin position from 3 votes (A/B: ab_binvote)
+  bin.vote.signed_rim_fit: false                # C3         signed physical rim displacement (release candidate only)
+  bin.vote.async_extract: false                 # H5         vote extraction in look worker (release candidate only)
+  bin.vote.frame_transform_snapshot: false      # H4         one transform snapshot per vote frame (release candidate only)
   decision.isolated_first: false                # isolated   touching candidates after the isolated ones (isolated_min_m 0.06)
   perception.inject_cam_error: null             # TEST ONLY [dpitch_deg, dyaw_deg, dx, dy, dz]: perturb the head extrinsics
   instruction.max_chars: 0                      # fuzz fix   0 = off; N>0 caps the instruction text at N chars (boundary cut)
