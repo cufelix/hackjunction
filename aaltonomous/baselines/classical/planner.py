@@ -55,8 +55,7 @@ class Plan:
     phases: list = field(default_factory=list)         # (name, start tick, end tick)
     posture: tuple | None = None                       # (posture, shape label, conf, path) with grasp.close_posture_by_shape
     close_hold: tuple | None = None                    # (first, end) tick of the closed-hand hold (lift_on_stall)
-    abort: tuple | None = None                         # policy.retry_vary_grasp: (lift start tick, arm, hand) = lift +
-                                                       # straight home, executed instead of the carry on held=no
+    abort: tuple | None = None                         # legacy field; early servo-error abort is intentionally disabled
     safety_clips: int | None = None
     grasp_key: tuple | None = None                     # policy.retry_vary_grasp: (grasp xy, finger heading, posture)
 
@@ -403,7 +402,9 @@ class Planner:
         (and as the fallback) _plan_side with each finger direction of grasp.finger_hints in turn (fingers forward
         can reach over the centre bin's wall when the object is close to it; then fingers inward/sideways)."""
         vy = (self.vary or {}).get("yaw")
-        if vy is not None and kw.get("place_xy") is None:   # policy.retry_vary_grasp: one fixed finger heading
+        # A corrective cleanup has place_xy but still needs a changed grasp after a miss. Ordinary relocations keep
+        # the legacy free-yaw planning because their destination search is already the fallback path.
+        if vy is not None and (kw.get("place_xy") is None or kw.get("source_bin") is not None):
             return self._plan_side_heading(det, side, bin_name, arm_q, hand_q, float(vy), **kw)
         if self._yaw_align_on(det) and kw.get("place_xy") is None:
             p = self._plan_side_yaw(det, side, bin_name, arm_q, hand_q, **kw)
@@ -618,7 +619,7 @@ class Planner:
             bxy = slots[min(int(drop_slot), len(slots) - 1)]
         if place_xy is not None:  # relocation: put it down on the counter (release just above the grasp height)
             bxy, z_drop = np.asarray(place_xy, float), z + 0.005
-        P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry)], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],
+        P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry) + float(g.get("approach_extra_m", 0.0))], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],
              "above_bin": np.r_[bxy, z_carry], "drop": np.r_[bxy, z_drop], "retreat": np.r_[bxy, z_drop + g["retreat_up"]]}
 
         q_pre, ok = self._ik(side, P["pregrasp"], qg, "pregrasp", plan)  # same IK branch as the grasp
@@ -736,38 +737,7 @@ class Planner:
             plan.reason = f"{plan.safety_clips} safety clips in dry run"
             return plan
         plan.ok = True
-        if (cfg.get("policy") or {}).get("retry_vary_grasp", False) and place_xy is None and source_bin is None:
-            plan.abort = self._abort_branch(side, plan, arm_q, hand_q, home, hand_open)
         return plan
-
-    def _abort_branch(self, side, plan, arm_q, hand_q, home, hand_open):
-        """policy.retry_vary_grasp: the plan's own lift ticks, then a joint move straight home (hand opening on the way)
-        at the configured arm_max_vel / arm_max_acc / hand_max_vel. The policy switches to it when the hand closed on
-        nothing (held=no). Checked like the plan (counter + bin-rim clearance, safety dry run from the start); None if
-        any check fails (then the stock carry runs)."""
-        mo, g = self.cfg["motion"], self.cfg["grasp"]
-        ph = {name: (s, e) for name, s, e in plan.phases}
-        if "lift" not in ph:
-            return None
-        ls, le = ph["lift"]
-        q_top, h_top = plan.arm[le - 1], plan.hand[le - 1]
-        a = time_scale([q_top, home], mo["arm_max_vel"], mo["arm_max_acc"], self.dt)
-        hr = ramp(h_top, hand_open, mo["hand_max_vel"], self.dt)
-        if len(hr) > len(a):
-            a = np.vstack([a, np.repeat((a[-1] if len(a) else q_top)[None], len(hr) - len(a), 0)])
-        h = np.repeat(np.asarray(hand_open, float)[None], len(a), 0)
-        h[:len(hr)] = hr
-        arm = np.vstack([plan.arm[ls:le], a])
-        hand = np.vstack([plan.hand[ls:le], h])
-        nl = le - ls
-        for k in range(nl, len(arm), 3):
-            if self.clearance(side, arm[k], hand[k]) < mo["counter_clearance"] - 2e-3:
-                return None
-            if self.bin_clearance(side, arm[k], hand[k]) < 0.003:
-                return None
-        if self.dry_run_safety(arm_q, hand_q, np.vstack([plan.arm[:ls], arm]), np.vstack([plan.hand[:ls], hand])):
-            return None
-        return (ls, arm, hand)
 
     def dry_run_safety(self, arm_q, hand_q, arm, hand):
         f = SafetyFilter(self.spec, self.safety)
