@@ -147,6 +147,8 @@ class ClassicalPolicy:
         self.perception.reset_calibration()
         self.calibration = None
         self._calibration_done = False
+        self.pitch_calibration = None
+        self._pitch_calibration_done = False
         self.last_bin_detections = []
         self.used_drop_slots = {name: set() for name in self.scene.bin_names}
         self.reserved_drop_slots = {name: set() for name in self.scene.bin_names}
@@ -174,6 +176,31 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        if not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False):
+            started = time.perf_counter()
+            try:
+                pitch_cal = self.perception.calibrate_pitch(obs.get("head_rgb"), obs.get("head_depth"))
+            except Exception as exc:  # optional calibration must never terminate the control loop
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                pitch_cal = self.perception.pitch_calibration_failure(
+                    f"{type(exc).__name__}: {exc}", elapsed_ms=elapsed_ms)
+            if pitch_cal.valid_frame:
+                self._pitch_calibration_done = True
+                self.pitch_calibration = pitch_cal
+                if pitch_cal.mode == "table":
+                    state = "accepted" if pitch_cal.success else "rejected"
+                    self.log(f"[pitch_cal] mode=table {state}: dpitch={pitch_cal.pitch_deg:+.2f} deg, "
+                             f"droll={pitch_cal.roll_deg:+.2f} deg, height={pitch_cal.camera_height_m:.3f} m, "
+                             f"inliers={pitch_cal.n_inliers}/{pitch_cal.n_points}, "
+                             f"rms={pitch_cal.residual_m * 1000.0:.1f} mm, "
+                             f"time={pitch_cal.elapsed_ms:.1f} ms ({pitch_cal.reason})")
+                else:
+                    # Preserve the established bin-rim mode and its log format.
+                    state = "accepted" if pitch_cal.success else "fallback"
+                    self.log(f"[pitch_cal] {state}: dtheta={pitch_cal.pitch_deg:+.2f} deg, "
+                             f"residual={pitch_cal.residual_m * 1000.0:.1f} mm, "
+                             f"points={pitch_cal.n_points}, time={pitch_cal.elapsed_ms:.1f} ms "
+                             f"({pitch_cal.reason})")
         if not self._calibration_done and (self.cfg["perception"].get("self_calibration") or {}).get("enabled", False):
             started = time.perf_counter()
             try:

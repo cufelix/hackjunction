@@ -1,0 +1,6 @@
+# A/B overlay: per-episode head-camera optical-x pitch from the orange bin far rims.
+# Runs once on the first valid RGB-D frame, logs one [pitch_cal] line, and retains nominal extrinsics on rejection.
+name: ab_pitch_cal
+flags:
+  perception.online_pitch_cal: true
+  policy.grasp_diag_log: true
