@@ -135,6 +135,7 @@ class Planner:
         self._apex = None      # grasp.posture_apex_gate: (pass, apex_conf, max angle) of the pick being planned
         self.vary = None       # policy.retry_vary_grasp: {"posture": name | None, "yaw": rad | None} for the next plan()
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
+        self.object_speed_scale = None  # policy.first_object_speed_scale: arm phase speed x this (a copy, per plan)
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
@@ -330,6 +331,41 @@ class Planner:
         plan.ik[name] = (False, 0.0, 0.0)
         plan.reason = f"{name}: no joint-space path above the bin rim"
         return None
+
+    def _in_bin_footprint(self, name, xy):
+        """True when pelvis-frame xy lies inside the inner footprint of bin `name`, bin.vote shift included."""
+        lo, hi = self.scene.bin_inner_box(name)
+        corners = self.scene.mat_to_pelvis(np.array([[x, y, 0.0] for x in (lo[0], hi[0]) for y in (lo[1], hi[1])]))
+        sh = np.asarray(self.bin_shift.get(name, (0.0, 0.0)), float)
+        xlo, xhi = corners[:, 0].min() + sh[0], corners[:, 0].max() + sh[0]
+        ylo, yhi = corners[:, 1].min() + sh[1], corners[:, 1].max() + sh[1]
+        return bool(xlo <= xy[0] <= xhi and ylo <= xy[1] <= yhi)
+
+    def _adjusted_drop_target(self, side, bin_name, xy, z, seed, z_max=None):
+        """Conservative bin release (grasp.drop_lateral_margin_m, grasp.drop_height_extra_m) -> (xy, z, adjusted).
+
+        The lateral margin moves only the y coordinate toward the (bin.vote-shifted) bin centre, never past it. The
+        height rises by drop_height_extra_m, capped at z_max (the carry height; never below the stock release). The
+        candidate must lie inside the bin footprint and pass a direct IK check, else the stock target is returned.
+        Both flags at 0 -> the stock target untouched, no IK call."""
+        g = self.cfg["grasp"]
+        dz = float(g.get("drop_height_extra_m", 0.0))
+        margin = float(g.get("drop_lateral_margin_m", 0.0))
+        base_xy = np.asarray(xy, float)
+        if dz == 0.0 and margin == 0.0:
+            return base_xy, float(z), False
+        cand_xy = base_xy.copy()
+        dy = float(self.bin_xy(bin_name)[1] - cand_xy[1])
+        cand_xy[1] += np.sign(dy) * min(abs(dy), margin)
+        z_new = float(z) + dz
+        if z_max is not None:
+            z_new = min(z_new, max(float(z_max), float(z)))
+        if not self._in_bin_footprint(bin_name, cand_xy):
+            return base_xy, float(z), False
+        candidate = np.r_[cand_xy, z_new]
+        _, ok, _, _ = self.kin.solve(side, candidate, seed, top_down=True,
+                                     extra_seeds=[self.home[ArmKinematics.sl(side)]])
+        return (cand_xy, z_new, True) if ok else (base_xy, float(z), False)
 
     # ------------------------------------------------------------------ main
     def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True, drop_slot=None, source_bin=None):
@@ -712,8 +748,13 @@ class Planner:
         else:                  # #6: the assigned drop slot
             slots = self.drop_slots(bin_name)
             bxy = slots[min(int(drop_slot), len(slots) - 1)]
+        stock_bxy, stock_z_drop = np.asarray(bxy, float).copy(), float(z_drop)
+        drop_adjustment_on, adjusted = False, False
         if place_xy is not None:  # relocation: put it down on the counter (release just above the grasp height)
             bxy, z_drop = np.asarray(place_xy, float), z + 0.005
+        elif g.get("drop_height_extra_m", 0.0) or g.get("drop_lateral_margin_m", 0.0):
+            drop_adjustment_on = True
+            bxy, z_drop, adjusted = self._adjusted_drop_target(side, bin_name, bxy, z_drop, qg, z_max=z_carry)
         P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry) + float(g.get("approach_extra_m", 0.0))], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],
              "above_bin": np.r_[bxy, z_carry], "drop": np.r_[bxy, z_drop], "retreat": np.r_[bxy, z_drop + g["retreat_up"]]}
 
@@ -725,15 +766,37 @@ class Planner:
         down = self._cartesian(side, P["pregrasp"], P["grasp"], q_pre, "descend", plan)
         up = down and self._cartesian(side, P["grasp"], P["lift"], down[-1], "lift", plan)
         hint_saved = (self.kin.hint, self.kin.w_hint)
-        if self._carry_hint is not None:   # retry heading variant: the wrist may turn back while carrying
-            self.kin.hint, self.kin.w_hint = self._carry_hint
-        try:
-            carry = up and (self._cartesian(side, P["lift"], P["above_bin"], up[-1], "carry", plan)
-                            or self._joint_carry(side, up[-1], P["lift"], P["above_bin"], z_drop, "carry", plan))
-            lower = carry and self._cartesian(side, P["above_bin"], P["drop"], carry[-1], "lower", plan)
-            retreat = lower and self._cartesian(side, P["drop"], P["retreat"], lower[-1], "retreat", plan)
-        finally:
-            self.kin.hint, self.kin.w_hint = hint_saved
+
+        def drop_leg(points):
+            if self._carry_hint is not None:   # retry heading variant: the wrist may turn back while carrying
+                self.kin.hint, self.kin.w_hint = self._carry_hint
+            try:
+                carry_ = up and (self._cartesian(side, points["lift"], points["above_bin"], up[-1], "carry", plan)
+                                 or self._joint_carry(side, up[-1], points["lift"], points["above_bin"],
+                                                      points["drop"][2], "carry", plan))
+                lower_ = carry_ and self._cartesian(side, points["above_bin"], points["drop"], carry_[-1],
+                                                    "lower", plan)
+                retreat_ = lower_ and self._cartesian(side, points["drop"], points["retreat"], lower_[-1],
+                                                      "retreat", plan)
+                return carry_, lower_, retreat_
+            finally:
+                self.kin.hint, self.kin.w_hint = hint_saved
+
+        carry, lower, retreat = drop_leg(P)
+        if not retreat and adjusted:
+            # Endpoint IK cannot prove a continuous lower/retreat path: retry the complete stock drop leg, so an
+            # adjusted release can never reject a pick that the flag-off planner could execute.
+            for key in ("carry", "carry_mid", "lower", "retreat"):
+                plan.ik.pop(key, None)
+                plan.waypoints.pop(key, None)
+            plan.reason = ""
+            P["above_bin"] = np.r_[stock_bxy, z_carry]
+            P["drop"] = np.r_[stock_bxy, stock_z_drop]
+            P["retreat"] = np.r_[stock_bxy, stock_z_drop + g["retreat_up"]]
+            adjusted = False
+            carry, lower, retreat = drop_leg(P)
+        if drop_adjustment_on:
+            plan.waypoints["drop_adjusted" if adjusted else "drop_fallback"] = P["drop"].copy()
         if not retreat:
             plan.reason = plan.reason or f"IK failed on {[k for k, v in plan.ik.items() if not v[0]]} ({side})"
             return plan
@@ -746,6 +809,8 @@ class Planner:
 
         def move(name, Qs, hand_to=None, scale=1.0):
             nonlocal cur_a, cur_h
+            if self.object_speed_scale is not None:   # <= 1 on top of the (capped) arm_max_vel: never faster
+                scale *= float(self.object_speed_scale)
             a = time_scale([cur_a] + list(Qs), vmax * scale, amax * scale, self.dt)
             h = np.repeat(cur_h[None], len(a), 0)
             if hand_to is not None:  # hand moves during the arm move (ends no later than the arm)

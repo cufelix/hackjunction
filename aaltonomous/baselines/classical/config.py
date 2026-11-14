@@ -72,6 +72,8 @@ FLAGS = {
     "policy.retry_vary_grasp": ("retry-vary", False, "retry after the object remains in the next frame with another "
                                                      "grasp (posture/heading), never an identical one"),
     "policy.max_attempts_vary": ("retry-vary", None, "with retry_vary_grasp: tries per object up to this, only with time left"),
+    "policy.first_object_speed_scale": ("finals safe", None,
+                                          "null | (0,1]: arm speed x this for every plan made before the first pick starts"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
     "policy.place_gate": ("EV gate", False, "require colour and target-bin confidence before planning a placement"),
     "policy.place_gate_colour_min": ("EV gate", 0.6, "minimum HSV/blob colour confidence (used only by place_gate)"),
@@ -82,6 +84,10 @@ FLAGS = {
     "policy.max_corrections_per_episode": ("Felix #6 rev", None, "#6: cap corrections; counter picks go first"),
     "grasp.drop_slots": ("Timi 23", False, "standalone drop slots: next object in a bin -> next slot"),
     "grasp.drop_slot_overflow": ("Felix #6 rev", "counter", "slots used up: counter (leave it) | stack (slot 0)"),
+    "grasp.drop_height_extra_m": ("finals safe", 0.0,
+                                    "extra bin-release height (capped at the carry height); IK failure uses the stock target"),
+    "grasp.drop_lateral_margin_m": ("finals safe", 0.0,
+                                      "move the bin release toward the bin centre (y only, footprint-checked); IK failure uses the stock target"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
@@ -96,6 +102,8 @@ FLAGS = {
     "grasp.border_posture": ("retry-vary", False, "label None from abstain_border -> demo posture on the first try"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
+    "debug.log_joint_offset": ("finals diag", False,
+                                 "log cmd-minus-measured during steady holds in the first second (no control change)"),
     "policy.confidence_order": ("D1/D2", False, "order by 2*p/est_time (p_colour*p_bin*p_grasp), never the hardest first"),
     "policy.object_time_cap": ("D2", False, "per-object cap (remaining-15)/left 15..35 s, T-20 s no new object, T-8 s release/retract"),
     "policy.speed_tiers": ("D3", False, "1st object 0.7 + 1.5 cm clearance, clean 0.85/0.9, failure 0.6 + centre bin only"),
@@ -228,6 +236,17 @@ def check_flag_values(cfg):
     if ice is not None and not (isinstance(ice, (list, tuple)) and len(ice) == 5
                                 and all(isinstance(x, (int, float)) for x in ice)):
         raise ValueError(f"perception.inject_cam_error = {ice!r}: want null or [dpitch_deg, dyaw_deg, dx, dy, dz]")
+    first_scale = _get(cfg, "policy.first_object_speed_scale")
+    if first_scale is not None and not 0.0 < float(first_scale) <= 1.0:
+        raise ValueError("policy.first_object_speed_scale must be null or in (0, 1]")
+    for k in ("grasp.drop_height_extra_m", "grasp.drop_lateral_margin_m"):
+        v = float(_get(cfg, k))
+        if not np.isfinite(v) or v < 0.0:
+            raise ValueError(f"{k} must be a finite non-negative distance")
+    pol = cfg["policy"]
+    if first_scale is not None and pol.get("safety_shell") and float(pol.get("safety_shell_vel_reserve", 0.0)) > 0.0:
+        # the shell wraps planner.plan with closures bound to the stock planner: the first-pick scale would not reach it
+        raise ValueError("policy.first_object_speed_scale cannot be combined with policy.safety_shell_vel_reserve > 0")
     _check_color_gate(cfg)
     g = cfg.get("grasp") or {}
     for key in ("generic_shape_min_conf", "generic_min_confidence"):

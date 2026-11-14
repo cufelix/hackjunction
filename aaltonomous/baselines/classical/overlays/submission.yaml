@@ -44,6 +44,7 @@ flags:
   policy.episode_summary_log: false             # Oliver #3  one log line per episode end
   policy.retry_vary_grasp: false                # retry-vary another grasp when the object remains in the next frame
   policy.max_attempts_vary: null                # retry-vary e.g. 3 (needs retry_vary_grasp), only with time left
+  policy.first_object_speed_scale: null         # finals safe null | (0,1], arm speed of the first started pick only
   grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture
   policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
   policy.place_gate: false                      # EV gate    confidence-gated placement (off in shipped submission)
@@ -54,6 +55,8 @@ flags:
   policy.max_corrections_per_episode: null      # Felix #6r  e.g. 1; set = counter picks first (needs verify)
   grasp.drop_slots: false                       # Timi 23    standalone drop slots (no verify needed)
   grasp.drop_slot_overflow: counter             # Felix #6r  counter | stack, when the slots are used up
+  grasp.drop_height_extra_m: 0.0                # finals safe extra release height; IK fallback to stock
+  grasp.drop_lateral_margin_m: 0.0              # finals safe release toward bin centre; IK fallback to stock
   policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
   motion.carry_scale: 1.0                       # Felix      <= 1 only: slower lift + carry
   motion.arm_vel_cap: null                      # Timi vel   rad/s arm speed cap (real robot margin); null = profile 0.97
@@ -67,6 +70,7 @@ flags:
   grasp.posture_apex_gate: true                # apex gate  demo also needs a real prism top (apex_conf, max angle)
   grasp.generic_fallback: false                 # generic grasp  unproven: unknown/low-confidence shapes stay untouched
   hand.closed_tight: [0.0, 0.0, 1.2, -1.0, -0.6, -1.0, -0.6]   # pinch fix  ON = ab_pinch_v1
+  debug.log_joint_offset: false                 # passive    first-second steady cmd-vs-measured diagnostic
   policy.confidence_order: false                # D1/D2      order by 2*p/est_time, never the hardest first
   policy.object_time_cap: false                 # D2         per-object cap, T-20 s / T-8 s rules
   policy.speed_tiers: false                     # D3         first object 0.7 + clearance, tiers by outcome

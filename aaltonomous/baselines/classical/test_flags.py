@@ -117,6 +117,10 @@ class TestFlags(unittest.TestCase):
         expect["ab_binvote"] = nopp | {"bin.vote.enabled"}   # rebased on cand_r17
         expect["ab_plane_cgate_live_vote"] = expect["ab_plane_cgate_live"] | {"bin.vote.enabled"}
         expect["ab_isolated_first"] = nopp | {"decision.isolated_first"}   # rebased on cand_r17
+        expect["ab_first_object_speed_scale"] = nopp | {"policy.first_object_speed_scale"}
+        expect["ab_drop_height_extra_m"] = nopp | {"grasp.drop_height_extra_m"}
+        expect["ab_drop_lateral_margin_m"] = nopp | {"grasp.drop_lateral_margin_m"}
+        expect["ab_log_joint_offset"] = nopp | {"debug.log_joint_offset"}
         expect["ab_generic_fallback"] = nopp | {"grasp.generic_fallback"}   # rebased on cand_r17
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
         expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
@@ -160,6 +164,8 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
                                       "finals_real", "rc1", "ab_decision", "ab_place_gate",
                                       "ab_object_time_budget_s", "ab_colour_kmeans", "ab_cgate", "ab_plane_cgate", "ab_cgate_fk", "ab_cgate_live", "ab_plane_cgate_live", "ab_plane_cgate_live_fk", "ab_binvote", "ab_plane_cgate_live_vote", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90", "ab_isolated_first", "cand_r18", "finals_r18", "ab_generic_fallback",
+                                      "ab_first_object_speed_scale", "ab_drop_height_extra_m",
+                                      "ab_drop_lateral_margin_m", "ab_log_joint_offset", "safe_profile",
                                       "ab_inj_p7", "ab_inj_p4", "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_plane_inj_p7",
                                       "ab_plane_b1_inj_p7", "ab_b1_inj_p7"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
@@ -197,6 +203,35 @@ class TestFlags(unittest.TestCase):
     def test_normalize_selfcheck(self):
         from . import normalize
         normalize._selfcheck()
+
+    def test_safe_profile_is_cand_r17_plus_conservative_values(self):
+        base = load_config(overlay="cand_r17")
+        safe = load_config(overlay="safe_profile")
+        base["overlay"] = "safe_profile"
+        base["policy"]["first_object_speed_scale"] = 0.7
+        base["grasp"]["drop_height_extra_m"] = 0.04
+        base["grasp"]["drop_lateral_margin_m"] = 0.02
+        base["debug"]["log_joint_offset"] = False
+        for key in ("online_pitch_cal", "colour_kmeans"):
+            base["perception"][key] = False
+        base["perception"]["hand_calibration"]["enabled"] = False
+        base["bin"]["vote"]["enabled"] = False
+        self.assertEqual(safe, base)
+        self.assertFalse(safe["perception"]["self_calibration"]["enabled"])
+        self.assertIsNone(safe["perception"]["y_affine"])
+
+    def test_conservative_ab_overlays_are_cand_r17_plus_one_flag(self):
+        changes = {
+            "ab_first_object_speed_scale": ("policy", "first_object_speed_scale", 0.7),
+            "ab_drop_height_extra_m": ("grasp", "drop_height_extra_m", 0.04),
+            "ab_drop_lateral_margin_m": ("grasp", "drop_lateral_margin_m", 0.02),
+            "ab_log_joint_offset": ("debug", "log_joint_offset", True),
+        }
+        for overlay, (section, key, value) in changes.items():
+            expected = load_config(overlay="cand_r17")
+            expected["overlay"] = overlay
+            expected[section][key] = value
+            self.assertEqual(load_config(overlay=overlay), expected, overlay)
 
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm
@@ -239,6 +274,14 @@ class TestFlags(unittest.TestCase):
                     load_config(overlay=str(p))
         self.assertEqual(load_config(overlay="ab_hold12")["motion"]["close_hold_s"], 1.2)
         self.assertEqual(load_config(overlay="none")["motion"]["close_hold_s"], 0.25)   # sim profile
+        for overrides in ({"policy.first_object_speed_scale": 0.0}, {"policy.first_object_speed_scale": 1.01},
+                          {"policy.first_object_speed_scale": float("nan")},
+                          {"grasp.drop_height_extra_m": -0.01}, {"grasp.drop_height_extra_m": float("inf")},
+                          {"grasp.drop_lateral_margin_m": -0.01},
+                          {"policy.first_object_speed_scale": 0.7, "policy.safety_shell": True,
+                           "policy.safety_shell_vel_reserve": 0.2}):
+            with self.assertRaises(ValueError, msg=overrides):
+                load_config(overrides=overrides)
         for key, value in (("policy.place_gate_colour_min", -0.1), ("policy.place_gate_bin_min", 1.1),
                            ("policy.object_time_budget_s", 0.0), ("policy.object_time_budget_s", float("inf"))):
             with self.assertRaises(ValueError, msg=f"{key}={value}"):
