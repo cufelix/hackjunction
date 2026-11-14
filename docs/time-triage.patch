@@ -1,0 +1,268 @@
+diff --git a/aaltonomous/baselines/classical/config.yaml b/aaltonomous/baselines/classical/config.yaml
+index dc5bc66..f139a5a 100644
+--- a/aaltonomous/baselines/classical/config.yaml
++++ b/aaltonomous/baselines/classical/config.yaml
+@@ -113,6 +113,15 @@ policy:
+   max_attempts: 2             # same object re-detected after this many tries -> skip it
+   same_object_radius: 0.03
+   order: nearest_bin          # nearest_bin | largest
++  # Time triage (default off = old behaviour: the first plan that does not fit the time left ends the episode).
++  # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
++  # lazily; the episode ends only when nothing fits. Plans are NOT computed for every candidate (IK 0.3-6 s each).
++  time_triage: false
++  triage_order: duration      # duration = cheap-estimate order only | priority = estimate ties (within triage_tie_m) go by
++                              # shape cost (policy.shape_cost, detection.shape) then mapping confidence
++  triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority
++  shape_cost: {cube: 0, cylinder: 1, triangle: 2}
++  time_margin_s: 0.0          # a plan must end this long before time_limit (applies with and without triage)
+ 
+ # Overrides per profile (dotted keys). `sim` = Aalto Isaac sim, ported from the oracle's ORACLE_OVERRIDES
+ # (sim/oracle.py) minus anything privileged; SIM-TUNED, not validated on the robot.
+diff --git a/aaltonomous/baselines/classical/policy.py b/aaltonomous/baselines/classical/policy.py
+index 5c6f94f..baa5d6e 100644
+--- a/aaltonomous/baselines/classical/policy.py
++++ b/aaltonomous/baselines/classical/policy.py
+@@ -86,6 +86,8 @@ class ClassicalPolicy:
+         self._job = None
+         self._decision = None
+         self.last_detections = []
++        self.mapping_conf = dict(info.get("mapping_conf") or {})   # colour -> confidence (default 1.0), triage tie-break
++        self.too_long = []          # (position, plan duration) of feasible plans that did not fit the time left
+ 
+     def confirm(self):
+         self._decision = "go"
+@@ -195,17 +197,45 @@ class ClassicalPolicy:
+         else:
+             def key(d):
+                 return -d.n_px
+-        cands.sort(key=key)
++        pol = self.cfg["policy"]
++        triage = bool(pol.get("time_triage", False))
++        if triage and pol.get("triage_order", "duration") == "priority":
++            eps = float(pol.get("triage_tie_m", 0.02))   # candidates with ~equal cheap estimate: cheaper shape first
++            cands.sort(key=lambda d: (round(key(d) / eps), self._priority(d)))
++        else:
++            cands.sort(key=key)
++        t = float(obs.get("t", 0.0))
++        left = self.time_limit - t - float(pol.get("time_margin_s", 0.0))
++        n_long, shortest = 0, None
+         for d in cands:
++            if triage:  # a plan that did not fit before cannot fit now (time only runs out; plans start from home)
++                rad = pol["same_object_radius"]
++                if any(np.linalg.norm(d.top[:2] - p) < rad and dur > left for p, dur in self.too_long):
++                    n_long += 1
++                    continue
+             others = [o.top[:2] for o in dets if o is not d]
+             p = self.planner.plan(d, self.arm_cmd, self.hand_cmd, obstacles=others)
+             self.plans.append(p)
+             if p.ok:
++                if triage and p.duration > left:  # feasible but too slow for the time left: try the next candidate
++                    self.too_long.append((d.top[:2], p.duration))
++                    n_long += 1
++                    shortest = p if shortest is None or p.duration < shortest.duration else shortest
++                    self.log(f"[classical] {d.color} takes {p.duration:.1f} s > {left:.1f} s left: trying the next candidate")
++                    continue
+                 return ("plan", p, len(dets))
+             self.failed.append(d.top[:2])
+             self.log(f"[classical] skip {d}: {p.reason}")
++        if n_long:
++            return ("notime", shortest, len(dets))
+         return ("none", None, len(dets))
+ 
++    def _priority(self, d):
++        """Triage tie-break tuple (lower = first): shape cost (cube < cylinder < triangle; `shape` attribute of the
++        detection, unknown = 0), then -mapping confidence of the colour (default 1.0)."""
++        cost = self.cfg["policy"].get("shape_cost", {})
++        return (float(cost.get(getattr(d, "shape", None), 0.0)), -float(self.mapping_conf.get(d.color, 1.0)))
++
+     def _after_look(self, res, t):
+         kind = res[0]
+         if kind == "error":
+@@ -216,8 +246,13 @@ class ClassicalPolicy:
+             self._note(t, f"nothing left to sort ({res[2]} detections)")
+             self.state = "done"
+             return self._hold(done=True)
++        if kind == "notime":
++            self._note(t, f"no candidate fits the time left (shortest {res[1].duration:.0f} s)"
++                          if res[1] is not None else "no candidate fits the time left")
++            self.state = "done"
++            return self._hold(done=True)
+         plan = res[1]
+-        if t + plan.duration > self.time_limit:
++        if t + plan.duration + float(self.cfg["policy"].get("time_margin_s", 0.0)) > self.time_limit:
+             self._note(t, f"not enough time for {plan.color} ({plan.duration:.0f} s)")
+             self.state = "done"
+             return self._hold(done=True)
+diff --git a/aaltonomous/baselines/classical/test_time_triage.py b/aaltonomous/baselines/classical/test_time_triage.py
+new file mode 100644
+index 0000000..2df5f0d
+--- /dev/null
++++ b/aaltonomous/baselines/classical/test_time_triage.py
+@@ -0,0 +1,167 @@
++"""CPU tests of policy.time_triage with a scripted perception + planner (no IK, no sim). Run from outside the repo:
++    PYTHONPATH=<repo> python -m pytest <repo>/aaltonomous/baselines/classical/test_time_triage.py -q
++"""
++import unittest
++
++import numpy as np
++
++from .perception import Detection
++from .planner import Plan
++from .policy import ClassicalPolicy
++
++
++class FakePerception:
++    def __init__(self, dets):
++        self.dets = dets
++
++    def detect(self, rgb, depth):
++        return list(self.dets)
++
++
++class FakePlanner:
++    """plan() returns a scripted duration per colour (None = IK failure) and counts the calls."""
++
++    def __init__(self, real, durations):
++        self.real, self.durations, self.calls = real, durations, []
++        self.mapping = real.mapping
++
++    def bin_xy(self, name):
++        return self.real.bin_xy(name)
++
++    def plan(self, det, arm_q, hand_q, bin_name=None, obstacles=(), relocate=True):
++        self.calls.append(det.color)
++        dur = self.durations[det.color]
++        if dur is None:
++            return Plan(False, color=det.color, reason="scripted failure")
++        n = int(round(dur * 30))
++        return Plan(True, side="left", color=det.color, target_bin="x", arm=np.zeros((n, 14)), hand=np.zeros((n, 14)),
++                    waypoints={"grasp": det.top.copy(), "drop": det.top.copy()}, ik={"g": (True, 0.0, 0.0)},
++                    safety_clips=0)
++
++
++def det(color, x, y=0.0, shape=None):
++    d = Detection(color, np.array([x, y, 0.8]), 500, 400, "depth")
++    if shape:
++        d.shape = shape
++    return d
++
++
++def make(durations, dets, time_limit=100.0, **policy):
++    ov = {f"policy.{k}": v for k, v in policy.items()}
++    pol = ClassicalPolicy(log=None, overrides=ov, time_limit=time_limit)
++    pol.perception = FakePerception(dets)
++    pol.planner = FakePlanner(pol.planner, durations)
++    pol.state = "look"
++    pol.arm_cmd, pol.hand_cmd = pol.home.copy(), np.zeros(14)
++    return pol
++
++
++def obs(t):
++    return {"t": t, "arm_q": np.zeros(14), "hand_q": np.zeros(14), "head_rgb": None, "head_depth": None}
++
++
++def first_executed(pol, t):
++    """act() once from the look state; returns (done, colour of the executed plan or None)."""
++    a = pol.act(obs(t))
++    ex = [m for _, m in pol.events if m.startswith("execute")]
++    return a["done"], (ex[0].split()[1] if ex else None)
++
++
++def far_near_dets():
++    # nearest_bin order puts the colour nearest its bin first; positions chosen by the test through `order: largest`
++    d1, d2 = det("red", 0.30), det("blue", 0.35)
++    d1.n_px, d2.n_px = 900, 500        # order largest: red first, then blue
++    return [d1, d2]
++
++
++class TestTriage(unittest.TestCase):
++    def test_flag_off_first_misfit_ends_episode(self):
++        pol = make({"red": 60.0, "blue": 10.0}, far_near_dets(), time_limit=50.0, order="largest")
++        done, ex = first_executed(pol, 10.0)
++        self.assertTrue(done)
++        self.assertIsNone(ex)
++        self.assertEqual(pol.planner.calls, ["red"])          # blue was never even planned
++        self.assertIn("not enough time", pol.events[-1][1])
++
++    def test_long_first_short_second_runs_short(self):
++        pol = make({"red": 60.0, "blue": 10.0}, far_near_dets(), time_limit=50.0, order="largest", time_triage=True)
++        done, ex = first_executed(pol, 10.0)
++        self.assertFalse(done)
++        self.assertEqual(ex, "blue")
++        self.assertEqual(pol.planner.calls, ["red", "blue"])
++        self.assertEqual(pol.failed, [])                       # the slow object is not marked failed
++        self.assertEqual(len(pol.too_long), 1)
++
++    def test_nothing_fits_is_done(self):
++        pol = make({"red": 60.0, "blue": 45.0}, far_near_dets(), time_limit=50.0, order="largest", time_triage=True)
++        done, ex = first_executed(pol, 10.0)
++        self.assertTrue(done)
++        self.assertIsNone(ex)
++        self.assertIn("no candidate fits", pol.events[-1][1])
++        self.assertEqual(pol.failed, [])
++
++    def test_too_long_cache_skips_replanning(self):
++        pol = make({"red": 60.0, "blue": 10.0}, far_near_dets(), time_limit=50.0, order="largest", time_triage=True)
++        first_executed(pol, 10.0)
++        pol.planner.calls.clear()
++        pol.state, pol.queue_a, pol.queue_h = "look", None, None
++        pol.act(obs(25.0))
++        self.assertNotIn("red", pol.planner.calls)             # known not to fit, no IK spent on it again
++
++    def test_failed_ik_still_marks_failed_and_moves_on(self):
++        pol = make({"red": None, "blue": 10.0}, far_near_dets(), time_limit=50.0, order="largest", time_triage=True)
++        done, ex = first_executed(pol, 0.0)
++        self.assertEqual(ex, "blue")
++        self.assertEqual(len(pol.failed), 1)
++
++    def test_tie_break_shape_then_confidence(self):
++        # same cheap estimate (same x): cylinder is listed first by `largest`, the cube must win under `priority`
++        cyl, cube = det("red", 0.30, shape="cylinder"), det("blue", 0.30, shape="cube")
++        cyl.n_px, cube.n_px = 900, 500
++        kw = dict(time_limit=100.0, order="nearest_bin", time_triage=True)
++        pol = make({"red": 5.0, "blue": 5.0}, [cyl, cube], triage_order="priority", **kw)
++        self.assertEqual(first_executed(pol, 0.0)[1], "blue")
++        pol = make({"red": 5.0, "blue": 5.0}, [cyl, cube], triage_order="duration", **kw)   # off: estimate order only
++        ref = sorted([cyl, cube], key=lambda d: np.linalg.norm(d.top[:2] - pol.planner.bin_xy(pol.mapping[d.color])))[0]
++        self.assertEqual(first_executed(pol, 0.0)[1], ref.color)
++        # equal shapes: higher mapping confidence first
++        a, b = det("red", 0.30, shape="cube"), det("blue", 0.30, shape="cube")
++        pol = make({"red": 5.0, "blue": 5.0}, [a, b], triage_order="priority", **kw)
++        pol.mapping_conf = {"red": 0.4, "blue": 0.9}
++        self.assertEqual(first_executed(pol, 0.0)[1], "blue")
++
++    def test_priority_does_not_override_clearly_cheaper_estimate(self):
++        near, far = det("red", 0.30, shape="triangle"), det("blue", 0.60, shape="cube")
++        pol = make({"red": 5.0, "blue": 5.0}, [far, near], time_limit=100.0, order="largest", time_triage=True,
++                   triage_order="priority", triage_tie_m=1e-6)
++        pol.perception.dets[0].n_px = 900
++        # `largest` keys are -n_px (huge gaps vs eps): the bigger blob stays first whatever its shape cost
++        self.assertEqual(first_executed(pol, 0.0)[1], "blue")
++
++    def test_margin(self):
++        for triage in (False, True):
++            # 10 + 40 = 50 <= 50 fits with margin 0; margin 0.5 makes it a misfit
++            pol = make({"red": 40.0, "blue": 40.0}, far_near_dets(), time_limit=50.0, order="largest",
++                       time_triage=triage)
++            self.assertIsNotNone(first_executed(pol, 10.0)[1], f"triage={triage} margin 0")
++            pol = make({"red": 40.0, "blue": 40.0}, far_near_dets(), time_limit=50.0, order="largest",
++                       time_triage=triage, time_margin_s=0.5)
++            done, ex = first_executed(pol, 10.0)
++            self.assertTrue(done, f"triage={triage} margin 0.5")
++            self.assertIsNone(ex)
++
++    def test_margin_applies_in_triage_candidate_choice(self):
++        pol = make({"red": 39.8, "blue": 30.0}, far_near_dets(), time_limit=50.0, order="largest", time_triage=True,
++                   time_margin_s=0.5)
++        self.assertEqual(first_executed(pol, 10.0)[1], "blue")
++
++    def test_defaults_are_off(self):
++        pol = make({"red": 1.0, "blue": 1.0}, far_near_dets())
++        p = pol.cfg["policy"]
++        self.assertFalse(p["time_triage"])
++        self.assertEqual(p["triage_order"], "duration")
++        self.assertEqual(p["time_margin_s"], 0.0)
++
++
++if __name__ == "__main__":
++    unittest.main()
