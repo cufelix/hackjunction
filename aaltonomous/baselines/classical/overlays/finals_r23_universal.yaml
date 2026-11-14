@@ -91,3 +91,6 @@ flags:
   brain.image_max_side_px: 448                  # brainspeed downscale head RGB for find/decide
   brain.find_n_predict: 128                     # brainspeed find() output cap
   brain.ev_gate: true                           # universal  per-object EV gate: low-confidence brain bin -> leave the object (0 beats -1)
+  brain.grounded_picks: true                    # universal  open-vocabulary instruction: only find()-located ids may be picked (real eval: blind plan hallucinated fruit)
+  brain.call_timeout_s: 4.0                     # universal  real 8B plan call p50 ~1.5 s on a busy GPU: 1.0 s timed out 61% of calls (async, act() unaffected)
+  brain.plan_timeout_s: 4.0                     # universal  initial plan deadline (async)

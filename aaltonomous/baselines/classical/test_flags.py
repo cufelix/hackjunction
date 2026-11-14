@@ -209,7 +209,8 @@ class TestFlags(unittest.TestCase):
         expect["finals_r23_universal"] = expect["finals_r22"] | {
             "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles",
             "brain.enabled", "brain.backend", "brain.planner", "brain.find", "brain.find_to_detection",
-            "brain.closed_loop", "brain.image_max_side_px", "brain.find_n_predict", "brain.ev_gate"}   # UNIVERSAL.md
+            "brain.closed_loop", "brain.image_max_side_px", "brain.find_n_predict", "brain.ev_gate",
+            "brain.grounded_picks", "brain.call_timeout_s", "brain.plan_timeout_s"}   # UNIVERSAL.md
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}

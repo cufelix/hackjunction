@@ -246,7 +246,9 @@ class ClassicalPolicy:
             if not str(text).strip():               # fixed mapping is reserved for an identified sort_fixed task
                 return {"default": None}
             from .brain.planner import MAX_INSTRUCTION_CHARS
-            if len(str(text)) > MAX_INSTRUCTION_CHARS:       # bounded: reset() has a 1.0 s watchdog
+            bcfg = self.cfg.get("brain") or {}
+            if (bcfg.get("enabled", False) or bcfg.get("planner", False)) and len(str(text)) > MAX_INSTRUCTION_CHARS:
+                # bounded (brain on only; flags off stays uncapped = rc7): reset() has a 1.0 s watchdog
                 self.log(f"instruction resolve skipped ({len(str(text))} chars), using FIXED_MAPPING")
                 return None
             from .instruction import resolve
@@ -330,6 +332,13 @@ class ClassicalPolicy:
         self._novel_brain_candidates = []
         self._novel_brain_bin = None
         self._parser_unreachable = 0
+        self._open_vocab = False
+        if (self.cfg.get("brain") or {}).get("grounded_picks", False):
+            try:
+                from .novel_objects import unknown_words
+                self._open_vocab = bool(self._brain_abstain) or bool(unknown_words(self._instruction))
+            except Exception:
+                self._open_vocab = bool(self._brain_abstain)
         self._parser_verdicts = {}          # universal: VLM cross-check verdicts of shape-noun parser matches (per episode)
         if self.brain is not None:
             self.brain.reset()
@@ -2664,6 +2673,7 @@ class ClassicalPolicy:
                 o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
             world["table_region"] = self._planner_table_region()
             world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            self._ground_flag(world)
             if self._found:
                 world["found"] = dict(self._found)
             classical_has_work = any(self._lookup(d) is not None for d in cands)
@@ -2791,9 +2801,16 @@ class ClassicalPolicy:
             o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
         world["table_region"] = self._planner_table_region()
         world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+        self._ground_flag(world)
         if self._found:
             world["found"] = dict(self._found)
         return world
+
+    def _ground_flag(self, world):
+        """brain.grounded_picks (universal): for an open-vocabulary instruction (parser abstains / unknown nouns) a blind plan
+        may only pick objects the VLM located with find() -- a text-only 8B planner happily "finds" fruit among cubes."""
+        if (self.cfg.get("brain") or {}).get("grounded_picks", False) and self.__dict__.get("_open_vocab", False):
+            world["grounded_only"] = True
 
     def _ev_leave(self, d, target_bin, brain_chosen):
         """brain.ev_gate (universal): per-object expected-value gate for a NOVEL object.  Score is +2 correct, -1 wrong
@@ -2905,6 +2922,7 @@ class ClassicalPolicy:
                 o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
             world["table_region"] = self._planner_table_region()
             world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            self._ground_flag(world)
             self.plan_brain.replan(world, call, reason)   # one async retry, 0.5 s deadline
         except Exception as e:
             self.log(f"[planner] replan failed ({e!r})")

@@ -34,8 +34,8 @@ class Brain(PlannerBackend):
     """Scripted planner backend. mode: ok (rules by object name) | garbage | empty | notlist | badbin | badid | inject |
     slow | boom | override (tries to move a resolver-certain object to another bin) | extrakeys | huge."""
 
-    def __init__(self, truth, rules=None, mode="ok", delay=0.0):
-        self.truth, self.rules, self.mode, self.delay = truth, rules or {}, mode, delay
+    def __init__(self, truth, rules=None, mode="ok", delay=0.0, phrase="the objects"):
+        self.truth, self.rules, self.mode, self.delay, self.phrase = truth, rules or {}, mode, delay, phrase
         self.reqs = []
 
     def decide(self, request_json):
@@ -76,8 +76,18 @@ class Brain(PlannerBackend):
         if m == "extrakeys":
             return json.dumps([{"tool": "pick_place", "args": {"obj_id": o["id"], "bin": "left"}, "arm_q": [0.0] * 7}
                                for o in objs])
+        grounded = bool(req["world"].get("grounded_only"))
+        found = req["world"].get("found") or {}
+        if m == "hallucinate":        # a blind planner that "sees" everything: picks every object left, no find()
+            return json.dumps([{"tool": "pick_place", "args": {"obj_id": o["id"], "bin": "left"}} for o in objs] +
+                              [{"tool": "done", "args": {}}])
+        if grounded and not found:    # open-vocabulary instruction: locate first, then pick only what find() returned
+            return json.dumps([{"tool": "find", "args": {"description": self.phrase}}, {"tool": "wait", "args": {}}])
+        ok_ids = {i for ids in found.values() for i in ids} if grounded else None
         steps = []
         for o in objs:
+            if ok_ids is not None and o["id"] not in ok_ids:
+                continue
             name = self.name_of(o)
             b = self.rules.get(name)
             if m == "override":
@@ -92,7 +102,8 @@ SPOTS = [np.array([0.29, 0.15, 0.0]), np.array([0.29, 0.05, 0.0]), np.array([0.2
          np.array([0.29, -0.15, 0.0])]
 
 
-def build(instr, objs, backend_mode="ok", rules=None, delay=0.0, overrides=None, brain=True, overlay=OVERLAY):
+def build(instr, objs, backend_mode="ok", rules=None, delay=0.0, overrides=None, brain=True, overlay=OVERLAY,
+          phrase="the objects"):
     """objs: [(name, colour, shape, size, height)] at the first len(objs) mock spawn positions."""
     env = make_mock_env(seed=0)
     ov = dict(OV)
@@ -113,7 +124,7 @@ def build(instr, objs, backend_mode="ok", rules=None, delay=0.0, overrides=None,
         truth[name] = scene[-1]["pos"]
     be.objects = scene
     be._cache = None
-    stub = Brain(truth, rules, backend_mode, delay)
+    stub = Brain(truth, rules, backend_mode, delay, phrase)
     if pol.plan_brain is not None:
         pol.plan_brain.adapter.backend = stub
         pol.plan_brain.backend = stub
@@ -158,6 +169,14 @@ PAN = ("pan", "black", "cylinder", 0.07, 0.03)
 BOX = ("box", "white", "cube", 0.06, 0.05)
 
 
+def finds(*names):
+    """VLM finder stub: a point on each named scene object for ANY query (the 'located by find()' set)."""
+    def make(pol, scene):
+        pts = [project(pol, o["pos"] + [0, 0, o["height"] / 2]) for o in scene if o["name"] in names]
+        return lambda rgb, q: [{"point": p, "bbox": None, "label": q} for p in pts]
+    return make
+
+
 def run(instr, objs, rules=None, mode="ok", delay=0.0, finder=None, **kw):
     env, pol, obs, lines, scene, stub = build(instr, objs, mode, rules, delay, **kw)
     if finder is not None:
@@ -200,14 +219,17 @@ class TestUnknownObjectInstructions(unittest.TestCase):
         self.assertTrue(any("CONTRADICTS" in l for l in lines), lines[:12])
 
     def test_sort_the_fruit_right_everything_else_center_via_brain(self):
+        # open vocabulary: the plan may only pick what find("fruit") located; the cube / block (the "everything else" part) are
+        # not grounded, so they stay on the counter: 0 points, never a -1 guess
         rules = {"ball": "right", "apple": "right", "cube": "center", "block": "center"}
         got, dts, pol, lines, stub = run("sort the fruit to the right, everything else center",
-                                         [CUBE, BALL, APPLE, BLOCK], rules)
+                                         [CUBE, BALL, APPLE, BLOCK], rules, finder=finds("ball", "apple"), phrase="fruit")
         self.assertTrue(stub.reqs, "the parser abstains on 'fruit' -> the brain was asked")
-        self.check(got, {"ball": "right", "apple": "right", "cube": "center", "block": "center"}, must=("ball", "cube"))
+        self.check(got, {"ball": "right", "apple": "right", "cube": None, "block": None}, must=("ball",))
 
     def test_the_pan_goes_in_the_middle_via_brain(self):
-        got, dts, pol, lines, stub = run("the pan goes in the middle", [CUBE, PAN, BOX], {"pan": "center"})
+        got, dts, pol, lines, stub = run("the pan goes in the middle", [CUBE, PAN, BOX], {"pan": "center"},
+                                         finder=finds("pan"), phrase="pan")
         self.assertTrue(stub.reqs)
         self.check(got, {"pan": "center", "cube": None, "box": None}, must=("pan",))
 
@@ -239,10 +261,23 @@ class TestGarbageBrainNeverWrongBin(unittest.TestCase):
         got, dts, pol, lines, stub = run("put the red cube in the left bin", [CUBE, BALL], {}, mode="override")
         self.assertIn(got["cube"], ("left", None))
 
+    def test_hallucinating_blind_planner_is_not_grounded_so_nothing_moves(self):
+        # "all the fruit" but there is no fruit: a text-only plan picks every object; grounded_picks rejects all of it
+        got, dts, pol, lines, stub = run("put all the fruit in the left bin", [CUBE, BALL, BLOCK], {}, mode="hallucinate")
+        self.assertTrue(stub.reqs)
+        self.assertEqual(got, {"cube": None, "ball": None, "block": None})
+
+    def test_find_returning_nothing_means_nothing_is_picked(self):
+        got, dts, pol, lines, stub = run("put all the fruit in the left bin", [CUBE, BALL, BLOCK], {"ball": "left"},
+                                         finder=finds(), phrase="fruit")
+        self.assertEqual(got, {"cube": None, "ball": None, "block": None})
+
     def test_ev_gate_leaves_a_low_confidence_brain_bin(self):
         # backend reports p_bin 0.2 for its answer -> EV = p_grasp*(3*0.2-1) < 0 -> leave (0 beats -1)
         env, pol, obs, lines, scene, stub = build("the pan goes in the middle", [CUBE, PAN, BOX], "ok", {"pan": "center"})
         stub.last_plan_conf = 0.2
+        pol._brain_find_fn = finds("pan")(pol, scene)
+        stub.phrase = "pan"
         drive(env, pol, obs)
         self.assertEqual(final_bins(env, scene), {"cube": None, "pan": None, "box": None})
         self.assertTrue(any("[ev] leave" in l for l in lines), lines[-8:])
@@ -250,6 +285,8 @@ class TestGarbageBrainNeverWrongBin(unittest.TestCase):
     def test_ev_gate_passes_a_confident_brain_bin(self):
         env, pol, obs, lines, scene, stub = build("the pan goes in the middle", [CUBE, PAN, BOX], "ok", {"pan": "center"})
         stub.last_plan_conf = 0.95
+        pol._brain_find_fn = finds("pan")(pol, scene)
+        stub.phrase = "pan"
         drive(env, pol, obs)
         self.assertEqual(final_bins(env, scene)["pan"], "center")
 

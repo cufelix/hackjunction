@@ -33,6 +33,9 @@ flags:
   brain.find_n_predict: 400                     # brain speed off: the old find() token cap
   brain.find_to_detection: false                # brain agent off: novel Detection from a find() point
   brain.closed_loop: false                      # brain agent off: closed-loop agent re-planning
+  brain.grounded_picks: false                   # universal off: open-vocabulary picks must be find()-grounded
+  brain.call_timeout_s: 1.0                     # universal off: stock deadline
+  brain.plan_timeout_s: 2.0                     # universal off: stock deadline
   brain.ev_gate: false                          # universal off: per-object EV gate for novel objects
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it

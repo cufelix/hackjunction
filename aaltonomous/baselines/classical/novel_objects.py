@@ -307,6 +307,18 @@ def match_instruction(text, candidates):
 
 
 
+def unknown_words(text):
+    """Words of the instruction that are neither colours, bins, shape synonyms nor filler: an open-vocabulary instruction."""
+    low = str(text or "").lower()
+    words = set(_WORDS.findall(low))
+    reserved = set(PALETTE) | {"put", "place", "move", "pick", "take", "drop", "sort", "the", "a", "an",
+                               "in", "into", "to", "on", "bin", "left", "right", "center", "centre", "please",
+                               "up", "and", "small", "little", "large", "big", "toy", "cube", "cylinder",
+                               "prism"} | _GENERIC_NOUNS
+    recognised = {w for ws in SHAPE_WORDS.values() for w in ws}
+    return sorted(words - reserved - recognised)
+
+
 def named_noun(text):
     """-> (noun, colour_named): the first recognised shape/category noun of the instruction (e.g. "ball") and whether a
     colour word is also present.  Used by the universal VLM cross-check of a shape-noun-only deterministic match."""
