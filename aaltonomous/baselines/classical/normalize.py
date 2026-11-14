@@ -98,9 +98,36 @@ def _fix(m: re.Match[str]) -> str:
     return new.capitalize() if raw[0].isupper() else new
 
 
+# Colour-named bins ("the yellow box", "the orange basket"): bins are only left / centre / right, so a colour-named
+# bin is never a position, and the resolver reads its colour word as an OBJECT colour (red -> yellow box became
+# {red, yellow, blue: left}). A clause that sends objects to a colour-named bin is dropped: those objects stay on
+# the counter (0) instead of a wrong bin (-1). Only a clear destination counts ("to/in/into ... the yellow box", or a
+# clause with two colour words), so "put the blue box in the left bin" (box = an object) is kept.
+_C = r"(?:red|orange|yellow|gold(?:en)?|blue|purple|violet|green|pink|white|black)"
+_B = r"(?:bins?|box(?:es)?|baskets?|containers?|buckets?|crates?|tubs?|trays?|receptacles?)"
+_CB = re.compile(rf"\b{_C}(?:\s+colou?red)?\s+{_B}\b", re.I)
+_TO_CB = re.compile(rf"\b(?:in|into|to|inside|onto)\s+(?:the\s+|a\s+)?{_C}(?:\s+colou?red)?\s+{_B}\b", re.I)
+_COLOUR = re.compile(rf"\b{_C}\b", re.I)
+_SPLIT = re.compile(r"\s*(?:[;,.:]|\band\b|\bwhile\b|\bbut\b)\s*", re.I)
+
+
+def _colour_bin_clause(clause: str) -> bool:
+    if not _CB.search(clause):
+        return False
+    return bool(_TO_CB.search(clause)) or len({c.lower() for c in _COLOUR.findall(clause)}) >= 2
+
+
+def drop_colour_bin_clauses(sentence: str) -> str:
+    """Remove every clause that sends objects to a colour-named bin; unchanged when there is none."""
+    parts = [p for p in _SPLIT.split(sentence) if p]
+    if not any(_colour_bin_clause(p) for p in parts):
+        return sentence
+    return "; ".join(p for p in parts if not _colour_bin_clause(p))
+
+
 def normalize(sentence: str) -> str:
-    """Map near-miss tokens onto the resolver's closed vocabulary. Returns a new string."""
-    return _WORD.sub(_fix, sentence)
+    """Map near-miss tokens onto the resolver's closed vocabulary, then drop colour-named-bin clauses."""
+    return drop_colour_bin_clauses(_WORD.sub(_fix, sentence))
 
 
 def _selfcheck() -> None:
