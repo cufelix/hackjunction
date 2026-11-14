@@ -13,7 +13,7 @@
 # serve() sends the metadata message on connect), plus a reset round trip in the act probe. Probes run inside the
 # container with the image's own python3 (websockets, msgpack, numpy). The host needs only docker and python3.
 #
-# Env (optional): GPU_OFF=1 drops --gpus all; HEALTH_TIMEOUT_S=180; LLAMA_TIMEOUT_S=240; ACT_TIMEOUT_S=20;
+# Env (optional): GPU_OFF=1 drops --gpus all; GPU_DEVICE=N uses --gpus device=N (shared box); HEALTH_TIMEOUT_S=180; LLAMA_TIMEOUT_S=240; ACT_TIMEOUT_S=20;
 #   P95_BUDGET_MS=1500 (= brain.request_timeout_s); PROMPTS_FILE=<jsonl, one recorded decision request
 #   {"world","choices","point"} per line> to replace the 20 synthetic prompts.
 # Exit 0 only if every check passes.
@@ -33,6 +33,7 @@ ACT_TIMEOUT_S=${ACT_TIMEOUT_S:-20}
 P95_BUDGET_MS=${P95_BUDGET_MS:-1500}
 N_PROMPTS=20
 GPU_ARGS=(--gpus all)
+[ -n "${GPU_DEVICE:-}" ] && GPU_ARGS=(--gpus "device=$GPU_DEVICE")
 [ "${GPU_OFF:-0}" = 1 ] && GPU_ARGS=()
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 
@@ -257,12 +258,12 @@ read -r B_OK B_P50 B_P95 B_MAX B_SRC <<<"$(printf '%s' "$BRAIN_JSON" | python3 -
 import json, sys
 d = json.loads(sys.stdin.read() or "{}")
 print(d.get("ok", 0), d.get("p50_ms", "na"), d.get("p95_ms", "na"), d.get("max_ms", "na"), d.get("source", "na"))')"
-echo "BRAIN prompts=$B_SRC ok=$B_OK/$N p50_ms=$B_P50 p95_ms=$B_P95 max_ms=$B_MAX budget_p95_ms=$P95_BUDGET_MS"
+echo "BRAIN prompts=$B_SRC ok=$B_OK/$N_PROMPTS p50_ms=$B_P50 p95_ms=$B_P95 max_ms=$B_MAX budget_p95_ms=$P95_BUDGET_MS"
 printf '%s\n' "$BRAIN_OUT" | sed -n 's/^BRAIN_JSON .*"errors": \(.*\)}$/  errors: \1/p' | tail -1
-if [ "$B_OK" = "$N" ] && python3 -c "import sys; sys.exit(0 if float('$B_P95') <= $P95_BUDGET_MS else 1)" 2>/dev/null; then
-  pass "(e) brain: $N/$N valid decisions, p95 ${B_P95} ms <= ${P95_BUDGET_MS} ms"
+if [ "$B_OK" = "$N_PROMPTS" ] && python3 -c "import sys; sys.exit(0 if float('$B_P95') <= $P95_BUDGET_MS else 1)" 2>/dev/null; then
+  pass "(e) brain: $N_PROMPTS/$N_PROMPTS valid decisions, p95 ${B_P95} ms <= ${P95_BUDGET_MS} ms"
 else
-  fail "(e) brain: ok=$B_OK/$N p95=$B_P95 ms (budget ${P95_BUDGET_MS} ms)"
+  fail "(e) brain: ok=$B_OK/$N_PROMPTS p95=$B_P95 ms (budget ${P95_BUDGET_MS} ms)"
 fi
 
 # (f) versions and checksums (printed; a missing GGUF or binary fails)

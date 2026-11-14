@@ -22,7 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends cmake build-ess
     && rm -rf /var/lib/apt/lists/*
 COPY tools/brain/llama.cpp /src/llama.cpp
 # Any cmake, build or copy failure fails the build (no `|| true`). GGML_NATIVE=OFF: no tuning to the build host CPU.
-RUN cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
+# The devel image has no libcuda.so.1 (the driver comes from the host at run time); link against the CUDA stub for the
+# libggml-cuda.so -> llama-server link only. GGML_CUDA_NCCL=OFF: single GPU, and the runtime base has no libnccl.so.2
+# (llama-server died at start with "cannot open shared object file: libnccl.so.2"). The stub dir is not copied to the final image.
+RUN ln -sf libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+ && export LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH:-} \
+ && cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_NATIVE=OFF -DGGML_CUDA_NCCL=OFF -DLLAMA_CURL=OFF \
         -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release \
  && cmake --build /src/build --target llama-server -j"$(nproc)" \
  && mkdir -p /out/bin /out/lib && cp /src/build/bin/llama-server /out/bin/ && cp /src/build/bin/*.so* /out/lib/
@@ -33,26 +38,37 @@ ENV BRAIN_ENABLED=${BRAIN_ENABLED}
 WORKDIR /app
 
 # cuBLAS for llama-server: the release base ships cudart only. Keep the 12.8 line matching the build stage.
+# ldconfig: the apt trigger does not refresh the loader cache here, so libcublas.so.12 was not found at run time.
 RUN apt-get update && apt-get install -y --no-install-recommends libcublas-12-8 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* && ldconfig
 
 # ---- brain: server + models (inside the image; no volume at finals)
 COPY --from=llama /out/ /opt/brain/
 COPY tools/brain/models/ /opt/brain/models/
 COPY tools/brain/entrypoint.policy_brain.sh /opt/brain/entrypoint.sh
+# Fail the build if llama-server has an unresolved shared library other than the host-injected driver (libcuda.so.1).
+RUN ! (LD_LIBRARY_PATH=/opt/brain/lib ldd /opt/brain/bin/llama-server | grep "not found" | grep -v "libcuda.so.1")
 
-# ---- overlay: the release image bakes submission.yaml as overlay.yaml. Replace it with the agent overlay, then set the
-# two brain keys from BRAIN_ENABLED (1 = on, anything else = off), and run the release checks against the result.
-COPY aaltonomous/baselines/classical/overlays/finals_r22_agent.yaml aaltonomous/baselines/classical/overlay.yaml
-RUN python3 -c "import os, yaml; \
+# ---- overlay: the release image bakes submission.yaml as overlay.yaml.
+# BRAIN_ENABLED=1: replace it with the agent overlay (brain.backend/find/planner/closed_loop/find_to_detection and
+#   calib.plane.apply_height on) and point brain.url at loopback.
+# BRAIN_ENABLED=0: keep the release overlay untouched, so the image acts exactly like the plain policy image (the agent
+#   overlay with only brain.enabled=false still turns on apply_height/planner/find and changes the actions).
+# Either way the release checks run against the result.
+COPY aaltonomous/baselines/classical/overlays/finals_r22_agent.yaml aaltonomous/baselines/classical/overlays/finals_r22_agent.yaml
+RUN if [ "$BRAIN_ENABLED" = 1 ]; then \
+      cp aaltonomous/baselines/classical/overlays/finals_r22_agent.yaml aaltonomous/baselines/classical/overlay.yaml \
+      && python3 -c "import yaml; \
 p='aaltonomous/baselines/classical/overlay.yaml'; d=yaml.safe_load(open(p)); f=d['flags']; \
-f['brain.enabled']=os.environ['BRAIN_ENABLED']=='1'; f['brain.url']='http://127.0.0.1:8080/completion'; \
-yaml.safe_dump(d, open(p, 'w'), sort_keys=False)" \
+f['brain.enabled']=True; f['brain.url']='http://127.0.0.1:8080/completion'; \
+yaml.safe_dump(d, open(p, 'w'), sort_keys=False)"; \
+    fi \
  && python3 -c "from aaltonomous.baselines.classical.policy_server import ClassicalServerPolicy; ClassicalServerPolicy()" \
  && python3 tools/flags.py \
  && python3 -c "import os, sys; from aaltonomous.baselines.classical.config import _get, load_config; \
 c=load_config(); want=os.environ['BRAIN_ENABLED']=='1'; \
-sys.exit(0 if _get(c, 'brain.enabled')==want and _get(c, 'brain.url')=='http://127.0.0.1:8080/completion' else 'brain.enabled/brain.url not as BRAIN_ENABLED')" \
+ok=_get(c, 'brain.enabled')==want and (not want or _get(c, 'brain.url')=='http://127.0.0.1:8080/completion'); \
+sys.exit(0 if ok else 'brain.enabled/brain.url not as BRAIN_ENABLED')" \
  && python3 -c "import sys; from aaltonomous.baselines.classical.config import BAKED_OVERLAY, resolve_overlay; \
 sys.exit(0 if resolve_overlay() == BAKED_OVERLAY else 'baked overlay not picked up')"
 
