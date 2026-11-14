@@ -10,3 +10,8 @@ logs/
 
 # submission flag overlay baked into the image (see overlays/submission.yaml); never in the repo
 aaltonomous/baselines/classical/overlay.yaml
+
+# brain variant: llama.cpp source tree, GGUF weights (large, staged by hand before the image build)
+tools/brain/models/
+tools/brain/llama.cpp/
+*.gguf
