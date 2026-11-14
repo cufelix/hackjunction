@@ -1,0 +1,20 @@
+# Submission flag overlay. submission.Dockerfile bakes this file into the image as
+# aaltonomous/baselines/classical/overlay.yaml; load_config() applies it after the `sim` profile.
+# The organisers run `docker run -d --gpus all -p <port>:8000 <image>` with no env/args, so THIS FILE is the switch.
+#
+# Only keys listed in config.FLAGS are accepted (typo -> the docker build fails). Every value below is the OFF value:
+# as committed, the image behaves exactly like the stock classical baseline. Flip flags ONLY after a GPU A/B run
+# (knowledge/humanoid/21-submission-pipeline.md), then rebuild. Check: python3 tools/flags.py --overlay submission
+name: submission
+flags:
+  instruction.resolve: false                    # Felix #1   instruction -> mapping
+  perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration
+  perception.classify_shape: false              # Oliver #5/#7 shape from the top face
+  perception.triangle_pose: false               # Oliver #5  triangle apex yaw + robust centre
+  perception.near_bin_guard: false              # Oliver #7  shape abstain next to a bin (needs classify_shape)
+  grasp.yaw_align: false                        # Oliver #5  yaw-aligned triangle grasp (needs shape + pose)
+  policy.time_triage: false                     # Oliver #3  skip plans that do not fit, try the next object
+  policy.max_total_attempts: null               # Oliver #3  e.g. 12; null = off
+  policy.time_margin_s: 0.0                     # Oliver #3  e.g. 1.0; 0 = off
+  policy.episode_summary_log: false             # Oliver #3  one log line per episode end
+  policy.verify_placement: false                # Timi #6    post-placement verification + drop slots
