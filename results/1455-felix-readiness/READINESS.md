@@ -24,8 +24,10 @@ only switch.
   episodes and must produce byte-identical action digests versus the submission.
 - **A release gate diffs every registered flag** between the baked overlay and the chosen release candidate, and it
   refuses known-bad combinations (for example two camera corrections stacked).
-- **Testing and review.** The full unit suite (~330 tests) runs 3× before any release-candidate push. Every merge
-  gets an independent review. Held-out real frames are never opened.
+- **Testing and review.** The full unit suite (328–339 tests depending on the branch) runs 3× with full logs before
+  any release-candidate push. Every merge gets an independent review. Held-out real frames are never opened.
+- **Fault drills.** Scripted drills exercise the deployed server path: offline cold start (any network attempt
+  fails), websocket drop and reconnect against the real `policy_server`, and the release gate.
 
 ## Evidence
 | Measurement | Result |
