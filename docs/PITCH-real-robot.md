@@ -57,8 +57,13 @@ Language episodes carry about 83 % of the final points, and the unseen-sentence 
 
 | resolver | v1 | many-to-one | v2 (honest unseen proxy) |
 |---|---|---|---|
-| first version | 0.868 | 0.833 | 0.583 |
-| integrated (05242eae) | **0.934** | **0.933** | **0.800** |
+| first resolver 8fcfb5f3 (00:56) | 0.868 | 0.833 | 0.583 |
+| resolver v2 82f30b09 | 0.907 | 0.933 | 0.667 |
+| a0d9db63 | 0.921 | 0.933 | 0.733 |
+| integrated 05242eae | **0.934** | **0.933** | **0.800** |
+
+v2 overall per hash, all blind on the same sealed 60 sentences. 0.583 is the OVERALL v2 score of the first resolver,
+not a category score. v2 elimination separately went 0.417 -> 0.583 -> 0.833 across these hashes.
 
 Sources: blind results posted in the room after each hash, e.g. the 05242eae run.
 
