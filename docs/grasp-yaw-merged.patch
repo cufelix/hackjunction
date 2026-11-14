@@ -1,0 +1,696 @@
+diff --git a/aaltonomous/baselines/classical/config.yaml b/aaltonomous/baselines/classical/config.yaml
+index dc5bc66..ce2f486 100644
+--- a/aaltonomous/baselines/classical/config.yaml
++++ b/aaltonomous/baselines/classical/config.yaml
+@@ -34,6 +34,8 @@ perception:
+   object_size: null           # null = scene.yaml objects.size (grasp width)
+   xy_offset: [0.0, 0.0]   # pelvis-frame xy added to every detection (head extrinsics correction). TUNE on the robot
+   object_height: null         # null = scene.yaml size * height_ratio
++  classify_shape: false       # set Detection.shape from the 2D blob (prism_pose.classify_blob); single-shape scenes: that shape
++  triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
+ 
+ grasp:
+   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
+@@ -49,6 +51,18 @@ grasp:
+     - [1.0, -1.0, 0.0]
+     - [0.0, -1.0, 0.0]
+   finger_hint_weight: 0.3
++  # Triangle prisms: finger direction from the detected apex yaw (needs Detection.shape == "triangle" + apex_yaw).
++  # Tried before finger_hints; a plan only counts if the achieved finger heading is within yaw_tol_deg, else the
++  # stock hints run. Finger heading = apex + yaw_phi_deg (left; right mirrors the sign) + k * 120 deg. TUNE (sweep phi)
++  yaw_align: false
++  yaw_phi_deg: 105            # sim grasp_test (left arm, n=6 per phi): 105 4/6, 90 ~3/6, 60 and 0 worst
++  yaw_hint_weight: 3.0        # IK weight of that finger direction (stock 0.3 is a weak preference)
++  yaw_tol_deg: 12.0
++  yaw_ref_deg: 25.0           # natural finger direction: forward, this far inward
++  yaw_max_dev_deg: 75.0       # candidates further from it are not tried
++  yaw_max_hints: 2
++  yaw_min_conf: 0.5
++  yaw_tri_shift: true         # move the grasp point to the midpoint of the object's extent along the finger direction
+   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
+   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
+   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
+diff --git a/aaltonomous/baselines/classical/perception.py b/aaltonomous/baselines/classical/perception.py
+index a40f29e..c462f93 100644
+--- a/aaltonomous/baselines/classical/perception.py
++++ b/aaltonomous/baselines/classical/perception.py
+@@ -26,6 +26,9 @@ class Detection:
+     method: str                # "depth" | "plane"
+     yaw: float | None = None   # in-plane orientation of the top face (rad), info only
+     uv: tuple = field(default=(0.0, 0.0))
++    shape: str | None = None   # "cube" | "cylinder" | "triangle" | None (unknown)
++    apex_yaw: float | None = None  # triangle only: pelvis-frame heading (rad, x fwd, y left) centre -> any one vertex (mod 120 deg)
++    apex_conf: float = 0.0     # confidence of apex_yaw, 0..1 (from perception.triangle_pose)
+ 
+     def __repr__(self):
+         x, y, z = self.top
+@@ -43,6 +46,11 @@ class Perception:
+         self.height = float(self.cfg.get("object_height") or scene.object_height())
+         # pelvis-frame xy correction added to every detection (head extrinsics error; tuned on the robot)
+         self.xy_offset = np.asarray(self.cfg.get("xy_offset") or [0.0, 0.0], float)
++        # opt-in shape / triangle pose (all default OFF = stock behaviour)
++        self.classify_shape = bool(self.cfg.get("classify_shape", False))
++        self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
++        shapes = (getattr(scene, "cfg", None) or {}).get("objects", {}).get("shapes") or []
++        self.scene_shape = shapes[0] if len(shapes) == 1 else None   # only one shape in the scene -> known
+ 
+     def masks(self, rgb):
+         import cv2
+@@ -83,10 +91,13 @@ class Perception:
+                 d = depth[v, u].astype(float) if depth is not None else np.zeros(len(u))
+                 ok = (d >= dlo) & (d <= dhi)
+                 det = None
++                shape = self._shape_of(blob)
+                 if ok.sum() >= c["min_valid_depth_px"]:
+-                    det = self._from_depth(color, u[ok], v[ok], d[ok], area)
++                    det = self._from_depth(color, u[ok], v[ok], d[ok], area, shape)
+                 if det is None:
+                     det = self._from_plane(color, cent[i], area, int(ok.sum()))
++                    if det is not None:
++                        det.shape = shape
+                 why = self._reject(det)
+                 if why:
+                     rejected.append((det, why))
+@@ -135,7 +146,16 @@ class Perception:
+             cv2.fillConvexPoly(keep, hull, 0)
+         return keep
+ 
+-    def _from_depth(self, color, u, v, d, area):
++    def _shape_of(self, blob):
++        """2D-blob shape label, or None (flags off, abstain). A single-shape scene gives the label directly."""
++        if not (self.classify_shape or self.triangle_pose):
++            return None
++        if self.scene_shape is not None:
++            return self.scene_shape
++        from .prism_pose import classify_blob
++        return classify_blob(blob)[0]
++
++    def _from_depth(self, color, u, v, d, area, shape=None):
+         P = self.cal.pixel_to_pelvis(self.cam, u, v, d)
+         z_top = np.percentile(P[:, 2], self.cfg["top_percentile"])
+         top = P[P[:, 2] >= z_top - self.cfg["top_band"]]
+@@ -145,9 +165,22 @@ class Perception:
+         w = (d[P[:, 2] >= z_top - self.cfg["top_band"]] / 1000.0) ** 2
+         xy = (top[:, :2] * w[:, None]).sum(0) / w.sum()
+         z = float(np.median(top[:, 2]))
++        apex_yaw, apex_conf = None, 0.0
++        if shape == "triangle" and self.triangle_pose:
++            from .prism_pose import robust_center, triangle_pose
++            tp = triangle_pose(top[:, :2])
++            if tp is not None:
++                apex_yaw, apex_conf = float(tp[1]), float(tp[2])
++            rc = robust_center(top[:, :2])
++            if rc is not None:
++                xy = rc  # unweighted, trimmed: the weighted mean is biased by the triangle's uneven pixel sampling
+         xy = xy + self.xy_offset
+-        return Detection(color, np.array([xy[0], xy[1], z]), area, len(u), "depth", _yaw(top[:, :2]),
+-                         (float(np.median(u)), float(np.median(v))))
++        det = Detection(color, np.array([xy[0], xy[1], z]), area, len(u), "depth", _yaw(top[:, :2]),
++                        (float(np.median(u)), float(np.median(v))))
++        det.shape = shape
++        if apex_yaw is not None:
++            det.apex_yaw, det.apex_conf = apex_yaw, apex_conf
++        return det
+ 
+     def _from_plane(self, color, uv, area, n_depth):
+         """Centroid ray of the blob intersected with the horizontal plane at the object's top."""
+diff --git a/aaltonomous/baselines/classical/planner.py b/aaltonomous/baselines/classical/planner.py
+index fe67bb1..203a8b3 100644
+--- a/aaltonomous/baselines/classical/planner.py
++++ b/aaltonomous/baselines/classical/planner.py
+@@ -16,6 +16,7 @@ Every planned tick is checked before it is used:
+ """
+ from __future__ import annotations
+ 
++import copy
+ from dataclasses import dataclass, field
+ 
+ import numpy as np
+@@ -291,8 +292,16 @@ class Planner:
+             last.reason = f"{side} cannot place at ({spot[0]:+.2f},{spot[1]:+.2f}): {p.reason}"
+         return last
+     def _plan_side_hints(self, det, side, bin_name, arm_q, hand_q, **kw):
+-        """_plan_side with each finger direction of grasp.finger_hints in turn (fingers forward can reach over the
+-        centre bin's wall when the object is close to it; then fingers inward/sideways)."""
++        """Triangle prisms with `grasp.yaw_align`: finger directions derived from the detected apex yaw first; else
++        (and as the fallback) _plan_side with each finger direction of grasp.finger_hints in turn (fingers forward
++        can reach over the centre bin's wall when the object is close to it; then fingers inward/sideways)."""
++        if self._yaw_align_on(det) and kw.get("place_xy") is None:
++            p = self._plan_side_yaw(det, side, bin_name, arm_q, hand_q, **kw)
++            if p is not None:
++                return p
++        return self._plan_side_legacy(det, side, bin_name, arm_q, hand_q, **kw)
++
++    def _plan_side_legacy(self, det, side, bin_name, arm_q, hand_q, **kw):
+         hints = self.cfg["grasp"].get("finger_hints") or [self.cfg["grasp"].get("finger_hint", [1.0, 0.0, 0.0])]
+         saved, first = self.kin.hint, None
+         try:
+@@ -307,6 +316,69 @@ class Planner:
+         finally:
+             self.kin.hint = saved
+ 
++    # ------------------------------------------------------------------ yaw-aligned triangle grasp (grasp.yaw_align)
++    def _yaw_align_on(self, det):
++        g = self.cfg["grasp"]
++        ya = getattr(det, "apex_yaw", None)
++        return (bool(g.get("yaw_align", False)) and getattr(det, "shape", None) == "triangle"
++                and ya is not None and np.isfinite(ya)
++                and float(getattr(det, "apex_conf", 1.0)) >= float(g.get("yaw_min_conf", 0.5)))
++
++    def yaw_hint_angles(self, apex_yaw, side):
++        """Candidate finger directions (pelvis-frame angle, rad), best first, for an equilateral triangle whose apex
++        (any of the 3 vertices) points along `apex_yaw` (pelvis frame, x forward, y left). Finger direction = apex
++        direction + s*phi + k*120 deg, s = +1 left arm, -1 right arm (the mirror image; phi is calibrated on the left
++        hand). Candidates further than yaw_max_dev_deg from the arm's natural direction (-yaw_ref_deg left, +yaw_ref_deg
++        right = forward, slightly inward) are dropped; the rest are sorted nearest first."""
++        g = self.cfg["grasp"]
++        s = 1.0 if side == "left" else -1.0
++        ref = -s * np.radians(float(g.get("yaw_ref_deg", 25.0)))
++        phi = s * np.radians(float(g.get("yaw_phi_deg", 105.0)))
++        out = []
++        for k in range(3):
++            a = apex_yaw + phi + 2 * np.pi * k / 3
++            da = abs((a - ref + np.pi) % (2 * np.pi) - np.pi)
++            if da <= np.radians(float(g.get("yaw_max_dev_deg", 75.0))):
++                out.append((da, a))
++        return [a for _, a in sorted(out)][: int(g.get("yaw_max_hints", 2))]
++
++    @staticmethod
++    def _tri_shift(phi, r=0.030):
++        """Midpoint (m, along f) of the triangle's extent in direction f at angle phi from the apex direction
++        (vertices r from the centroid): phi=0 -> +7.5 mm towards the apex, phi=60 deg -> -7.5 mm."""
++        v = np.radians([0.0, 120.0, 240.0])
++        return 0.5 * (r * np.cos(phi - v).max() - r * np.cos(phi + np.pi - v).max())
++
++    def _finger_err(self, plan, side, a):
++        """Angle (deg) between the palm x axis (finger direction) at the end of the descend and the heading a."""
++        e = next(e for name, s, e in plan.phases if name == "descend")
++        self.kin._fk(plan.arm[e - 1])
++        x = self.kin.data.oMf[self.kin.palm[side]].rotation[:, 0]
++        d = np.arctan2(x[1], x[0]) - a
++        return float(np.degrees(abs((d + np.pi) % (2 * np.pi) - np.pi)))
++
++    def _plan_side_yaw(self, det, side, bin_name, arm_q, hand_q, **kw):
++        """Try the yaw-derived finger directions (strong hint weight, grasp point moved to the pinch midpoint).
++        Returns the first Plan whose achieved finger direction is within yaw_tol_deg, else None (-> legacy hints)."""
++        g = self.cfg["grasp"]
++        saved = (self.kin.hint, self.kin.w_hint)
++        try:
++            for a in self.yaw_hint_angles(float(det.apex_yaw), side):
++                f = np.array([np.cos(a), np.sin(a), 0.0])
++                d2 = copy.copy(det)
++                if g.get("yaw_tri_shift", True):  # pinch midpoint along f is not the centroid
++                    d2.top = det.top + self._tri_shift(a - float(det.apex_yaw)) * f
++                self.kin.hint, self.kin.w_hint = f, float(g.get("yaw_hint_weight", 3.0))
++                p = self._plan_side(d2, side, bin_name, arm_q, hand_q, **kw)
++                if p.ok:
++                    err = self._finger_err(p, side, a)
++                    if err <= float(g.get("yaw_tol_deg", 12.0)):
++                        p.reason = f"yaw-aligned ({np.degrees(a):.0f} deg, err {err:.0f})"
++                        return p
++        finally:
++            self.kin.hint, self.kin.w_hint = saved
++        return None
++
+     def _plan_side(self, det, side, bin_name, arm_q, hand_q, place_xy=None):
+         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
+         sc, zc = self.scene, self.scene.counter_z
+diff --git a/aaltonomous/baselines/classical/prism_pose.py b/aaltonomous/baselines/classical/prism_pose.py
+new file mode 100644
+index 0000000..fd95f0f
+--- /dev/null
++++ b/aaltonomous/baselines/classical/prism_pose.py
+@@ -0,0 +1,120 @@
++"""Robust top-face pose helpers for the classical perception (pure numpy/cv2, not wired into the planner).
++
++    robust_center(xy)            trimmed centre of a point cloud (metres)
++    triangle_pose(xy)            (centre_xy, yaw, confidence) of an equilateral-triangle top face, or None
++    classify_blob(mask)          ("cube"|"cylinder"|"triangle"|None, area ratio) from the 2D colour blob
++
++Equilateral triangle: the top face has a 3-fold symmetry, so the geometry only fixes the yaw modulo 120 deg. The
++returned yaw is the vertex direction (centroid -> a vertex) that lies closest to `prefer_yaw` (default +y = the
++scene's rot=0 apex), i.e. in [prefer-60, prefer+60) deg. Which of the three vertices is "the" apex is a convention,
++not a measurement; a grasp that is symmetric under 120 deg does not care.
++
++Fit: for a triangle with edge normals n_k = th + k*120deg, every point satisfies p.n_k <= c.n_k + r. The robust
++support values h_k(th) (99.5th percentile of p.n_k) give r = mean(h) and c = 2/3 sum h_k n_k exactly (sum n_k = 0),
++and sum h_k(th) = 3 r(th) is the size of the smallest enclosing equilateral triangle of orientation th, which is
++minimal at the true orientation. Hole-tolerant (only needs points near each edge), no reliance on the mean.
++"""
++from __future__ import annotations
++
++import numpy as np
++
++# ---- config constants ------------------------------------------------------------------------------------------
++TRIANGLE_MIN_POINTS = 40          # below this triangle_pose returns None (see test table: p90 yaw < 10 deg from ~this)
++ROBUST_MIN_POINTS = 5
++TRIANGLE_ALTITUDE = 0.045         # m, flat-to-apex (scene objects.size); inradius = altitude / 3
++SUPPORT_PERCENTILE = 99.5         # robust "max" of the projection onto each edge normal
++SIZE_TOLERANCE = 0.5              # |r_fit / r_expected - 1| at which the size term of the confidence reaches 0
++CONF_FULL_POINTS = 200            # point count at which the count term of the confidence saturates
++# blob classifier
++BLOB_MIN_AREA_PX = 60
++BLOB_BORDER_PX = 1                # blob pixels within this many px of the image edge -> abstain (clipped blob)
++RATIO_CUBE_MIN = 0.88             # area / minAreaRect-area: cube ~1.0, cylinder ~0.785, triangle ~0.5
++RATIO_CYL_MIN = 0.66
++
++
++def robust_center(xy, trim: float = 0.2):
++    """Centre of a 2D cloud: coordinate-wise median, then mean of the points within the (1-trim) quantile of the
++    distance to it, repeated once. Returns (2,) or None for fewer than ROBUST_MIN_POINTS points."""
++    xy = np.asarray(xy, float).reshape(-1, 2)
++    if len(xy) < ROBUST_MIN_POINTS:
++        return None
++    c = np.median(xy, axis=0)
++    for _ in range(2):
++        d = np.linalg.norm(xy - c, axis=1)
++        keep = d <= np.quantile(d, 1.0 - trim)
++        c = xy[keep].mean(0)
++    return c
++
++
++def _supports(P, th, q):
++    """P (N,2) centred points, th (A,) normal-set angles -> h (A,3) support values."""
++    ang = th[:, None] + np.arange(3) * (2 * np.pi / 3)               # (A,3)
++    N = np.stack([np.cos(ang), np.sin(ang)], -1).reshape(-1, 2)      # (3A,2)
++    return np.percentile(P @ N.T, q, axis=0).reshape(-1, 3)
++
++
++def triangle_fit(xy, q: float = SUPPORT_PERCENTILE):
++    """(centre (2,), normal angle th in [0,120deg), inradius r) of the best-fit equilateral triangle."""
++    xy = np.asarray(xy, float).reshape(-1, 2)
++    c0 = np.median(xy, axis=0)
++    P = xy - c0
++    coarse = np.radians(np.arange(0.0, 120.0, 1.0))
++    th = coarse[np.argmin(_supports(P, coarse, q).sum(1))]
++    fine = th + np.radians(np.arange(-1.0, 1.0001, 0.1))
++    h = _supports(P, fine, q)
++    i = int(np.argmin(h.sum(1)))
++    th, h = fine[i], h[i]
++    n = np.stack([np.cos(th + np.arange(3) * 2 * np.pi / 3), np.sin(th + np.arange(3) * 2 * np.pi / 3)], -1)
++    c = c0 + (2.0 / 3.0) * (h[:, None] * n).sum(0)
++    return c, th % (2 * np.pi / 3), float(h.mean())
++
++
++def triangle_pose(xy_metres, prefer_yaw: float = np.pi / 2, min_points: int = TRIANGLE_MIN_POINTS):
++    """Top-face point cloud (N,2) in metres -> (centre_xy (2,), yaw in [0,2pi), confidence in [0,1]) or None.
++
++    yaw points from the centroid to a vertex (the "apex"), the one closest to prefer_yaw (see module docstring)."""
++    xy = np.asarray(xy_metres, float).reshape(-1, 2)
++    xy = xy[np.all(np.isfinite(xy), axis=1)]
++    if len(xy) < max(min_points, ROBUST_MIN_POINTS):
++        return None
++    c, th, r = triangle_fit(xy)
++    # vertex directions are opposite to the edge normals
++    base = th + np.pi
++    k = np.round((prefer_yaw - base) / (2 * np.pi / 3))
++    yaw = float((base + k * 2 * np.pi / 3) % (2 * np.pi))
++    # confidence: enough points, fitted size matches the known object, minAreaRect offset agrees (h/6 toward vertex)
++    r_exp = TRIANGLE_ALTITUDE / 3.0
++    f_n = min(1.0, len(xy) / CONF_FULL_POINTS)
++    f_s = float(np.clip(1.0 - abs(r / r_exp - 1.0) / SIZE_TOLERANCE, 0.0, 1.0))
++    import cv2
++    (rx, ry), _, _ = cv2.minAreaRect(xy.astype(np.float32))
++    off = np.array([rx, ry]) - robust_center(xy)
++    # any of the 3 vertices is valid, so compare against the nearest one
++    d = np.arctan2(off[1], off[0]) - yaw
++    d = (d + np.pi / 3) % (2 * np.pi / 3) - np.pi / 3
++    agree = abs(np.linalg.norm(off) - TRIANGLE_ALTITUDE / 6) < 0.006 and abs(d) < np.radians(30)
++    conf = float(f_n * f_s * (0.75 + 0.25 * bool(agree)))
++    return c, yaw, conf
++
++
++def classify_blob(mask, min_area_px: int = BLOB_MIN_AREA_PX, border_px: int = BLOB_BORDER_PX):
++    """2D colour blob (uint8/bool mask, single object) -> (label, ratio). label is "cube" | "cylinder" | "triangle",
++    or None to abstain: blob touches the image edge (clipped), or is smaller than min_area_px, or is empty.
++    ratio = pixel area / minAreaRect area (cube ~1.0, cylinder ~0.785, triangle ~0.5)."""
++    import cv2
++    m = (np.asarray(mask) > 0).astype(np.uint8)
++    H, W = m.shape
++    b = max(int(border_px), 1)
++    if m[:b].any() or m[-b:].any() or m[:, :b].any() or m[:, -b:].any():
++        return None, float("nan")
++    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
++    if not cnts:
++        return None, float("nan")
++    cnt = max(cnts, key=cv2.contourArea)
++    area = float(m.sum()) if len(cnts) == 1 else float(cv2.contourArea(cnt))
++    if area < min_area_px:
++        return None, float("nan")
++    _, (w, h), _ = cv2.minAreaRect(cnt)
++    ratio = area / max((w + 1.0) * (h + 1.0), 1e-9)       # +1 px: contour runs through pixel centres
++    label = "cube" if ratio >= RATIO_CUBE_MIN else "cylinder" if ratio >= RATIO_CYL_MIN else "triangle"
++    return label, float(ratio)
+diff --git a/aaltonomous/baselines/classical/test_prism_pose.py b/aaltonomous/baselines/classical/test_prism_pose.py
+new file mode 100644
+index 0000000..24b93d4
+--- /dev/null
++++ b/aaltonomous/baselines/classical/test_prism_pose.py
+@@ -0,0 +1,172 @@
++"""Synthetic tests for prism_pose (triangle pose, robust centre, blob classifier). Run:
++    python -m pytest aaltonomous/baselines/classical/test_prism_pose.py -q
++    python -m aaltonomous.baselines.classical.test_prism_pose        # prints the full error table (about 1 min)
++Yaw errors are measured modulo 120 deg (equilateral symmetry): 'flip' = error > 30 deg, i.e. the wrong vertex wedge.
++"""
++import cv2
++import numpy as np
++
++from .prism_pose import (TRIANGLE_MIN_POINTS, classify_blob, robust_center, triangle_pose)
++
++SIDE = 0.045 / (np.sqrt(3) / 2)          # 0.052 m
++ALT = 0.045
++
++
++def make_cloud(rng, n_kept, hole, sigma, apex=None, centre=None):
++    """Uniform points in an equilateral triangle (apex towards `apex`), then uneven holes: drop probability grows
++    linearly along a random direction (mean hole fraction `hole`, max 0.95), then gaussian noise sigma (m).
++    Returns (xy kept, true centre, true apex angle). Exactly n_kept points survive."""
++    apex = rng.uniform(0, 2 * np.pi) if apex is None else apex
++    centre = rng.uniform(-0.3, 0.3, 2) if centre is None else np.asarray(centre)
++    n0 = int(round(1.5 * n_kept / max(1 - hole, 0.05))) + 20
++    R = ALT * 2 / 3
++    V = R * np.stack([np.cos(apex + 2 * np.pi * np.arange(3) / 3), np.sin(apex + 2 * np.pi * np.arange(3) / 3)], -1)
++    u = rng.random((n0, 2))
++    flip = u.sum(1) > 1
++    u[flip] = 1 - u[flip]
++    p = V[0] + u[:, :1] * (V[1] - V[0]) + u[:, 1:] * (V[2] - V[0])
++    if hole > 0:
++        d = rng.uniform(0, 2 * np.pi)
++        t = p @ np.array([np.cos(d), np.sin(d)])
++        t = (t - t.min()) / (np.ptp(t) + 1e-12)
++        keep = rng.random(n0) >= np.clip(2 * hole * t, 0, 0.95)
++        p = p[keep]
++    p = p[rng.permutation(len(p))[:n_kept]]          # exactly n_kept survive (when enough were generated)
++    p = p + rng.normal(0, sigma, p.shape)
++    return p + centre, centre, apex
++
++
++def err_mod120(a, b):
++    d = (a - b + np.pi / 3) % (2 * np.pi / 3) - np.pi / 3
++    return abs(np.degrees(d))
++
++
++def baseline(xy):
++    """Current approach: mean centre; yaw = direction centroid -> minAreaRect centre (points at the apex side)."""
++    c = xy.mean(0)
++    (rx, ry), _, _ = cv2.minAreaRect(xy.astype(np.float32))
++    return c, np.arctan2(ry - c[1], rx - c[0]) % (2 * np.pi)
++
++
++def trial(rng, n, hole, sigma):
++    xy, c, a = make_cloud(rng, n, hole, sigma)
++    r = triangle_pose(xy, min_points=10)
++    bc, by = baseline(xy)
++    ours = (np.linalg.norm(r[0] - c) * 1e3, err_mod120(r[1], a), r[2]) if r else (np.nan, np.nan, 0.0)
++    return ours + (np.linalg.norm(bc - c) * 1e3, err_mod120(by, a))
++
++
++def stats(rng, n, hole, trials=100, sigma_max=0.002):
++    R = np.array([trial(rng, n, hole, rng.uniform(0, sigma_max)) for _ in range(trials)])
++    f = lambda e: (np.percentile(e, 50), np.percentile(e, 90), e.max(), np.mean(e > 30))
++    return {"ours": f(R[:, 1]), "base": f(R[:, 4]), "c_ours": np.median(R[:, 0]), "c_base": np.median(R[:, 3]),
++            "conf": np.median(R[:, 2])}
++
++
++NS = (20, 30, 40, 60, 100, 200, 500, 1500)
++HOLES = (0.0, 0.1, 0.2, 0.3)
++
++
++def print_table(trials=100):
++    rng = np.random.default_rng(0)
++    print("yaw err deg (mod 120) p50/p90/max | flips(>30) | centre err mm p50 ; ours vs baseline(mean+minAreaRect)")
++    print("noise sigma U(0,2) mm, N = points KEPT after holes")
++    for h in HOLES:
++        print(f"-- hole fraction {h:.1f}")
++        for n in NS:
++            s = stats(rng, n, h, trials)
++            o, b = s["ours"], s["base"]
++            print(f"N={n:5d} ours {o[0]:5.1f}/{o[1]:5.1f}/{o[2]:5.1f} flip {o[3]:.2f} c {s['c_ours']:.2f} | "
++                  f"base {b[0]:5.1f}/{b[1]:5.1f}/{b[2]:5.1f} flip {b[3]:.2f} c {s['c_base']:.2f}")
++    print("min N for ours p90 < 10 deg:")
++    for h in HOLES:
++        ok = [n for n in NS if stats(np.random.default_rng(1), n, h, trials)["ours"][1] < 10]
++        print(f"  hole {h:.1f}: {ok[0] if ok else '>' + str(NS[-1])}")
++
++
++# ---- pytest ---------------------------------------------------------------------------------------------------------
++def test_clean_triangle_exact_any_apex():
++    rng = np.random.default_rng(1)
++    for apex in np.radians(np.arange(0, 360, 17.0)):
++        xy, c, a = make_cloud(rng, 400, 0.0, 0.0, apex=apex, centre=(0.1, -0.2))
++        cen, yaw, conf = triangle_pose(xy)
++        assert err_mod120(yaw, a) < 1.5
++        assert np.linalg.norm(cen - c) < 1.5e-3
++        assert 0 <= yaw < 2 * np.pi and conf > 0.7
++
++
++def test_yaw_is_vertex_nearest_prefer():
++    rng = np.random.default_rng(2)
++    xy, c, a = make_cloud(rng, 400, 0.0, 0.0, apex=np.pi / 2 + np.radians(100))   # true vertices: 190, 310, 70 deg
++    _, yaw, _ = triangle_pose(xy, prefer_yaw=np.pi / 2)
++    assert abs(np.degrees(yaw) - 70) < 2.0
++    _, yaw, _ = triangle_pose(xy, prefer_yaw=np.radians(200))
++    assert abs(np.degrees(yaw) - 190) < 2.0
++
++
++def test_min_points_gate():
++    rng = np.random.default_rng(3)
++    xy, _, _ = make_cloud(rng, TRIANGLE_MIN_POINTS - 1, 0.0, 0.001)
++    assert triangle_pose(xy[:TRIANGLE_MIN_POINTS - 1]) is None
++    assert triangle_pose(xy, min_points=10) is not None
++    assert triangle_pose(np.zeros((0, 2))) is None
++
++
++def test_stress_holes_noise():
++    rng = np.random.default_rng(4)
++    s = stats(rng, 200, 0.2, trials=60)
++    assert s["ours"][1] < 10 and s["ours"][3] <= 0.02          # p90 < 10 deg, flips rare
++    assert s["c_ours"] < 2.0                                    # median centre error < 2 mm
++    assert s["ours"][1] <= s["base"][1]
++
++
++def test_beats_baseline_centre_with_uneven_holes():
++    rng = np.random.default_rng(5)
++    s = stats(rng, 300, 0.3, trials=60)
++    assert s["c_ours"] <= s["c_base"] + 0.1
++
++
++def test_robust_center_ignores_outliers():
++    rng = np.random.default_rng(6)
++    xy = rng.normal(0, 0.003, (200, 2))
++    xy[:20] += 0.05
++    assert np.linalg.norm(robust_center(xy)) < 0.0015
++    assert np.linalg.norm(xy.mean(0)) > 0.003
++    assert robust_center(xy[:3]) is None
++
++
++def _blob(kind, size=40, shift=(0, 0), canvas=(120, 160), rot=0.3):
++    m = np.zeros(canvas, np.uint8)
++    c = np.array([canvas[1] / 2 + shift[0], canvas[0] / 2 + shift[1]])
++    if kind == "cube":
++        pts = size / 2 * np.array([[1, 1], [-1, 1], [-1, -1], [1, -1]])
++    elif kind == "triangle":
++        R = size * 2 / 3
++        pts = R * np.array([[np.cos(a), np.sin(a)] for a in 2 * np.pi * np.arange(3) / 3 + 1.2])
++    if kind == "cylinder":
++        cv2.circle(m, tuple(int(v) for v in c), size // 2, 255, -1)
++    else:
++        Rm = np.array([[np.cos(rot), -np.sin(rot)], [np.sin(rot), np.cos(rot)]])
++        cv2.fillPoly(m, [np.round(pts @ Rm.T + c).astype(np.int32)], 255)
++    return m
++
++
++def test_classifier_shapes():
++    for kind in ("cube", "cylinder", "triangle"):
++        for size in (30, 40, 60):
++            for rot in (0.0, 0.3, 0.785):
++                lab, ratio = classify_blob(_blob(kind, size, rot=rot))
++                assert lab == kind, (kind, size, rot, ratio)
++
++
++def test_classifier_border_guard_and_tiny():
++    m = _blob("cube", 40, shift=(70, 0))              # pushed against the right edge
++    assert m[:, -1].any()
++    assert classify_blob(m)[0] is None
++    assert classify_blob(_blob("cube", 40, shift=(-65, 0)))[0] is None   # touches the left edge
++    assert classify_blob(_blob("cube", 6))[0] is None                    # too small
++    assert classify_blob(np.zeros((50, 50), np.uint8))[0] is None
++
++
++if __name__ == "__main__":
++    print_table()
+diff --git a/aaltonomous/baselines/classical/test_yaw_align.py b/aaltonomous/baselines/classical/test_yaw_align.py
+new file mode 100644
+index 0000000..f98163a
+--- /dev/null
++++ b/aaltonomous/baselines/classical/test_yaw_align.py
+@@ -0,0 +1,169 @@
++"""Wiring tests for the triangle yaw-align path (no IK solves: planner methods are mocked, perception uses a stub
++camera). Run: python -m pytest aaltonomous/baselines/classical/test_yaw_align.py -q"""
++import copy
++import unittest
++from unittest import mock
++
++import numpy as np
++
++from aaltonomous.interface.calibration import Calibration
++from aaltonomous.scene.scene import Scene
++
++from .config import hand_postures, home_arm, load_config
++from .perception import Detection, Perception
++from .planner import Planner
++
++SC = Scene.load()
++
++
++def _planner(**grasp):
++    cfg = load_config()
++    cfg["grasp"].update(grasp)
++    return Planner(cfg, SC, hand_postures(cfg), home_arm(cfg))
++
++
++def _tri(**kw):
++    d = dict(shape="triangle", apex_yaw=0.3, apex_conf=0.9)
++    d.update(kw)
++    return Detection("red", np.array([0.3, 0.1, 0.9]), 0, 0, "depth", **d)
++
++
++def _wrap(a):
++    return (a + np.pi) % (2 * np.pi) - np.pi
++
++
++class TestYawHints(unittest.TestCase):
++    def test_right_arm_mirrors_left(self):
++        pl = _planner(yaw_max_dev_deg=180.0, yaw_max_hints=3)
++        phi = np.radians(pl.cfg["grasp"]["yaw_phi_deg"])
++        for apex in np.radians([-170, -90, -30, 0, 45, 90, 150]):
++            L = pl.yaw_hint_angles(apex, "left")
++            R = pl.yaw_hint_angles(apex, "right")
++            self.assertEqual((len(L), len(R)), (3, 3))
++            for a in L:   # left: apex + phi + k*120
++                self.assertAlmostEqual(abs(_wrap((a - apex - phi) * 3)) % (2 * np.pi), 0, places=6)
++            for a in R:   # right: apex - phi + k*120
++                self.assertAlmostEqual(abs(_wrap((a - apex + phi) * 3)) % (2 * np.pi), 0, places=6)
++            # mirror: right(apex) == -left(-apex) as a set of angles
++            mir = sorted(_wrap(-a) % (2 * np.pi) for a in pl.yaw_hint_angles(-apex, "left"))
++            self.assertTrue(np.allclose(sorted(a % (2 * np.pi) for a in R), mir, atol=1e-9))
++
++    def test_default_filter_and_order(self):
++        pl = _planner()
++        for side, s in (("left", 1.0), ("right", -1.0)):
++            ref = -s * np.radians(25.0)
++            for apex in np.radians(np.arange(-180, 180, 20)):
++                out = pl.yaw_hint_angles(apex, side)
++                self.assertLessEqual(len(out), 2)
++                dev = [abs(_wrap(a - ref)) for a in out]
++                self.assertTrue(all(d <= np.radians(75.0) + 1e-9 for d in dev))
++                self.assertEqual(dev, sorted(dev))
++
++
++class TestYawDispatch(unittest.TestCase):
++    def _run(self, planner, det, yaw_result):
++        args = (det, "left", "left", np.zeros(14), np.zeros(14))
++        with mock.patch.object(planner, "_plan_side_yaw", return_value=yaw_result) as y, \
++                mock.patch.object(planner, "_plan_side_legacy", return_value="legacy") as l:
++            r = planner._plan_side_hints(*args)
++        return r, y, l
++
++    def test_yaw_first_when_on(self):
++        r, y, l = self._run(_planner(yaw_align=True), _tri(), "yaw")
++        self.assertEqual(r, "yaw")
++        y.assert_called_once()
++        l.assert_not_called()
++
++    def test_fallback_to_legacy_when_yaw_fails(self):
++        r, y, l = self._run(_planner(yaw_align=True), _tri(), None)
++        self.assertEqual(r, "legacy")
++        y.assert_called_once()
++        l.assert_called_once()
++
++    def test_skipped_when_off_or_not_triangle_or_low_conf(self):
++        for pl, det in ((_planner(yaw_align=False), _tri()),
++                        (_planner(yaw_align=True), _tri(shape="cube")),
++                        (_planner(yaw_align=True), _tri(shape=None)),
++                        (_planner(yaw_align=True), _tri(apex_yaw=None)),
++                        (_planner(yaw_align=True), _tri(apex_conf=0.1))):
++            r, y, l = self._run(pl, det, "yaw")
++            self.assertEqual(r, "legacy")
++            y.assert_not_called()
++
++    def test_yaw_plan_tries_hint_angles_in_order(self):
++        """_plan_side_yaw calls _plan_side once per candidate with kin.hint = that finger direction."""
++        pl = _planner(yaw_align=True)
++        seen = []
++
++        def fake(d2, side, *a, **k):
++            seen.append(np.arctan2(pl.kin.hint[1], pl.kin.hint[0]))
++            return mock.Mock(ok=False)
++
++        det = _tri(apex_yaw=0.0)
++        with mock.patch.object(pl, "_plan_side", side_effect=fake):
++            self.assertIsNone(pl._plan_side_yaw(det, "left", "left", np.zeros(14), np.zeros(14)))
++        exp = pl.yaw_hint_angles(0.0, "left")
++        self.assertEqual(len(seen), len(exp))
++        np.testing.assert_allclose([_wrap(a - b) for a, b in zip(seen, exp)], 0, atol=1e-9)
++
++
++class _StubCal:
++    def pixel_to_pelvis(self, cam, u, v, d):
++        return np.stack([u, v, d], -1).astype(float)   # "pixels" already metres
++
++
++class TestPerceptionWiring(unittest.TestCase):
++    def _perc(self, **flags):
++        cfg = load_config()
++        cfg["perception"].update(flags)
++        return Perception(cfg, SC, _StubCal())
++
++    def _cloud(self, apex=0.4, n=400, seed=0):
++        rng = np.random.default_rng(seed)
++        R = 0.045 * 2 / 3
++        V = R * np.stack([np.cos(apex + 2 * np.pi * np.arange(3) / 3), np.sin(apex + 2 * np.pi * np.arange(3) / 3)], -1)
++        u = rng.random((n, 2)); f = u.sum(1) > 1; u[f] = 1 - u[f]
++        xy = V[0] + u[:, :1] * (V[1] - V[0]) + u[:, 1:] * (V[2] - V[0]) + np.array([0.3, 0.1])
++        return xy
++
++    def _det(self, perc, shape):
++        xy = self._cloud()
++        # pixel_to_pelvis stub takes (u, v, d); d is z in "metres" here, depth weight uses d/1000 (uniform)
++        return perc._from_depth("red", xy[:, 0], xy[:, 1], np.full(len(xy), 0.9), 500, shape)
++
++    def test_flags_off_unchanged(self):
++        p = self._perc()
++        d = self._det(p, None)
++        self.assertIsNone(d.shape)
++        self.assertIsNone(d.apex_yaw)
++        self.assertEqual(d.apex_conf, 0.0)
++        self.assertIsNone(p._shape_of(np.ones((10, 10), np.uint8)))
++
++    def test_triangle_pose_set(self):
++        p = self._perc(triangle_pose=True)
++        d = self._det(p, "triangle")
++        self.assertEqual(d.shape, "triangle")
++        self.assertGreater(d.apex_conf, 0.5)
++        err = abs(_wrap((d.apex_yaw - 0.4) * 3)) / 3   # modulo 120 deg
++        self.assertLess(np.degrees(err), 6.0)
++        np.testing.assert_allclose(d.top[:2], [0.3, 0.1], atol=0.004)
++
++    def test_cube_untouched_by_triangle_flag(self):
++        base = self._det(self._perc(), "cube")
++        on = self._det(self._perc(triangle_pose=True), "cube")
++        np.testing.assert_array_equal(base.top, on.top)
++        self.assertIsNone(on.apex_yaw)
++
++    def test_classify_from_blob(self):
++        import cv2
++        p = self._perc(classify_shape=True)
++        p.scene_shape = None
++        m = np.zeros((120, 120), np.uint8)
++        cv2.fillPoly(m, [np.array([[60, 20], [95, 85], [25, 85]])], 1)
++        self.assertEqual(p._shape_of(m), "triangle")
++        m[:] = 0; m[30:90, 30:90] = 1
++        self.assertEqual(p._shape_of(m), "cube")
++
++
++if __name__ == "__main__":
++    unittest.main()
