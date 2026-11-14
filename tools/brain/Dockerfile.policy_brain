@@ -12,6 +12,14 @@
 #   tools/brain/models/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf
 #   docker build -f tools/brain/Dockerfile.policy_brain --build-arg POLICY_IMAGE=hackjunction/policy:<release-tag> \
 #       --build-arg BRAIN_ENABLED=1 -t hackjunction/policy:finals-agent .
+# Verified build (box C, RTX PRO 6000): two steps from the repo root, any source tree/branch (build args: POLICY_IMAGE, BRAIN_ENABLED,
+# BRAIN_OVERLAY = file under aaltonomous/baselines/classical/overlays/ without .yaml, default finals_r23_universal):
+#   docker build -f tools/submission.Dockerfile -t hackjunction/policy:<tag>-base .      # base; if tools/check_release_flags.py
+#       rejects the tree's submission overlay, build it from a copy with an overlay it accepts (e.g. finals_r22): the brain stage
+#       replaces overlay.yaml with BRAIN_OVERLAY anyway.
+#   docker build -f tools/brain/Dockerfile.policy_brain --build-arg POLICY_IMAGE=hackjunction/policy:<tag>-base \
+#       --build-arg BRAIN_ENABLED=1 --build-arg BRAIN_OVERLAY=finals_r23_universal -t hackjunction/policy:brainimg-<sha> .
+# The build needs no internet (llama.cpp source and GGUFs are staged, LLAMA_BUILD_UI=OFF). Accept with tools/brain/test_brain_image.sh.
 # Record the llama.cpp commit and both GGUF sha256 next to the image. Not built in this branch.
 ARG POLICY_IMAGE=hackjunction/policy:latest
 ARG BRAIN_ENABLED=0
@@ -22,8 +30,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends cmake build-ess
     && rm -rf /var/lib/apt/lists/*
 COPY tools/brain/llama.cpp /src/llama.cpp
 # Any cmake, build or copy failure fails the build (no `|| true`). GGML_NATIVE=OFF: no tuning to the build host CPU.
-RUN cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
-        -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA_NCCL=OFF \
+# The devel image has only the libcuda STUB (no libcuda.so.1; the real one comes from the host driver at run time). libggml-cuda
+# is NEEDED-linked to libcuda.so.1, so the llama-server link fails with "undefined reference to cuMem*" unless ld can see a
+# libcuda.so.1 (symlink to the stub + -rpath-link). The stub is NOT copied into the image. LLAMA_BUILD_UI=OFF: no web UI, so
+# the build does not download it from huggingface.co (llama-server API only).
+RUN ln -s libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+ && cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
+        -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA_NCCL=OFF -DLLAMA_BUILD_UI=OFF \
+        -DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,/usr/local/cuda/lib64/stubs \
  && cmake --build /src/build --target llama-server -j"$(nproc)" \
  && mkdir -p /out/bin /out/lib && cp /src/build/bin/llama-server /out/bin/ && cp /src/build/bin/*.so* /out/lib/
 
