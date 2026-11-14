@@ -142,7 +142,8 @@ class TestFlags(unittest.TestCase):
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
         self.assertEqual(set(retry), {"ab_retry_vary", "ab_retry_vary_slots", "cand_r16", "cand_r16_nopp", "cand_r17",
                                       "finals_real", "rc1", "ab_decision", "ab_place_gate",
-                                      "ab_object_time_budget_s", "ab_colour_kmeans", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90"})
+                                      "ab_object_time_budget_s", "ab_colour_kmeans", "ab_safety", "ab_hand_calib", "brain_llm", "ab_vel80", "ab_vel85", "ab_vel90",
+                                      "ab_overlap"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
@@ -210,7 +211,8 @@ class TestFlags(unittest.TestCase):
         """Overlays can never make anything faster than the stock sim profile."""
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
                           ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
-                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap")])   # arm_vel_cap: min() only
+                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap",   # arm_vel_cap: min() only
+                           "motion.overlap_look")])   # look timing only: planned arm motion is unchanged
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",

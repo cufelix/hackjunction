@@ -272,6 +272,8 @@ motion:
     settle_ticks: 3
   open_hold_s: 0.4
   settle_s: 0.5               # hold at home before looking (arm lag, motion blur)
+  overlap_look: false         # FLAG (Oliver J8). look during the return home; on arrival the result is used, settle skipped
+  overlap_look_lead_s: 1.0    # overlap_look: start the look when the queued motion has this much left (s)
   chunk: 10                   # ticks returned per act() (0.33 s)
   hold_ticks: 6               # ticks per hold while planning / waiting (fewer requests; <= 0.2 s extra latency)
   counter_clearance: 0.03     # hand points above the counter footprint stay this high during transit

@@ -54,6 +54,10 @@ def _lower_thread_priority(nice=10):
 
 
 class ClassicalPolicy:
+    _plan_from = None      # motion.overlap_look: (arm, hand) queue end pose while an overlap look runs
+    _overlap_job = None    # motion.overlap_look: {"obs", "result", "xy", "t0"} for the look during the return home
+    _cur_xy = None         # grasp xy of the plan now executing (the object just attempted)
+
     def __init__(self, config=None, scene=None, calibration=None, safety: SafetyConfig | None = None,
                  require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None):
         self.cfg = config if isinstance(config, dict) else load_config(config, overrides)
@@ -167,6 +171,7 @@ class ClassicalPolicy:
         self.state = "init"
         self.queue_a = self.queue_h = None
         self.arm_cmd = self.hand_cmd = None
+        self._plan_from = self._overlap_job = self._cur_xy = None
         self.attempts = []          # (position, count) of objects we tried to pick
         self.attempt_tracks = []    # retry-vary: {color, latest xy, cumulative count} stable pushed-object tracks
         self.object_time_tracks = []  # EV budget: {color, latest xy, cumulative planned motion seconds}
@@ -476,6 +481,9 @@ class ClassicalPolicy:
                 r = None
             if r is not None:
                 return r
+        if self.state == "executing" and self._overlap_job is None and self.queue_a is not None \
+                and 0 < len(self.queue_a) <= self._overlap_ticks() and self._overlap_ok():
+            self._overlap_start(obs, t)
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
         if self.state == "init":
@@ -553,9 +561,79 @@ class ClassicalPolicy:
                 self._note(t, "operator stop")
             return self._hold(done=self.state == "done")
         if self.state == "executing":  # queue drained -> back home: look again after settling
+            if self._overlap_job is not None:
+                r = self._overlap_drain(obs, t)
+                if r is not None:
+                    return r
             self.state = "settle"
             return self._act(obs)
         return self._hold(done=True)
+
+    # ------------------------------------------------------------------ motion.overlap_look
+    def _overlap_on(self):
+        return bool(self.cfg["motion"].get("overlap_look", False))
+
+    def _overlap_ok(self):
+        """Overlap needs the look thread (threaded or safety_shell), and is off with policy.verify_placement (the
+        verify relooks and corrections depend on the settled arm) and while confidence tiers are still measuring."""
+        if not (self._overlap_on() and self.threaded) or self._verify_on():
+            return False
+        return not (self._dflag("confidence_tiers") and self.tier is None)
+
+    def _overlap_ticks(self):
+        return int(round(float(self.cfg["motion"].get("overlap_look_lead_s", 1.0)) * HZ))
+
+    def _q0(self):
+        """Start pose for planning. With an overlap look running this is the END pose of the queued motion (the arm
+        is still moving home, so arm_cmd is mid-motion); otherwise the current commanded pose, as before."""
+        if self._plan_from is not None:
+            return self._plan_from[0].copy(), self._plan_from[1].copy()
+        return self.arm_cmd, self.hand_cmd
+
+    def _overlap_start(self, obs, t):
+        arm, hand = self.queue_a[-1].copy(), self.queue_h[-1].copy()
+        self._plan_from = (arm, hand)
+        snap = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in obs.items()}
+        job = {"obs": snap, "result": None, "xy": self._cur_xy, "t0": None}
+        self._overlap_job = job
+        threading.Thread(target=self._look_job, args=(job,), daemon=True).start()
+        self._note(t, f"overlap look started {len(self.queue_a) / HZ:.2f} s before home")
+
+    def _overlap_drain(self, obs, t):
+        """Queue drained (arm home). Returns an action to hold, or None to continue with the normal settle + look.
+        Freshness rule: the overlap result is discarded (normal look) if its job errored, or if the plan it picked
+        targets an object within 3 cm of the grasp xy we just attempted (that object may still be on the counter),
+        or if it would exceed max_total_attempts. Waiting for the job holds the arm for at most 1.0 s (sim time)."""
+        job = self._overlap_job
+        if job["result"] is None:
+            if job["t0"] is None:
+                job["t0"] = t
+            if t - job["t0"] < 1.0:
+                return self._hold()
+            self._overlap_discard(t, "not ready after 1.0 s")
+            return None
+        res = job["result"]
+        why = None
+        if res[0] == "error":
+            why = "job error"
+        elif res[0] == "plan" and job["xy"] is not None and \
+                np.linalg.norm(np.asarray(res[1].waypoints["grasp"][:2], float) - job["xy"]) < 0.03:
+            why = "target is the object just attempted"
+        cap = self.cfg["policy"].get("max_total_attempts")
+        if why is None and cap is not None and self.n_started >= int(cap):
+            why = "attempt cap reached"
+        if why is not None:
+            self._overlap_discard(t, why)
+            return None
+        self._overlap_job = None
+        self._plan_from = None
+        self._note(t, "overlap look used: skip settle")
+        return self._after_look(res, t)
+
+    def _overlap_discard(self, t, why):
+        self._overlap_job = None
+        self._plan_from = None
+        self._note(t, f"overlap look discarded ({why}): settle + look")
 
     # ------------------------------------------------------------------ look + plan
     def _look_job(self, job):
@@ -569,7 +647,7 @@ class ClassicalPolicy:
         """Only with perception.colour_kmeans: tell detect() whether the arm is out of view (parked at home)."""
         if not self.cfg["perception"].get("colour_kmeans", False):
             return {}
-        return {"arm_clear": bool(np.abs(self.arm_cmd - self.home).max() < 0.05)}
+        return {"arm_clear": bool(np.abs(self._q0()[0] - self.home).max() < 0.05)}
 
     def _look(self, obs):
         verify = self._verify_on()
@@ -1391,10 +1469,10 @@ class ClassicalPolicy:
                 args["relocate"] = relocate
             with self._decision_motion() as pl:   # D3/D4 speed scale + first-object clearance (stock planner when off)
                 if plan_fn is None:
-                    return pl.plan(d, self.arm_cmd, self.hand_cmd, **args)
+                    return pl.plan(d, *self._q0(), **args)
                 if pl is not self.planner:
                     args["planner"] = pl
-                return plan_fn(d, self.arm_cmd, self.hand_cmd, **args)
+                return plan_fn(d, *self._q0(), **args)
 
         if not self._vary_on():
             return plan()
@@ -1489,7 +1567,7 @@ class ClassicalPolicy:
         bc = self.cfg["brain"]
         calibrated = self.calibration is not None and self.calibration.success
         bins = [(n, self.planner.bin_xy(n), "calibrated" if calibrated else "scene") for n in self.scene.bin_names]
-        reach = (lambda d, b: self.planner.plan(d, self.arm_cmd, self.hand_cmd, bin_name=b, relocate=False).ok) \
+        reach = (lambda d, b: self.planner.plan(d, *self._q0(), bin_name=b, relocate=False).ok) \
             if bc.get("world_reach", False) else None
         opinions = self._brain_mapping
         known_bin = lambda d: lookup_bin(self.cfg, opinions, d.color, getattr(d, "shape", None))
@@ -1591,7 +1669,7 @@ class ClassicalPolicy:
             image = self._brain_image(obs) if bc.get("image", False) else None
 
             def reach_check(oid, b):
-                p = self.planner.plan(dmap[oid], self.arm_cmd, self.hand_cmd, bin_name=b, relocate=False)
+                p = self.planner.plan(dmap[oid], *self._q0(), bin_name=b, relocate=False)
                 return p.ok, p.reason
 
             for point, state, classical, ab in self._brain_points(lp, dets, cands, ids):
@@ -1810,6 +1888,7 @@ class ClassicalPolicy:
 
     def _start(self, plan, t):
         xy = plan.waypoints["grasp"][:2]
+        self._cur_xy = np.asarray(xy, float).copy()
         self.attempts.append((xy, 1))
         self._track_attempt(plan.color, xy)
         self._record_object_time(plan.color, xy, plan.duration)

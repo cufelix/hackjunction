@@ -79,6 +79,7 @@ FLAGS = {
     "grasp.drop_slot_overflow": ("Felix #6 rev", "counter", "slots used up: counter (leave it) | stack (slot 0)"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
+    "motion.overlap_look": ("Oliver J8", False, "look (detect + plan the next object) during the return home; used on arrival, settle skipped (threaded only; off with verify_placement)"),
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),
     "motion.lift_on_stall.timeout_s": ("round 9", STOCK, "lift_on_stall: longest close hold (stock 1.2 s)"),
