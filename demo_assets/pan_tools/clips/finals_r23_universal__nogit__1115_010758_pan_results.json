@@ -1,0 +1,105 @@
+[
+ {
+  "variant": "egg_right",
+  "instruction": "take the pan and pretend you are making pancakes",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.35,
+    "y": 0.16,
+    "yaw": -3.14159,
+    "z": 0.03
+   },
+   {
+    "color": "tan",
+    "shape": "pancake",
+    "x": 0.35,
+    "y": 0.16,
+    "yaw": -1.5708,
+    "z": 0.007500000000000001
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.7,
+    "y": 0.13,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 7.0,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 43,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": -0.0,
+  "touched": false,
+  "min_palm_dist_m": 0.1467,
+  "verdict": "no_lift",
+  "in_center_bin": false,
+  "final_pos": [
+   0.3001,
+   -0.1,
+   0.04
+  ],
+  "closest": {
+   "left": {
+    "pinch_mid_to_handle_mm": 203,
+    "t": 0.99,
+    "links_mm": {
+     "palm_link": [
+      125,
+      82,
+      156
+     ],
+     "thumb_2_link": [
+      61,
+      62,
+      143
+     ],
+     "index_1_link": [
+      96,
+      -17,
+      229
+     ],
+     "middle_1_link": [
+      113,
+      -42,
+      180
+     ]
+    }
+   },
+   "right": {
+    "pinch_mid_to_handle_mm": 266,
+    "t": 0.99,
+    "links_mm": {
+     "palm_link": [
+      -235,
+      82,
+      156
+     ],
+     "thumb_2_link": [
+      -171,
+      62,
+      143
+     ],
+     "index_1_link": [
+      -206,
+      -17,
+      229
+     ],
+     "middle_1_link": [
+      -223,
+      -42,
+      180
+     ]
+    }
+   }
+  }
+ }
+]

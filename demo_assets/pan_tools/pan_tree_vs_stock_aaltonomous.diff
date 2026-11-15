@@ -1,0 +1,954 @@
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.stl' '--exclude=.urdf_cache' /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/hooks.py /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/hooks.py
+--- /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/hooks.py	2026-11-13 23:10:02.000000000 +0000
++++ /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/hooks.py	2026-11-15 00:43:20.205784517 +0000
+@@ -140,6 +140,39 @@
+             return {"ok": True, "active": self.place(env, lay), "layout": lay}
+         if cmd == "state":
+             return {"ok": True, "objects": self.state(env), "layout": self.layout}
++        if cmd == "rec_start":   # AALTO_SHOWCAM: record the third-person camera to an mp4 (sim-time 30 fps)
++            import cv2
++            self.rec_stop()
++            path = str(req["path"])
++            self._rec = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (1280, 720))
++            self._rec_n, self._rec_last = 0, None
++            return {"ok": bool(self._rec.isOpened()), "path": path, "showcam": "show_camera" in env.scene.keys()}
++        if cmd == "showcam_pose":   # eye/tgt relative to the pelvis (m); optional snap=<jpg path> of the current frame
++            from scipy.spatial.transform import Rotation as Rot
++            cam = env.scene["show_camera"]
++            if req.get("eye") is not None:
++                eye = PELVIS_W + np.asarray(req["eye"], float)
++                tgt = PELVIS_W + np.asarray(req["tgt"], float)
++                fwd = (tgt - eye) / np.linalg.norm(tgt - eye)
++                left = np.cross([0.0, 0.0, 1.0], fwd); left /= np.linalg.norm(left)
++                q = Rot.from_matrix(np.stack([fwd, left, np.cross(fwd, left)], axis=1)).as_quat()   # xyzw
++                origin = _t(env.scene.env_origins)[0].cpu().numpy()
++                cam.set_world_poses(torch.tensor([eye + origin], dtype=torch.float32),
++                                    torch.tensor([q], dtype=torch.float32), convention="world")
++            if req.get("snap"):
++                import cv2
++                rgb = _t(cam.data.output["rgb"])[0, ..., :3].cpu().numpy().astype(np.uint8)
++                cv2.imwrite(str(req["snap"]), np.ascontiguousarray(rgb[..., ::-1]))
++            return {"ok": True}
++        if cmd == "rec_stop":
++            return {"ok": True, "frames": self.rec_stop()}
++        if cmd == "bodies":   # pan test: robot hand/wrist body positions (pelvis frame) to see WHERE the pan is held
++            rob = env.scene["robot"]
++            origin = _t(env.scene.env_origins)[0].cpu().numpy()
++            pos = _t(rob.data.body_pos_w)[0].cpu().numpy() - origin - PELVIS_W
++            names = list(rob.body_names)
++            keep = [i for i, b in enumerate(names) if any(k in b for k in ("palm", "hand", "wrist_yaw"))]
++            return {"ok": True, "bodies": {names[i]: [round(float(x), 5) for x in pos[i]] for i in keep}}
+         if cmd == "evaluate":
+             r = evaluate(self.sc, req.get("task", "sort_fixed"), self.state(env), req.get("mapping"))
+             return {"ok": True, **r}
+@@ -185,6 +218,28 @@
+                 self.rep.send(json.dumps(resp).encode())
+         if self.rgbd is not None:
+             self._publish_rgbd(env)
++        if getattr(self, "_rec", None) is not None and "show_camera" in env.scene.keys():
++            try:
++                self._rec_frame(env)
++            except Exception as e:   # never kill the sim over the demo recorder
++                print(f"[aalto] show_camera recording stopped: {type(e).__name__}: {e}", flush=True)
++                self.rec_stop()
++
++    def _rec_frame(self, env):
++        cam = env.scene["show_camera"]
++        if self._rec_last is not None and self.sim_t - self._rec_last < 1.0 / 30 - 1e-6:
++            return   # one frame per 1/30 s of SIM time: the mp4 plays at sim speed
++        self._rec_last = self.sim_t
++        rgb = _t(cam.data.output["rgb"])[0, ..., :3].cpu().numpy().astype(np.uint8)
++        self._rec.write(np.ascontiguousarray(rgb[..., ::-1]))
++        self._rec_n += 1
++
++    def rec_stop(self):
++        n = getattr(self, "_rec_n", 0)
++        if getattr(self, "_rec", None) is not None:
++            self._rec.release()
++        self._rec = None
++        return n
+ 
+     def _publish_rgbd(self, env):
+         from tasks.common_observations.camera_state import _camera_frame
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.stl' '--exclude=.urdf_cache' /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/hooks.py.preshow /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/hooks.py.preshow
+--- /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/hooks.py.preshow	1970-01-01 00:00:00.000000000 +0000
++++ /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/hooks.py.preshow	2026-11-15 00:39:20.012416938 +0000
+@@ -0,0 +1,385 @@
++"""Runtime side of the Aalto task, called once per env step from an observation term (main thread, so it may
++write sim state safely).
++
++1. Head RGB-D: the head pinhole camera's rgb + distance_to_image_plane are published on tcp :55560 in the exact
++   wire format of interface/pc2/head_rgbd_server.py (uint16 mm depth, 0 = invalid), so AaltoEnv reads sim and
++   real depth through the same HeadRGBDClient (DDSBackend head_rgbd=True).
++2. Scene service: zmq REP on tcp :55580, JSON in / JSON out (client: aaltonomous/sim/scene_client.py):
++     {"cmd": "reset", "layout": [{color, shape, x, y, yaw}, ...]}   place a layout (mat coords), park the rest
++     {"cmd": "reset_random", "seed": int|null}                      sample + place (scene.yaml layout knobs)
++     {"cmd": "state"}                                               objects: name, color, shape, active, pos
++                                                                    (pelvis frame), quat_xyzw, speed (m/s)
++     {"cmd": "evaluate", "task": "sort_fixed"|"sort_language"|"insert_shapes", "mapping": {...}|null}
++                                                                    spec §3 outcomes + score (Scene checker)
++     {"cmd": "ping"}
++     {"cmd": "info"}                                                DR config (null = off), ports
++     {"cmd": "randomize", "seed": int|null}                         DR: sample + apply one parameter set (dr.py);
++                                                                    no-op returning params null when DR is off
++   Ports via env AALTO_RGBD_PORT / AALTO_SCENE_PORT; 0 disables.
++   ping / info also return the sim clock: sim_t (s), rtf (sim/wall over the last ~10 s window), rtf_mean.
++4. Sim clock (real-time governor): zmq PUB on tcp :AALTO_CLOCK_PORT (default scene port + 1 = 55581), one
++   b"<sim_t float64 LE><wall float64 LE>" message per env step. The sim runs slower than real time (rendering);
++   AaltoEnv's sim backend paces its 30 Hz ticks on this clock instead of wall time (interface/backends.py SimClock),
++   so the physics sees commands at the intended rate whatever the machine load. Logs a warning when RTF < 0.95.
++3. Domain randomization (dr.py), only if AALTO_DR names a config: lights, mat/counter/bin/object colours,
++   object mass/friction, layout pose jitter, head camera pose + RGB-D noise (noise on :55560 only; the teleimager
++   mono head stream and the wrist cameras get the lighting/colour DR but no pixel noise).
++"""
++from __future__ import annotations
++
++import json
++import os
++import struct
++import time
++
++import numpy as np
++import torch
++
++from aaltonomous.scene.scene import Scene
++from . import dr
++from .layout import PELVIS_W, assign, evaluate, object_names, parse_name, random_layout
++
++_RT = None
++
++
++def _t(x):
++    return x.torch if hasattr(x, "torch") else x
++
++
++class AaltoRuntime:
++    def __init__(self, env):
++        import zmq
++        self.sc = Scene.load()
++        self.names = object_names(self.sc)
++        self.layout, self.active = [], []
++        self.ctx = zmq.Context.instance()
++        self.rep = self.rgbd = None
++        sp = int(os.environ.get("AALTO_SCENE_PORT", "55580"))
++        if sp:
++            self.rep = self.ctx.socket(zmq.REP)
++            self.rep.setsockopt(zmq.LINGER, 0)
++            self.rep.bind(f"tcp://*:{sp}")
++            print(f"[aalto] scene service on tcp :{sp}")
++        rp = int(os.environ.get("AALTO_RGBD_PORT", "55560"))
++        if rp and "front_camera" in env.scene.keys():
++            from aaltonomous.interface.pc2.head_rgbd_server import HeadRGBDServer
++            self._latest = None
++            self.rgbd = HeadRGBDServer(self, port=rp, ctx=self.ctx)
++            print(f"[aalto] head RGB-D on tcp :{rp}")
++        self.last_frame = None
++        self.zmq = zmq
++        self.dr_cfg = dr.load()
++        self.dr_params, self._dr_base, self._cam_rng = None, None, None
++        cp = int(os.environ.get("AALTO_CLOCK_PORT", str(sp + 1 if sp else 0)))
++        self.clock = None
++        if cp:
++            self.clock = self.ctx.socket(zmq.PUB)
++            self.clock.setsockopt(zmq.LINGER, 0)
++            self.clock.setsockopt(zmq.SNDHWM, 10)
++            self.clock.bind(f"tcp://*:{cp}")
++            print(f"[aalto] sim clock on tcp :{cp}")
++        self.step_dt = float(env.step_dt)
++        self.sim_t = 0.0
++        self.rtf = self.rtf_mean = None
++        self._win = self._start = None            # (wall, sim_t) at window / clock start
++        self.ports = {"scene": sp, "rgbd": rp, "clock": cp}
++        if self.dr_cfg:
++            print(f"[aalto] domain randomization ON: {self.dr_cfg['_path']}")
++
++    # HeadRGBDServer source interface
++    def read(self):
++        return self._latest
++
++    # ------------------------------------------------------------------ scene
++    def place(self, env, layout):
++        if self.dr_params:
++            layout = dr.jitter_layout(layout, self.dr_params)
++        poses, active = assign(self.sc, layout)
++        origin = _t(env.scene.env_origins)[0]
++        dev = origin.device
++        for n in self.names:
++            p, q = poses[n]
++            pose = torch.tensor([[*(np.asarray(p) + PELVIS_W), *q]], dtype=torch.float32, device=dev)
++            pose[:, :3] += origin
++            obj = env.scene[n]
++            obj.write_root_pose_to_sim_index(root_pose=pose, env_ids=torch.tensor([0], device=dev))
++            obj.write_root_velocity_to_sim_index(root_velocity=torch.zeros((1, 6), device=dev),
++                                                 env_ids=torch.tensor([0], device=dev))
++        self.layout, self.active = list(layout), active
++        return active
++
++    def state(self, env):
++        origin = _t(env.scene.env_origins)[0].cpu().numpy()
++        out = []
++        for n in self.names:
++            d = env.scene[n].data
++            p = _t(d.root_pos_w)[0].cpu().numpy() - origin - PELVIS_W
++            q = _t(d.root_quat_w)[0].cpu().numpy()
++            v = _t(d.root_lin_vel_w)[0].cpu().numpy()
++            color, shape, _ = parse_name(n)
++            out.append({"name": n, "color": color, "shape": shape, "active": n in self.active,
++                        "pos": [round(float(x), 5) for x in p], "quat_xyzw": [round(float(x), 5) for x in q],
++                        "speed": round(float(np.linalg.norm(v)), 5)})
++        return out
++
++    def handle(self, env, req):
++        cmd = req.get("cmd")
++        if cmd == "ping":
++            return {"ok": True, "t": time.time(), **self.clock_info()}
++        if cmd == "reset":
++            return {"ok": True, "active": self.place(env, req["layout"]), "layout": req["layout"]}
++        if cmd == "info":
++            d = None if not self.dr_cfg else {"name": self.dr_cfg.get("name"), "path": self.dr_cfg["_path"]}
++            return {"ok": True, "dr": d, "ports": self.ports, "n_objects": len(self.names), **self.clock_info()}
++        if cmd == "randomize":
++            return {"ok": True, "params": self.randomize(env, req.get("seed"))}
++        if cmd == "reset_random":
++            if self.dr_cfg:
++                self.randomize(env, req.get("seed"))
++            lay = random_layout(self.sc, req.get("seed"))
++            return {"ok": True, "active": self.place(env, lay), "layout": lay}
++        if cmd == "state":
++            return {"ok": True, "objects": self.state(env), "layout": self.layout}
++        if cmd == "bodies":   # pan test: robot hand/wrist body positions (pelvis frame) to see WHERE the pan is held
++            rob = env.scene["robot"]
++            origin = _t(env.scene.env_origins)[0].cpu().numpy()
++            pos = _t(rob.data.body_pos_w)[0].cpu().numpy() - origin - PELVIS_W
++            names = list(rob.body_names)
++            keep = [i for i, b in enumerate(names) if any(k in b for k in ("palm", "hand", "wrist_yaw"))]
++            return {"ok": True, "bodies": {names[i]: [round(float(x), 5) for x in pos[i]] for i in keep}}
++        if cmd == "evaluate":
++            r = evaluate(self.sc, req.get("task", "sort_fixed"), self.state(env), req.get("mapping"))
++            return {"ok": True, **r}
++        return {"ok": False, "error": f"unknown cmd {cmd!r}"}
++
++    # ------------------------------------------------------------------ sim clock
++    def clock_info(self):
++        r = lambda x: None if x is None else round(x, 3)
++        return {"sim_t": round(self.sim_t, 4), "step_dt": self.step_dt, "rtf": r(self.rtf), "rtf_mean": r(self.rtf_mean)}
++
++    def _tick_clock(self, env):
++        self.sim_t = int(env.common_step_counter) * self.step_dt
++        now = time.monotonic()
++        if self.clock is not None:
++            try:
++                self.clock.send(struct.pack("<dd", self.sim_t, time.time()), self.zmq.NOBLOCK)
++            except self.zmq.Again:
++                pass
++        if self._win is None:
++            self._win = self._start = (now, self.sim_t)
++            return
++        if now - self._win[0] >= 10.0:
++            self.rtf = (self.sim_t - self._win[1]) / (now - self._win[0])
++            self.rtf_mean = (self.sim_t - self._start[1]) / (now - self._start[0])
++            self._win = (now, self.sim_t)
++            if self.rtf < 0.95:
++                print(f"[aalto] WARNING real-time factor {self.rtf:.2f} (< 0.95; mean {self.rtf_mean:.2f}): the sim runs "
++                      f"slower than real time; AaltoEnv paces on the sim clock", flush=True)
++
++    # ------------------------------------------------------------------ per step
++    def step(self, env):
++        self._tick_clock(env)
++        if self.rep is not None:
++            for _ in range(4):
++                try:
++                    msg = self.rep.recv(self.zmq.NOBLOCK)
++                except self.zmq.Again:
++                    break
++                try:
++                    resp = self.handle(env, json.loads(msg))
++                except Exception as e:  # never kill the sim over a bad request
++                    resp = {"ok": False, "error": f"{type(e).__name__}: {e}"}
++                self.rep.send(json.dumps(resp).encode())
++        if self.rgbd is not None:
++            self._publish_rgbd(env)
++
++    def _publish_rgbd(self, env):
++        from tasks.common_observations.camera_state import _camera_frame
++        cam = env.scene["front_camera"]
++        out = cam.data.output
++        frame = _camera_frame(cam)
++        if frame is not None and frame == self.last_frame:
++            return
++        self.last_frame = frame
++        rgb = _t(out["rgb"])[0, ..., :3].cpu().numpy().astype(np.uint8)
++        dist = _t(out["distance_to_image_plane"])[0, ..., 0].cpu().numpy()
++        dist = np.where(np.isfinite(dist), dist, 0.0)
++        depth = np.clip(np.round(dist * 1000.0), 0, 65535).astype(np.uint16)
++        depth[(dist < 0.1) | (dist > 10.0)] = 0     # D435 has no valid depth this close / far
++        if self.dr_params and self._cam_rng is not None:
++            rgb, depth = dr.corrupt(rgb, depth, self.dr_params.get("camera"), self._cam_rng)
++        self._latest = (rgb, depth, time.time())
++        self.rgbd.publish_one()
++
++
++    # ------------------------------------------------------------------ domain randomization
++    def randomize(self, env, seed):
++        if not self.dr_cfg:
++            return None
++        params = dr.sample(self.dr_cfg, seed, self.names, self.sc.bin_names)
++        if self._dr_base is None:
++            self._dr_base = _capture_base(env, self)
++        params["applied"] = _apply_dr(env, self, params)
++        self.dr_params = params
++        self._cam_rng = np.random.default_rng(params["camera"]["stream_seed"])
++        return params
++
++
++def _env0(path):
++    return path.replace("env_.*", "env_0")
++
++
++def _stage():
++    import omni.usd
++    return omni.usd.get_context().get_stage()
++
++
++def _shaders(stage, root, name):
++    """UsdPreviewSurface shaders under root with input `name`."""
++    from pxr import Usd, UsdShade
++    out = []
++    prim = stage.GetPrimAtPath(root)
++    if not prim.IsValid():
++        return out
++    for p in Usd.PrimRange(prim):
++        if p.IsA(UsdShade.Shader):
++            sh = UsdShade.Shader(p)
++            if sh.GetInput(name):
++                out.append(sh)
++    return out
++
++
++def _capture_base(env, rt):
++    """Nominal values, captured once before the first randomization (DR is always relative to these)."""
++    stage = _stage()
++    b = {"lights": {}, "colors": {}, "mass": {}, "material": {}, "cam": None}
++    for key, path in (("key", "/World/KeyLight"), ("dome", "/World/DomeLight")):
++        p = stage.GetPrimAtPath(path)
++        if p.IsValid():
++            t = p.GetAttribute("xformOp:translate")
++            b["lights"][key] = {"intensity": p.GetAttribute("inputs:intensity").Get(),
++                                "color": tuple(p.GetAttribute("inputs:color").Get() or (1, 1, 1)),
++                                "translate": tuple(t.Get()) if t and t.Get() is not None else None}
++    roots = {"Counter": "/World/envs/env_0/Counter"}
++    for bn in rt.sc.bin_names:
++        for part in ("floor", "wall_xlo", "wall_xhi", "wall_ylo", "wall_yhi"):
++            roots[f"bin:{bn}:{part}"] = f"/World/envs/env_0/Bin_{bn}_{part}"
++    for n in rt.names:
++        roots[f"obj:{n}"] = _env0(env.scene[n].cfg.prim_path)
++    for k, r in roots.items():
++        b["colors"][k] = [(sh, tuple(sh.GetInput("diffuseColor").Get())) for sh in _shaders(stage, r, "diffuseColor")]
++    for n in rt.names:
++        obj = env.scene[n]
++        try:
++            b["mass"][n] = _t(obj.data.body_mass).clone()
++        except Exception as e:
++            print(f"[aalto] DR: no mass access for {n}: {e}")
++        try:
++            import warp as wp
++            b["material"][n] = wp.to_torch(obj.root_view.get_material_properties()).clone()
++        except Exception as e:
++            print(f"[aalto] DR: no material access for {n}: {e}")
++    if "front_camera" in env.scene.keys():
++        cam = env.scene["front_camera"]
++        try:
++            b["cam"] = (_t(cam.data.pos_w).clone(), _t(cam.data.quat_w_ros).clone())
++        except Exception as e:
++            print(f"[aalto] DR: no camera pose access: {e}")
++    return b
++
++
++def _apply_dr(env, rt, P):
++    """Apply one parameter set. Returns which groups were applied (False = API missing, logged)."""
++    from pxr import Gf, Sdf
++    stage, base, ok = _stage(), rt._dr_base, {}
++    try:
++        L = P["lighting"]
++        for key in ("key", "dome"):
++            lb = base["lights"].get(key)
++            if not lb:
++                continue
++            p = stage.GetPrimAtPath("/World/KeyLight" if key == "key" else "/World/DomeLight")
++            p.GetAttribute("inputs:intensity").Set(float(lb["intensity"]) * L[f"{key}_intensity_scale"])
++            p.GetAttribute("inputs:color").Set(Gf.Vec3f(*[float(c) * j for c, j in zip(lb["color"], L[f"{key}_rgb"])]))
++            if key == "key" and lb["translate"] is not None:
++                p.GetAttribute("xformOp:translate").Set(Gf.Vec3d(*[float(a) + d for a, d in zip(lb["translate"], L["key_pos_offset"])]))
++        ok["lighting"] = True
++    except Exception as e:
++        ok["lighting"] = f"{type(e).__name__}: {e}"
++    try:
++        T, O = P["textures"], P["objects"]
++        for k, lst in base["colors"].items():
++            for sh, rgb in lst:
++                if k == "Counter":
++                    new = [c * j for c, j in zip(rgb, T["counter_rgb"])]
++                elif k.startswith("bin:"):
++                    new = [c * j for c, j in zip(rgb, T["bin_rgb"][k.split(":")[1]])]
++                else:
++                    o = O[k[4:]]
++                    new = dr.jitter_color(rgb, o["dh"], o["s"], o["v"])
++                sh.GetInput("diffuseColor").Set(Gf.Vec3f(*[float(min(max(c, 0.0), 1.0)) for c in new]))
++        tex = stage.GetPrimAtPath("/World/envs/env_0/Mat/material/texture")
++        if tex.IsValid():
++            from pxr import UsdShade
++            sh = UsdShade.Shader(tex)
++            s, bias = T["mat_scale"], T["mat_bias"]
++            (sh.GetInput("scale") or sh.CreateInput("scale", Sdf.ValueTypeNames.Float4)).Set(Gf.Vec4f(*s, 1.0))
++            (sh.GetInput("bias") or sh.CreateInput("bias", Sdf.ValueTypeNames.Float4)).Set(Gf.Vec4f(bias, bias, bias, 0.0))
++        ok["colors"] = True
++    except Exception as e:
++        ok["colors"] = f"{type(e).__name__}: {e}"
++    try:
++        ids = torch.tensor([0], dtype=torch.int32)
++        for n in rt.names:
++            o, obj = P["objects"][n], env.scene[n]
++            if n in base["mass"]:
++                m = base["mass"][n] * o["mass_scale"]
++                obj.set_masses_index(masses=m.to(m.device), env_ids=ids.to(m.device))
++            if n in base["material"]:
++                import warp as wp
++                mat = base["material"][n].clone()
++                mat[..., 0:2] *= o["friction_scale"]
++                obj.root_view.set_material_properties(wp.from_torch(mat.contiguous(), dtype=wp.float32),
++                                                      wp.from_torch(ids, dtype=wp.int32))
++        ok["physics"] = True
++    except Exception as e:
++        ok["physics"] = f"{type(e).__name__}: {e}"
++    try:
++        if base["cam"] is not None:
++            from scipy.spatial.transform import Rotation as R
++            pos0, q0 = base["cam"]
++            C = P["camera"]
++            q = (R.from_rotvec(C["rot_offset_rad"]) * R.from_quat(q0[0].cpu().numpy())).as_quat()   # xyzw
++            pos = pos0[0].cpu().numpy() + np.asarray(C["pos_offset"])
++            env.scene["front_camera"].set_world_poses(torch.tensor([pos], dtype=torch.float32),
++                                                      torch.tensor([q], dtype=torch.float32), convention="ros")
++            ok["camera_pose"] = True
++    except Exception as e:
++        ok["camera_pose"] = f"{type(e).__name__}: {e}"
++    return ok
++
++
++def runtime(env):
++    global _RT
++    if _RT is None:
++        _RT = AaltoRuntime(env)
++    return _RT
++
++
++# ---------------------------------------------------------------------- Isaac Lab hooks
++_placeholder = None
++
++
++def aalto_step_obs(env) -> torch.Tensor:
++    """ObsTerm: runs the runtime once per step; returns a dummy (num_envs, 1) tensor."""
++    global _placeholder
++    runtime(env).step(env)
++    if _placeholder is None:
++        _placeholder = torch.zeros((env.num_envs, 1), device=env.device)
++    return _placeholder
++
++
++def reset_random_layout(env, env_ids, seed=None):
++    """Event (startup / DDS reset category 1): a fresh random layout from scene.yaml."""
++    rt = runtime(env)
++    rt.place(env, random_layout(rt.sc, seed))
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.stl' '--exclude=.urdf_cache' /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/layout.py /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/layout.py
+--- /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/layout.py	2026-11-13 23:10:02.000000000 +0000
++++ /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/layout.py	2026-11-15 01:50:50.423344093 +0000
+@@ -9,6 +9,8 @@
+ """
+ from __future__ import annotations
+ 
++import os
++
+ import numpy as np
+ 
+ from aaltonomous.interface import tasks
+@@ -28,9 +30,24 @@
+ PARK_X = -0.60                          # park row behind the robot (pelvis frame)
+ 
+ 
++PAN_NAME = "obj_grey_pan_0"   # pan test (tools/pan): one novel object, only when the sim starts with AALTO_PAN=1
++PANCAKE_NAME = "obj_tan_pancake_0"
++MEAT_NAME = "obj_brown_meat_0"
++TOOL_NAMES = ["obj_green_screwdriver_0", "obj_silver_wrench_0", "obj_black_pliers_0", "obj_dgrey_hammer_0", "obj_green_lime_0", "obj_white_teacup_0", "obj_dgrey_knife_0"]   # AALTO_TOOLS=1: tool-table demo   # demo prop (AALTO_PAN=1 + AALTO_MEAT=1): steak slab in the pan   # demo prop (AALTO_PAN=1 + AALTO_PANCAKE=1): thin light disc that sits in the pan
++
++
++def pan_enabled():
++    import os
++    return os.environ.get("AALTO_PAN", "0") == "1"
++
++
+ def object_names(sc: Scene):
+     o = sc.cfg["objects"]
+-    return [f"obj_{c}_{s}_{k}" for s in o["shapes"] for c in o["colors"] for k in range(int(o["copies_per_type"]))]
++    names = [f"obj_{c}_{s}_{k}" for s in o["shapes"] for c in o["colors"] for k in range(int(o["copies_per_type"]))]
++    pancake = [PANCAKE_NAME] if pan_enabled() and os.environ.get("AALTO_PANCAKE", "0") == "1" else []
++    meat = [MEAT_NAME] if pan_enabled() and os.environ.get("AALTO_MEAT", "0") == "1" else []
++    tools = TOOL_NAMES if pan_enabled() and os.environ.get("AALTO_TOOLS", "0") == "1" else []
++    return names + ([PAN_NAME] if pan_enabled() else []) + pancake + meat + tools
+ 
+ 
+ def parse_name(name):
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.stl' '--exclude=.urdf_cache' /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/scene_cfg.py /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/scene_cfg.py
+--- /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-13 23:10:02.000000000 +0000
++++ /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-15 01:50:50.426344164 +0000
+@@ -12,6 +12,7 @@
+ """
+ from __future__ import annotations
+ 
++import os
+ from pathlib import Path
+ 
+ import numpy as np
+@@ -47,7 +48,26 @@
+     return tuple(float(v) for v in np.asarray(p_pelvis, float) + PELVIS_W)
+ 
+ 
++PAN_RGB = (0.42, 0.42, 0.45)   # pan test: dark grey, not an object colour
++PAN_MASS = float(__import__("os").environ.get("PAN_MASS_KG", "0.15"))              # kg: light enough for the Dex3 sim grip, heavier than a cube
++
++
++PANCAKE_RGB, PANCAKE_MASS = (0.92, 0.89, 0.84), 0.01
++MEAT_RGB, MEAT_MASS = (0.24, 0.20, 0.18), 0.06
++# tool table: no known HSV class (green H~75 > yellow's 60, greys/black low S)
++TOOL_RGB = {"green": (0.10, 0.50, 0.30), "silver": (0.62, 0.62, 0.65), "black": (0.10, 0.10, 0.11), "dgrey": (0.30, 0.30, 0.32), "white": (0.93, 0.93, 0.93)}
++TOOL_MASS = {"screwdriver": 0.06, "wrench": 0.10, "pliers": 0.12, "hammer": 0.10, "lime": 0.06, "teacup": 0.06, "knife": 0.05}   # dark low-saturation brown: S~64, V~61 (< red's S/V 70 floor)   # pale cream: low saturation, no known HSV class
++
++
+ def _rgb(name):
++    if name == "tan":
++        return PANCAKE_RGB
++    if name == "brown":
++        return MEAT_RGB
++    if name in TOOL_RGB:
++        return TOOL_RGB[name]
++    if name not in SC.colors:
++        return PAN_RGB
+     return tuple(c / 255.0 for c in SC.colors[name])
+ 
+ 
+@@ -219,8 +239,10 @@
+             init_state=RigidObjectCfg.InitialStateCfg(pos=_w(p), rot=tuple(float(v) for v in q)),
+             spawn=StlMeshCfg(
+                 path=str(ASSETS / f"object_{shape}.stl"),
++                # pan = disc + handle: a convex hull would fill the gap under the handle, so decompose it
++                approximation="convexDecomposition" if shape in ("pan", "screwdriver", "wrench", "pliers", "hammer", "teacup", "knife") else "convexHull",
+                 rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False, max_depenetration_velocity=1.0),
+-                mass_props=sim_utils.MassPropertiesCfg(mass=OBJ_MASS),
++                mass_props=sim_utils.MassPropertiesCfg(mass={"pan": PAN_MASS, "pancake": PANCAKE_MASS, "meat": MEAT_MASS, **TOOL_MASS}.get(shape, OBJ_MASS)),
+                 collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True, contact_offset=0.004,
+                                                                  rest_offset=0.0),
+                 visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=_rgb(color), roughness=0.7, metallic=0.0),
+@@ -262,6 +284,21 @@
+     )
+ 
+ 
++def show_camera_cfg():
++    """AALTO_SHOWCAM=1: third-person 1280x720 RTX camera (world-fixed, side-front of the robot + counter) for demo video."""
++    eye = PELVIS_W + np.array([float(v) for v in os.environ.get("AALTO_SHOWCAM_EYE", "1.05,-0.80,0.30").split(",")])
++    tgt = PELVIS_W + np.array([float(v) for v in os.environ.get("AALTO_SHOWCAM_TGT", "0.30,0.0,-0.20").split(",")])
++    fwd = (tgt - eye) / np.linalg.norm(tgt - eye)
++    left = np.cross([0.0, 0.0, 1.0], fwd); left /= np.linalg.norm(left)
++    up = np.cross(fwd, left)
++    R = np.stack([fwd, left, up], axis=1)   # world convention: camera +x forward, +z up
++    return CameraCfg(
++        prim_path="/World/ShowCam", update_period=1.0 / 30, height=720, width=1280, data_types=["rgb"],
++        spawn=sim_utils.PinholeCameraCfg(focal_length=18.0, horizontal_aperture=20.955, clipping_range=(0.05, 20.0)),
++        offset=CameraCfg.OffsetCfg(pos=tuple(float(v) for v in eye), rot=rotmat_to_quat_xyzw(R), convention="world"),
++    )
++
++
+ def _robot_cfg():
+     cfg = G1RobotPresets.g1_29dof_dex3_base_fix(init_pos=tuple(float(v) for v in PELVIS_W),
+                                                 init_rot=(0.0, 0.0, 0.0, 1.0))
+@@ -290,6 +327,7 @@
+         "front_camera": head_camera_cfg(),
+         "left_wrist_camera": CameraPresets.left_dex3_wrist_camera(),
+         "right_wrist_camera": CameraPresets.right_dex3_wrist_camera(),
++        **({"show_camera": show_camera_cfg()} if os.environ.get("AALTO_SHOWCAM") else {}),
+     }
+ 
+ 
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.stl' '--exclude=.urdf_cache' /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/scene_cfg.py.preshow /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/scene_cfg.py.preshow
+--- /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/scene_cfg.py.preshow	1970-01-01 00:00:00.000000000 +0000
++++ /data/aaltonomous-humanoid-pan/aaltonomous/sim/aalto_task/scene_cfg.py.preshow	2026-11-15 00:39:20.010416885 +0000
+@@ -0,0 +1,316 @@
++"""Isaac Lab scene for the Aaltonomous challenge, generated from aaltonomous/scene/scene.yaml + interface/calibration.yaml.
++
++World = pelvis frame + PELVIS_W (robot at the origin facing +x). Contents:
++  robot            G1 29-DoF + Dex3, fixed base (upstream preset), pelvis at PELVIS_W
++  counter          static slab, top at scene.counter_z, footprint counter_size centred on the mat
++  mat              visual quad with scene/assets/mat_texture.png (the printed mat), 0.5 mm above the counter
++  bin_<name>_*     static floor + 4 walls per bin (fixed + known), colour from scene.yaml bins.rgb (all identical)
++  obj_<c>_<s>_<k>  18 rigid objects from the printed STL meshes (scene/assets/object_<shape>.stl), convex hulls
++  lid              rung 3 only (Aalto-Insert-*): static triangle-mesh plate with the 3 holes on the lid bin
++  front_camera     head RealSense colour, ONE pinhole cam at calibration.yaml head.T_pelvis_optical, rgb + depth
++  left/right_wrist_camera  upstream presets (no measured mount yet, M7)
++"""
++from __future__ import annotations
++
++from pathlib import Path
++
++import numpy as np
++import yaml
++
++import isaaclab.sim as sim_utils
++from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
++from isaaclab.scene import InteractiveSceneCfg
++from isaaclab.sensors import CameraCfg
++from isaaclab.sim.utils import clone
++from isaaclab.utils import configclass
++
++from tasks.common_config import CameraPresets, G1RobotPresets  # upstream (unitree_sim_isaaclab on sys.path)
++
++from aaltonomous.scene.scene import Scene
++from .layout import ARM_HOME, PELVIS_W, assign, object_names, parse_name
++
++REPO = Path(__file__).resolve().parents[3]
++ASSETS = REPO / "aaltonomous/scene/assets"
++CALIB = REPO / "aaltonomous/interface/calibration.yaml"
++SC = Scene.load()
++ENV = "/World/envs/env_.*"
++
++# Physics of the printed PLA parts (DR knobs later, spec §6). Friction is on the high side: Dex3 fingertips
++# are rubber; the sim tends to need more grip than reality for the same grasp.
++OBJ_MASS = 0.05            # kg, 45 mm PLA part at ~20 % infill
++OBJ_STATIC_FRICTION = 1.2
++OBJ_DYNAMIC_FRICTION = 1.0
++COUNTER_THICKNESS = 0.04
++
++
++def _w(p_pelvis):
++    return tuple(float(v) for v in np.asarray(p_pelvis, float) + PELVIS_W)
++
++
++PAN_RGB = (0.42, 0.42, 0.45)   # pan test: dark grey, not an object colour
++PAN_MASS = 0.15               # kg: light enough for the Dex3 sim grip, heavier than a cube
++
++
++def _rgb(name):
++    if name not in SC.colors:
++        return PAN_RGB
++    return tuple(c / 255.0 for c in SC.colors[name])
++
++
++def rotmat_to_quat_xyzw(R):
++    R = np.asarray(R, float)
++    w = np.sqrt(max(0.0, 1.0 + R[0, 0] + R[1, 1] + R[2, 2])) / 2
++    x = np.sqrt(max(0.0, 1.0 + R[0, 0] - R[1, 1] - R[2, 2])) / 2
++    y = np.sqrt(max(0.0, 1.0 - R[0, 0] + R[1, 1] - R[2, 2])) / 2
++    z = np.sqrt(max(0.0, 1.0 - R[0, 0] - R[1, 1] + R[2, 2])) / 2
++    x = np.copysign(x, R[2, 1] - R[1, 2])
++    y = np.copysign(y, R[0, 2] - R[2, 0])
++    z = np.copysign(z, R[1, 0] - R[0, 1])
++    q = np.array([x, y, z, w])
++    return tuple(float(v) for v in q / np.linalg.norm(q))
++
++
++# ------------------------------------------------------------------ custom spawners
++@configclass
++class StlMeshCfg(sim_utils.MeshCfg):
++    """Rigid/static body from an STL (mm), recentred so the origin is the object centroid (bbox centre in z).
++    approximation: PhysX MeshCollisionAPI approximation ("convexHull" for dynamic, "none" = exact for static)."""
++    func: object = None
++    path: str = ""
++    center_z: bool = True
++    approximation: str = "convexHull"
++    swap_xy: bool = False      # mesh authored in MAT axes -> pelvis axes (x<->y mirror, faces re-wound)
++
++    def __post_init__(self):
++        self.func = spawn_stl_mesh
++
++
++@clone
++def spawn_stl_mesh(prim_path, cfg, translation=None, orientation=None, **kwargs):
++    import trimesh
++    from pxr import UsdPhysics
++    from isaaclab.sim.spawners.meshes.meshes import _spawn_mesh_geom_from_mesh
++
++    mesh = trimesh.load(cfg.path, force="mesh")
++    mesh.apply_scale(0.001)
++    if cfg.swap_xy:
++        mesh = trimesh.Trimesh(mesh.vertices[:, [1, 0, 2]], mesh.faces[:, ::-1], process=False)
++    if cfg.center_z:
++        lo, hi = mesh.bounds
++        mesh.apply_translation([0.0, 0.0, -(lo[2] + hi[2]) / 2])
++    prim = _spawn_mesh_geom_from_mesh(prim_path, cfg, mesh, translation, orientation, **kwargs)
++    if cfg.collision_props is not None and cfg.approximation != "convexHull":
++        mp = prim.GetStage().GetPrimAtPath(prim_path + "/geometry/mesh")
++        UsdPhysics.MeshCollisionAPI.Apply(mp).GetApproximationAttr().Set(cfg.approximation)
++    return prim
++
++
++@configclass
++class TexturedQuadCfg(sim_utils.SpawnerCfg):
++    """Visual-only quad (size x, y) in the xy plane, UV-mapped 0..1 with a texture image."""
++    func: object = None
++    size: tuple = (1.0, 1.0)
++    texture: str = ""
++    uvs: tuple = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))   # for vertices (-x,-y) (x,-y) (x,y) (-x,y)
++
++    def __post_init__(self):
++        self.func = spawn_textured_quad
++
++
++@clone
++def spawn_textured_quad(prim_path, cfg, translation=None, orientation=None, **kwargs):
++    from pxr import Gf, Sdf, UsdGeom, UsdShade, Vt
++    from isaaclab.sim.utils import create_prim, get_current_stage
++
++    stage = get_current_stage()
++    prim = create_prim(prim_path, prim_type="Xform", translation=translation, orientation=orientation, stage=stage)
++    hx, hy = cfg.size[0] / 2, cfg.size[1] / 2
++    mesh = UsdGeom.Mesh.Define(stage, prim_path + "/quad")
++    mesh.CreatePointsAttr([Gf.Vec3f(-hx, -hy, 0), Gf.Vec3f(hx, -hy, 0), Gf.Vec3f(hx, hy, 0), Gf.Vec3f(-hx, hy, 0)])
++    mesh.CreateFaceVertexCountsAttr([4])
++    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
++    mesh.CreateNormalsAttr([Gf.Vec3f(0, 0, 1)] * 4)
++    mesh.SetNormalsInterpolation("vertex")
++    mesh.CreateSubdivisionSchemeAttr("none")
++    st = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex)
++    st.Set(Vt.Vec2fArray([Gf.Vec2f(float(u), float(v)) for u, v in cfg.uvs]))
++
++    mat = UsdShade.Material.Define(stage, prim_path + "/material")
++    sh = UsdShade.Shader.Define(stage, prim_path + "/material/surface")
++    sh.CreateIdAttr("UsdPreviewSurface")
++    sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.9)
++    sh.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
++    reader = UsdShade.Shader.Define(stage, prim_path + "/material/st_reader")
++    reader.CreateIdAttr("UsdPrimvarReader_float2")
++    reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
++    tex = UsdShade.Shader.Define(stage, prim_path + "/material/texture")
++    tex.CreateIdAttr("UsdUVTexture")
++    tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(cfg.texture)
++    tex.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("sRGB")
++    tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(reader.ConnectableAPI(), "result")
++    tex.CreateOutput("rgb", Sdf.ValueTypeNames.Float3)
++    sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(tex.ConnectableAPI(), "rgb")
++    mat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
++    UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(mat)
++    return prim
++
++
++# ------------------------------------------------------------------ scene pieces
++def _static_box(name, center_pelvis, size, rgb, roughness=0.8):
++    return AssetBaseCfg(
++        prim_path=f"{ENV}/{name}",
++        init_state=AssetBaseCfg.InitialStateCfg(pos=_w(center_pelvis)),
++        spawn=sim_utils.CuboidCfg(
++            size=tuple(float(s) for s in size),
++            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True, contact_offset=0.005,
++                                                             rest_offset=0.0),
++            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=rgb, roughness=roughness, metallic=0.0),
++            physics_material=sim_utils.RigidBodyMaterialCfg(static_friction=0.8, dynamic_friction=0.6,
++                                                            restitution=0.0),
++        ),
++    )
++
++
++def counter_cfg():
++    c = SC.cfg["counter"]
++    mat = np.asarray(c["mat_size"], float)
++    size = np.asarray(c["counter_size"], float)
++    centre = SC.mat_to_pelvis([mat[0] / 2, mat[1] / 2, -COUNTER_THICKNESS / 2])
++    # mat x runs along pelvis y: footprint (pelvis x, pelvis y) = (size[1], size[0])
++    return _static_box("Counter", centre, (size[1], size[0], COUNTER_THICKNESS), (0.55, 0.45, 0.35))
++
++
++def mat_cfg():
++    """Printed mat texture on the counter. export.mat_image: row 0 = far edge (pelvis +x), column 0 = robot's LEFT
++    (pelvis +y). USD UVs: v = 0 at the image bottom, u = 0 at the left column."""
++    c = SC.cfg["counter"]
++    mat = np.asarray(c["mat_size"], float)
++    centre = SC.mat_to_pelvis([mat[0] / 2, mat[1] / 2, 0.0005])
++    return AssetBaseCfg(
++        prim_path=f"{ENV}/Mat",
++        init_state=AssetBaseCfg.InitialStateCfg(pos=_w(centre)),
++        spawn=TexturedQuadCfg(size=(float(mat[1]), float(mat[0])), texture=str(ASSETS / c["mat_texture"]),
++                              uvs=((1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0))),
++    )
++
++
++def bin_cfgs():
++    b = SC.cfg["bins"]
++    ox, oy = b["outer_size"]
++    t, ft, h = b["wall_thickness"], b["floor_thickness"], b["wall_height"]
++    out = {}
++    for name, (cx, cy) in b["centers"].items():
++        rgb = tuple(c / 255.0 for c in SC.bin_rgb)
++        parts = {  # (centre mat xyz, size mat xyz)
++            "floor": ((cx, cy, ft / 2), (ox, oy, ft)),
++            "wall_xlo": ((cx - ox / 2 + t / 2, cy, h / 2), (t, oy, h)),
++            "wall_xhi": ((cx + ox / 2 - t / 2, cy, h / 2), (t, oy, h)),
++            "wall_ylo": ((cx, cy - oy / 2 + t / 2, h / 2), (ox - 2 * t, t, h)),
++            "wall_yhi": ((cx, cy + oy / 2 - t / 2, h / 2), (ox - 2 * t, t, h)),
++        }
++        for part, (c, s) in parts.items():
++            # mat (x, y, z) sizes -> pelvis (y, x, z)
++            out[f"bin_{name}_{part}"] = _static_box(f"Bin_{name}_{part}", SC.mat_to_pelvis(c), (s[1], s[0], s[2]), rgb)
++    return out
++
++
++def object_cfgs():
++    poses, _ = assign(SC, [])  # everything parked; the reset event places the layout
++    out = {}
++    for n in object_names(SC):
++        color, shape, _ = parse_name(n)
++        p, q = poses[n]
++        out[n] = RigidObjectCfg(
++            prim_path=f"{ENV}/{n}",
++            init_state=RigidObjectCfg.InitialStateCfg(pos=_w(p), rot=tuple(float(v) for v in q)),
++            spawn=StlMeshCfg(
++                path=str(ASSETS / f"object_{shape}.stl"),
++                # pan = disc + handle: a convex hull would fill the gap under the handle, so decompose it
++                approximation="convexDecomposition" if shape == "pan" else "convexHull",
++                rigid_props=sim_utils.RigidBodyPropertiesCfg(disable_gravity=False, max_depenetration_velocity=1.0),
++                mass_props=sim_utils.MassPropertiesCfg(mass=PAN_MASS if shape == "pan" else OBJ_MASS),
++                collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True, contact_offset=0.004,
++                                                                 rest_offset=0.0),
++                visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=_rgb(color), roughness=0.7, metallic=0.0),
++                physics_material=sim_utils.RigidBodyMaterialCfg(
++                    friction_combine_mode="max", restitution_combine_mode="min",
++                    static_friction=OBJ_STATIC_FRICTION, dynamic_friction=OBJ_DYNAMIC_FRICTION, restitution=0.0),
++            ),
++        )
++    return out
++
++
++def lid_cfg():
++    """Rung-3 lid plate on the lid bin rim. The STL is in mat axes around the lid centre -> swap_xy."""
++    cx, cy = SC.cfg["bins"]["centers"][SC.lid_bin]
++    return AssetBaseCfg(
++        prim_path=f"{ENV}/Lid",
++        init_state=AssetBaseCfg.InitialStateCfg(pos=_w(SC.mat_to_pelvis([cx, cy, SC.lid_z[0]]))),
++        spawn=StlMeshCfg(path=str(ASSETS / "lid_shapes.stl"), center_z=False, swap_xy=True, approximation="none",
++                         collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True, contact_offset=0.002,
++                                                                          rest_offset=0.0),
++                         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.85, 0.85, 0.85), roughness=0.8)),
++    )
++
++
++def head_camera_cfg():
++    cal = yaml.safe_load(open(CALIB))["cameras"]["head"]
++    K = cal["intrinsics"]
++    T = np.asarray(cal["T_pelvis_optical"], float)
++    return CameraCfg(
++        prim_path=f"{ENV}/Robot/pelvis/front_cam",
++        update_period=1.0 / 30,
++        height=int(K["height"]), width=int(K["width"]),
++        data_types=["rgb", "distance_to_image_plane"],
++        spawn=sim_utils.PinholeCameraCfg.from_intrinsic_matrix(
++            intrinsic_matrix=[K["fx"], 0, K["cx"], 0, K["fy"], K["cy"], 0, 0, 1],
++            width=int(K["width"]), height=int(K["height"]), clipping_range=(0.05, 20.0)),
++        offset=CameraCfg.OffsetCfg(pos=tuple(float(v) for v in T[:3, 3]), rot=rotmat_to_quat_xyzw(T[:3, :3]),
++                                   convention="ros"),
++    )
++
++
++def _robot_cfg():
++    cfg = G1RobotPresets.g1_29dof_dex3_base_fix(init_pos=tuple(float(v) for v in PELVIS_W),
++                                                init_rot=(0.0, 0.0, 0.0, 1.0))
++    cfg.init_state.joint_pos = {**cfg.init_state.joint_pos, **ARM_HOME}
++    return cfg
++
++
++def _fixed_cfgs():
++    return {
++        "robot": _robot_cfg(),
++        "floor": AssetBaseCfg(
++            prim_path=f"{ENV}/Floor",
++            init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
++            spawn=sim_utils.CuboidCfg(size=(8.0, 8.0, 0.1),
++                                      collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
++                                      visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.35, 0.35, 0.38)))),
++        "dome_light": AssetBaseCfg(prim_path="/World/DomeLight",
++                                   spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=800.0)),
++        # "our own lights at the counter": one overhead area-ish light slightly in front of the robot
++        "key_light": AssetBaseCfg(prim_path="/World/KeyLight",
++                                  init_state=AssetBaseCfg.InitialStateCfg(pos=(0.5, 0.0, 2.2)),
++                                  spawn=sim_utils.SphereLightCfg(color=(1.0, 0.97, 0.92), intensity=60000.0,
++                                                                 radius=0.15)),
++        "counter": counter_cfg(),
++        "mat": mat_cfg(),
++        "front_camera": head_camera_cfg(),
++        "left_wrist_camera": CameraPresets.left_dex3_wrist_camera(),
++        "right_wrist_camera": CameraPresets.right_dex3_wrist_camera(),
++    }
++
++
++def make_scene_cfg_class(name="AaltoSceneCfg", lid=False):
++    """InteractiveSceneCfg subclass with every entity as a dataclass field (InteractiveScene reads fields only)."""
++    attrs = {**_fixed_cfgs(), **bin_cfgs(), **object_cfgs()}
++    if lid:
++        attrs["lid"] = lid_cfg()
++    ns = dict(attrs)
++    ns["__annotations__"] = {k: type(v) for k, v in attrs.items()}
++    ns["__module__"] = __name__
++    return configclass(type(name, (InteractiveSceneCfg,), ns))
++
++
++AaltoSceneCfg = make_scene_cfg_class()
++AaltoLidSceneCfg = make_scene_cfg_class("AaltoLidSceneCfg", lid=True)
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.stl' '--exclude=.urdf_cache' /data/aaltonomous-humanoid/aaltonomous/sim/run_sim.sh /data/aaltonomous-humanoid-pan/aaltonomous/sim/run_sim.sh
+--- /data/aaltonomous-humanoid/aaltonomous/sim/run_sim.sh	2026-11-13 23:10:02.000000000 +0000
++++ /data/aaltonomous-humanoid-pan/aaltonomous/sim/run_sim.sh	2026-11-15 00:41:17.054536436 +0000
+@@ -30,7 +30,7 @@
+     fi
+     export PYTHONPATH="$REPO:$PYTHONPATH"
+     MAIN="$REPO/aaltonomous/sim/aalto_sim_main.py"
+-    EXTRA=(--camera_include front_camera,left_wrist_camera,right_wrist_camera)
++    EXTRA=(--camera_include front_camera,left_wrist_camera,right_wrist_camera${AALTO_SHOWCAM:+,show_camera})
+ else
+     export TELEIMAGER_CONFIG="$REPO/aaltonomous/sim/teleimager_isaacsim_zmq.yaml"
+     MAIN=sim_main.py
+diff -ruN '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=*.stl' '--exclude=.urdf_cache' /data/aaltonomous-humanoid/aaltonomous/sim/run_sim.sh.preshow /data/aaltonomous-humanoid-pan/aaltonomous/sim/run_sim.sh.preshow
+--- /data/aaltonomous-humanoid/aaltonomous/sim/run_sim.sh.preshow	1970-01-01 00:00:00.000000000 +0000
++++ /data/aaltonomous-humanoid-pan/aaltonomous/sim/run_sim.sh.preshow	2026-11-15 00:41:17.050536330 +0000
+@@ -0,0 +1,39 @@
++#!/bin/bash
++# Headless unitree_sim_isaaclab, G1 29-DoF + Dex3, on twinflow. Extra args are passed to sim_main.py.
++#   bash aaltonomous/sim/run_sim.sh                      # RedBlock pick-place task
++#   TASK=Isaac-PickPlace-Cylinder-G129-Dex3-Joint bash aaltonomous/sim/run_sim.sh
++#   TASK=Aalto-Sort-G129-Dex3-Joint bash aaltonomous/sim/run_sim.sh     # OUR scene (aalto_task/), rung 1-2
++#   TASK=Aalto-Insert-G129-Dex3-Joint bash aaltonomous/sim/run_sim.sh   # + rung-3 lid
++#   Aalto-*: mono head 640x480 on 55555, head RGB-D on 55560, scene service on 55580 (scene_client.py),
++#            sim clock on 55581 (AaltoEnv paces on it; AALTO_PROFILE=1 prints a per-step time breakdown)
++#   AALTO_DR=train|eval_heldout|<yaml>   domain randomization (aalto_task/dr.py; off when unset)
++#   AALTO_INSTANCE=b   isolated 2nd sim: DDS domain $AALTO_DDS_DOMAIN (7), cams 56555-7, rgbd 56560, scene 56580;
++#                      clients: AALTO_DDS_DOMAIN=7 AALTO_CAM_PORT_BASE=56555 AALTO_SCENE_PORT=56580 AALTO_RGBD_PORT=56560
++# DDS domain 1 (same topics as the real robot); cameras on teleimager ZMQ 55555-55557 (WebRTC off).
++set -e
++REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
++source ~/miniforge3/etc/profile.d/conda.sh
++conda activate isaac
++export OMNI_KIT_ACCEPT_EULA=YES
++TASK="${TASK:-Isaac-PickPlace-RedBlock-G129-Dex3-Joint}"
++cd "$REPO/third_party/unitree_sim_isaaclab"
++if [[ "$TASK" == Aalto-* ]]; then
++    export TELEIMAGER_CONFIG="$REPO/aaltonomous/sim/teleimager_aalto.yaml"
++    if [[ -n "$AALTO_INSTANCE" ]]; then   # isolated 2nd sim: own DDS domain, shm names, ports (aalto_sim_main.py)
++        export AALTO_DDS_DOMAIN="${AALTO_DDS_DOMAIN:-7}" AALTO_CAM_PORT_BASE="${AALTO_CAM_PORT_BASE:-56555}"
++        export AALTO_SCENE_PORT="${AALTO_SCENE_PORT:-56580}" AALTO_RGBD_PORT="${AALTO_RGBD_PORT:-56560}"
++        cfg="/tmp/teleimager_aalto_${AALTO_INSTANCE}.yaml"
++        sed -e "s/zmq_port: 55555/zmq_port: $AALTO_CAM_PORT_BASE/" -e "s/zmq_port: 55556/zmq_port: $((AALTO_CAM_PORT_BASE+1))/" \
++            -e "s/zmq_port: 55557/zmq_port: $((AALTO_CAM_PORT_BASE+2))/" \
++            -e "s/webrtc_port: 6000\([1-3]\)/webrtc_port: 6100\1/" "$TELEIMAGER_CONFIG" > "$cfg"
++        export TELEIMAGER_CONFIG="$cfg"
++    fi
++    export PYTHONPATH="$REPO:$PYTHONPATH"
++    MAIN="$REPO/aaltonomous/sim/aalto_sim_main.py"
++    EXTRA=(--camera_include front_camera,left_wrist_camera,right_wrist_camera)
++else
++    export TELEIMAGER_CONFIG="$REPO/aaltonomous/sim/teleimager_isaacsim_zmq.yaml"
++    MAIN=sim_main.py
++    EXTRA=()
++fi
++exec python "$MAIN" --device cpu --task "$TASK" --enable_dex3_dds --robot_type g129 "${EXTRA[@]}" "$@"

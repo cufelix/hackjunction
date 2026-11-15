@@ -1,0 +1,23 @@
+[00:21:29] ckout=/data/work/oliver/ck_pansha3 (nogit) overlay=finals_r23_universal variants=right_in,left_in,right_diag,left_diag image=hackjunction/policy:rc1-7a4168e-g port=8003
+00:21:35.658591 WARNING  [G1_29_ArmController] Waiting to         dds_utils.py:9
+                         subscribe dds...                                       
+00:21:36.215415 INFO      📷 Camera 'head_camera'          init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55555,                       
+                         request_bgr=True)                                      
+00:21:36.217778 INFO      📷 Camera 'left_wrist_camera'    init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55556,                       
+                         request_bgr=True)                                      
+00:21:36.224847 INFO      📷 Camera 'right_wrist_camera'   init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55557,                       
+                         request_bgr=True)                                      
+[DDSBackend] pacing on the sim clock (tcp://127.0.0.1:55581, sim t 734.20 s)
+policy: {'type': 'metadata', 'version': 1, 'name': 'classical-rung1', 'action_horizon': 10}  instruction: 'put the pan in the middle bin'  -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_002129
+right_in    verdict=no_lift  lift=0.0 touched=False palm=None local=None center_bin=False end=done t=5.8s
+left_in     verdict=no_lift  lift=0.001 touched=False palm=None local=None center_bin=False end=done t=5.1s
+right_diag  verdict=no_lift  lift=0.001 touched=False palm=None local=None center_bin=False end=done t=5.3s
+left_diag   verdict=no_lift  lift=0.0 touched=False palm=None local=None center_bin=False end=done t=4.9s
+00:22:19.115498 INFO      📷 Camera 'head_camera'          closed. client.py:174
+00:22:19.115610 INFO      📷 Camera 'left_wrist_camera'    closed. client.py:174
+00:22:19.205671 INFO      📷 Camera 'right_wrist_camera'   closed. client.py:174
+handle 0/4  disc 0/4  no_lift 4/4  in_center_bin 0/4  -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_002129/pan_results.json
+[00:22:19] done -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_002129

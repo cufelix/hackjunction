@@ -1,0 +1,87 @@
+[
+ {
+  "variant": "tools_left",
+  "instruction": "take the screwdriver and put it in the left bin",
+  "layout": [
+   {
+    "color": "green",
+    "shape": "screwdriver",
+    "x": 0.57,
+    "y": 0.16,
+    "yaw": -3.14159,
+    "z": 0.016
+   },
+   {
+    "color": "silver",
+    "shape": "wrench",
+    "x": 0.37,
+    "y": 0.115,
+    "yaw": -3.14159,
+    "z": 0.005
+   },
+   {
+    "color": "dgrey",
+    "shape": "hammer",
+    "x": 0.35,
+    "y": 0.205,
+    "yaw": -3.14159,
+    "z": 0.0135
+   },
+   {
+    "color": "black",
+    "shape": "pliers",
+    "x": 0.73,
+    "y": 0.16,
+    "yaw": -1.5708,
+    "z": 0.0075
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 20.2,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 134,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "tools": {
+   "obj_green_screwdriver_0": {
+    "pos": [
+     0.3,
+     0.12,
+     0.025
+    ],
+    "bin": null
+   },
+   "obj_silver_wrench_0": {
+    "pos": [
+     0.255,
+     -0.08,
+     0.014
+    ],
+    "bin": null
+   },
+   "obj_black_pliers_0": {
+    "pos": [
+     0.3,
+     0.28,
+     0.017
+    ],
+    "bin": null
+   },
+   "obj_dgrey_hammer_0": {
+    "pos": [
+     0.345,
+     -0.1,
+     0.022
+    ],
+    "bin": null
+   }
+  },
+  "verdict": "tools",
+  "closest": {},
+  "meat": null
+ }
+]

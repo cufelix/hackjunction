@@ -1,0 +1,306 @@
+[
+ {
+  "variant": "meat_right",
+  "instruction": "take the pan and hold it steady",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.35,
+    "y": 0.16,
+    "yaw": -3.14159,
+    "z": 0.03
+   },
+   {
+    "color": "brown",
+    "shape": "meat",
+    "x": 0.35,
+    "y": 0.16,
+    "yaw": -1.5708,
+    "z": 0.015
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.65,
+    "y": 0.13,
+    "yaw": -1.5708
+   },
+   {
+    "color": "yellow",
+    "shape": "cylinder",
+    "x": 0.72,
+    "y": 0.19,
+    "yaw": -1.5708
+   },
+   {
+    "color": "blue",
+    "shape": "cube",
+    "x": 0.73,
+    "y": 0.11,
+    "yaw": -1.5708
+   },
+   {
+    "color": "red",
+    "shape": "triangle",
+    "x": 0.18,
+    "y": 0.16,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 58.5,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 493,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.1153,
+  "touched": true,
+  "min_palm_dist_m": 0.0356,
+  "verdict": "disc",
+  "palm": "right_hand_palm_link",
+  "palm_in_pan_frame": [
+   -0.024,
+   0.1343,
+   0.0158
+  ],
+  "in_center_bin": false,
+  "final_pos": [
+   0.3177,
+   -0.1136,
+   0.04
+  ],
+  "closest": {
+   "left": {
+    "pinch_mid_to_handle_mm": 28,
+    "t": 21.23,
+    "links_mm": {
+     "palm_link": [
+      41,
+      88,
+      53
+     ],
+     "thumb_2_link": [
+      35,
+      29,
+      5
+     ],
+     "index_1_link": [
+      3,
+      -28,
+      35
+     ],
+     "middle_1_link": [
+      59,
+      -32,
+      33
+     ]
+    }
+   },
+   "right": {
+    "pinch_mid_to_handle_mm": 171,
+    "t": 39.89,
+    "links_mm": {
+     "palm_link": [
+      -172,
+      133,
+      19
+     ],
+     "thumb_2_link": [
+      -123,
+      106,
+      0
+     ],
+     "index_1_link": [
+      -145,
+      68,
+      122
+     ],
+     "middle_1_link": [
+      -177,
+      32,
+      91
+     ]
+    }
+   }
+  },
+  "meat": {
+   "end_of_episode": {
+    "in": true,
+    "t": 59.01,
+    "meat_in_pan_frame_mm": [
+     -9,
+     -31,
+     11
+    ]
+   },
+   "end_of_hold": {
+    "in": true,
+    "t": 41.31,
+    "meat_in_pan_frame_mm": [
+     -11,
+     -30,
+     11
+    ]
+   },
+   "lifted_s": 13.77,
+   "in_frac_while_lifted": 1.0
+  }
+ },
+ {
+  "variant": "meat_left",
+  "instruction": "take the pan and hold it steady",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.55,
+    "y": 0.16,
+    "yaw": 0.0,
+    "z": 0.03
+   },
+   {
+    "color": "brown",
+    "shape": "meat",
+    "x": 0.55,
+    "y": 0.16,
+    "yaw": -1.5708,
+    "z": 0.015
+   },
+   {
+    "color": "yellow",
+    "shape": "cube",
+    "x": 0.25,
+    "y": 0.13,
+    "yaw": -1.5708
+   },
+   {
+    "color": "blue",
+    "shape": "cylinder",
+    "x": 0.18,
+    "y": 0.19,
+    "yaw": -1.5708
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.17,
+    "y": 0.11,
+    "yaw": -1.5708
+   },
+   {
+    "color": "yellow",
+    "shape": "triangle",
+    "x": 0.72,
+    "y": 0.16,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 58.7,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 490,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.107,
+  "touched": true,
+  "min_palm_dist_m": 0.0267,
+  "verdict": "disc",
+  "palm": "left_hand_palm_link",
+  "palm_in_pan_frame": [
+   -0.0517,
+   -0.0961,
+   0.0401
+  ],
+  "in_center_bin": false,
+  "final_pos": [
+   0.3149,
+   0.1056,
+   0.04
+  ],
+  "closest": {
+   "left": {
+    "pinch_mid_to_handle_mm": 178,
+    "t": 39.32,
+    "links_mm": {
+     "palm_link": [
+      -201,
+      -86,
+      48
+     ],
+     "thumb_2_link": [
+      -148,
+      -75,
+      24
+     ],
+     "index_1_link": [
+      -161,
+      -5,
+      133
+     ],
+     "middle_1_link": [
+      -185,
+      28,
+      94
+     ]
+    }
+   },
+   "right": {
+    "pinch_mid_to_handle_mm": 20,
+    "t": 20.29,
+    "links_mm": {
+     "palm_link": [
+      29,
+      -86,
+      46
+     ],
+     "thumb_2_link": [
+      24,
+      -24,
+      3
+     ],
+     "index_1_link": [
+      -9,
+      30,
+      33
+     ],
+     "middle_1_link": [
+      48,
+      35,
+      34
+     ]
+    }
+   }
+  },
+  "meat": {
+   "end_of_episode": {
+    "in": true,
+    "t": 59.15,
+    "meat_in_pan_frame_mm": [
+     9,
+     7,
+     -7
+    ]
+   },
+   "end_of_hold": {
+    "in": true,
+    "t": 40.93,
+    "meat_in_pan_frame_mm": [
+     9,
+     6,
+     -7
+    ]
+   },
+   "lifted_s": 15.94,
+   "in_frac_while_lifted": 1.0
+  }
+ }
+]

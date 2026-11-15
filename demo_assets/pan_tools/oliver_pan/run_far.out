@@ -1,0 +1,21 @@
+[00:23:24] ckout=/data/work/oliver/ck_pansha3 (nogit) overlay=finals_r23_universal variants=far_right,far_left image=hackjunction/policy:rc1-7a4168e-g port=8003
+00:23:30.407218 WARNING  [G1_29_ArmController] Waiting to         dds_utils.py:9
+                         subscribe dds...                                       
+00:23:30.962899 INFO      📷 Camera 'head_camera'          init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55555,                       
+                         request_bgr=True)                                      
+00:23:30.970023 INFO      📷 Camera 'left_wrist_camera'    init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55556,                       
+                         request_bgr=True)                                      
+00:23:30.973424 INFO      📷 Camera 'right_wrist_camera'   init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55557,                       
+                         request_bgr=True)                                      
+[DDSBackend] pacing on the sim clock (tcp://127.0.0.1:55581, sim t 779.24 s)
+policy: {'type': 'metadata', 'version': 1, 'name': 'classical-rung1', 'action_horizon': 10}  instruction: 'put the pan in the middle bin'  -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_002324
+far_right   verdict=no_lift  lift=0.0027 touched=False palm=None local=None center_bin=False end=done t=6.1s
+far_left    verdict=no_lift  lift=0.0031 touched=False palm=None local=None center_bin=False end=done t=3.9s
+00:23:51.969534 INFO      📷 Camera 'head_camera'          closed. client.py:174
+00:23:51.969617 INFO      📷 Camera 'left_wrist_camera'    closed. client.py:174
+00:23:52.060587 INFO      📷 Camera 'right_wrist_camera'   closed. client.py:174
+handle 0/2  disc 0/2  no_lift 2/2  in_center_bin 0/2  -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_002324/pan_results.json
+[00:23:52] done -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_002324

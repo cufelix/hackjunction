@@ -1,0 +1,329 @@
+"""Pan test episode runner: a novel pan-like object (disc + handle) next to the usual objects, a fixed instruction,
+and a verdict on WHERE the robot held the pan (handle vs disc). Runs inside the PAN sim tree's isaac env:
+
+    cd $PAN_TREE && bash aaltonomous/cloud/aalto.sh py <tools>/run_pan.py --policy ws://localhost:8003 \
+        --out <dir> [--variants right_in,left_in,right_diag,left_diag] [--instruction "..."] [--time-limit 120]
+
+Needs the pan sim (AALTO_PAN=1, tools/pan/start_pan_sim.sh): it adds obj_grey_pan_0 and the scene command `bodies`.
+Never touches the organiser evaluator: it reuses its helpers (home_arms, settle) and deploy.runner.run_episode.
+
+Verdict per episode:
+  handle      pan lifted >= 3 cm and, at its highest point, the nearest palm sits on the handle (pan-frame x > 0.09 m)
+  disc        lifted, nearest palm over the disc
+  no_lift     never lifted >= 3 cm; `touched` says whether a palm came within 4 cm of the pan
+  lifted_no_palm  lifted but no palm within 4 cm at the top (knocked or flipped, not held)
+plus in_center_bin (final pan centre inside the centre bin footprint) and the full pan/palm trajectory (5 Hz).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import threading
+import time
+import traceback
+from pathlib import Path
+
+import numpy as np
+
+PAN = "obj_grey_pan_0"
+DISC_R, HANDLE_X0, HANDLE_X1 = (0.06, 0.055, 0.140) if os.environ.get("PAN_SMALL") else (0.10, 0.095, 0.215)
+HANDLE_C = ((HANDLE_X0 + HANDLE_X1) / 2, 0.0, 0.007 if os.environ.get("PAN_SMALL") else 0.005)   # pan frame (bbox-centred z)
+LIFT_M, TOUCH_M, ON_HANDLE_X = 0.03, 0.04, 0.09
+PAN_Z_MAT = float(os.environ.get("PAN_Z_MAT", "0.015"))          # pan bbox centre above the mat (mesh z 0..30 mm, centred by the loader)
+
+# name: (pan centre pelvis xy, handle direction theta in pelvis frame (deg), [(colour index, shape, pelvis xy)])
+VARIANTS = {
+    "right_in":   ((0.27, -0.12), 90.0, [(0, "cube", (0.27, 0.22)), (2, "cylinder", (0.30, -0.33))]),
+    "left_in":    ((0.27, 0.12), -90.0, [(0, "cube", (0.27, -0.22)), (1, "cube", (0.30, 0.33))]),
+    "right_diag": ((0.28, -0.10), 135.0, [(1, "cube", (0.27, 0.22))]),
+    "left_diag":  ((0.28, 0.10), -135.0, [(2, "cube", (0.27, -0.22))]),
+    # whole pan in the head view (disc not cut by the image edges): handle across the table toward the centre
+    "far_right":  ((0.37, -0.08), 90.0, [(0, "cube", (0.27, 0.25))]),
+    "far_left":   ((0.37, 0.08), -90.0, [(1, "cube", (0.27, -0.25))]),
+    # toy pan (PAN_SMALL): whole pan in view, handle sideways
+    "small_right": ((0.32, -0.07), 90.0, [(0, "cube", (0.27, 0.25))]),
+    "small_left":  ((0.32, 0.07), -90.0, [(1, "cube", (0.27, -0.25))]),
+    "small_rdiag": ((0.31, -0.08), 135.0, [(2, "cube", (0.27, 0.25))]),
+    "small_ldiag": ((0.31, 0.08), -135.0, [(0, "cube", (0.27, -0.25))]),
+    "real_right":  ((0.31, -0.12), 90.0, [(0, "cube", (0.27, 0.25))]),   # 18 cm skillet, handle middle near y +0.04
+    "real_left":   ((0.31, 0.12), -90.0, [(1, "cube", (0.27, -0.25))]),
+    "egg_right":   ((0.30, -0.10), 90.0, [(0, "cube", (0.27, 0.25))]),    # 15 cm egg pan (PAN_RIM_R=75)
+    "egg_left":    ((0.30, 0.10), -90.0, [(1, "cube", (0.27, -0.25))]),
+    # cluttered 'hold the pan, do not spill the meat' scene: >= 5 cm from pan + handle, all x <= 0.35 (bin band 0.37)
+    # tool table (AALTO_TOOLS=1, no pan): screwdriver sideways (axis along y) on the side of the arm that serves the
+    # target bin; distractors >= 5 cm apart, x 0.25..0.35 (free strip), long axes along y
+    "tools_left":  (None, 0.0, [("tool", "green", "screwdriver", (0.30, 0.12), 90.0), ("tool", "silver", "wrench", (0.255, -0.08), 90.0),
+                                ("tool", "dgrey", "hammer", (0.345, -0.10), 90.0), ("tool", "black", "pliers", (0.30, 0.28), 0.0)]),
+    "tools_right": (None, 0.0, [("tool", "green", "screwdriver", (0.30, -0.12), -90.0), ("tool", "silver", "wrench", (0.255, 0.08), -90.0),
+                                ("tool", "dgrey", "hammer", (0.345, 0.10), -90.0), ("tool", "black", "pliers", (0.30, -0.28), 0.0)]),
+    # Felix's VLM use cases (screwdriver sideways along y; left-bin targets on +y for the left arm, right-bin on -y)
+    "thirsty_left": (None, 0.0, [("tool", "white", "teacup", (0.30, 0.12), -90.0), ("tool", "green", "screwdriver", (0.255, -0.08), 90.0),
+                                 ("tool", "dgrey", "hammer", (0.345, -0.10), 90.0), ("tool", "black", "pliers", (0.30, 0.28), 0.0)]),
+    "tidy":         (None, 0.0, [("tool", "green", "screwdriver", (0.30, 0.12), 90.0), ("tool", "green", "lime", (0.30, -0.12), 0.0),
+                                 ("tool", "white", "teacup", (0.33, -0.25), 90.0)]),
+    "restraint":    (None, 0.0, [("tool", "dgrey", "knife", (0.255, 0.0), 90.0), ("tool", "green", "lime", (0.335, -0.15), 0.0),
+                                 ("tool", "white", "teacup", (0.335, 0.15), -90.0)]),
+    "meat_right":  ((0.30, -0.10), 90.0, [(0, "cube", (0.27, 0.20)), (1, "cylinder", (0.33, 0.27)),
+                                          (2, "cube", (0.25, 0.28)), (0, "triangle", (0.30, -0.27))]),
+    "meat_left":   ((0.30, 0.10), -90.0, [(1, "cube", (0.27, -0.20)), (2, "cylinder", (0.33, -0.27)),
+                                          (0, "cube", (0.25, -0.28)), (1, "triangle", (0.30, 0.27))]),
+}
+
+
+def quat_xyzw_to_R(q):
+    x, y, z, w = q
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+
+
+def layout_for(sc_scene, name):
+    pos, theta, others = VARIANTS[name]
+    px, py = pos if pos is not None else (0.0, 0.0)
+    colours = list(sc_scene.cfg["objects"]["colors"])
+    lay = []
+
+    def entry(colour, shape, xy, yaw_pelvis_deg, z=None):
+        m = sc_scene.pelvis_to_mat(np.array([xy[0], xy[1], 0.0]))
+        e = {"color": colour, "shape": shape, "x": round(float(m[0]), 4), "y": round(float(m[1]), 4),
+             # layout yaw (mat) -> pelvis yaw is -pi/2 - yaw (layout.mat_yaw_to_pelvis); invert it
+             "yaw": round(float(-math.pi / 2 - math.radians(yaw_pelvis_deg)), 5)}
+        if z is not None:
+            e["z"] = z
+        return e
+
+    if VARIANTS[name][0] is None:   # tool table: no pan
+        tz = {"screwdriver": 0.016, "wrench": 0.005, "pliers": 0.0075, "hammer": 0.0135, "lime": 0.026, "teacup": 0.0335, "knife": 0.011}   # bbox half height + 1 mm
+        return [entry(c, s, xy, yaw, tz[s]) for _, c, s, xy, yaw in others]
+    lay.append(entry("grey", "pan", (px, py), theta, PAN_Z_MAT))
+    if os.environ.get("AALTO_PANCAKE") == "1":   # demo prop resting in the pan (pan top + half the 5 mm disc)
+        lay.append(entry("tan", "pancake", (px, py), 0.0, float(os.environ.get("PAN_TOP_MAT", "0.025")) + 0.0025 + 0.001))
+    if os.environ.get("AALTO_MEAT") == "1":   # steak slab on the pan base: base top + half the 20 mm slab + 1 mm
+        lay.append(entry("brown", "meat", (px, py), 0.0, float(os.environ.get("PAN_TOP_MAT", "0.004")) + 0.010 + 0.001))
+    for ci, shape, xy in others:
+        lay.append(entry(colours[ci % len(colours)], shape, xy, 0.0))
+    return lay
+
+
+class Poller(threading.Thread):
+    """20 Hz pan pose + palm positions from the scene service (own client: REQ sockets are not thread-safe)."""
+
+    def __init__(self, host):
+        super().__init__(daemon=True)
+        from aaltonomous.sim.scene_client import SceneClient
+        self.sc, self.rows, self.stop, self.err = SceneClient(host), [], threading.Event(), None
+
+    def run(self):
+        t0 = time.monotonic()
+        while not self.stop.is_set():
+            try:
+                objs = {o["name"]: o for o in self.sc.call(cmd="state")["objects"]}
+                bodies = self.sc.call(cmd="bodies")["bodies"]
+                p = objs.get(PAN)
+                if p is not None:
+                    m = objs.get("obj_brown_meat_0")
+                    self.rows.append({"t": round(time.monotonic() - t0, 2), "pos": p["pos"], "quat": p["quat_xyzw"],
+                                      "bodies": bodies, "meat": None if m is None else m["pos"]})
+            except Exception as e:  # keep polling; report the last error
+                self.err = repr(e)
+            time.sleep(0.05)
+
+
+def meat_in_pan(rows, sc_scene):
+    """Meat centre inside the rim radius (pan frame xy) and above the pan base, at: the end of the lifted phase
+    (last sample with the pan >= 3 cm up = end of the hold, before the put-back) and the end of the episode."""
+    rows = [r for r in rows if r["pos"][0] > 0.0 and r.get("meat")]
+    if not rows:
+        return None
+    z0 = float(sc_scene.mat_to_pelvis(np.array([0.0, 0.0, PAN_Z_MAT]))[2])
+    rim_in, base_top = float(os.environ.get("PAN_RIM_IN_M", "0.072")), -float(os.environ.get("PAN_BASE_LOCAL_M", "0.026"))
+
+    def check(r):
+        lp = quat_xyzw_to_R(r["quat"]).T @ (np.asarray(r["meat"]) - np.asarray(r["pos"]))
+        return {"in": bool(math.hypot(lp[0], lp[1]) < rim_in and lp[2] > base_top), "t": r["t"],
+                "meat_in_pan_frame_mm": [int(round(1000 * v)) for v in lp]}
+    lifted = [r for r in rows if r["pos"][2] - z0 >= 0.03]
+    out = {"end_of_episode": check(rows[-1])}
+    if lifted:
+        out["end_of_hold"] = check(lifted[-1])
+        out["lifted_s"] = round(lifted[-1]["t"] - lifted[0]["t"], 2)
+        out["in_frac_while_lifted"] = round(float(np.mean([check(r)["in"] for r in lifted])), 3)
+    return out
+
+
+def closest_approach(rows):
+    """Per hand: the row where the thumb_2/index_1 midpoint is closest to the handle centre; link offsets (mm) in the
+    handle frame (along, across, up). Link ORIGINS: fingertips sit lower than these."""
+    rows = [r for r in rows if r["pos"][0] > 0.0]
+    out = {}
+    for side in ("left", "right"):
+        best = None
+        for r in rows:
+            R = quat_xyzw_to_R(r["quat"])
+            loc = lambda p: R.T @ (np.asarray(p) - np.asarray(r["pos"])) - np.asarray(HANDLE_C)
+            b = r["bodies"]
+            k = f"{side}_hand_index_1_link"
+            if k not in b:
+                continue
+            d = float(np.linalg.norm((loc(b[k]) + loc(b[f"{side}_hand_thumb_2_link"])) / 2))
+            if best is None or d < best[0]:
+                best = (d, r["t"], {n: [int(round(1000 * v)) for v in loc(b[f"{side}_hand_{n}"])]
+                                    for n in ("palm_link", "thumb_2_link", "index_1_link", "middle_1_link")})
+        if best:
+            out[side] = {"pinch_mid_to_handle_mm": int(round(1000 * best[0])), "t": best[1], "links_mm": best[2]}
+    return out
+
+
+def verdict(rows, sc_scene):
+    # rows before the reset placed the pan show it parked on the floor behind the robot (x ~ -0.60): drop them
+    rows = [r for r in rows if r["pos"][0] > 0.0]
+    if not rows:
+        return {"verdict": "no_data"}
+    z0 = float(sc_scene.mat_to_pelvis(np.array([0.0, 0.0, PAN_Z_MAT]))[2])   # placed resting height, not a sample
+    palms = [k for k in rows[0]["bodies"] if "palm" in k] or list(rows[0]["bodies"])
+
+    def local(row, pt):
+        R = quat_xyzw_to_R(row["quat"])
+        return R.T @ (np.asarray(pt) - np.asarray(row["pos"]))
+
+    def dist_to_pan(lp):   # rough distance from a pan-frame point to the disc + handle solid
+        dz = max(0.0, abs(lp[2]) - 0.015)
+        d_disc = math.hypot(max(0.0, math.hypot(lp[0], lp[1]) - DISC_R), dz)
+        dx = max(HANDLE_X0 - lp[0], 0.0, lp[0] - HANDLE_X1)
+        dy = max(0.0, abs(lp[1]) - 0.0125)
+        return min(d_disc, math.sqrt(dx * dx + dy * dy + dz * dz))
+
+    touched, min_d = False, 9.0
+    for r in rows:
+        for k in palms:
+            d = dist_to_pan(local(r, r["bodies"][k]))
+            min_d = min(min_d, d)
+            touched |= d < TOUCH_M
+    top = max(rows, key=lambda r: r["pos"][2])
+    lift = top["pos"][2] - z0
+    out = {"lift_m": round(lift, 4), "touched": touched, "min_palm_dist_m": round(min_d, 4)}
+    if lift < LIFT_M:
+        out["verdict"] = "no_lift"
+    else:
+        best = min(palms, key=lambda k: dist_to_pan(local(top, top["bodies"][k])))
+        lp = local(top, top["bodies"][best])
+        held = dist_to_pan(lp) < TOUCH_M   # lifted with no palm on it = knocked/flipped, not a grasp
+        out.update(verdict=("handle" if lp[0] > ON_HANDLE_X else "disc") if held else "lifted_no_palm", palm=best,
+                   palm_in_pan_frame=[round(float(v), 4) for v in lp])
+    fin = rows[-1]["pos"]
+    cx, cy = sc_scene.cfg["bins"]["centers"]["center"] if "center" in sc_scene.cfg["bins"]["centers"] else (None, None)
+    if cx is not None:
+        c = sc_scene.mat_to_pelvis(np.array([cx, cy, 0.0]))
+        out["in_center_bin"] = bool(abs(fin[0] - c[0]) < 0.105 and abs(fin[1] - c[1]) < 0.105)
+    out["final_pos"] = [round(float(v), 4) for v in fin]
+    return out
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--policy", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--variants", default=",".join(VARIANTS))
+    ap.add_argument("--instruction", default=__import__("os").environ.get("PAN_INSTRUCTION", "put the pan in the middle bin"))
+    ap.add_argument("--time-limit", type=float, default=120.0)
+    ap.add_argument("--settle", type=float, default=3.0)
+    ap.add_argument("--seed", type=int, default=5000)
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--startup-timeout", type=float, default=180.0)
+    a = ap.parse_args(argv)
+
+    from aaltonomous.deploy.runner import PolicyClient, Recorder, run_episode
+    from aaltonomous.interface.env import AaltoEnv
+    from aaltonomous.sim.evaluate import apply_instance_env, home_arms, settle
+    from aaltonomous.sim.scene_client import SceneClient
+
+    apply_instance_env()
+    import os
+    sc = SceneClient(a.host)
+    names = [o["name"] for o in sc.state()["objects"]]
+    if PAN not in names:
+        raise SystemExit(f"{PAN} not in the sim scene: start the pan sim (AALTO_PAN=1, start_pan_sim.sh)")
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    env = AaltoEnv(backend="sim", task="sort_language", seed=a.seed, time_limit=a.time_limit, realtime=True,
+                   img_server_ip=a.host, head_rgbd=True, instruction=a.instruction,
+                   head_rgbd_port=int(os.environ.get("AALTO_RGBD_PORT", "55560")), cameras=True)
+    orig_reset = env.backend.reset_scene
+    client = PolicyClient(a.policy, a.startup_timeout)
+    print(f"policy: {client.metadata}  instruction: {a.instruction!r}  -> {out}", flush=True)
+    results, stop = [], threading.Event()
+    try:
+        for i, vname in enumerate(v for v in a.variants.split(",") if v):
+            lay = layout_for(env.scene, vname)
+
+            def reset_scene(layout, instruction, _lay=lay):
+                env.layout = _lay
+                return orig_reset(_lay, instruction)
+
+            home_err = home_arms(env, sc)
+            env.backend.reset_scene = reset_scene
+            env.rng = np.random.default_rng(a.seed + i)
+            poll = Poller(a.host)
+            poll.start()
+            if os.environ.get("AALTO_SHOWCAM"):
+                ev = lambda k, d: [float(x) for x in os.environ.get(k, d).split(",")]
+                sc.call(cmd="showcam_pose", eye=ev("AALTO_SHOWCAM_EYE", "0.75,-0.45,0.50"),
+                        tgt=ev("AALTO_SHOWCAM_TGT", "0.25,0.02,0.08"))
+                time.sleep(0.5)
+                print("rec_start", sc.call(cmd="rec_start", path=str((out / f"episode_{i:03d}_{vname}_show.mp4").resolve())), flush=True)
+            rec = Recorder(out / f"episode_{i:03d}_{vname}", video=True)
+            t0 = time.monotonic()
+            try:
+                summary, events = run_episode(env, client, i, a.seed + i, rec, stop, "sort_language")
+            except Exception as e:
+                traceback.print_exc()
+                summary, events = {"episode": i, "end_reason": "crash", "error": repr(e)}, []
+            rtf = summary.get("rtf") or 1.0
+            settle(sc, a.settle / max(min(rtf, 1.0), 0.2), float(env.scene.cfg["success"]["at_rest_speed"]))
+            time.sleep(0.5)
+            if os.environ.get("AALTO_SHOWCAM"):
+                print("rec_stop", sc.call(cmd="rec_stop"), flush=True)
+            poll.stop.set()
+            poll.join(timeout=3)
+            v = verdict(poll.rows, env.scene)
+            if VARIANTS[vname][0] is None:   # tool table: where did each tool end up
+                fin, bins = {}, {k: env.scene.mat_to_pelvis(np.array([c[0], c[1], 0.0]))
+                                 for k, c in env.scene.cfg["bins"]["centers"].items()}
+                for o in sc.call(cmd="state")["objects"]:
+                    if any(t in o["name"] for t in ("screwdriver", "wrench", "pliers", "hammer", "lime", "teacup", "knife")):
+                        p = o["pos"]
+                        inb = [k for k, c in bins.items() if abs(p[0] - c[0]) < 0.105 and abs(p[1] - c[1]) < 0.105]
+                        fin[o["name"]] = {"pos": [round(float(x), 3) for x in p], "bin": inb[0] if inb else None}
+                v = {"tools": fin, "verdict": "tools"}
+                print(f"{vname:11s} tools={json.dumps(fin)}", flush=True)
+            v["closest"] = closest_approach(poll.rows)
+            v["meat"] = meat_in_pan(poll.rows, env.scene)
+            res = {"variant": vname, "instruction": a.instruction, "layout": lay, "end_reason": summary.get("end_reason"),
+                   "wall_s": round(time.monotonic() - t0, 1), "home_err": round(float(home_err), 3),
+                   "safety": summary.get("safety"), "poll_error": poll.err, **v}
+            rec.save(events, {k: x for k, x in res.items()})
+            (out / f"episode_{i:03d}_{vname}_traj.json").write_text(json.dumps(poll.rows))
+            results.append(res)
+            print(f"{vname:11s} verdict={v.get('verdict'):8s} lift={v.get('lift_m')} touched={v.get('touched')} "
+                  f"palm={v.get('palm')} local={v.get('palm_in_pan_frame')} center_bin={v.get('in_center_bin')} "
+                  f"end={res['end_reason']} t={res['wall_s']}s", flush=True)
+            if v.get("meat"):
+                print(f"{vname:11s} meat={json.dumps(v['meat'])}", flush=True)
+            env.backend.reset_scene = orig_reset
+            if stop.is_set():
+                break
+    finally:
+        client.close()
+        env.close()
+    (out / "pan_results.json").write_text(json.dumps(results, indent=1, default=str))
+    n = len(results)
+    print(f"handle {sum(r.get('verdict') == 'handle' for r in results)}/{n}  disc "
+          f"{sum(r.get('verdict') == 'disc' for r in results)}/{n}  no_lift "
+          f"{sum(r.get('verdict') == 'no_lift' for r in results)}/{n}  in_center_bin "
+          f"{sum(bool(r.get('in_center_bin')) for r in results)}/{n}  -> {out / 'pan_results.json'}", flush=True)
+
+
+if __name__ == "__main__":
+    main()

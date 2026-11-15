@@ -1,0 +1,220 @@
+[
+ {
+  "variant": "egg_right",
+  "instruction": "put the pan in the middle bin",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.35,
+    "y": 0.16,
+    "yaw": -3.14159,
+    "z": 0.03
+   },
+   {
+    "color": "tan",
+    "shape": "pancake",
+    "x": 0.35,
+    "y": 0.16,
+    "yaw": -1.5708,
+    "z": 0.007500000000000001
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.7,
+    "y": 0.13,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 49.3,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 402,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.0623,
+  "touched": false,
+  "min_palm_dist_m": 0.0543,
+  "verdict": "lifted_no_palm",
+  "palm": "right_hand_palm_link",
+  "palm_in_pan_frame": [
+   -0.0291,
+   0.1469,
+   0.0366
+  ],
+  "in_center_bin": false,
+  "final_pos": [
+   0.3256,
+   -0.1475,
+   0.0515
+  ],
+  "closest": {
+   "left": {
+    "pinch_mid_to_handle_mm": 23,
+    "t": 22.31,
+    "links_mm": {
+     "palm_link": [
+      29,
+      94,
+      43
+     ],
+     "thumb_2_link": [
+      27,
+      30,
+      3
+     ],
+     "index_1_link": [
+      -5,
+      -24,
+      36
+     ],
+     "middle_1_link": [
+      52,
+      -27,
+      38
+     ]
+    }
+   },
+   "right": {
+    "pinch_mid_to_handle_mm": 164,
+    "t": 31.33,
+    "links_mm": {
+     "palm_link": [
+      -133,
+      85,
+      146
+     ],
+     "thumb_2_link": [
+      -97,
+      90,
+      100
+     ],
+     "index_1_link": [
+      -52,
+      -2,
+      180
+     ],
+     "middle_1_link": [
+      -89,
+      -31,
+      147
+     ]
+    }
+   }
+  }
+ },
+ {
+  "variant": "egg_left",
+  "instruction": "put the pan in the middle bin",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.55,
+    "y": 0.16,
+    "yaw": 0.0,
+    "z": 0.03
+   },
+   {
+    "color": "tan",
+    "shape": "pancake",
+    "x": 0.55,
+    "y": 0.16,
+    "yaw": -1.5708,
+    "z": 0.007500000000000001
+   },
+   {
+    "color": "yellow",
+    "shape": "cube",
+    "x": 0.2,
+    "y": 0.13,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 47.2,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 381,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.1164,
+  "touched": true,
+  "min_palm_dist_m": 0.0282,
+  "verdict": "disc",
+  "palm": "left_hand_palm_link",
+  "palm_in_pan_frame": [
+   -0.051,
+   -0.0933,
+   0.0461
+  ],
+  "in_center_bin": false,
+  "final_pos": [
+   0.4409,
+   0.1608,
+   0.1
+  ],
+  "closest": {
+   "left": {
+    "pinch_mid_to_handle_mm": 174,
+    "t": 29.38,
+    "links_mm": {
+     "palm_link": [
+      -189,
+      -117,
+      45
+     ],
+     "thumb_2_link": [
+      -136,
+      -106,
+      20
+     ],
+     "index_1_link": [
+      -153,
+      -27,
+      122
+     ],
+     "middle_1_link": [
+      -179,
+      2,
+      80
+     ]
+    }
+   },
+   "right": {
+    "pinch_mid_to_handle_mm": 18,
+    "t": 19.65,
+    "links_mm": {
+     "palm_link": [
+      26,
+      -85,
+      48
+     ],
+     "thumb_2_link": [
+      22,
+      -25,
+      3
+     ],
+     "index_1_link": [
+      -11,
+      31,
+      32
+     ],
+     "middle_1_link": [
+      46,
+      35,
+      33
+     ]
+    }
+   }
+  }
+ }
+]

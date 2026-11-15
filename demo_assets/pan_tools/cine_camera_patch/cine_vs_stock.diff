@@ -1,0 +1,214 @@
+--- /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/hooks.py	2026-11-13 23:10:02.442898143 +0000
++++ cine/tree/aaltonomous/sim/aalto_task/hooks.py	2026-11-15 04:56:14.583680691 +0000
+@@ -79,6 +79,7 @@
+             self.clock.bind(f"tcp://*:{cp}")
+             print(f"[aalto] sim clock on tcp :{cp}")
+         self.step_dt = float(env.step_dt)
++        self._rec_dir, self._rec_n, self._rec_last, self._rec_ts = None, 0, None, None
+         self.sim_t = 0.0
+         self.rtf = self.rtf_mean = None
+         self._win = self._start = None            # (wall, sim_t) at window / clock start
+@@ -127,6 +128,8 @@
+         if cmd == "ping":
+             return {"ok": True, "t": time.time(), **self.clock_info()}
+         if cmd == "reset":
++            self._cine_t0 = self.sim_t
++            if self._rec_dir: open(os.path.join(self._rec_dir, "resets.tsv"), "a").write(f"{self.sim_t:.4f} {self._rec_n}\n")
+             return {"ok": True, "active": self.place(env, req["layout"]), "layout": req["layout"]}
+         if cmd == "info":
+             d = None if not self.dr_cfg else {"name": self.dr_cfg.get("name"), "path": self.dr_cfg["_path"]}
+@@ -138,8 +141,23 @@
+                 self.randomize(env, req.get("seed"))
+             lay = random_layout(self.sc, req.get("seed"))
+             return {"ok": True, "active": self.place(env, lay), "layout": lay}
++        if cmd == "dbg":
++            sc = env.scene
++            return {"ok": True, "sensors": list(sc.sensors.keys()), "extras": list(sc.extras.keys()),
++                    "type": str(type(sc["demo_camera"])), "mro": [c.__name__ for c in type(sc["demo_camera"]).__mro__],
++                    "attrs": [a for a in dir(sc["demo_camera"]) if not a.startswith("_")][:60]}
+         if cmd == "state":
+             return {"ok": True, "objects": self.state(env), "layout": self.layout}
++        if cmd == "rec_start":
++            os.makedirs(req["dir"], exist_ok=True)
++            self._rec_dir, self._rec_n, self._rec_last, self._cine_t0 = req["dir"], 0, None, self.sim_t
++            self._rec_ts = open(os.path.join(req["dir"], "ts.tsv"), "w", buffering=1)
++            self._cine_init(env)
++            return {"ok": True, "has_cam": "demo_camera" in env.scene.keys(), "bodies": self._cine_names}
++        if cmd == "rec_stop":
++            n, self._rec_dir = self._rec_n, None
++            if self._rec_ts: self._rec_ts.close()
++            return {"ok": True, "frames": n}
+         if cmd == "evaluate":
+             r = evaluate(self.sc, req.get("task", "sort_fixed"), self.state(env), req.get("mapping"))
+             return {"ok": True, **r}
+@@ -185,6 +203,101 @@
+                 self.rep.send(json.dumps(resp).encode())
+         if self.rgbd is not None:
+             self._publish_rgbd(env)
++        if self._rec_dir is not None and "demo_camera" in env.scene.keys():
++            try:
++                self._cine_pose(env)
++                self._rec_frame(env)
++            except Exception:
++                import traceback
++                traceback.print_exc()
++                self._rec_dir = None
++
++
++    # ------------------------------------------------------------------ cinematic camera
++    def _cine_init(self, env):
++        r = env.scene["robot"]
++        names = list(r.data.body_names)
++        self._cine_names = [n for n in names if "hand" in n or "wrist" in n]
++        self._hb = {}
++        for side in ("left", "right"):
++            c = [i for i, n in enumerate(names) if side in n and "palm" in n] or \
++                [i for i, n in enumerate(names) if side in n and "wrist_yaw" in n]
++            self._hb[side] = c[0]
++        self._cine_H, self._cine_act, self._cine_w, self._cine_hz = None, "right", 0.0, 0.0
++        self._cine_sw = 0
++
++    def _cine_pose(self, env):
++        mode = os.environ.get("CINE_MODE", "orbit")
++        T = float(os.environ.get("CINE_T", "40"))
++        t = self.sim_t - self._cine_t0
++        cam = env.scene.sensors["demo_camera"]
++        origin = _t(env.scene.env_origins)[0].cpu().numpy()
++        bp = _t(env.scene["robot"].data.body_pos_w)[0].cpu().numpy() - origin
++        hp = {k: bp[i] for k, i in self._hb.items()}
++        other = "left" if self._cine_act == "right" else "right"
++        if hp[other][2] < hp[self._cine_act][2] - 0.04:
++            self._cine_sw += 1
++            if self._cine_sw > 60:
++                self._cine_act, self._cine_sw = other, 0
++        else:
++            self._cine_sw = 0
++        hand = hp[self._cine_act]
++        dt = self.step_dt
++        self._cine_H = hand.copy() if self._cine_H is None else self._cine_H + (1 - np.exp(-dt / 0.25)) * (hand - self._cine_H)
++        H = self._cine_H
++        self._cine_hz = float(hand[2])
++        near = 1.0 if hand[2] < 0.80 + float(os.environ.get("CINE_NEAR", "0.17")) else 0.0
++        if mode == "overhead":
++            near = 0.0
++        self._cine_w += (1 - np.exp(-dt / 0.8)) * (near - self._cine_w)
++        w = float(self._cine_w); w = w * w * (3 - 2 * w)
++        u = min(max(t / T, 0.0), 1.0); s = u * u * (3 - 2 * u)
++        tgt_w = np.array([0.40, 0.0, 0.88])
++        if mode == "orbit":
++            a = np.radians(-55 + 110 * s)
++            eye_w = np.array([0.40 + 1.05 * np.cos(a), 1.05 * np.sin(a), 1.22]); b = a + 0.55
++        elif mode == "orbit2":
++            a = np.radians(60 - 120 * s)
++            eye_w = np.array([0.40 + 0.95 * np.cos(a), 0.95 * np.sin(a), 1.10 + 0.15 * s]); b = a - 0.5
++        elif mode == "side":
++            eye_w = np.array([0.45, -1.10 + 0.35 * s, 0.98]); b = -1.25
++        elif mode == "overhead":
++            eye_w = np.array([0.62 - 0.12 * s, 0.10 * np.sin(2 * np.pi * s), 1.85 - 0.45 * s]); tgt_w = np.array([0.40, 0.0, 0.80])
++            b = 0.0
++        else:  # front dolly
++            eye_w = np.array([1.55 - 0.45 * s, 0.30 * np.sin(np.pi * s), 1.15]); b = 0.5
++        dist = float(os.environ.get("CINE_DIST", "0.40"))
++        eye_c = H + np.array([dist * np.cos(b), dist * np.sin(b), 0.0])
++        eye_c[2] = max(H[2] - 0.03, 0.86)
++        eye = (1 - w) * eye_w + w * eye_c
++        tgt = (1 - w) * tgt_w + w * (H + np.array([0, 0, -0.01]))
++        from pxr import Gf, UsdGeom
++        f = tgt - eye; f = f / np.linalg.norm(f)
++        right = np.cross(f, [0, 0, 1.0]); right /= np.linalg.norm(right)
++        up = np.cross(right, f)
++        e = eye + origin
++        m = Gf.Matrix4d(float(right[0]), float(right[1]), float(right[2]), 0.0,
++                        float(up[0]), float(up[1]), float(up[2]), 0.0,
++                        float(-f[0]), float(-f[1]), float(-f[2]), 0.0,
++                        float(e[0]), float(e[1]), float(e[2]), 1.0)
++        prim = _stage().GetPrimAtPath(_env0("/World/envs/env_.*/DemoCam"))
++        xf = UsdGeom.Xformable(prim)
++        if not getattr(self, "_cine_op", None):
++            xf.ClearXformOpOrder()
++            self._cine_op = xf.AddTransformOp()
++        self._cine_op.Set(m)
++
++    def _rec_frame(self, env):
++        import cv2
++        cam = env.scene.sensors["demo_camera"]
++        n = int(env.common_step_counter)
++        if self._rec_last is not None and n - self._rec_last < 4:
++            return
++        self._rec_last = n
++        rgb = _t(cam.data.output["rgb"])[0, ..., :3].cpu().numpy().astype(np.uint8)
++        cv2.imwrite(os.path.join(self._rec_dir, f"{self._rec_n:06d}.jpg"), rgb[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, 88])
++        self._rec_ts.write(f"{self._rec_n} {self.sim_t:.4f} {self._cine_act} {self._cine_hz:.3f} {self._cine_w:.2f}\n")
++        self._rec_n += 1
+ 
+     def _publish_rgbd(self, env):
+         from tasks.common_observations.camera_state import _camera_frame
+--- /data/aaltonomous-humanoid/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-13 23:10:02.442898143 +0000
++++ cine/tree/aaltonomous/sim/aalto_task/scene_cfg.py	2026-11-15 04:31:35.248652593 +0000
+@@ -12,6 +12,7 @@
+ """
+ from __future__ import annotations
+ 
++import os
+ from pathlib import Path
+ 
+ import numpy as np
+@@ -35,6 +36,22 @@
+ SC = Scene.load()
+ ENV = "/World/envs/env_.*"
+ 
++
++def _demo_cam(env_ns, rotmat_to_quat_xyzw):
++    import numpy as np
++    import isaaclab.sim as sim_utils
++    from isaaclab.sensors import CameraCfg
++    pos, tgt = (np.asarray(v, float) for v in ((0.95, 0.70, 1.28), (0.38, 0.02, 0.90)))
++    f = tgt - pos; f /= np.linalg.norm(f)
++    right = np.cross(f, [0, 0, 1.0]); right /= np.linalg.norm(right)
++    down = np.cross(f, right)
++    R = np.c_[right, down, f]
++    return CameraCfg(
++        prim_path=f"{env_ns}/DemoCam", update_period=1.0 / 25, height=int(os.environ.get('CINE_H','1080')), width=int(os.environ.get('CINE_W','1920')), data_types=["rgb"],
++        spawn=sim_utils.PinholeCameraCfg(focal_length=float(os.environ.get('CINE_FOCAL','22')), horizontal_aperture=20.955, clipping_range=(0.05, 20.0)),
++        offset=CameraCfg.OffsetCfg(pos=tuple(float(v) for v in pos), rot=rotmat_to_quat_xyzw(R), convention="ros"))
++
++
+ # Physics of the printed PLA parts (DR knobs later, spec §6). Friction is on the high side: Dex3 fingertips
+ # are rubber; the sim tends to need more grip than reality for the same grasp.
+ OBJ_MASS = 0.05            # kg, 45 mm PLA part at ~20 % infill
+@@ -275,21 +292,27 @@
+         "floor": AssetBaseCfg(
+             prim_path=f"{ENV}/Floor",
+             init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, -0.05)),
+-            spawn=sim_utils.CuboidCfg(size=(8.0, 8.0, 0.1),
++            spawn=sim_utils.CuboidCfg(size=((30.0, 30.0, 0.1) if os.environ.get('CINE_LIGHT') == '1' else (8.0, 8.0, 0.1)),
+                                       collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
+-                                      visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.35, 0.35, 0.38)))),
++                                      visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=((0.05, 0.05, 0.06) if os.environ.get('CINE_LIGHT') == '1' else (0.35, 0.35, 0.38))))),
+         "dome_light": AssetBaseCfg(prim_path="/World/DomeLight",
+-                                   spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=800.0)),
++                                   spawn=sim_utils.DomeLightCfg(color=(0.9, 0.9, 0.9), intensity=800.0, visible_in_primary_ray=(os.environ.get("CINE_LIGHT") != "1"))),
+         # "our own lights at the counter": one overhead area-ish light slightly in front of the robot
+         "key_light": AssetBaseCfg(prim_path="/World/KeyLight",
+                                   init_state=AssetBaseCfg.InitialStateCfg(pos=(0.5, 0.0, 2.2)),
+                                   spawn=sim_utils.SphereLightCfg(color=(1.0, 0.97, 0.92), intensity=60000.0,
+                                                                  radius=0.15)),
++        **({"rim_a": AssetBaseCfg(prim_path="/World/RimA", init_state=AssetBaseCfg.InitialStateCfg(pos=(-0.9, 0.9, 1.7)),
++                                  spawn=sim_utils.SphereLightCfg(color=(0.55, 0.7, 1.0), intensity=40000.0, radius=0.2)),
++            "rim_b": AssetBaseCfg(prim_path="/World/RimB", init_state=AssetBaseCfg.InitialStateCfg(pos=(-0.9, -0.9, 1.7)),
++                                  spawn=sim_utils.SphereLightCfg(color=(1.0, 0.8, 0.55), intensity=40000.0, radius=0.2))}
++           if os.environ.get("CINE_LIGHT") == "1" else {}),
+         "counter": counter_cfg(),
+         "mat": mat_cfg(),
+         "front_camera": head_camera_cfg(),
+         "left_wrist_camera": CameraPresets.left_dex3_wrist_camera(),
+         "right_wrist_camera": CameraPresets.right_dex3_wrist_camera(),
++        **({"demo_camera": _demo_cam(ENV, rotmat_to_quat_xyzw)} if os.environ.get("NOVEL_CAM") == "1" else {}),
+     }
+ 
+ 
+@@ -306,3 +329,4 @@
+ 
+ AaltoSceneCfg = make_scene_cfg_class()
+ AaltoLidSceneCfg = make_scene_cfg_class("AaltoLidSceneCfg", lid=True)
++
