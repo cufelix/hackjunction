@@ -128,7 +128,9 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(sub, stock)
         # The frozen submission is unchanged; only the newly registered, default-off overrides may be absent.
         sub_keys = set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"])
-        self.assertEqual(set(FLAGS) - sub_keys, {"policy.chunk_ticks", "policy.hold_ticks"})
+        self.assertEqual(set(FLAGS) - sub_keys, {"policy.chunk_ticks", "policy.hold_ticks", "grasp.arm_xy_offset",
+                                                 "grasp.prefer_object_side", "grasp.prefer_object_side_margin_m",
+                                                 "motion.final_approach_scale", "motion.final_approach_m"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):
@@ -351,6 +353,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_colour_kmeans", "ab_cylinder", "ab_decision",
                                       "ab_drop_height_extra_m", "ab_drop_lateral_margin_m",
                                       "ab_first_object_speed_scale", "ab_fk_xcheck",
+                                      "ab_grip_both", "ab_grip_side", "ab_grip_slow",
                                       "ab_generic_fallback", "ab_hand_calib", "ab_held_detector",
                                       "ab_hue_guard", "ab_hue_v2", "ab_inj_p4", "ab_inj_p7",
                                       "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_isolated_first",
@@ -559,7 +562,7 @@ class TestFlags(unittest.TestCase):
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
                           ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
                            "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap",
-                           "motion.output_caps")])   # cap flags only reduce motion
+                           "motion.output_caps", "motion.final_approach_scale", "motion.final_approach_m")])   # cap flags only reduce motion
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",

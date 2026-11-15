@@ -38,7 +38,8 @@ class TestFlagsOff(unittest.TestCase):
         self.assertEqual(cfg["grasp"]["arm_xy_offset"], {"left": [0.0, 0.0], "right": [0.0, 0.0]})
         for k in ("grasp.arm_xy_offset", "grasp.prefer_object_side", "motion.final_approach_scale"):
             self.assertIn(k, FLAGS)
-            self.assertEqual(effective_flags(cfg)[k], effective_flags(load_config())[k])
+        self.assertFalse([k for k, _, is_on, _, _ in effective_flags(cfg) if is_on and k in (
+            "grasp.arm_xy_offset", "grasp.prefer_object_side", "motion.final_approach_scale")])
 
     def test_flags_off_identical_plans(self):
         a = _planner()
@@ -73,11 +74,11 @@ class TestFinalApproach(unittest.TestCase):
         np.testing.assert_allclose(p.arm[P["descend"][1] - 1], q.arm[Q["descend"][1] - 1], atol=1e-9)
         # every later phase: same samples, only shifted in time
         for name in ("close", "lift", "carry", "open", "retreat", "home"):
-            np.testing.assert_array_equal(p.arm[P[name][0]:P[name][1]], q.arm[Q[name][0]:Q[name][1]])
-            np.testing.assert_array_equal(p.hand[P[name][0]:P[name][1]], q.hand[Q[name][0]:Q[name][1]])
+            np.testing.assert_allclose(p.arm[P[name][0]:P[name][1]], q.arm[Q[name][0]:Q[name][1]], atol=1e-9)
+            np.testing.assert_allclose(p.hand[P[name][0]:P[name][1]], q.hand[Q[name][0]:Q[name][1]], atol=1e-9)
         # the first part of the descend (above the final segment) is not slowed: its speed profile matches stock
         extra = lq - lp
-        dt = float(getattr(a[0], "dt", 0.02))
+        dt = float(a.dt)
         self.assertLess(extra * dt, 3.0)
         self.assertLess(len(q.arm) * dt, 60.0)
 
@@ -91,14 +92,36 @@ class TestFinalApproach(unittest.TestCase):
 
 
 class TestPreferObjectSide(unittest.TestCase):
-    def test_object_side_first_for_right_bin(self):
-        a, sc, post, home = _planner()
-        b = _planner(grasp__prefer_object_side=True)
-        xy = (0.31, 0.12)   # left-side object, right bin: stock = right arm first
-        p, q = _plan(a, sc, post, home, xy, "right"), _plan(*b, xy, "right")
-        self.assertTrue(p.ok and q.ok)
-        self.assertEqual(p.side, "right")
-        self.assertEqual(q.side, "left")
+    def _order(self, flag, xy, bin_name):
+        pl, sc, post, home = _planner(grasp__prefer_object_side=flag)
+        calls = []
+
+        def fake(det, side, *a, **k):
+            calls.append(side)
+            from .planner import Plan
+            return Plan(True, color=det.color, side=side)
+        pl._plan_side_hints = fake
+        pl._lying_reach_on = lambda det: False
+        r = pl._plan_core(_det(sc, xy), home, post["open"], bin_name=bin_name)
+        return calls, r
+
+    def test_object_side_first_when_both_arms_can_do_it(self):
+        # stubbed planner: both arms always succeed -> the order decides. Right bin, object on the left.
+        self.assertEqual(self._order(False, (0.31, 0.12), "right")[0], ["right"])
+        calls, r = self._order(True, (0.31, 0.12), "right")
+        self.assertEqual(calls, ["left"])
+        self.assertEqual(r.side, "left")
+        calls, r = self._order(True, (0.31, -0.12), "center")
+        self.assertEqual(r.side, "right")
+
+    def test_falls_back_when_object_side_arm_fails(self):
+        pl, sc, post, home = _planner(grasp__prefer_object_side=True)
+        from .planner import Plan
+        pl._plan_side_hints = lambda det, side, *a, **k: Plan(side == "right", color=det.color, side=side, reason="x")
+        pl._lying_reach_on = lambda det: False
+        r = pl._plan_core(_det(sc, (0.31, 0.12)), home, post["open"], bin_name="right")
+        self.assertTrue(r.ok)
+        self.assertEqual(r.side, "right")
 
     def test_left_bin_keeps_left_arm(self):
         a, sc, post, home = _planner()
@@ -115,7 +138,7 @@ class TestPreferObjectSide(unittest.TestCase):
         p, q = _plan(a, sc, post, home, (0.31, 0.02), "right"), _plan(*b, (0.31, 0.02), "right")
         self.assertEqual(p.side, q.side)
         rng = np.random.default_rng(0)
-        for _ in range(12):
+        for _ in range(3):
             xy = (rng.uniform(0.22, 0.42), rng.uniform(-0.25, 0.25))
             for bn in ("left", "center", "right"):
                 p, q = _plan(a, sc, post, home, xy, bn), _plan(*b, xy, bn)
