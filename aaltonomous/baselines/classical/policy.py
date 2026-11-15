@@ -3589,8 +3589,28 @@ class ClassicalPolicy:
         return bool(bc.get("find", False)) and bool(self._brain_queries) \
             and self._brain_finds < int(bc.get("max_finds", 2))
 
-    def _brain_find(self, query, obs, dets):
-        """Run the find tool for one phrase: image points -> ids of OUR detections (nearest uv)."""
+    def _find_hit(self, it, query, obs, dets, grown):
+        """Which detection a find point is: (index into dets or None, grown depth blob or None).
+        (a) uv within match_found's radius; else (b) the depth blob grown at the point (once per point, cached in
+        `grown`) has its top within 0.04 m of a detection's top: a long object's blob centre can sit >40 px from its uv."""
+        from .brain.novel import novel_detection
+        pt = tuple(map(float, it["point"]))
+        hit = match_found([pt], dets)
+        if hit:
+            return hit[0], None
+        if pt not in grown:
+            grown[pt] = novel_detection(self.perception, obs["head_rgb"], obs["head_depth"], pt, query,
+                                        it.get("bbox") or None, self.cfg["brain"])
+        d = grown[pt]
+        if d is None:
+            return None, None
+        for i, k in enumerate(dets):
+            if np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04:
+                return i, d
+        return None, d
+
+    def _brain_find(self, query, obs, dets, grown=None):
+        """Run the find tool for one phrase: image points -> ids of OUR detections (nearest uv, or the 3D blob match)."""
         if self._brain_find_fn is None:
             bc = self.cfg["brain"]
             self._brain_find_fn = FindClient(bc.get("find_path", "/data/brain/find/find_tool.py"), bc.get("find_url"),
@@ -3604,18 +3624,20 @@ class ClassicalPolicy:
         raw = fn.detect(obs["head_rgb"], query) if hasattr(fn, "detect") else fn(obs["head_rgb"], query)
         items = [it if isinstance(it, dict) else {"point": tuple(it), "bbox": None, "label": query} for it in raw]
         self._last_find_items = items
-        idx = match_found([it["point"] for it in items], dets)
-        matched = {tuple(map(float, it["point"])) for it in items
-                   if match_found([it["point"]], dets)}
-        from .brain.novel import novel_detection
+        grown = {} if grown is None else grown
+        hits = [self._find_hit(it, query, obs, dets, grown) for it in items]
+        idx = []
+        for i, _ in hits:
+            if i is not None and i not in idx:
+                idx.append(i)
         bc = self.cfg["brain"]
-        for it in items:
+        for it, (i, _) in zip(items, hits):
             pt = tuple(map(float, it["point"]))
-            if pt in matched or len(self._novel_store) >= int(bc.get("novel_max_objects", 3)):
+            if i is not None or len(self._novel_store) >= int(bc.get("novel_max_objects", 3)):
                 continue
             if any(((e["uv"][0] - pt[0]) ** 2 + (e["uv"][1] - pt[1]) ** 2) ** 0.5 < 30 for e in self._novel_store):
                 continue
-            d = novel_detection(self.perception, obs["head_rgb"], obs["head_depth"], pt, query, it.get("bbox") or None, bc)
+            d = grown[pt]
             if d is None:
                 self.log(f"[novel] find({query!r}) point {pt}: no depth blob above the counter plane")
                 continue
@@ -3629,10 +3651,15 @@ class ClassicalPolicy:
         if not self._ftd_on():
             ids = self._brain_ids(dets)
             return [ids[i] for i in self._brain_find(query, obs, dets)], dets, ids
-        self._brain_find(query, obs, dets)
+        grown = {}
+        self._brain_find(query, obs, dets, grown)
         all_dets = self._with_novel(dets, obs)
         ids_all = self._brain_ids(all_dets)
-        idx = match_found([it["point"] for it in self._last_find_items], all_dets)
+        idx = []
+        for it in self._last_find_items:
+            i = self._find_hit(it, query, obs, all_dets, grown)[0]
+            if i is not None and i not in idx:
+                idx.append(i)
         return [ids_all[i] for i in idx], all_dets, ids_all
 
     def _brain_points(self, lp, dets, cands, ids):
