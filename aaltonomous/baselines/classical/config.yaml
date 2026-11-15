@@ -722,6 +722,7 @@ insert:                       # policy.insert_shapes parameters (read only when 
   pg_max_sigma_m: 0.003       # max xy 1-sigma of the lid fit
   pg_max_dz_m: 0.015          # max |lid z_top - nominal|
   pg_search_m: 0.14           # lid search radius around the nominal pose
+  pg_bias_xy: [0.0, 0.0]      # subtracted from the fitted lid/hole xy (head-camera bias of the fit)
   pg_ticks: 600               # max ticks spent on the lid fit before abstaining
   palm_shift_m: 0.0           # EXPERIMENT, keep 0: edge grasp (IK target d ahead of the palm point). Measured r24: even d=0.045 leaves the cube/cylinder holes 4-6 cm out of reach
   release_gap_max_m: 0.015    # max object-bottom height over the lid accepted at the release (stock 0.015)

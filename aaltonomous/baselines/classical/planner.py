@@ -936,9 +936,11 @@ class Planner:
             tg = ip.to_targets(le, self.scene, min_conf=float(ic.get("pg_hole_min_conf", 0.7)))
             if shape not in tg:
                 return fail(f"pg: no confident {ins.SHAPE_HOLE[shape]} hole")
-            tgt, z_top = tg[shape], float(le.z_top)
+            tgt, z_top = dict(tg[shape]), float(le.z_top)
+            bias = np.asarray(ic.get("pg_bias_xy") or [0.0, 0.0], float)   # head-camera xy bias of the fit (sim-measured, see ENV notes)
+            tgt["xy"] = np.asarray(tgt["xy"], float) - bias
             c0 = np.asarray(self.scene.mat_to_pelvis(np.r_[np.asarray(self.scene.cfg["bins"]["centers"][lid_name], float), 0.0])[:2], float)
-            new_shift = np.asarray(le.centre_xy, float) - c0
+            new_shift = np.asarray(le.centre_xy, float) - bias - c0
         else:
             tgt = ins.hole_targets(self.scene, z_lid_top=z_top, offsets_mat=ic.get("hole_offsets_mat"),
                                    margin=ic.get("hole_margin_m"))[shape]
