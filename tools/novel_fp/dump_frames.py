@@ -27,8 +27,6 @@ def main(argv=None):
     ap.add_argument("--seconds", type=float, default=20.0)
     ap.add_argument("--every", type=int, default=15)
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--pan-tools", help="dir of tools/pan (run_pan.py): with --eps pan_<variant>,... the pan sim layouts "
-                                        "(AALTO_PAN=1 sim) replace the seeded layout, instruction 'put the pan in the middle bin'")
     a = ap.parse_args(argv)
 
     import os
@@ -57,24 +55,9 @@ def main(argv=None):
             self.n += 1
 
     for ep in (e for e in a.eps.split(",") if e):
-        pan = ep.startswith("pan_")
-        if pan:
-            import sys
-            sys.path.insert(0, a.pan_tools)
-            import run_pan
-            k, task, instr = 5000, "sort_language", "put the pan in the middle bin"
-        else:
-            k, task, instr = int(ep[2]), {"f": "sort_fixed", "l": "sort_language"}[ep[3]], None
+        k, task = int(ep[2]), {"f": "sort_fixed", "l": "sort_language"}[ep[3]]
         env = AaltoEnv(backend="sim", task=task, seed=k, time_limit=a.seconds, realtime=True, img_server_ip=a.host,
-                       head_rgbd=True, head_rgbd_port=int(os.environ.get("AALTO_RGBD_PORT", "55560")), cameras=True,
-                       instruction=instr)
-        if pan:
-            lay, orig = run_pan.layout_for(env.scene, ep[4:]), env.backend.reset_scene
-
-            def reset_scene(layout, instruction, _lay=lay, _orig=orig):
-                env.layout = _lay
-                return _orig(_lay, instruction)
-            env.backend.reset_scene = reset_scene
+                       head_rgbd=True, head_rgbd_port=int(os.environ.get("AALTO_RGBD_PORT", "55560")), cameras=True)
         try:
             home_arms(env, sc)
             env.rng = np.random.default_rng(k)
