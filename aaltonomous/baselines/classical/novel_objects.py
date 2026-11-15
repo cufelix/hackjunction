@@ -150,7 +150,7 @@ def _handle_pixels(blob, max_aspect, extension):
         return None, None
     # Past the thick body's tangent.  A box corner never reaches this gate;
     # the rectangular pan handle contributes a coherent patch.
-    take = (along > 0.90 * radius) & (np.abs(across) < 0.75 * radius)
+    take = (along > 1.00 * radius) & (np.abs(across) < 0.75 * radius)
     if take.sum() < max(12, int(0.02 * len(pts))) or np.percentile(along[take], 90) < 1.30 * radius:
         return None, None
     out = np.zeros_like(blob, bool)
@@ -312,8 +312,12 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
                 w = np.array([-u[1], u[0]])
                 rel = HP[:, :2] - body_c
                 DP = BP[:, :2] - body_c
+                # robust handle half-width (10th-90th percentile across the axis): the handle mask can carry a sliver of
+                # disc where the handle meets the rim, which inflates the full extent (hdims[1]) to 2-3x the true width
+                cross = rel @ w
+                hw = 0.5 * (float(np.percentile(cross, 90)) - float(np.percentile(cross, 10)))
                 # disc pixels only: handle pixels the handle mask missed sit in the handle band and would push the rim out to the tip
-                DP = DP[np.abs(DP @ w - float(np.median(rel @ w))) > float(hdims[1]) / 2 + 0.01]
+                DP = DP[np.abs(DP @ w - float(np.median(rel @ w))) > hw + 0.01]
                 rim = max(float(np.percentile(DP @ u, 100.0)), float(_axes_and_footprint(DP)[3][0]) / 2) if len(DP) >= 10 else float(dims[0]) / 2
                 s_min = rim + float(cfg.get("handle_rim_margin_m", 0.04))
                 if float((rel @ u).max()) < s_min + 0.01:
@@ -321,7 +325,9 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
                 else:
                     s = max(float(np.median(rel @ u)), s_min)
                     centre_xy = body_c + s * u + float(np.median(rel @ w)) * w
-                    width = float(hdims[1])
+                    # width from handle pixels beyond the rim only (s > rim + 0.01), robust 10-90 spread
+                    beyond = cross[(rel @ u) > rim + 0.01]
+                    width = (float(np.percentile(beyond, 90)) - float(np.percentile(beyond, 10))) if len(beyond) >= 10 else float(hdims[1])
                 handle_axis = hmajor
                 yaw = _fold_yaw(np.arctan2(hmajor[1], hmajor[0]))
                 grasp_kind = "handle"
@@ -331,7 +337,9 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         top_z = float(np.percentile(P[:, 2], 95.0))
         height = float(np.percentile(P[:, 2], 98.0) - perception.scene.counter_z)
         support = min(1.0, len(P) / 200.0)
-        border = bool(blob[0].any() or blob[-1].any() or blob[:, 0].any() or blob[:, -1].any())
+        # handle grasp: only the handle must be fully in view; a disc cut by the image edge does not matter
+        touch = handle_mask if (grasp_kind == "handle" and handle_mask is not None) else blob
+        border = bool(touch[0].any() or touch[-1].any() or touch[:, 0].any() or touch[:, -1].any())
         confidence = float(np.clip(support * (0.35 if border else 1.0), 0.0, 1.0))
         det = Detection(colour, np.r_[centre_xy, top_z], area * scale_area, len(P) * scale_area, "novel_depth",
                         yaw, (cu, cv), shape=label,
