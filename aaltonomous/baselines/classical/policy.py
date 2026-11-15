@@ -556,6 +556,7 @@ class ClassicalPolicy:
         self._target_cooldowns = []     # [{color, xy, until}], planner.per_target_guard only
         self._budget_scale = 1.0        # planner.budget_escalate: >1 only inside the escalation re-plan
         self._budget_relooks = 0
+        self._esc_failed, self._esc_extra_used = [], False   # planner.budget_escalate memory (episode-wide)
         self._deferred_cands = []       # [(color, xy)] candidates deferred once by planner.candidate_budget (episode-wide)
         self._latest_t = 0.0            # newest episode clock seen by act(); planning workers use it for cooldown start
         # A stale generation owns its detached snapshot and may finish in the
@@ -2898,24 +2899,44 @@ class ClassicalPolicy:
             if fp:
                 return planner_fail(p.reason)
         if budget_failed and self._escalate_on():
-            # planner.budget_escalate: EVERY candidate of this look was only budget-deferred (slow / loaded machine): re-plan the
-            # best 2 with 3x the budget (wall capped at 12 s); still nothing -> re-look and retry, never "nothing left to sort".
-            self._budget_scale = 3.0
-            try:
-                for d in budget_failed[:2]:
-                    others = [o.top[:2] for o in dets if o is not d]
-                    p = self._plan_pick(d, {"obstacles": others}, None)
-                    self.plans.append(p)
-                    self.log(f"[budget_escalate] {d.color} re-planned with 3x budget: ok={p.ok} ({p.reason})")
-                    if p.ok:
-                        self._budget_relooks = 0
-                        return ("plan", p, len(dets))
-            finally:
-                self._budget_scale = 1.0
-            self._deferred_cands = []
-            self._budget_relooks += 1
-            self.log(f"[budget_escalate] all {len(budget_failed)} candidates deferred for budget: re-look #{self._budget_relooks}")
-            return ("relook", None, len(dets))
+            # planner.budget_escalate: every candidate of this look was only budget-deferred (slow / loaded machine): re-plan the
+            # best 2 NOT YET escalation-failed with 3x the budget (wall capped at 12 s); still nothing -> re-look and retry.
+            # Escalation-failed candidates persist across looks (colour+shape, xy within 3 cm; cleared when the object is gone or
+            # picked). Once all failed, ONE more full round is allowed, then they are skipped (no endless loop, others not starved).
+            def _ekey(d):
+                return (d.color, getattr(d, "shape", None), np.asarray(d.top[:2], float).copy())
+            def _same(k, d):
+                return k[0] == d.color and k[1] == getattr(d, "shape", None) and np.linalg.norm(k[2] - np.asarray(d.top[:2], float)) < 0.03
+            self._esc_failed = [k for k in self._esc_failed if any(_same(k, o) for o in dets)]   # disappeared -> cleared
+            eligible = [d for d in budget_failed if not any(_same(k, d) for k in self._esc_failed)]
+            if not eligible and not self._esc_extra_used:
+                self._esc_extra_used = True
+                self._esc_failed = []
+                eligible = list(budget_failed)
+                self.log("[budget_escalate] every candidate failed escalation: one more full round")
+            if eligible:
+                self._budget_scale = 3.0
+                try:
+                    for d in eligible[:2]:
+                        others = [o.top[:2] for o in dets if o is not d]
+                        p = self._plan_pick(d, {"obstacles": others}, None)
+                        self.plans.append(p)
+                        self.log(f"[budget_escalate] {d.color} re-planned with 3x budget: ok={p.ok} ({p.reason})")
+                        if p.ok:
+                            self._budget_relooks = 0
+                            self._esc_failed = [k for k in self._esc_failed if not _same(k, d)]
+                            self._esc_extra_used = False
+                            return ("plan", p, len(dets))
+                        self._esc_failed.append(_ekey(d))
+                finally:
+                    self._budget_scale = 1.0
+                self._deferred_cands = []
+                self._budget_relooks += 1
+                self.log(f"[budget_escalate] {len(budget_failed)} candidates deferred for budget ({len(self._esc_failed)} escalation-failed): re-look #{self._budget_relooks}")
+                return ("relook", None, len(dets))
+            for d in budget_failed:   # all failed twice: skipped like an infeasible candidate
+                self.failed.append(d.top[:2])
+                self.log(f"[budget_escalate] skip {d}: failed escalation twice")
         if over_cap:   # nothing within the cap: the quickest over-cap plan beats leaving points on the counter
             best = min(over_cap, key=lambda q: q.duration)
             if not triage or best.duration <= left:
