@@ -128,7 +128,7 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(sub, stock)
         # The frozen submission is unchanged; only the newly registered, default-off overrides may be absent.
         sub_keys = set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"])
-        self.assertEqual(set(FLAGS) - sub_keys, {"motion.output_hold_on_late", "policy.chunk_ticks", "policy.hold_ticks",
+        self.assertEqual(set(FLAGS) - sub_keys, {"motion.arm_tau_ff", "motion.output_hold_on_late", "policy.chunk_ticks", "policy.hold_ticks",
                                                   "policy.retry_cross_relocate", "policy.late_sweep",
                                                   "policy.frozen_rgb_guard",
                                                   "perception.prism_speckle_floor", "perception.real_border_partial",
@@ -576,7 +576,7 @@ class TestFlags(unittest.TestCase):
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
                           ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
                            "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap",
-                           "motion.output_caps", "motion.output_hold_on_late")])   # cap flags only reduce motion
+                           "motion.output_caps", "motion.output_hold_on_late", "motion.arm_tau_ff")])   # cap flags only reduce motion
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",

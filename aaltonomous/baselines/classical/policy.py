@@ -983,11 +983,31 @@ class ClassicalPolicy:
 
     def act(self, obs):
         res = self._act_entry(obs)
+        res = self._with_tau_ff(res)
         if self._mirror_im:   # hand.mirror_index_middle (R42a): last stop before the runner, every return path
             h = np.asarray(res["hand_q_target"], float)
             if h.size:   # zero-row hold (no encoder sample yet): nothing to mirror
                 res = dict(res, hand_q_target=np.stack([self._im_emit(r) for r in h]) if h.ndim == 2 else self._im_emit(h))
         return res
+
+    _gff = None
+
+    def _with_tau_ff(self, res):
+        """motion.arm_tau_ff = gravity (default off: res untouched): add arm_tau_ff, gravity torque per emitted row."""
+        if self.cfg["motion"].get("arm_tau_ff") != "gravity":
+            return res
+        try:
+            if self._gff is None:
+                from .gravity_ff import GravityFF
+                self._gff = GravityFF(self.spec)
+            a = np.asarray(res["arm_q_target"], float)
+            if not a.size:
+                return res
+            tau = self._gff.rows(a, res.get("hand_q_target"))
+        except Exception as e:   # never let the feed-forward break an action: no key = torque 0
+            self.log(f"[arm_tau_ff] disabled for this reply: {type(e).__name__}: {e}")
+            return res
+        return res if tau is None else {**res, "arm_tau_ff": tau}
 
     def _im_emit(self, r):
         """Posture-aware index/middle repair at emission: a hand flexed past the open/closed midpoint keeps the more

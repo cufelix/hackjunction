@@ -120,8 +120,11 @@ class ClassicalServerPolicy(Policy):
             self._decide_profile(self._auto_buf)
             self._auto_buf = None
         a = self.pol.act(obs)
-        return {"arm_q_target": np.asarray(a["arm_q_target"], np.float64),
-                "hand_q_target": np.asarray(a["hand_q_target"], np.float64), "done": bool(a.get("done", False))}
+        out = {"arm_q_target": np.asarray(a["arm_q_target"], np.float64),
+               "hand_q_target": np.asarray(a["hand_q_target"], np.float64), "done": bool(a.get("done", False))}
+        if a.get("arm_tau_ff") is not None:   # motion.arm_tau_ff (organiser PR #4); absent = flag off
+            out["arm_tau_ff"] = np.asarray(a["arm_tau_ff"], np.float64)
+        return out
 
     def _decide_profile(self, frames):
         pa = self.probe_cfg["profile_auto"]
