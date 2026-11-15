@@ -101,6 +101,33 @@ All three fixes are real-only. The sim/real detector switches them on, and the s
 - **The brain has not been tested on the robot.** End-to-end runs with the real llama.cpp server take place on a GPU
   simulator box. The unit tests cover only a server that is down or late.
 
+## Build the submitted image
+
+The final image (`ghcr.io/dymyt-ry/pp9gi2f:final`) is built from this repo in two steps on an x86_64 host with
+Docker and BuildKit. The brain stage compiles llama.cpp with CUDA, so it needs a few minutes and about 30 GB of disk.
+
+```bash
+# 1. Stage what is not in git: the G1 URDF, llama.cpp b12110 source, Qwen3-VL-8B-Instruct Q8_0 + mmproj
+#    (about 9.5 GB, all sha256-checked). This is the only step that needs internet.
+bash tools/brain/stage_brain.sh
+
+# 2. Policy base, then the brain layer on top (llama-server and the model inside the image, no downloads at start)
+docker build -f tools/submission.Dockerfile --build-arg OVERLAY=finals_r25_gen --build-arg PROFILE_MODE=auto \
+    -t hackjunction/policy:final-base .
+docker build -f tools/brain/Dockerfile.policy_brain --build-arg POLICY_IMAGE=hackjunction/policy:final-base \
+    --build-arg BRAIN_ENABLED=1 --build-arg BRAIN_OVERLAY=finals_r25_gen --build-arg PROFILE_MODE=auto \
+    -t hackjunction/policy:final .
+
+# 3. Check it: server up within 120 s, brain answers, replay above 27 Hz
+bash tools/brain/test_brain_image.sh hackjunction/policy:final 8371
+python -m aaltonomous.deploy.replay --synthetic 100 --container hackjunction/policy:final
+```
+
+- `PROFILE_MODE=auto` lets the policy tell sim from the real robot at start-up. `sim` or `real` forces one profile.
+- `BRAIN_ENABLED=0` builds the same image with the brain off. Step 2's first command alone gives the CPU-only image.
+- Both Dockerfiles run the release checks (`tools/flags.py`, `tools/check_release_flags.py`) during the build, so a
+  build with a wrong overlay or flag set fails.
+
 ## Challenge starter kit
 
 | Start here | |
