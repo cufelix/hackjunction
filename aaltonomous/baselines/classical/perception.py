@@ -406,6 +406,10 @@ class Perception:
         self.fk_rescue_cfg = dict(self.cfg.get("fk_colour_rescue_params") or {})
         self.real_merge_split = bool(self.cfg.get("real_merge_split", False))
         self.real_merge_cfg = dict(self.cfg.get("real_merge_split_params") or {})
+        # hotfix (real only): a bin-sized / bin-tall colour blob is a bin, never a pick candidate (checked BEFORE split_blobs,
+        # which otherwise slices one 21 cm orange bin wall into up to 3 cube-sized parts)
+        self.bin_size_guard = bool(self.cfg.get("bin_size_guard", False))
+        self.bin_size_cfg = dict(self.cfg.get("bin_size_guard_params") or {})
         self.partial_ok_near_hand = bool(self.cfg.get("partial_ok_near_hand", False))
         self.partial_near_hand_cfg = dict(self.cfg.get("partial_ok_near_hand_params") or {})
         # perception.neutral_obstacles (FLAG, default OFF): non-target dark / grey blobs are never detections; they
@@ -1828,6 +1832,11 @@ class Perception:
                     continue
                 if all_masks is not None and self._local_bg_reject(blob, hsv, all_masks):
                     continue
+                if self.bin_size_guard:
+                    why_bin = self._bin_sized_blob(blob, area, cent[i], depth)
+                    if why_bin is not None:
+                        rejected.append((self._blob_placeholder(color, area, cent[i]), why_bin))
+                        continue
                 parts = [(blob, area, cent[i])]
                 if self.split_by_solidity:
                     lo, hi = self.split_solidity_cfg.get("area_px", [520, 15500])
@@ -2436,6 +2445,47 @@ class Perception:
             rejected.append((det, why))
         else:
             dets.append(det)
+
+    def _bin_sized_blob(self, blob, area, centroid, depth):
+        """perception.bin_size_guard: rejection reason when one colour blob is bin-sized, else None. Objects are ~4.5 cm
+        (two touching ~9 cm); a bin is ~21 x 21 cm with a 6-12 cm rim. Checks (any one rejects):
+          area   > max_area_factor x the expected single-object pixel area (works without depth),
+          top    (92nd percentile z) > max_top_m above the counter,
+          extent of the points above the counter (5..95 percentile along the principal axes) > max_extent_m.
+        Never raises: on any error the blob is kept (fail open = the pre-hotfix behaviour)."""
+        try:
+            p = self.bin_size_cfg
+            exp = float(self.expected_area_px(blob, centroid, depth) or 0.0)
+            if exp > 0 and area > float(p.get("max_area_factor", 4.0)) * exp:
+                return "bin_size:area"
+            if depth is None:
+                return None
+            c = self.cfg
+            dlo, dhi = c["depth_range_mm"]
+            ys, xs = np.nonzero(blob)
+            d = depth[ys, xs].astype(float)
+            ok = (d >= dlo) & (d <= dhi)
+            if int(ok.sum()) < int(c["min_valid_depth_px"]):
+                return None
+            P = self._pixel_to_pelvis(xs[ok], ys[ok], d[ok])
+            P = P[np.all(np.isfinite(P), axis=1)]
+            if len(P) < int(c["min_valid_depth_px"]):
+                return None
+            zc = float(self.scene.counter_z)
+            if float(np.percentile(P[:, 2], c["top_percentile"])) - zc > float(p.get("max_top_m", 0.075)):
+                return "bin_size:top"
+            Q = P[P[:, 2] > zc + float(p.get("min_point_height_m", 0.01)), :2]
+            if len(Q) < 10:
+                return None
+            Q = Q - Q.mean(axis=0)
+            _, vecs = np.linalg.eigh(np.cov(Q.T))
+            proj = Q @ vecs
+            ext = np.percentile(proj, 95, axis=0) - np.percentile(proj, 5, axis=0)
+            if float(ext.max()) > float(p.get("max_extent_m", 0.13)):
+                return "bin_size:extent"
+        except Exception as exc:   # never raise into act()
+            self.log(f"[bin_size_guard] failed: {type(exc).__name__}: {exc}")
+        return None
 
     def _fk_rescue_reject(self, det, blob, area):
         """perception.fk_colour_rescue: a blob that overlaps the FK arm silhouette is the robot's own hand / forearm
