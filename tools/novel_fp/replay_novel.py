@@ -17,10 +17,12 @@ from pathlib import Path
 import numpy as np
 
 
-def load_cfg(overlay):
+def load_cfg(overlay, fp_filter=None):
     from aaltonomous.baselines.classical.config import load_config
     probe = load_config(overlay=overlay)
     extra = dict((probe.get("profile_auto") or {}).get("sim_overrides") or {})
+    if fp_filter is not None:
+        extra["perception.novel.fp_filter"] = fp_filter
     return load_config(overlay=overlay, profile="sim", overrides=extra)
 
 
@@ -30,20 +32,28 @@ def main(argv=None):
     ap.add_argument("--overlay", default="finals_r23_universal")
     ap.add_argument("--png")
     ap.add_argument("--max-t", type=float, default=1e9, help="only frames with t <= this (s)")
+    ap.add_argument("--static-rad", type=float, default=0.0,
+                    help="only frames whose arm_q moved <= this (max abs, rad) since the previous kept frame: the policy "
+                         "looks with a still arm, and a moving arm's image lags its joints (FK mask misaligned)")
+    ap.add_argument("--fp-filter", choices=("on", "off"), help="force perception.novel.fp_filter (default: overlay's)")
+    ap.add_argument("--tag", default="", help="suffix for the report json (two code versions on one frames dir)")
     a = ap.parse_args(argv)
 
     from aaltonomous.baselines.classical.policy import ClassicalPolicy
-    cfg = load_cfg(a.overlay)
+    cfg = load_cfg(a.overlay, None if a.fp_filter is None else a.fp_filter == "on")
+    print(f"fp_filter={cfg['perception'].get('novel', {}).get('fp_filter')}", flush=True)
     pol = ClassicalPolicy(config=cfg, log=lambda *_: None)
     per = pol.perception
     tot_frames = tot_bad = 0
     report = {}
-    for f in sorted(Path(a.frames).glob("ep*.npz")):
+    for f in sorted(Path(a.frames).glob("*.npz")):
         d = np.load(f)
         meta = json.loads(f.with_suffix(".json").read_text()) if f.with_suffix(".json").exists() else {}
         labels, bad, n, saved = Counter(), 0, 0, False
         for i in range(len(d["t"])):
             if float(d["t"][i]) > a.max_t:
+                continue
+            if a.static_rad > 0 and (i == 0 or float(np.max(np.abs(d["arm_q"][i] - d["arm_q"][i - 1]))) > a.static_rad):
                 continue
             rgb, depth = d["rgb"][i], d["depth"][i]
             dets = per.detect(rgb, depth, robot_q=(d["arm_q"][i].astype(float), d["hand_q"][i].astype(float))) or []
@@ -68,7 +78,7 @@ def main(argv=None):
                           "layout": [f"{o.get('color')} {o.get('shape')}" for o in meta.get("layout", [])]}
         print(f"{f.stem}: {bad}/{n} frames with novel  {dict(labels)}", flush=True)
     print(f"TOTAL: {tot_bad}/{tot_frames} frames with >= 1 novel detection")
-    json.dump(report, sys.stderr if False else open(Path(a.frames) / f"replay_{a.overlay}.json", "w"), indent=1)
+    json.dump(report, sys.stderr if False else open(Path(a.frames) / f"replay_{a.overlay}{a.tag}.json", "w"), indent=1)
     return 0 if tot_bad == 0 else 1
 
 
