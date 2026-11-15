@@ -213,14 +213,12 @@ FLAGS = {
     "grasp.arm_xy_offset": ("arm offset", {"left": [0.0, 0.0], "right": [0.0, 0.0]}, "per-arm grasp xy correction (pelvis frame, m, each |v| <= 0.05) added to the detected top xy in the planner; zeros = off"),
     "grasp.left_hand_fix.shift_z": ("left hand", 0.0, "left arm + triangle only: add this (m) to the grasp z before the fingertip-clearance raise; 0 = off"),
     "grasp.online_bias": ("online bias", False, "robot learns its own per-hand grasp xy bias from misses (online_bias.py); starts at grasp.arm_xy_offset, grasp point only; needs policy.grasp_diag_log"),
-    "grasp.arm_xy_offset": ("online bias", {"left": [0.0, 0.0], "right": [0.0, 0.0]}, "per-arm grasp xy correction (m, pelvis frame); the start value of grasp.online_bias"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
     "motion.output_caps": ("M4", None, "null = legacy output; dict = final per-joint arm/hand velocity and acceleration caps, with stateful limiting on every emitted route"),
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),
     "motion.lift_on_stall.timeout_s": ("round 9", STOCK, "lift_on_stall: longest close hold (stock 1.2 s)"),
-    "grasp.arm_xy_offset": ("lh sweep", None, "per-arm grasp xy offset {left: [x, y], right: [x, y]} in the pelvis frame (experiment)"),
     "grasp.point_in_palm": ("pinch fix", STOCK, "object centre in the LEFT palm frame (right = [1,-1,1] mirror)"),
     "grasp.cage_mode": ("finals cage", False,
                          "three-contact cage for metric cylinders/standing triangles; cubes keep their configured grasp"),
@@ -407,12 +405,6 @@ def check_flag_values(cfg):
         raise ValueError(f"grasp.left_hand_fix.shift_z = {lhz!r}: want a finite number with |v| <= 0.05 m")
     if not isinstance(_get(cfg, "grasp.online_bias"), bool):
         raise ValueError("grasp.online_bias: want true or false")
-    axo = _get(cfg, "grasp.arm_xy_offset")
-    if not (isinstance(axo, dict) and set(axo) == {"left", "right"} and all(
-            isinstance(v, (list, tuple)) and len(v) == 2 and all(
-                isinstance(x, (int, float)) and not isinstance(x, bool) and np.isfinite(x) and abs(x) <= 0.1 for x in v)
-            for v in axo.values())):
-        raise ValueError(f"grasp.arm_xy_offset = {axo!r}: want {{left: [dx, dy], right: [dx, dy]}}, |v| <= 0.1 m")
     for k, (lo, hi) in LIMITS.items():
         v = float(_get(cfg, k))
         if not lo < v <= hi:
