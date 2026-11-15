@@ -591,6 +591,7 @@ brain:
   novel_max_objects: 3        # novel detections kept per episode
   grounded_picks: false       # FLAG (universal). open-vocabulary instruction: pick_place only ids that find() located
   ev_gate: false              # FLAG (universal). novel object with EV = p_grasp*(3*p_bin-1) < ev_min is left on the counter
+  known_task_hard_off: false  # FLAG (r25). known task (resolver/sort_fixed, no novel noun): NO brain call at all this episode (= brain.enabled false)
   ev_min: 0.5                 # universal: p_bin >= 0.5 at p_grasp 1 (break-even is 1/3; the margin absorbs mis-calibration)
   ev_default_conf: 0.7        # universal: p_bin of a brain-chosen bin when the backend reports no confidence
   closed_loop: false          # FLAG. agent loop (brain/agent.py): async re-plan after every outcome; needs planner
