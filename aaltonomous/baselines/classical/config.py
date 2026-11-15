@@ -233,6 +233,7 @@ FLAGS = {
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
     "motion.output_caps": ("M4", None, "null = legacy output; dict = final per-joint arm/hand velocity and acceleration caps, with stateful limiting on every emitted route"),
     "motion.output_hold_on_late": ("chaos", False, "output limiter (needs output_caps): a late act() request does NOT grant the first new target the extra elapsed time (the runner holds the last command meanwhile, so more than one dt per tick is a velocity clip); off = legacy"),
+    "motion.sag_comp": ("sag", False, "true = REAL arm sag compensation: q_cmd = q_plan + kappa*tau_g(q_plan)/kp (slew <= 0.5 rad/s, added before the output limiter), kappa estimated online from still ticks (0 when the runner already has gravity ff; needs output_caps; sim_overrides false)"),
     "motion.arm_tau_ff": ("sag", None, "null = off (no arm_tau_ff key in replies); gravity = reply carries arm_tau_ff, the URDF gravity torque (Nm) at each commanded arm row, clamped like the runner (organiser PR #4: real arm PD has no gravity term; sim/mock ignore it)"),
     "motion.close_hold_s": ("Felix grasp", STOCK, "hold after closing the hand (sim profile 0.25 s)"),
     "motion.lift_on_stall.enabled": ("round 9", False, "lift as soon as the fingers stall (>= close_hold_s, <= timeout)"),

@@ -609,6 +609,8 @@ class ClassicalPolicy:
             self._shell_last = None
         if self.output_limiter is not None:
             self.output_limiter.reset()
+        if self._sag:   # keep kappa (same robot), drop the offset + still history: the limiter restarts from the encoders
+            self._sag.soft_reset()
         self._partial_relooks = 0   # partial_ok_near_hand: bounded retract/re-observe attempts
         self._final_relook_used = False
         self._relook_fresh = 0
@@ -1052,6 +1054,22 @@ class ClassicalPolicy:
                 self._emitted = (a[-1].copy(), h[-1].copy())
         return res
 
+    _sag = None
+
+    def _sag_comp(self):
+        if self._sag is False or self.output_limiter is None or not self.cfg["motion"].get("sag_comp", False):
+            return None
+        if self._sag is None:
+            try:
+                from .gravity_ff import GravityFF
+                from .sag_comp import SagComp
+                self._sag = SagComp(self._gff or GravityFF(self.spec), 1.0 / HZ, log=lambda m: self.log(m))
+            except Exception as exc:
+                self.log(f"[sag_comp] disabled: {type(exc).__name__}: {exc}")
+                self._sag = False
+                return None
+        return self._sag
+
     def _limit_motion_output(self, action, obs):
         """M4 final boundary: cap every route, including holds, home, endgame and empty-grasp queue replacement."""
         a, h = np.asarray(action["arm_q_target"], float), np.asarray(action["hand_q_target"], float)
@@ -1065,11 +1083,22 @@ class ClassicalPolicy:
                 q = np.asarray(target, float)
             return q if q.shape == (14,) and np.all(np.isfinite(q)) else np.asarray(target, float)
 
+        sag = self._sag_comp()   # motion.sag_comp (default off: None -> this path is untouched)
+        if sag is not None:
+            try:
+                sag.observe(float(obs.get("t", 0.0)), obs.get("arm_q"), obs.get("hand_q"))
+                a = sag.process(a, h)   # BEFORE the limiter: its velocity/acceleration caps bound the offset change too
+            except Exception as exc:
+                self.log(f"[sag_comp] disabled: {type(exc).__name__}: {exc}")
+                self._sag, sag = False, None
         a, h = self.output_limiter.limit(
             a, h, start("arm_q", a[0]), start("hand_q", h[0]), float(obs.get("t", 0.0)))
         out = {**action, "arm_q_target": a, "hand_q_target": h}
         if len(a):
             self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()
+            if sag is not None:
+                sag.note_emitted(a[-1])
+                self.arm_cmd = a[-1] - sag.off   # planner state stays in the uncompensated frame
             if self._shell:
                 self._shell_last = (self.arm_cmd.copy(), self.hand_cmd.copy())
             if (self.cfg.get("debug") or {}).get("log_joint_offset", False):

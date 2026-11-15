@@ -33,6 +33,15 @@ class GravityFF:
             effort = np.array([j["effort"] for j in yaml.safe_load(f)["arm"]], float)
         self.tau_max = np.minimum(TAU_MAX, effort)
 
+    def raw(self, arm_q, hand_q=None):
+        """(14,) unscaled, unclamped generalized gravity of the arm joints (NaN -> 0); used by sag_comp."""
+        q = self.q0.copy()
+        q[self.arm_iq] = np.asarray(arm_q, float)
+        if hand_q is not None:
+            q[self.hand_iq] = np.asarray(hand_q, float)
+        return np.nan_to_num(self.pin.computeGeneralizedGravity(self.model, self.data, q)[self.arm_iv],
+                             nan=0.0, posinf=0.0, neginf=0.0)
+
     def row(self, arm_q, hand_q=None):
         """(14,) torque for one commanded pose."""
         q = self.q0.copy()
