@@ -96,13 +96,14 @@ def drive(a):
         H = np.vstack([x[2] for x in acts if len(x[2])]) if len(A) else np.zeros((0, 14))
         viol = int(((A < spec.arm_lower - 1e-6) | (A > spec.arm_upper + 1e-6)).any(axis=1).sum()) if len(A) else 0
         hviol = int(((H < spec.hand_lower - 1e-6) | (H > spec.hand_upper + 1e-6)).any(axis=1).sum()) if len(H) else 0
+        (out / f"e{ep:02d}.log").write_text(logs)
         pick = lambda *keys: [l.strip()[:200] for l in logs.splitlines() if any(k in l for k in keys)]
         rec = {"ep": ep, "connect_s": round(t_conn, 2), "first_action_s": None if t_first is None else round(t_first, 2),
                "first_action_after_connect_s": None if t_first is None else round(t_first - t_conn, 2),
                "p50_ms": round(1e3 * float(np.median(lat)), 1) if lat else None, "errors": errs[:3], "n_err": len(errs),
                "arm_limit_viol": viol, "hand_limit_viol": hviol, "rows": int(len(A)), "start_arm_q": S[0, :14].tolist(),
                "profile": pick("[profile]")[:3], "pitch": pick("pitch", "online_pitch")[:4],
-               "detect": pick("detections", "[look]", "n_det", "execute ")[:4], "exceptions": pick("Traceback", "Exception")[:3]}
+               "detect": pick("detections", "execute ", "[retry", "skip")[:4], "exceptions": pick("Traceback", "Exception")[:3]}
         np.savez(out / f"e{ep:02d}.npz", arm=A, hand=H, start_arm=S[0, :14])
         (out / f"e{ep:02d}.json").write_text(json.dumps(rec, indent=1))
         print(json.dumps({k: rec[k] for k in ("ep", "first_action_s", "first_action_after_connect_s", "n_err", "arm_limit_viol",
