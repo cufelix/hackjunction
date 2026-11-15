@@ -249,6 +249,8 @@ FLAGS = {
     "grasp.staggered_release_delay_s": ("finals grasp", 0.30, "delay before DDS slots 5/6 begin opening when staggered_release is on"),
     "grasp.novel_near_rim_retry": ("novel R22", False, "novel/generic objects: when the drop leg fails, retry once releasing at the target bin's near rim (no inset); clearances unchanged"),
     "bin.geometry_runtime": ("bin geo", False, "every bin consumer (perception masks/hulls/near_bin/in_bin/gate, planner drop/slots/collision) follows bin_geometry(): nominal + the voted shift"),
+    "calib.plane.robust_agree_m": ("real fix", 0.03, "robust_height: legacy table fit kept only if within this of the dominant plane (real overlay 0.01)"),
+    "perception.height_range": ("real fix", [0.4, 2.0], "accepted object top height above the counter in object sizes; real overlay lowers the floor to 0.25"),
     "bin.vote.max_shift_m": ("bin vote", 0.10, "a bin vote result further than this from the prior is discarded (prior kept); real venue bins measure +8..+15 cm vs nominal"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "bin.vote.signed_rim_fit": ("C3", False, "fit physical rim displacement with its signed +x/+y direction"),
