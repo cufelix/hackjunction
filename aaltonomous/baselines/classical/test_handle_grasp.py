@@ -71,6 +71,15 @@ class TestPanHandleGrasp(unittest.TestCase):
         self.assertTrue(novel[0].graspable)
         self.assertEqual(novel[0].grasp_kind, "handle")
 
+    def test_edge_cut_disc_is_not_judged_by_its_inflated_bbox(self):
+        # disc pushed into the bottom edge: the cut plus the handle inflate the bbox past max_aspect and the blob reads
+        # elongated; the visible handle must still be found and graspable
+        novel, _, _, _ = self.novels(0, centre=(.45, .12))
+        self.assertEqual(len(novel), 1)
+        self.assertEqual(novel[0].shape, "with-handle")
+        self.assertTrue(novel[0].graspable)
+        self.assertEqual(novel[0].grasp_kind, "handle")
+
     def test_handle_grasp_clears_the_rim_or_is_ungraspable(self):
         # 0 deg: full handle visible -> grasp on the handle >= rim + 3 cm.
         novel, dc, dir_p, perp_p = self.novels(0)
