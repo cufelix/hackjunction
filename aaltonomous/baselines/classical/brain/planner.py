@@ -15,7 +15,7 @@ from .core import AsyncRequest, BackendWorker, make_backend, world_to_json
 from .registry import BINS
 
 PLAN_TOOLS = ("pick_place", "place_at", "find", "skip", "wait", "done", "skill")
-SKILLS = ("flip", "hold")   # closed set of motion skills; the policy sets planner.skill from it while planning
+SKILLS = ("flip", "hold", "use")   # closed set of motion skills; the policy sets planner.skill from it while planning
 MAX_PLAN_STEPS = 32
 
 _COMPLEX = re.compile(
@@ -102,6 +102,8 @@ def plan_prompt(req):
          '[{"tool":"skill","args":{"obj_id":"o0","skill":"flip"}},{"tool":"done","args":{}}]'),
         ('take the pan and hold it steady',
          '[{"tool":"skill","args":{"obj_id":"o0","skill":"hold"}},{"tool":"done","args":{}}]'),
+        ('drive the screw into the block with the power screwdriver',
+         '[{"tool":"skill","args":{"obj_id":"o0","skill":"use"}},{"tool":"done","args":{}}]'),
     ]
     shots = "\n".join(f"Instruction: {i}\nPlan: {p}" for i, p in examples)
     failure = req.get("failure")

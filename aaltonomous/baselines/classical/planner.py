@@ -251,7 +251,8 @@ class Planner:
         self._lying = False    # grasp.lying_prism: the pick being planned is a lying prism (grasp height / posture)
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
         self.object_speed_scale = None  # policy.first_object_speed_scale: arm phase speed x this (a copy, per plan)
-        self.skill = None  # "flip": pan-toss phase after the lift (_flip_waypoints); "hold": still hand-closed hold; None = stock pick
+        self.skill = None  # "flip": pan-toss phase after the lift (_flip_waypoints); "hold": still hand-closed hold; "use": push a target with the tool (_use_waypoints); None = stock pick
+        self.skill_target_xy = None  # "use": pelvis xy of the target the tool is pushed towards (None: no target)
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
@@ -1465,6 +1466,12 @@ class Planner:
             move("flip", self._flip_waypoints(side, cur_a), scale=cs)
         elif self.skill == "hold":   # arm constant, hand closed on the pan for grasp.hold_s
             hand("hold", hand_cls, float(g.get("hold_s", 3.0)))
+        elif self.skill == "use":   # grasp.use: approach the target along the tool axis, push, twist, back to the lift pose
+            seq = self._use_waypoints(side, det, xy, z, P, up[-1], plan)
+            if seq is None:
+                return plan
+            for name, qs in seq:
+                move(name, qs, scale=cs)
         move("carry", carry + lower, scale=cs)
         rw = g.get("release_wait_s")  # grasp.release_wait_s: the retreat starts >= this long after the open command
         hand("open", hand_rel, mo["open_hold_s"] if rw is None else max(mo["open_hold_s"], float(rw)))  # widest posture: `open` alone left the cube wedged in the sim
@@ -1542,6 +1549,76 @@ class Planner:
             return plan
         plan.ok = True
         return plan
+
+    def _use_axis(self, det, xy):
+        """skill 'use': (u, L) = unit tool axis (pelvis xy) and distance from the grasp xy to the tool's front end along u.
+        u points at skill_target_xy; with no target, away from the grasp offset (far end from the grasp). (None, None)
+        when the detection has no orientation."""
+        ang = getattr(det, "ridge_yaw", None)
+        if ang is None:
+            ang = getattr(det, "yaw", None)
+        if ang is None:
+            return None, None
+        u = np.array([np.cos(ang), np.sin(ang)])
+        half = 0.5 * float(det.footprint[0]) if getattr(det, "footprint", None) else 0.10
+        off = np.asarray(xy, float) - np.asarray(det.top[:2], float)
+        if self.skill_target_xy is not None:
+            if np.dot(np.asarray(self.skill_target_xy, float) - xy, u) < 0:
+                u = -u
+        elif np.dot(off, u) > 0:
+            u = -u
+        return u, float(np.clip(half - np.dot(off, u), 0.03, 0.20))
+
+    def _use_waypoints(self, side, det, xy, z, P, q_lift, plan):
+        """skill 'use' (grasp.use): from the lift pose, slide along the tool axis by d (approach), lower to the grasp
+        height + 1 cm, push 1.5 cm further, twist the wrist roll (+r, -r, +r, -r, 0), then back up and to the lift pose.
+        d puts the tool's front end on the target (+1 cm), clipped to 0..10 cm; 3 cm with no target.
+        Returns [(phase, arm_q waypoints)] or None (plan.reason set)."""
+        u, L = self._use_axis(det, xy)
+        if u is None:
+            plan.reason = "use: no tool axis"
+            return None
+        if self.skill_target_xy is None:
+            d = 0.03
+        else:
+            contact = np.asarray(self.skill_target_xy, float) - u * 0.03
+            d = float(np.clip(np.dot(contact - (xy + u * L), u) + 0.01, 0.0, 0.10))
+        g = self.cfg["grasp"].get("use") or {}
+        r = float(g.get("twist_rad", 0.35))  # ponytail: 0.5 rad leaves the hand 1.5 cm above the counter (clearance fails); 0.35 passes here
+        lift = np.asarray(P["lift"], float)
+        out, q = [], q_lift
+
+        def run(name, p0, p1):
+            nonlocal q
+            qs = self._cartesian(side, p0, p1, q, name, plan)
+            if qs is None:
+                plan.reason = "use: no IK path"
+                return False
+            out.append((name, qs))
+            q = qs[-1]
+            return True
+
+        appr = np.r_[xy + u * d, lift[2]]
+        low = np.r_[xy + u * d, z + 0.01]
+        push = np.r_[xy + u * (d + 0.015), z + 0.01]
+        if not (run("use_approach", lift, appr) and run("use_lower", appr, low) and run("use_push", low, push)):
+            return None
+        ir = self.spec.arm_names.index(f"{side}_wrist_roll_joint")
+        tw = []
+        for s in (r, -r, r, -r, 0.0):
+            w = q.copy()
+            w[ir] += s
+            tw.append(np.clip(w, self.kin.lo, self.kin.hi))
+        out.append(("use_twist", tw))
+        q = tw[-1]
+        up_p = np.r_[push[:2], lift[2]]   # back up at the push xy, then to the lift pose (one phase)
+        back = self._cartesian(side, push, up_p, q, "use_back", plan)
+        back = back and self._cartesian(side, up_p, lift, back[-1], "use_back", plan)
+        if not back:
+            plan.reason = "use: no IK path"
+            return None
+        out.append(("use_back", back))
+        return out
 
     def _flip_waypoints(self, side, q):
         """grasp.flip: pan-toss choreography from the lift pose q (14,). Per cycle: toss (elbow -elbow_rad, wrist
