@@ -496,6 +496,7 @@ class ClassicalPolicy:
         self._brain_reg, self._brain_n, self._last_pick = [], 0, None
         self._novel_brain_candidates = []
         self._novel_brain_bin = None
+        self._brain_wait, self._brain_wait_spent = None, False     # brain down on an open instruction (_brain_down_wait)
         self._novel_store, self._found, self._agent_dirty, self._last_find_items = [], {}, False, []
         self._parser_unreachable = 0
         self._open_vocab = False
@@ -508,6 +509,8 @@ class ClassicalPolicy:
         self._parser_verdicts = {}          # universal: VLM cross-check verdicts of shape-noun parser matches (per episode)
         if self.brain is not None:
             self.brain.reset()
+            if not self._universal_inert:   # open / novel instruction only: async health re-probe, never latched
+                self.brain.probe()
         if self.plan_brain is not None:
             self.plan_brain.reset()
         self._planner_needed = (self.plan_brain is not None and not self._universal_inert and
@@ -1399,6 +1402,8 @@ class ClassicalPolicy:
                 return r
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
+        if self.state == "brain_wait":   # brain down on an open instruction: arms home, re-probe (_brain_down_wait)
+            return self._brain_wait_step(t)
         if self.state == "relook_settle":
             n = int(round(self.cfg["motion"]["settle_s"] * HZ))
             self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
@@ -4461,6 +4466,8 @@ class ClassicalPolicy:
                 return r
         elif kind != "none" or int(res[2]) != 0:
             self._zero_looks, self._zero_since = 0, None
+        if kind == "none" and self._brain_down_wait(t):
+            return self._pop()
         if kind == "none":
             if self.cfg["perception"].get("relook_before_done", False) and not self._final_relook_used:
                 self._final_relook_used = True
@@ -4537,6 +4544,42 @@ class ClassicalPolicy:
         self._relook_reason = reason
         self._note(t, f"{note}: retract arms to home before re-detection")
         return self._pop()
+
+    def _brain_down_wait(self, t):
+        """Open / novel instruction whose brain call failed and the brain is down: go home and wait instead of ending
+        the episode. True = episode held in state brain_wait. Known tasks (no brain, or inert) never reach this.
+        Once per episode; brain.down_retry_s (3 s) re-probe interval, brain.down_wait_s (60 s) limit."""
+        if self.brain is None or self._universal_inert or self._brain_wait is not None or self._brain_wait_spent:
+            return False
+        if not any(getattr(getattr(b, "req", None), "status", None) in ("error", "timeout", "busy")
+                   for b in (self.brain, self.plan_brain) if b is not None):
+            return False
+        bc = self.cfg["brain"]
+        self._brain_wait_spent = True
+        self._brain_wait = {"t0": float(t), "probe": float(t), "retry": float(bc.get("down_retry_s", 3.0)),
+                            "limit": float(bc.get("down_wait_s", 60.0))}
+        self.brain.probe()
+        self.state = "brain_wait"
+        self._note(t, "brain down on an open instruction: arms home, re-probing "
+                      f"for up to {self._brain_wait['limit']:.0f} s")
+        a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
+        self._enqueue(a, h)
+        return True
+
+    def _brain_wait_step(self, t):
+        w = self._brain_wait
+        if self.brain.up:
+            self._brain_wait, self.state = None, "settle"
+            self._note(t, "brain healthy again: re-looking")
+            return self._hold()
+        if float(t) - w["t0"] >= w["limit"]:
+            self._brain_wait, self.state = None, "done"
+            self._note(t, f"brain still down after {w['limit']:.0f} s: ending the episode")
+            return self._hold(done=True)
+        if float(t) - w["probe"] >= w["retry"]:
+            w["probe"] = float(t)
+            self.brain.probe()
+        return self._hold()
 
     def _verify_on(self):
         return bool(self.cfg["policy"].get("verify_placement", False))

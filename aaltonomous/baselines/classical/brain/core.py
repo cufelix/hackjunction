@@ -379,6 +379,7 @@ class BrainLayer:
         self.backend = backend or make_backend(self.c.get("backend", "stub"), self.c, self.log)
         self.worker = BackendWorker(self.backend)
         self.req = AsyncRequest(self.backend, self.c["timeout_s"], clock, self.worker)
+        self.up, self._probe_gen = None, 0    # last health probe (True / False / None = probe running)
         self.verbose = not isinstance(self.backend, StubPlanner)    # per-decision log lines only with a real model
         self.reset()
 
@@ -454,6 +455,23 @@ class BrainLayer:
 
     def wait(self, seconds):
         return self.req.wait(seconds)
+
+    def probe(self, timeout=0.5):
+        """Re-probe backend health without blocking: a short daemon thread sets self.up. Every call starts a fresh
+        probe and a stale one is dropped, so a dead brain is never latched past the next probe."""
+        healthy = getattr(self.backend, "healthy", None)
+        if healthy is None:
+            self.up = True
+            return
+        self.up = None
+        gen = self._probe_gen = self._probe_gen + 1
+
+        def run():
+            ok = bool(healthy(timeout=timeout))
+            if gen == self._probe_gen:
+                self.up = ok
+
+        threading.Thread(target=run, daemon=True, name="brain-probe").start()
 
     def take(self, reach_fn=None):
         """-> call dict the brain wants executed instead of the classical one, or None (= classical decides).

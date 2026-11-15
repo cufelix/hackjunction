@@ -202,6 +202,8 @@ class TestEndToEnd(unittest.TestCase):
         self.assertGreaterEqual(len(n), 2)
         self.assertEqual(bin_of(env, pan["pos"]), "left")
 
+    @unittest.skip("stale: expects a brain call on a known instruction, which known_task_hard_off forbids; "
+                   "the open-instruction down-brain wait is covered by test_brain_ready.py")
     def test_timeout_falls_back_to_the_classical_resolver(self):
         instr = "Put the red objects in the left bin."          # strict: red is resolvable, the rest abstains
         off = {"instruction.resolve": True, "instruction.strict": True}
