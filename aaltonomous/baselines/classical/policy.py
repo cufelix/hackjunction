@@ -45,6 +45,7 @@ from .perception import Perception
 from .planner import MotionOutputLimiter, Plan, Planner, lookup_bin, lookup_detection_bin, ramp, staggered_release_ramp
 from .safety_shell import reserve_pair, reserve_plan
 from .brain import AgentLoop, BrainLayer, PlanLayer, build_world, instruction_needs_plan
+from .brain.planner import forced_skill_plan, validate_plan
 from .brain.find import FindClient, extract_queries, match_found
 
 HZ = 30.0
@@ -199,6 +200,7 @@ class ClassicalPolicy:
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
         self.require_confirm = require_confirm
         self._jobs = {}   # bounded background work; reset swaps the dict so stale jobs cannot publish into a new episode
+        self._forced_skill_ids = set()   # AALTO_FORCE_SKILL: objects already sent through the forced skill
         self._universal_inert = False   # known-task guard: set per episode in reset(); read by _cl_on/_ftd_on/_match_novel before then
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
         bv = (self.cfg.get("bin") or {}).get("vote") or {}
@@ -3198,6 +3200,29 @@ class ClassicalPolicy:
             cl = self._cl_on()
             wkey = (float(obs.get("t", 0.0)), tuple(ids)) if cl else None   # one world JSON per look
 
+            def reach(oid, bin_name):
+                p = self.planner.plan(dmap[oid], self.arm_cmd, self.hand_cmd, bin_name=bin_name, relocate=False,
+                                      obstacles=[d.top[:2] for d in dets if d is not dmap[oid]])
+                return p.ok, p.reason
+
+            def place(oid, xy, virtual_xy=None):
+                return self._planner_place_at(dmap, dets, oid, xy, virtual_xy)
+
+            forced = forced_skill_plan(
+                os.environ.get("AALTO_FORCE_SKILL"), world,
+                handle_ids={oid for oid, d in dmap.items() if getattr(d, "grasp_kind", None) == "handle"},
+                exclude=self._forced_skill_ids)
+            if forced is not None:   # demo override: same validator and skill path as a model plan, no VLM call
+                steps, errors = validate_plan(forced, world, reach_fn=reach, place_fn=place, find_enabled=False,
+                                              classical_has_work=classical_has_work)
+                for e in errors:
+                    self.log(f"[planner] rejected {e}")
+                if steps and steps[0].get("valid"):
+                    oid = steps[0]["args"]["obj_id"]
+                    self._forced_skill_ids.add(oid)
+                    self.log(f"[skill] forced by AALTO_FORCE_SKILL={os.environ.get('AALTO_FORCE_SKILL')}")
+                    return ("skill", dmap[oid], None, None, np.asarray(dmap[oid].top[:2], float))
+                return None
             if not self.plan_brain.requested:
                 if cl:
                     self.plan_brain.request(world, key=wkey)
@@ -3207,14 +3232,6 @@ class ClassicalPolicy:
                 self.plan_brain.request(world, key=wkey)   # the first answer was late / failed: ask again (capped)
             if self.cfg["brain"].get("debug_wait", False):
                 self.plan_brain.wait(float(self.cfg["brain"].get("plan_timeout_s", 2.0)))
-
-            def reach(oid, bin_name):
-                p = self.planner.plan(dmap[oid], self.arm_cmd, self.hand_cmd, bin_name=bin_name, relocate=False,
-                                      obstacles=[d.top[:2] for d in dets if d is not dmap[oid]])
-                return p.ok, p.reason
-
-            def place(oid, xy, virtual_xy=None):
-                return self._planner_place_at(dmap, dets, oid, xy, virtual_xy)
 
             steps = self.plan_brain.take(
                 world, reach_fn=reach, place_fn=place,

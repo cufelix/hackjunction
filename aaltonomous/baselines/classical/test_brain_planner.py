@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from .brain import PlanLayer, PlannerBackend, instruction_needs_plan, validate_plan
-from .brain.planner import plan_gbnf
+from .brain.planner import forced_skill_plan, plan_gbnf
 
 
 WORLD = {
@@ -157,6 +157,36 @@ class TestAsyncFallback(unittest.TestCase):
         self.assertTrue(layer.replan(WORLD, layer.next_call(), "failed"))
         self.assertTrue(layer.adopted)
         self.assertFalse(layer.replan(WORLD, layer.next_call(), "again"))
+
+
+class TestForcedSkill(unittest.TestCase):
+    """AALTO_FORCE_SKILL demo override: the forced plan goes through the same validator."""
+
+    def _world(self):
+        world = dict(WORLD, instruction="take the yellow novel object and flip it")
+        world["objects"] = [dict(o) for o in WORLD["objects"]]
+        world["objects"][1].update(novel=True, graspable=True)   # o1 is the handle novel object
+        return world
+
+    def test_env_forces_flip_on_the_handle_object(self):
+        world = self._world()
+        raw = forced_skill_plan("flip", world, handle_ids={"o1"})
+        steps, errors = validate_plan(raw, world, classical_has_work=False)
+        self.assertFalse(errors, errors)
+        self.assertEqual([s["tool"] for s in steps], ["skill", "done"])
+        self.assertEqual(steps[0]["args"], {"obj_id": "o1", "skill": "flip"})
+        self.assertTrue(steps[0]["valid"])
+
+    def test_unset_or_unknown_value_changes_nothing(self):
+        world = self._world()
+        self.assertIsNone(forced_skill_plan(None, world, handle_ids={"o1"}))
+        self.assertIsNone(forced_skill_plan("", world, handle_ids={"o1"}))
+        self.assertIsNone(forced_skill_plan("spin", world, handle_ids={"o1"}))
+
+    def test_no_graspable_novel_object_keeps_the_normal_path(self):
+        world = self._world()
+        world["objects"][1]["graspable"] = False
+        self.assertIsNone(forced_skill_plan("flip", world, handle_ids={"o1"}))
 
 
 if __name__ == "__main__":

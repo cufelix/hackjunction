@@ -270,6 +270,21 @@ def explicit_plan_satisfied(instruction, successful_steps, world_or_count):
     return False
 
 
+def forced_skill_plan(env_value, world, handle_ids=(), exclude=()):
+    """AALTO_FORCE_SKILL demo override: a one-skill plan for the first graspable handle object (else the first
+    graspable novel object). None when the value is not a known skill or nothing is eligible. Not in exclude."""
+    skill = str(env_value or "").strip()
+    if skill not in SKILLS:
+        return None
+    objs = {o.get("id"): o for o in (world or {}).get("objects", []) if isinstance(o, dict)}
+    graspable = [oid for oid, o in objs.items() if o.get("graspable") is not False and oid not in exclude]
+    pick = next((oid for oid in graspable if oid in handle_ids), None) \
+        or next((oid for oid in graspable if objs[oid].get("novel")), None)
+    if pick is None:
+        return None
+    return [{"tool": "skill", "args": {"obj_id": pick, "skill": skill}}, {"tool": "done", "args": {}}]
+
+
 def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True,
                   classical_has_work=True, max_steps=MAX_PLAN_STEPS, prior_steps=()):
     """Return ``(annotated_steps, errors)``. Invalid steps stay in-order and are skipped at execution.
