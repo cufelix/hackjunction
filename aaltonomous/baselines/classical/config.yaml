@@ -716,6 +716,8 @@ insert:                       # policy.insert_shapes parameters (read only when 
   max_yaw_err_deg: 8.0        # residual yaw of the held object vs the hole (square/triangle)
   max_tilt_deg: 8.0           # approach axis vs vertical at the release (the object must enter upright)
   max_headings: 2             # grasp headings tried per object
+  palm_shift_m: 0.0           # EXPERIMENT, keep 0: edge grasp (IK target d ahead of the palm point). Measured r24: even d=0.045 leaves the cube/cylinder holes 4-6 cm out of reach
+  release_gap_max_m: 0.015    # max object-bottom height over the lid accepted at the release (stock 0.015)
   hole_offsets_mat: null      # {cube: [dx, dy], cylinder: [dx, dy]} hole centre offsets (mat axes, m) from the lid-bin centre for a
                               # physically different lid; null = scene.yaml layout (authoritative in sim). Printed 200 mm lid, if
                               # +y_lid points away from the robot: {cube: [-0.048, -0.035], cylinder: [0.048, -0.035]}

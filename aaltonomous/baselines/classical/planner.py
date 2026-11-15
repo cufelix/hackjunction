@@ -931,6 +931,12 @@ class Planner:
         w = float(g.get("yaw_hint_weight", 3.0))
         saved = (self.kin.hint, self.kin.w_hint)
         reasons = []
+        # insert.palm_shift_m (default 0 = off): edge grasp. The IK targets the grasp point d ahead of the real palm point
+        # along the fingers, so the hand holds the object d behind its centre and the centre lands on the hole.
+        shift = float(ic.get("palm_shift_m", 0.0))
+        saved_off = self.kin.offset[side].copy()
+        if shift:
+            self.kin.offset[side] = saved_off + np.array([shift, 0.0, 0.0])
         try:
             for a_g in heads:
                 a_d = ins.drop_heading(shape, oy, tgt["yaw"], a_g, side, float(g.get("yaw_ref_deg", 25.0)),
@@ -961,6 +967,7 @@ class Planner:
         finally:
             self.insert_target, self._carry_hint = None, None
             self.kin.hint, self.kin.w_hint = saved
+            self.kin.offset[side] = saved_off
         return fail("; ".join(dict.fromkeys(reasons)) or "no grasp heading")
 
     def _insert_check(self, p, side, tgt, shape, oy, a_g, a_d, z_top, ic, g):
@@ -979,7 +986,7 @@ class Planner:
             return f"tilt {tilt:.0f} deg at the release"
         H = self.height
         bottom = float(pt[2]) - float(g["height_frac"]) * H
-        if not ins.release_gap_ok(bottom, z_top):
+        if not ins.release_gap_ok(bottom, z_top, gap_max=float(ic.get("release_gap_max_m", 0.015))):
             return f"release gap {1000 * (bottom - z_top):.0f} mm over the lid"
         if a_g is not None:
             ag, ad = self.finger_heading(p), self._heading_at(side, q_end)
