@@ -1,0 +1,14 @@
+# Pan in real Isaac (box G, AALTO_PAN=1 sim), 2026-11-15 ~00:20Z — throwaway branch
+
+Instruction: "put the pan in the middle bin". Sim pan: 20 cm disc + 12 cm handle, grey. Overlay finals_r23_universal.
+Per episode: `*.mp4` (head camera recording from the runner), `*.npz` / `*.jsonl` / `*_traj.json` (runner logs),
+`policy_server.log` (the policy's reasons). No grasp phase happened in any run (all plan-rejected / left).
+
+- `A_gd_4e7741d_fpoff/` felix/generality-demo 4e7741d, fp_filter off: pan blob merges with the hovering hand
+  (height 200 mm) on *_in; diag: "wider than the hand, no handle".
+- `B_sha3cand_fpon/` 4e7741d + oliver/novel-fp-v2 94aa3a8, fp_filter true: pan clean, but the disc is cut by the
+  bottom/right image edge -> box-like, "wider than the hand, no handle".
+- `C_fullview_sha3cand/` same code, pan at x=0.37 (whole pan in view): far_left matched with-handle, rejected
+  "handle too short/occluded" (the bin band cuts the disc's far half); far_right "white elongated", no handle.
+- `frames/pan_<variant>.npz`: head RGB-D every 3rd tick (rgb uint8 [N,480,640,3], depth [N,H,W], arm_q, hand_q, t)
+  for the first 8-15 s; `.json` = layout. Replay: `tools/novel_fp/replay_novel.py frames --fp-filter on`.

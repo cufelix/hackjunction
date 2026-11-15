@@ -1,0 +1,1 @@
+{"ep": "pan_left_diag", "task": "sort_language", "seed": 5000, "layout": [{"color": "grey", "shape": "pan", "x": 0.55, "y": 0.14, "yaw": 0.7854, "z": 0.015}, {"color": "blue", "shape": "cube", "x": 0.23, "y": 0.13, "yaw": -1.5708}], "instruction": "put the pan in the middle bin", "end": "done", "frames": 15}
