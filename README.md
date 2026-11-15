@@ -37,3 +37,7 @@ resting on the bin rim (z 0.10), not inside. egg_right: lift 6.2 cm, then the pa
 80 g egg pan + 60 g meat slab (9x6x2 cm, RGB 0.24/0.20/0.18, no known HSV class) + 4 clutter objects.
 meat_right: left-arm handle pinch, lift 10.7 cm, held 13.8 s, put back; meat in pan at end of hold + end: yes/yes.
 meat_left: right arm, lift 12.7 cm, held 15.3 s; yes/yes. Meat inside the rim the whole time lifted on both.
+
+## I_meat_hold_150g_327e947 — same hold scene, honest 150 g pan
+meat_right: lift 11.5 cm, held 13.8 s, meat in pan at end of hold + end yes/yes (slid ~30 mm toward the wall, still inside).
+meat_left: lift 10.7 cm, held 15.9 s, yes/yes. 2/2 at 150 g: the hold skill keeps the pinch where the carry slipped.
