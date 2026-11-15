@@ -151,7 +151,11 @@ def _axes_and_footprint(xy):
     return footprint, major, minor, dims
 
 
-def _handle_pixels(blob, max_aspect, extension):
+def _touches_border(blob):
+    return bool(blob[0].any() or blob[-1].any() or blob[:, 0].any() or blob[:, -1].any())
+
+
+def _handle_pixels(blob, max_aspect, extension, truncated=None):
     """Return (mask, image-axis) for a thick body plus one thin protrusion."""
     yy, xx = np.nonzero(blob)
     if len(xx) < 20:
@@ -167,7 +171,10 @@ def _handle_pixels(blob, max_aspect, extension):
     delta = pts - [cx, cy]
     radial = np.linalg.norm(delta, axis=1)
     aspect = max(crop.shape) / max(1.0, min(crop.shape))
-    if aspect > float(max_aspect) or radial.max() < float(extension) * radius:
+    # The image edge truncates the disc, so the bounding box of a border-touching blob is inflated by the
+    # handle and the cut; judge those on the visible geometry (one-sidedness, take, p90) instead.
+    if (aspect > float(max_aspect) and not (_touches_border(blob) if truncated is None else truncated)) \
+            or radial.max() < float(extension) * radius:
         return None, None
     axis = delta[int(np.argmax(radial))]
     axis /= max(np.linalg.norm(axis), 1e-9)
@@ -188,20 +195,24 @@ def _handle_pixels(blob, max_aspect, extension):
     return out, axis
 
 
-def _shape(blob, dims, cfg):
+def _shape(blob, dims, cfg, truncated=None):
     contours, _ = cv2.findContours(blob.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contour = max(contours, key=cv2.contourArea)
     area, perimeter = float(cv2.contourArea(contour)), float(cv2.arcLength(contour, True))
     circularity = 0.0 if perimeter <= 0 else 4.0 * np.pi * area / (perimeter * perimeter)
     aspect = float(dims[0] / max(dims[1], 1e-6))
-    if aspect >= float(cfg.get("elongated_aspect", 2.2)):
-        return "elongated", None, None, circularity
     handle, image_axis = (None, None)
-    if aspect >= float(cfg.get("handle_min_aspect", 1.5)):
+    # a truncated blob (image edge, bin band or FK arm cut its disc) may read as elongated only because of the cut:
+    # look for the handle first
+    if truncated is None:
+        truncated = _touches_border(blob)
+    if aspect >= float(cfg.get("handle_min_aspect", 1.5)) and (truncated or aspect < float(cfg.get("elongated_aspect", 2.2))):
         handle, image_axis = _handle_pixels(blob, cfg.get("handle_max_aspect", 2.5),
-                                            cfg.get("handle_extension", 1.45))
+                                            cfg.get("handle_extension", 1.45), truncated)
     if handle is not None:
         return "with-handle", handle, image_axis, circularity
+    if aspect >= float(cfg.get("elongated_aspect", 2.2)):
+        return "elongated", None, None, circularity
     if circularity >= float(cfg.get("round_circularity", 0.70)) and aspect <= float(cfg.get("round_aspect", 1.45)):
         return "round", None, None, circularity
     return "box-like", None, None, circularity
@@ -241,12 +252,15 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
     for ctr in perception._bin_centres_mat().values():
         ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= bin_half, axis=-1)
     fp = bool(cfg.get("fp_filter", True))
+    binned = np.zeros(raw.shape, bool)   # pixels cut by the bin-band exclusion: a blob next to them is truncated
     if fp:
         # FP filter (b): bin walls/rims project a few mm outside the nominal footprint (depth edges, perspective,
         # runtime shift error), so the novel path excludes a wider band than the known detector's bin_pixel_margin.
         wide = np.asarray(perception.scene.cfg["bins"]["outer_size"], float) / 2.0 + float(cfg.get("bin_margin_m", 0.03))
         for ctr in perception._bin_centres_mat().values():
-            ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= wide, axis=-1)
+            inband = np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= wide, axis=-1)
+            ok &= ~inband
+            binned[vv[inband], uu[inband]] = True
     good = np.zeros(raw.shape, bool)
     good[vv[ok], uu[ok]] = True
     mask = good.astype(np.uint8)
@@ -284,6 +298,7 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
     n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    cut_zone = binned | (arm_ring if arm_ring is not None else False)
     scale_area = stride * stride
     min_area = max(8, int(np.ceil(float(cfg.get("min_area_px", 45)) / scale_area)))
     max_area = int(np.ceil(float(cfg.get("max_area_px", 30000)) / scale_area))
@@ -358,7 +373,8 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         if nearby and dims[0] <= known_hi * float(cfg.get("supersede_min_ratio", 1.15)):
             continue
 
-        label, handle_mask, image_axis, circularity = _shape(blob, dims, cfg)
+        near_cut = bool((cv2.dilate(blob.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)[cut_zone].any())
+        label, handle_mask, image_axis, circularity = _shape(blob, dims, cfg, truncated=_touches_border(blob) or near_cut)
         object_centre_xy = np.median(P[:, :2], axis=0)
         centre_xy = object_centre_xy.copy()
         yaw = _fold_yaw(np.arctan2(major[1], major[0]))
