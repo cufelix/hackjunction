@@ -1049,8 +1049,11 @@ class Planner:
         if getattr(det, "novel", False):
             score = float(getattr(det, "generic_confidence", 0.0) or 0.0)
             if not getattr(det, "graspable", not getattr(det, "ungraspable", False)) or score < float(g.get("generic_min_confidence", 0.5)):
+                cause = getattr(det, "ungraspable_reason", None)
+                reason = (f"novel ungraspable: {cause} (score {score:.2f})" if cause
+                          else f"novel graspability {score:.2f} below threshold")
                 return Plan(False, side=side, color=det.color, target_bin=bin_name,
-                            reason=f"novel graspability {score:.2f} below threshold")
+                            reason=reason)
             if float(det.generic_width) > self.generic_hand_opening:
                 return Plan(False, side=side, color=det.color, target_bin=bin_name,
                             reason=f"novel width {1000 * det.generic_width:.0f} mm exceeds URDF opening "
