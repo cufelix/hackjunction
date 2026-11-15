@@ -132,7 +132,7 @@ class TestFlags(unittest.TestCase):
                                                   "policy.retry_cross_relocate", "policy.late_sweep",
                                                   "policy.frozen_rgb_guard",
                                                   "perception.prism_speckle_floor", "perception.real_border_partial",
-                                                  "perception.real_merge_split", "grasp.approach_slow_mps", "grasp.approach_slow_dist_m",
+                                                  "perception.real_merge_split", "perception.bin_bottom_first_run", "perception.fk_colour_rescue", "grasp.approach_slow_mps", "grasp.approach_slow_dist_m",
                                                   "policy.retry_repeat_ok", "policy.late_regrant", "profile_auto.force", "profile_auto.second_cue",
                                                   "brain.known_task_hard_off", "planner.candidate_budget",
                                                   "perception.table_pitch_calibration.max_abs_pitch_deg"})

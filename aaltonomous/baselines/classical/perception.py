@@ -396,6 +396,9 @@ class Perception:
         # real-only recall flags (default OFF; finals_r23 profile_auto.sim_overrides keeps them off in sim)
         self.real_border_partial = self.color_gate and bool(self.cfg.get("real_border_partial", False))
         self.real_border_cfg = dict(self.cfg.get("real_border_partial_params") or {})
+        self.bin_bottom_first_run = bool(self.cfg.get("bin_bottom_first_run", False))
+        self.fk_colour_rescue = bool(self.cfg.get("fk_colour_rescue", False))
+        self.fk_rescue_cfg = dict(self.cfg.get("fk_colour_rescue_params") or {})
         self.real_merge_split = bool(self.cfg.get("real_merge_split", False))
         self.real_merge_cfg = dict(self.cfg.get("real_merge_split_params") or {})
         self.partial_ok_near_hand = bool(self.cfg.get("partial_ok_near_hand", False))
@@ -1529,13 +1532,16 @@ class Perception:
             blocked_by_image_gate = ~below
             keep[~below] = 0
         self._last_arm_mask = None
+        self._rescue_arm = None
         arm = None
         arm_boundary = None
         if (self.fk_mask or self.depth_blob_recover) and robot_q is not None:   # the robot's own arms / hands are never objects
             arm = self._fk_arm_mask(keep.shape, *robot_q)
             if arm is not None:
                 self._last_arm_mask = arm
-                if self.fk_mask:   # depth_blob_recover alone must not FK-mask the colour blobs
+                if self.fk_mask and self.fk_colour_rescue:   # real: the FK silhouette is off by up to ~80 px; judge by height
+                    self._rescue_arm = arm
+                elif self.fk_mask:   # depth_blob_recover alone must not FK-mask the colour blobs
                     keep[arm] = 0
                 if self.partial_ok_near_hand:
                     r = max(1, int(self.partial_near_hand_cfg.get("boundary_px", 2)))
@@ -1876,12 +1882,37 @@ class Perception:
                 keep |= lab == i
         if int(keep.sum()) < int(p.get("min_mass_px", 18000)):
             return None
+        if self.bin_bottom_first_run:
+            keep = self._first_run_columns(keep, p)
+            if int(keep.sum()) < int(p.get("min_mass_px", 18000)) // 4:
+                return None
         supported = keep.any(axis=0)
         rows = np.full(keep.shape[1], np.nan)
         rows[supported] = keep.shape[0] - 1 - np.argmax(keep[::-1, supported], axis=0)
         fallback = float(np.nanmedian(rows))
         rows[~np.isfinite(rows)] = fallback
         return rows
+
+    @staticmethod
+    def _first_run_columns(keep, p):
+        """perception.bin_bottom_first_run: per column keep only the warm vertical runs (gaps <= gap_px bridged) that
+        START in the bin-wall band (top first_run_top_frac of the frame; the front rim ends ~row 190 of 480). A shadowed
+        orange object lying on the mat starts below that band; counting it as bin mass pushed the row limit past the
+        object and gate_below_bins deleted the whole object (drop_3 e9 orange cylinder: 3000 px blob -> 649 px sliver)."""
+        gap = int(p.get("first_run_gap_px", 8))
+        top_max = int(float(p.get("first_run_top_frac", 0.45)) * keep.shape[0])
+        out = np.zeros_like(keep)
+        for x in np.flatnonzero(keep.any(axis=0)):
+            idx = np.flatnonzero(keep[:, x])
+            if idx[0] > top_max:
+                continue    # no bin wall in this column: unsupported (median fallback)
+            cut = np.flatnonzero(np.diff(idx) > gap)
+            starts = np.r_[idx[0], idx[cut + 1]]
+            ends = np.r_[idx[cut], idx[-1]]
+            for s, e in zip(starts, ends):
+                if s <= top_max:
+                    out[s:e + 1, x] = keep[s:e + 1, x]
+        return out
 
     @staticmethod
     def _reject_stage(reason):
@@ -2179,12 +2210,26 @@ class Perception:
             det.tentative = True
             det.tentative_reason = "fk_mask_boundary"
         why = self._reject(det, bins_first=include_bins)
+        if why is None and det is not None and getattr(self, "_rescue_arm", None) is not None:
+            why = self._fk_rescue_reject(det, blob, area)
         if self.shape_diag and det is not None and det.shape_diag is not None:
             self._log_diag(det, why)
         if why:
             rejected.append((det, why))
         else:
             dets.append(det)
+
+    def _fk_rescue_reject(self, det, blob, area):
+        """perception.fk_colour_rescue: a blob that overlaps the FK arm silhouette is the robot's own hand / forearm
+        unless its top sits at object height above the counter (hands float 6-9 cm higher)."""
+        ov = float(np.count_nonzero(np.asarray(blob, bool) & self._rescue_arm)) / max(1, int(area))
+        if ov < float(self.fk_rescue_cfg.get("min_overlap_frac", 0.02)):
+            return None
+        if det.method != "depth" or int(det.n_px) < int(self.fk_rescue_cfg.get("min_area_px", 1200)):
+            return "fk_rescue:small"   # plane-only / speckle blobs on the hand were what the silhouette used to remove
+        lo, hi = self.fk_rescue_cfg.get("z_above_counter_m", [0.034, 0.056])
+        dz = float(det.top[2]) - float(self.scene.counter_z)
+        return None if lo <= dz <= hi else "fk_rescue:height"
 
     def _blob_vertex_yaw(self, blob, z):
         """Pelvis-frame direction of a triangle vertex line from the blob's minimum-area rectangle, modulo 120 deg.

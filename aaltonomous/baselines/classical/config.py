@@ -137,6 +137,8 @@ FLAGS = {
     "perception.bins_from_image": ("gate fix", False, "bin masks from the taped rims found in the image (no depth / untrusted bin poses)"),
     "perception.prism_speckle_floor": ("prism floor", False, "color_gate speckle floor: orange/red blobs with a triangular outline (minEnclosingTriangle fill) use prism_speckle_floor_params.area_frac instead of color_gate.area_frac"),
     "perception.real_border_partial": ("real perc", False, "real only: color_gate speckle floor uses real_border_partial_params.area_frac for blobs cut by the left/right/bottom image border"),
+    "perception.bin_bottom_first_run": ("real perc", False, "real only: gate_below_bins observed bin-bottom row = first vertical warm run per column (a shadowed orange object on the mat is not bin mass)"),
+    "perception.fk_colour_rescue": ("real perc", False, "real only: colour pixels inside the FK arm mask stay candidates; detections overlapping the mask must sit at object height (fk_colour_rescue_params.z_above_counter_m)"),
     "perception.real_merge_split": ("real perc", False, "real only: split_blob tries merged same-colour pairs from real_merge_split_params.area_factor x expected area (default 0.9 instead of 1.5)"),
     "perception.gate_below_bins": ("gate fix", False, "when live bins are untrusted, gate candidates below observed bin mass in image space"),
     "perception.reject_log": ("gate fix", False, "log and retain per-colour rejection-stage counts"),
@@ -465,7 +467,8 @@ def check_flag_values(cfg):
                 raise ValueError(f"motion.output_caps.{key} = {caps[key]} exceeds finals cap {maximum}")
     p = cfg.get("perception") or {}
     for key in ("sim_center_principal_point", "split_by_solidity", "tape_value_cut", "gate_below_bins",
-                "bins_from_image", "reject_log", "still_vote", "prism_speckle_floor", "real_border_partial", "real_merge_split"):
+                "bins_from_image", "reject_log", "still_vote", "prism_speckle_floor", "real_border_partial", "real_merge_split",
+                "bin_bottom_first_run", "fk_colour_rescue"):
         if not isinstance(p.get(key), bool):
             raise ValueError(f"perception.{key}: want true or false")
     aim = p.get("aim_z_frac", 0.25)
