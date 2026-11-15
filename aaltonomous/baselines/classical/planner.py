@@ -1478,7 +1478,8 @@ class Planner:
             closing[s:e] |= name == "close" or (place_xy is not None and name == "open")
         for k in range(0, len(plan.arm), 3):
             # closing: the thumb swings through its lowest point; touching the mat lightly is acceptable
-            need = 0.003 if closing[k] else g["fingertip_clearance"] if grasp_ticks[k] else mo["counter_clearance"]
+            gclr = clr if is_handle else g["fingertip_clearance"]   # handle: the bar sits ~8 mm above the counter
+            need = 0.003 if closing[k] else gclr if grasp_ticks[k] else mo["counter_clearance"]
             c = self.clearance(side, plan.arm[k], plan.hand[k])
             if c < need - 2e-3:
                 name = next(n for n, s, e in phases if s <= k < e)
