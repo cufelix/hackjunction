@@ -64,6 +64,7 @@ FLAGS = {
     "brain.find_to_detection": ("brain agent", False, "find() point that matches no detection -> a novel Detection from the depth blob there (region grow above the counter plane, generic_grasp, ungraspable -> skip); needs brain.find"),
     "brain.timeout_s": ("brain", 2.0, "decision deadline (s): later decisions are dropped, the classical planner decides (stock config.yaml 2.0)"),
     "brain.request_timeout_s": ("brain", 1.5, "absolute llamacpp HTTP deadline (s) (stock config.yaml 1.5)"),
+    "brain.known_task_hard_off": ("universal", False, "known task (resolver/sort_fixed, no novel noun): skip EVERY brain call (find/planner/closed-loop/ev_gate) for the episode = classical path exactly as brain.enabled=false"),
     "brain.ev_gate": ("universal", False, "per-object EV gate for novel objects: EV = p_grasp*(3*p_bin-1) < brain.ev_min -> leave the object (0 beats -1)"),
     "brain.grounded_picks": ("universal", False, "open-vocabulary instruction (parser abstains / unknown nouns): the plan may only pick_place ids located by find()"),
     "brain.call_timeout_s": ("universal", 1.0, "closed loop: deadline (s) per planner call; the real 8B plan call needs ~1.5 s on a shared GPU (async: act() never waits)"),

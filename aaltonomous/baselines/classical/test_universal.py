@@ -358,3 +358,79 @@ class TestKnownTaskNoRegression(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestKnownTaskHardOff(unittest.TestCase):
+    """brain.known_task_hard_off: a known task (same _known_task_inert test) makes NO brain call; the brain stays armed for
+    a novel noun / unresolved instruction."""
+    HO = {"brain.known_task_hard_off": True}
+
+    def test_known_task_makes_no_brain_calls(self):
+        calls = []
+        def finder(pol, scene):
+            return lambda rgb, q: calls.append(q) or []
+        got, _, pol, lines, stub = run("put the red cube in the left bin", [CUBE, BLOCK], {"cube": "left"},
+                                       overrides=self.HO, finder=finder)
+        self.assertTrue(pol._universal_inert and pol._brain_hard_off)
+        self.assertIsNone(pol.brain)
+        self.assertIsNone(pol.plan_brain)
+        self.assertEqual((stub.reqs, calls), ([], []))
+        self.assertFalse(any(l.startswith("[brain] after_") for l in lines), lines[:12])
+        self.assertTrue(any("hard_off" in l for l in lines))
+
+    def test_novel_noun_keeps_vlm_find_active(self):
+        calls = []
+        def finder(pol, scene):
+            ball = next(o for o in scene if o["name"] == "ball")
+            def f(rgb, q):
+                calls.append(q)
+                return [{"point": project(pol, ball["pos"] + [0, 0, 0.04]), "bbox": None, "label": q}]
+            return f
+        _, _, pol, lines, _ = run("put the wok in the left bin", [CUBE, BALL, BLOCK], {"ball": "left"},
+                                  overrides=self.HO, finder=finder)
+        self.assertFalse(pol._universal_inert)
+        self.assertFalse(pol._brain_hard_off)
+        self.assertIsNotNone(pol.brain)
+        self.assertTrue(calls, "brain find must stay active for a novel noun")
+
+    def test_unresolved_instruction_keeps_brain(self):
+        _, _, pol, _, stub = run("sort the fruit to the right, everything else center", [CUBE, BALL, BLOCK],
+                                 {"ball": "right"}, overrides=self.HO, phrase="fruit")
+        self.assertFalse(pol._brain_hard_off)
+        self.assertIsNotNone(pol.brain)
+        self.assertTrue(stub.reqs)
+
+    @staticmethod
+    def _stream_digest(overrides):
+        """Action-stream sha of one mock sort_language-style episode.  threaded=True for both arms (brain.planner forces it, so
+        the brain-armed run is threaded); the driver waits for the look job like drive() does, so both runs are deterministic."""
+        import hashlib
+        env = make_mock_env(seed=0)
+        pol = ClassicalPolicy(log=None, safety=env.filter.cfg, time_limit=25.0, overrides=overrides, threaded=True)
+        obs = env.reset()
+        pol.reset({"instruction": obs["instruction"], "time_limit": 25.0})
+        h, n, info = hashlib.sha256(), 0, {}
+        while n < 20000:
+            a = pol.act(obs)
+            h.update(np.ascontiguousarray(a["arm_q_target"], np.float64).tobytes())
+            h.update(np.ascontiguousarray(a["hand_q_target"], np.float64).tobytes())
+            h.update(b"D" if a.get("done") else b"-")
+            n += 1
+            obs, info = env.step(a)
+            end = time.monotonic() + 5.0
+            while (getattr(pol, "_job", None) or {}).get("result", True) is None and time.monotonic() < end:
+                time.sleep(0.0005)
+            if info["episode_over"]:
+                break
+        for e in pol.events:
+            h.update(repr(e).encode())
+        return n, info["end_reason"], len(pol.plans), h.hexdigest()
+
+    def test_hard_off_action_stream_identical_to_brain_disabled(self):
+        base = dict(MOCK_OV)
+        on = dict(base, **{"brain.enabled": True, "brain.backend": "stub", "brain.planner": True, "brain.closed_loop": True,
+                           "brain.find": True, "brain.ev_gate": True, "brain.known_task_hard_off": True})
+        off = dict(base, **{"brain.enabled": False})
+        a, b = self._stream_digest(on), self._stream_digest(off)
+        self.assertGreater(a[2], 0, "the episode must actually plan/pick")
+        self.assertEqual(a, b)

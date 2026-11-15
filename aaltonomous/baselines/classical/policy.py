@@ -423,6 +423,19 @@ class ClassicalPolicy:
         self.perception.novel_objects = bool(self.cfg["perception"].get("novel_objects", False)) and not self._universal_inert
         if inert_reason and self.brain is not None:
             self.log(f"[universal] inert: known task ({inert_reason})")
+        # FLAG brain.known_task_hard_off: a KNOWN task (resolver / sort_fixed, no novel noun named) runs with NO brain at all
+        # this episode (no find / planner / closed-loop after_* / ev_gate).  Novel perception is already off when inert, so no
+        # novel_matched object can exist; the brain stays armed for any episode that is not inert (novel noun / unresolved).
+        full = self.__dict__.get("_brain_full")
+        if full is None:
+            full = self._brain_full = (self.brain, self.plan_brain)
+        self._brain_hard_off = bool((self.cfg.get("brain") or {}).get("known_task_hard_off", False)) and self._universal_inert
+        if self._brain_hard_off:
+            if full[0] is not None:
+                self.log(f"[brain] hard_off: known task ({inert_reason}); no brain calls this episode")
+            self.brain, self.plan_brain = None, None
+        else:
+            self.brain, self.plan_brain = full
         self._brain_looks = 0
         self._brain_finds = 0
         self._brain_find_fn = getattr(self, "_brain_find_fn", None)
