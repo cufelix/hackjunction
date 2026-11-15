@@ -1,0 +1,15 @@
+felix/brain-ready2 gate (base de17e25), laptop CPU, PYTHONPATH=. python -m unittest -v <file>
+equivalence_check vs felix/final-brain: EMPTY (diff rc=0)
+known-task guard: 51/51 known wordings hard_off (novel_noun_named False, resolver maps); listed novel nouns still ON except 'red cup' / 'red ball' (coloured, now known tasks by design)
+release_flags_r25_gen: RELEASE FLAGS PASS 
+test_brain_agent: Ran 23 tests in 48.513s OK (skipped=1) 
+test_brain_planner: Ran 17 tests in 0.040s OK 
+test_brain_ready: Ran 2 tests in 8.766s OK 
+test_flags: Ran 38 tests in 94.424s OK 
+test_handle_grasp: Ran 9 tests in 9.221s OK 
+test_novel_instruction: Ran 23 tests in 24.587s OK 
+test_novel_objects: Ran 16 tests in 5.889s OK (expected failures=1) 
+test_recall: Ran 17 tests in 8.153s OK 
+test_tool_grasp: Ran 23 tests in 14.832s OK (expected failures=15) 
+test_universal: Ran 20 tests in 107.464s OK 
+TestKnownTaskHardOff: 4/4 ok

@@ -221,7 +221,7 @@ class TestColorGateWorkspaceAndCeiling(unittest.TestCase):
 
     def test_bad_tuning_fails_at_load(self):
         for k, v in (("max_cands", 0), ("area_frac", float("nan")), ("edge_h", [0.07, 0.03]), ("ws_x", [0.1]),
-                     ("max_area_frac", "x")):
+                     ("max_area_frac", "x"), ("fk_dilate_px", 1.5)):
             with self.assertRaises(ValueError, msg=(k, v)):
                 load_config(overlay="none", overrides={"perception.color_gate.enabled": True,
                                                        f"perception.color_gate.{k}": v})
@@ -237,19 +237,28 @@ if __name__ == "__main__":
 
 
 class TestColorGateLiveBins(unittest.TestCase):
-    """perception.color_gate.live_bins: the footprint follows the policy's live bin estimate."""
+    """live-bin footprints hedge each bin from planner.bin_conf, never from a nonempty shift dictionary."""
     G = None
 
-    def _p(self, live=True):
+    def _p(self, live=True, margin=0.10):
         cfg = load_config(overlay="none", overrides={"perception.color_gate.enabled": True,
-                                                     "perception.color_gate.live_bins": live})
+                                                     "perception.color_gate.live_bins": live,
+                                                     "perception.color_gate.near_margin_m": margin})
         p = Perception(cfg, SC, CAL, log=lambda *_: None)
         return p, p.color_gate_cfg
 
     def _near(self, dy):   # mat point on the centre bin's axis, dy in front of its NEAR edge (towards the robot)
         return _det(_top([BIN[0], BIN[1] - HALF[1] - dy]), method="plane", n_depth=0)
 
-    def test_no_estimate_grows_the_near_side_by_10cm(self):
+    def test_near_margin_is_a_default_off_flag_and_finals_uses_the_full_vote_displacement(self):
+        from .config import FLAGS
+
+        self.assertIn("perception.color_gate.near_margin_m", FLAGS)
+        self.assertEqual(load_config(overlay="none")["perception"]["color_gate"]["near_margin_m"], 0.0)
+        cfg = load_config(overlay="finals_r21")
+        self.assertEqual(cfg["perception"]["color_gate"]["near_margin_m"], cfg["bin"]["vote"]["max_shift_m"])
+
+    def test_missing_confidence_grows_the_near_side_by_full_allowed_10cm(self):
         p, g = self._p()
         self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")   # 5 cm in front: inside the margin
         self.assertIsNone(p._color_gate_why(self._near(0.15), g))                       # beyond margin + edge band
@@ -258,17 +267,90 @@ class TestColorGateLiveBins(unittest.TestCase):
         p, g = self._p(live=False)
         self.assertIsNone(p._color_gate_why(self._near(0.05), g))
 
-    def test_calibrate_bins_success_counts_as_an_estimate(self):
+    def test_calibration_success_does_not_substitute_for_per_bin_vote_confidence(self):
         p, g = self._p()
         p.calibration = BinCalibration(True, True, 0.9, np.zeros(2), 100, 0.002, 1.0, "ok")
-        self.assertIsNone(p._color_gate_why(self._near(0.05), g))                       # nominal again, no margin
+        self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")
 
-    def test_bin_vote_shift_moves_the_footprint(self):
+    def test_prior_or_disagree_shift_dict_still_gets_the_union_hedge(self):
+        for confidence in (0.5, 0.3):
+            p, g = self._p()
+            p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([-0.07, 0.0])},
+                                                "bin_conf": {"center": confidence}})()
+            g["ws_x"] = None
+            self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin", confidence)
+
+    def test_confident_bin_vote_uses_only_the_tight_shifted_footprint(self):
         p, g = self._p()
-        p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([-0.07, 0.0])}})()   # pelvis dx -7 cm
+        p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([-0.07, 0.0])},
+                                           "bin_conf": {"center": 1.0}})()   # pelvis dx -7 cm
         self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:workspace")   # 2b edge follows the shift
         far = _det(_top([BIN[0], BIN[1] + HALF[1] - 0.03]), method="plane", n_depth=0)  # nominal far strip, now outside
         self.assertEqual(p._color_gate_why(far, g), "color_gate:workspace")             # behind the bin row: 2b
         g["ws_x"] = None
         self.assertEqual(p._color_gate_why(self._near(0.05), g), "color_gate:in_bin")   # inside the SHIFTED box
         self.assertIsNone(p._color_gate_why(far, g))
+
+    def test_hedge_is_per_bin_and_uses_nominal_to_full_allowed_displacement_union(self):
+        p, g = self._p()
+        p.bin_shift_src = type("Pl", (), {"bin_shift": {"center": np.array([0.07, 0.0])},
+                                           "bin_conf": {"left": 1.0, "center": 0.5, "right": 0.3}})()
+        boxes = dict(zip(SC.bin_names, p._color_gate_boxes(g)))
+        nominal = p.bin_geometry(gate=False)
+        for name in ("center", "right"):
+            lo, hi = boxes[name]
+            np.testing.assert_allclose(lo, nominal[name]["outer_lo"] - [0.0, 0.10])
+            np.testing.assert_allclose(hi, nominal[name]["outer_hi"])
+        np.testing.assert_allclose(boxes["left"][0], nominal["left"]["outer_lo"])
+        np.testing.assert_allclose(boxes["left"][1], nominal["left"]["outer_hi"])
+
+
+class TestPrismSpeckleFloor(unittest.TestCase):
+    """perception.prism_speckle_floor (default OFF): triangular orange/red blobs use a lower speckle floor."""
+
+    @staticmethod
+    def _blob(kind):
+        import cv2
+        m = np.zeros((200, 200), np.uint8)
+        if kind == "triangle":
+            cv2.fillConvexPoly(m, np.array([[100, 40], [40, 140], [160, 140]], np.int32), 1)
+        elif kind == "square":
+            m[60:140, 60:140] = 1
+        else:   # thin tape
+            m[90:100, 10:190] = 1
+        return m
+
+    def _perc(self, on):
+        from aaltonomous.baselines.classical.config import load_config
+        cfg = load_config(overlay="finals_r22_gate", overrides={"perception.prism_speckle_floor": on})
+        return Perception(cfg, Scene.load(), Calibration.load())
+
+    def test_flag_default_off_and_registered(self):
+        from aaltonomous.baselines.classical.config import FLAGS
+        self.assertIn("perception.prism_speckle_floor", FLAGS)
+        self.assertFalse(load_config()["perception"]["prism_speckle_floor"])
+        self.assertFalse(self._perc(False).prism_speckle_floor)
+
+    def test_shape_test_accepts_triangle_only(self):
+        p = self._perc(True)
+        self.assertTrue(p._prism_like(self._blob("triangle")))
+        self.assertFalse(p._prism_like(self._blob("square")))
+        self.assertFalse(p._prism_like(self._blob("tape")))
+
+    def test_lower_floor_applies_only_to_prism_like(self):
+        p = self._perc(True)
+        top = np.array([0.30, 0.0, 0.15])
+        Z = p._color_gate_depth(top)
+        self.assertIsNotNone(Z)
+        K = p.cal.cams[p.cam].K
+        expected = float(K[0, 0]) * float(K[1, 1]) * (p.size / Z) ** 2
+        n_px = int(0.2 * expected)   # between the prism floor (0.08) and the generic floor (0.4)
+        g = p.color_gate_cfg
+        plain = Detection("red", top, n_px, 0, "plane")
+        prism = Detection("red", top, n_px, 0, "plane", prism_like=True)
+        self.assertEqual(p._color_gate_why(plain, g), "color_gate:speckle")
+        self.assertNotEqual(p._color_gate_why(prism, g), "color_gate:speckle")
+        tiny = Detection("red", top, int(0.02 * expected), 0, "plane", prism_like=True)
+        self.assertEqual(p._color_gate_why(tiny, g), "color_gate:speckle")
+        off = self._perc(False)
+        self.assertEqual(off._color_gate_why(prism, off.color_gate_cfg), "color_gate:speckle")

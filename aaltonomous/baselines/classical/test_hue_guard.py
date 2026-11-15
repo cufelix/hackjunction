@@ -69,6 +69,35 @@ def _frame(p, patches):
 
 
 class TestHueGuard(unittest.TestCase):
+    def test_h1_touching_red_yellow_union_is_split_before_each_part_is_labelled(self):
+        cfg = load_config(overlay="none", overrides={"perception.hsv_set": "robust_v2",
+                                                      "perception.hue_guard.enabled": True,
+                                                      "perception.split_blobs": True})
+        p = Perception(cfg, SC, CAL, log=lambda s: None)
+        hsv = np.zeros((30, 40, 3), np.uint8)
+        hsv[:, :20] = (12, 190, 205)
+        hsv[:, 20:] = (39, 76, 245)
+        masks = {c: np.zeros((30, 40), np.uint8) for c in p.hsv}
+        masks["red"][:, :20] = 255
+        masks["yellow"][:, 20:] = 255       # one touching union component
+        left, right = masks["red"] > 0, masks["yellow"] > 0
+
+        def split(_blob, _area, _cent, _depth):
+            return [(left.astype(np.uint8), int(left.sum()), np.array([9.5, 14.5])),
+                    (right.astype(np.uint8), int(right.sum()), np.array([29.5, 14.5]))]
+
+        p.split_blob = split
+        parts = p._hue_guard_parts(masks, hsv, np.full((30, 40), 255, np.uint8), None)
+        self.assertEqual([(label, mixed) for label, _, _, _, mixed, _ in parts],
+                         [("red", False), ("yellow", False)])
+
+    def test_h1_part_with_both_source_colours_abstains(self):
+        p = Perception(ON, SC, CAL, log=lambda s: None)
+        d = Detection("red", np.zeros(3), 500, 500, "depth", hsv_med=(12.0, 190.0, 205.0), hue_mixed=True)
+        dets, rejected = p._hue_guard([d], [])
+        self.assertEqual(dets, [])
+        self.assertEqual(rejected[0][1], "hue_guard:ambiguous")
+
     def _sim_frames(self, n=4):
         rng = np.random.default_rng(3)
         L = SC.cfg["layout"]

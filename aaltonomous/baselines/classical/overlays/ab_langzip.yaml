@@ -1,0 +1,11 @@
+# Language-only A/B arm for deterministic parallel lists.  Motion and perception stay at stock values;
+# this overlay exercises the same normalize -> resolve -> strict path used by finals_r21 plus the one new flag.
+name: ab_langzip
+flags:
+  instruction.resolve: true
+  instruction.normalize: true
+  instruction.strict: true
+  instruction.structured: true
+  instruction.max_chars: 2000
+  policy.bin_lookup: resolve_bin
+  policy.grasp_diag_log: true

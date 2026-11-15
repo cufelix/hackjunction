@@ -1,0 +1,14 @@
+felix/final-brain gate, tested commit 6073df9 (= timi/final 890d387 + felix/screw-axis 7cd3cfe + fixup), laptop CPU, PYTHONPATH=. python -m unittest -v <file>
+release_flags_r25_gen: RELEASE FLAGS PASS 
+test_brain_planner: Ran 17 tests in 0.039s OK 
+test_flags: Ran 38 tests in 90.194s OK 
+test_flip_skill: Ran 3 tests in 2.006s OK 
+test_handle_grasp: Ran 9 tests in 6.906s OK 
+test_novel_instruction: Ran 21 tests in 15.591s OK 
+test_novel_objects: Ran 16 tests in 4.629s OK (expected failures=1) 
+test_recall: Ran 15 tests in 2.782s OK 
+test_tool_grasp: Ran 23 tests in 13.012s OK (expected failures=15) 
+test_universal: Ran 20 tests in 98.089s OK 
+test_use_skill: Ran 5 tests in 12.505s OK 
+TestKnownTaskHardOff (in test_universal): test_hard_off_action_stream_identical_to_brain_disabled ... ok;test_known_task_makes_no_brain_calls ... ok;test_novel_noun_keeps_vlm_find_active ... ok;test_unresolved_instruction_keeps_brain ... ok;
+release flags command: python tools/check_release_flags.py --overlay finals_r25_gen

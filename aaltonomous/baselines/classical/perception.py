@@ -12,17 +12,23 @@ height instead (method "plane"). Blobs over the bins, off the mat, or at a wrong
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+import threading
+from collections import Counter
 import time
 
 import cv2
 import numpy as np
 
 from .bin_vote import bin_geometry
+from .prism_orientation import prism_orientation
 from .shape_id import classify_top_face   # the ONE shape decision; swap this import to change the classifier
 from .shape_2d import decide_shape2d, shape2d_features
 from .shape_id import classify_top_face_diag   # diagnostics only (perception.shape_diag): never decides anything
 from .hue_guard import AMBIGUOUS_CONF, Cand, classify_hue, judge, top_face_hsv
+from . import bare_table
 
 
 def colour_confidence(hsv, blob, ranges_by_class, color, min_area_px=120):
@@ -105,9 +111,10 @@ class Detection:
     shape: str | None = None   # "cube" | "cylinder" | "triangle" | None (unknown)
     apex_yaw: float | None = None  # triangle only: pelvis-frame heading (rad, x fwd, y left) centre -> any one vertex (mod 120 deg)
     apex_conf: float = 0.0     # confidence of apex_yaw, 0..1 (from perception.triangle_pose)
+    vertex_yaw: float | None = None  # triangle only: blob rectangle's pelvis-frame vertex line (mod 120 deg)
     shape_conf: float = 0.0    # shape_id confidence (0..1) behind `shape`
     apex_gate: tuple | None = None  # grasp.posture_apex_gate only: (apex_conf, max vertex angle deg) of a "triangle" top
-    shape_path: str | None = None  # shape_id path ("metric" | "blob" | "abstain_*" | "off"), only filled when grasp.close_posture_by_shape
+    shape_path: str | None = None  # shape_id path; filled for shape-specific posture/cage planning
     generic_required: bool = False  # grasp.generic_fallback: label absent/below confidence threshold
     generic_width: float | None = None  # accepted proposal's closing-axis width (m); None means abstain
     generic_confidence: float = 0.0
@@ -116,6 +123,19 @@ class Detection:
     color_conf: float = 1.0  # policy.place_gate only; 1 keeps synthetic/legacy detections confidently compatible
     hsv_med: tuple | None = None  # perception.hue_guard only: (H, S, V) median of the brightest 35 pct by V of the object pixels
     sat_med: float | None = None  # perception.color_gate.sat_floor only: median HSV S (0-255) over the blob mask
+    prism_like: bool = False      # perception.prism_speckle_floor only: orange/red blob with a triangular outline
+    border_touch: bool = False    # perception.real_border_partial only: blob touches the left/right/bottom image border
+    hue_mixed: bool = False       # H1: a post-split part still contains both red and yellow source-mask pixels
+    novel: bool = False  # novel objects only: built from a depth blob, never a known colour/shape detection
+    label: str | None = None  # novel only: query phrase / label
+    footprint: tuple | None = None  # novel only: (major, minor) extents of the blob in m
+    height_m: float | None = None  # novel only: top height above the counter plane in m
+    ungraspable: bool = False  # novel only: too wide / flat / unsupported -> the policy skips it
+    ungraspable_reason: str | None = None  # novel only: why (handle too short/occluded, wider than the hand, no handle)
+    prism_orientation: str | None = None  # perception.prism_orientation only: "standing" | "lying" | None (unsure)
+    ridge_yaw: float | None = None  # lying prism: pelvis-frame heading (rad, mod pi) of the ridge = long axis
+    prism_xy: tuple | None = None   # lying prism: ridge-strip centre (pelvis xy, = footprint centroid by symmetry)
+    prism_conf: float = 0.0         # smallest normalised cue margin of the orientation decision (0..1)
 
     def __repr__(self):
         x, y, z = self.top
@@ -136,6 +156,24 @@ def perturb_extrinsics(T, err):
     out[:3, :3] = Rz @ Ry @ out[:3, :3]
     out[:3, 3] += (dx, dyy, dz)
     return out
+
+
+@dataclass
+class NeutralObstacle:
+    """perception.neutral_obstacles: a dark / grey / colourless blob that is not a target colour. Never pickable.
+    xy_lo / xy_hi / z_top (pelvis frame, m) exist only when depth gave a 3D footprint above the counter; without
+    them the obstacle is image-only (uv, box) and the planner ignores it."""
+    uv: tuple
+    n_px: int
+    box: tuple                  # (x, y, w, h) pixels
+    reason: str                 # "dark" | "grey"
+    xy_lo: np.ndarray | None = None
+    xy_hi: np.ndarray | None = None
+    z_top: float | None = None
+
+    @property
+    def has_footprint(self):
+        return self.xy_lo is not None
 
 
 @dataclass
@@ -169,9 +207,27 @@ class PitchCalibration:
     T: object = field(default=None, repr=False, compare=False)  # corrected extrinsic when success
 
 
+@dataclass(frozen=True)
+class FrameTransform:
+    """One immutable camera transform used by every projection/deprojection of one RGB-D frame."""
+    T: np.ndarray = field(repr=False, compare=False)
+    version: int = 0
+
+
+@dataclass(frozen=True)
+class CounterHeightSample:
+    """Pure result of one counter-plane height fit; committing it is a separate main-thread operation."""
+    z: float
+    tilt_deg: float
+    n_inliers: int
+    reason: str | None
+
+
 class Perception:
     def __init__(self, cfg, scene, calibration, log=None):
+        self._root_cfg = cfg
         self.cfg = cfg["perception"]
+        self.profile = cfg.get("profile", "none")
         self.scene = scene
         self.cal = calibration
         self.cam = self.cfg["camera"]
@@ -180,14 +236,16 @@ class Perception:
         # aperture offsets ("c_x and c_y will be half of width and height", utils/sensors.py).
         # Perception gets its own shallow copy of the calibration, so every path (pixel_to_pelvis, project, the ray
         # fallbacks) uses the same K and nothing outside perception changes.
-        if self.cfg.get("principal_point", "file") == "center":
+        centred_sim = bool(self.cfg.get("sim_center_principal_point", False)) and self.profile == "sim"
+        explicit_center = self.cfg.get("principal_point", "file") == "center"
+        if explicit_center or centred_sim:
             import copy
             import dataclasses
             cam = calibration.cams[self.cam]
             K = np.array(cam.K, float).copy()
             f = 0.5 * (K[0, 0] + K[1, 1])
             K[0, 0] = K[1, 1] = f
-            K[0, 2], K[1, 2] = cam.width / 2.0, cam.height / 2.0
+            K[0, 2], K[1, 2] = (cam.width - 1) / 2.0, (cam.height - 1) / 2.0
             self.cal = copy.copy(calibration)
             self.cal.cams = dict(calibration.cams)
             self.cal.cams[self.cam] = dataclasses.replace(cam, K=K)
@@ -204,8 +262,29 @@ class Perception:
         # what reset_calibration() restores: AFTER every construction step above (principal_point copy), so a reset never
         # reverts perception to the file K. perception.hand_calibration swaps self.cal for a corrected COPY per episode.
         self.cal_nominal = self.cal
+        scene.counter_z_prior = (cfg.get("scene") or {}).get("counter_z_prior")   # None = nominal
         self.ah = (cfg.get("calib") or {}).get("plane") or {}   # calib.plane.apply_height (FLAG, default OFF)
         self._ah_est, self._ah_tries = [], 0
+        self.plan_nominal = self.cfg.get("plan_frame", "fitted") == "nominal"   # perception.plan_frame (FLAG, real only)
+        self.robust_h = bool(self.ah.get("robust_height", False))   # calib.plane.robust_height (FLAG, default OFF, real overlay)
+        self._robust_logged = False
+        # calib.wide_counter_window (FLAG, default OFF): estimation window nominal -wide_lo .. +wide_hi, runtime height
+        # estimated even without apply_height, mat z follows the runtime counter (see COUNTERZ.md)
+        self.wide = bool(((cfg.get("calib") or {}).get("wide_counter_window", False)))
+        self.wide_lo = float(self.ah.get("wide_lo_m", 0.08))
+        self.wide_hi = float(self.ah.get("wide_hi_m", 0.22))
+        if self.wide:
+            self.scene.mat_z_follows_counter = True
+        self._ah_done = not self._ah_on()
+        self._ah_committed = None
+        calib_cfg = cfg.get("calib") or {}
+        self.counter_after_hand = bool(calib_cfg.get("counter_after_hand", False))
+        self.refit_per_look = bool(calib_cfg.get("refit_per_look", False))
+        self.counter_tracker = None       # installed by policy with the same fitter used by the primary phase
+        self.camera_pose_selected = False
+        self.rz_on = bool(self.cfg.get("rim_z_from_depth", False))   # perception.rim_z_from_depth (FLAG, default OFF)
+        self.rz = dict(self.cfg.get("rim_z_params") or {})
+        self._rz_est, self._rz_tries = {}, 0
         self.size = float(self.cfg.get("object_size") or scene.size)
         self.height = float(self.cfg.get("object_height") or scene.object_height())
         # Pelvis-frame xy correction added to every detection. The configured value is the fail-safe fallback.
@@ -216,6 +295,9 @@ class Perception:
         self.online_pitch_cal = self.cfg.get("online_pitch_cal", False)
         self.pitch_calibration = None
         self.pitch_T = None
+        self._transform_lock = threading.Lock()
+        self._transform_version = 0
+        self._frame_transform = ContextVar(f"perception_frame_{id(self)}", default=None)
         # opt-in shape / triangle pose (all default OFF = stock behaviour)
         grasp = cfg.get("grasp", {})
         self.generic_fallback = bool(grasp.get("generic_fallback", False))
@@ -223,11 +305,17 @@ class Perception:
         self.generic_min_confidence = float(grasp.get("generic_min_confidence", 0.5))
         self.generic_max_width = float(grasp.get("generic_max_width", 0.060))
         self.classify_shape = bool(self.cfg.get("classify_shape", False)) or self.generic_fallback
-        self.want_path = bool(grasp.get("close_posture_by_shape", False)) or self.generic_fallback
+        self.want_path = (bool(grasp.get("close_posture_by_shape", False))
+                          or bool(grasp.get("cage_mode", False)) or self.generic_fallback
+                          or bool((cfg.get("policy") or {}).get("shape_rule_guard", False)))   # policy.shape_rule_guard needs conf + path
         self._last_path = None
         # grasp.posture_apex_gate (default off): prism-top check features for "triangle" detections (apex_gate.py)
         self.want_apex = self.want_path and bool(cfg.get("grasp", {}).get("posture_apex_gate", False))
         self.triangle_pose = bool(self.cfg.get("triangle_pose", False))
+        self.tri_vertex_align = bool(grasp.get("tri_vertex_align", False))
+        # perception.prism_orientation (default off): standing vs lying triangular prism (prism_orientation.py)
+        self.prism_orientation = bool(self.cfg.get("prism_orientation", False))
+        self.prism_params = dict(self.cfg.get("prism_orientation_params") or {})
         # #7 near-bin guard: abstain on shape when the top face may be cut by the bin exclusion (needs classify_shape)
         self.near_bin_guard = bool(self.cfg.get("near_bin_guard", False))
         # perception.y_affine [a, b] (23-grasp-failure §11b/§13): perceived - true y = a*y + b (pelvis) -> subtract it.
@@ -246,12 +334,43 @@ class Perception:
         hs = self.cfg.get("hsv_set", "stock")
         self.hsv = self.cfg["hsv_robust_v2"] if hs == "robust_v2" else self.cfg["hsv_robust"] if hs == "robust" else self.cfg["hsv"]
         self.split_blobs = bool(self.cfg.get("split_blobs", False))
+        self.split_by_solidity = bool(self.cfg.get("split_by_solidity", False))
+        self.split_solidity_cfg = dict(self.cfg.get("split_by_solidity_params") or {})
+        self.tape_value_cut = bool(self.cfg.get("tape_value_cut", False))
+        self.tape_value_cfg = dict(self.cfg.get("tape_value_cut_params") or {})
+        self.gate_below_bins = bool(self.cfg.get("gate_below_bins", False))
+        self.gate_below_cfg = dict(self.cfg.get("gate_below_bins_params") or {})
+        self._below_bin_row = None
+        self._image_bin_gate_active = False
+        self.reject_log = bool(self.cfg.get("reject_log", False))
+        self.look_summary = bool(self.cfg.get("look_summary", False))   # passive: last_look_summary for the 0-detection log
+        self.last_look_summary = None
+        self.bins_from_image = bool(self.cfg.get("bins_from_image", False))
+        self.bins_img_cfg = dict(self.cfg.get("bins_from_image_params") or {})
+        self.bin_rims = None          # last RimResult (bins_from_image); diagnostics / tests
+        self.bin_rim_hint = {}        # {bin: (dx, dy)} pelvis shift estimated from the rim line (param hint)
+        self._below_bin_margin = float(self.gate_below_cfg.get("margin_px", 3))
+        self.reject_tally = {}
+        self.still_vote = bool(self.cfg.get("still_vote", False))
+        self.still_vote_cfg = dict(self.cfg.get("still_vote_params") or {})
+        self._still_frames = []
         self.place_gate = bool((cfg.get("policy") or {}).get("place_gate", False))
         # perception.hue_guard (default OFF): abstain on orange/yellow hues near the red|yellow boundary (hue_guard.py)
         hg = self.cfg.get("hue_guard") or {}
         self.hue_guard = bool(hg.get("enabled", False))
         self.hue_guard_min_gap_deg = float(hg.get("min_gap_deg", 6.0))
         self.hue_guard_red_min_s = float(hg.get("red_min_s", 110.0))
+        self.topface_mode = self.cfg.get("topface_mode", "top35")
+        self.topface_min_px = int(self.cfg.get("topface_min_px", 1024))
+        # bare / glossy table (all default OFF): glare_reject, reflection_reject, local_bg (bare_table.py)
+        self.glare_cfg = dict(self.cfg.get("glare_reject") or {})
+        self.glare_reject = bool(self.glare_cfg.get("enabled", False))
+        self.reflect_cfg = dict(self.cfg.get("reflection_reject") or {})
+        self.reflection_reject = bool(self.reflect_cfg.get("enabled", False))
+        self.local_bg_cfg = dict(self.cfg.get("local_bg") or {})
+        self.local_bg = bool(self.local_bg_cfg.get("enabled", False))
+        self.bare_stats = {"glare_px": 0, "reflection": 0, "local_bg": 0}   # last detect(): diagnostics only
+        self.hue_guard_yellow_fix = bool(hg.get("yellow_fix", False))   # perception.hue_guard.yellow_fix (FLAG)
         # Per-episode colour k-means always starts/falls back at the measured
         # robust ranges, regardless of the separately selectable stock set.
         self.colour_kmeans = bool(self.cfg.get("colour_kmeans", False))
@@ -267,47 +386,144 @@ class Perception:
         self.color_gate_cfg = dict(self.cfg.get("color_gate") or {})
         self.color_gate_degraded = False
         self.fk_mask = bool(self.color_gate_cfg.get("fk_mask", False))   # perception.color_gate.fk_mask (FLAG)
+        self.fk_silhouette = self.fk_mask and bool(self.color_gate_cfg.get("fk_silhouette", False))
         self._arm_surface = None   # lazily built FK surface for fk_mask (own instance: never shares B1's lock)
+        self._arm_surface_error = None
+        self._last_arm_mask = None
         self.fk_mask_px = 0        # pixels the last fk mask removed (diagnostics)
-        self.sat_floor = self.color_gate and bool(self.color_gate_cfg.get("sat_floor", False))   # color_gate.sat_floor (FLAG)
+        self.sat_floor_adaptive = bool(self.cfg.get("sat_floor_adaptive", False))
+        self.sat_floor_fixed = self.color_gate and bool(self.color_gate_cfg.get("sat_floor", False))
+        self.sat_floor = self.color_gate and (self.sat_floor_fixed or self.sat_floor_adaptive)
+        self._sat_floors = dict(self.color_gate_cfg.get("sat_floor_params") or {})
+        self.area_floor_geometric = self.color_gate and bool(self.cfg.get("area_floor_geometric", False))
+        self.prism_speckle_floor = self.color_gate and bool(self.cfg.get("prism_speckle_floor", False))
+        self.prism_speckle_cfg = dict(self.cfg.get("prism_speckle_floor_params") or {})
+        # real-only recall flags (default OFF; finals_r23 profile_auto.sim_overrides keeps them off in sim)
+        self.real_border_partial = self.color_gate and bool(self.cfg.get("real_border_partial", False))
+        self.real_border_cfg = dict(self.cfg.get("real_border_partial_params") or {})
+        self.bin_bottom_first_run = bool(self.cfg.get("bin_bottom_first_run", False))
+        self.fk_colour_rescue = bool(self.cfg.get("fk_colour_rescue", False))
+        self.fk_rescue_cfg = dict(self.cfg.get("fk_colour_rescue_params") or {})
+        self.real_merge_split = bool(self.cfg.get("real_merge_split", False))
+        self.real_merge_cfg = dict(self.cfg.get("real_merge_split_params") or {})
+        self.partial_ok_near_hand = bool(self.cfg.get("partial_ok_near_hand", False))
+        self.partial_near_hand_cfg = dict(self.cfg.get("partial_ok_near_hand_params") or {})
+        # perception.neutral_obstacles (FLAG, default OFF): non-target dark / grey blobs are never detections; they
+        # become Perception.neutral_obstacles (3D footprint when depth exists) for the planner's collision check.
+        self.neutral_on = bool(self.cfg.get("neutral_obstacles", False))
+        self.neutral_cfg = dict(self.cfg.get("neutral_params") or {})
+        self.neutral_obstacles = []
+        self._neutral_new = None
         self.live_bins = bool(self.color_gate_cfg.get("live_bins", False))   # perception.color_gate.live_bins (FLAG)
         self.bin_shift_src = None  # live_bins: object with .bin_shift {bin: pelvis dxy} (the policy's planner, bin.vote)
         self.geometry_runtime = False   # bin.geometry_runtime flag, set by policy.py: every bin consumer follows bin_shift_src.bin_shift
         self.bin_vote_on = False   # bin.vote flag, set by policy.py: bin footprints follow bin_shift_src.bin_shift
+        # P0 depth recovery: imported/executed only on this opt-in path and only on scheduled detect() updates, never
+        # on ordinary control ticks.  The real runner already executes scheduled look work in its worker thread.
+        self.depth_blob_recover = bool(self.cfg.get("depth_blob_recover", False))
+        self.depth_recover_cfg = dict(self.cfg.get("depth_blob_recover_params") or {})
+        self.depth_recover_ms = 0.0
+        if self.depth_blob_recover:
+            # Loading Pinocchio, the URDF, and the surface asset can take tens
+            # of milliseconds.  Do it during policy construction, never on the
+            # first scheduled perception/control tick.
+            try:
+                from .hand_calib import ArmSurface
+                self._arm_surface = ArmSurface()
+            except Exception as exc:
+                self._arm_surface_error = exc
+                self.log(f"[depth_recover] FK mask unavailable ({type(exc).__name__}: {exc}); recovery will abstain")
+        # R22 novel objects.  Keeping the switch here (rather than merely in
+        # the policy) makes the disabled detect() path instruction-for-
+        # instruction identical through the existing return below.
+        self.novel_objects = bool(self.cfg.get("novel_objects", False))
 
     def reset_calibration(self):
         """Restore the configured fallback at the start of every episode."""
         self.scene.counter_z_runtime = None
         self._ah_est, self._ah_tries = [], 0
+        self._robust_logged = False
+        self._ah_done = not self._ah_on()
+        self._ah_committed = None
+        self.camera_pose_selected = False
+        if self.counter_tracker is not None:
+            self.counter_tracker.reset()
+        if self.rz_on:
+            self.scene.rim_z_runtime = None
+            self._rz_est, self._rz_tries = {}, 0
         self.xy_offset = self.base_xy_offset.copy()
         self.calibration = None
         self.pitch_calibration = None
-        self.pitch_T = None
+        with self._transform_lock:
+            self.pitch_T = None
+            self.cal = self.cal_nominal   # B1: a hand-calibrated copy never outlives its episode
+            self._transform_version += 1
         if self.colour_kmeans:
             self.hsv = self._colour_kmeans_base
             self._colour_kmeans_done = False
             self._colour_kmeans_tries = 0
             self.colour_kmeans_info = None
-        self.cal = self.cal_nominal   # B1: a hand-calibrated copy never outlives its episode
+        self._still_frames = []
 
-    def _T(self):
-        """Episode-corrected camera pose, or the untouched nominal calibration."""
+    def frame_transform(self):
+        """Snapshot the current camera pose/version for one complete RGB-D frame."""
+        with self._transform_lock:
+            T = np.array(self.pitch_T if self.pitch_T is not None else self.cal._T(self.cam), float, copy=True)
+            version = self._transform_version
+        T.setflags(write=False)
+        return FrameTransform(T, version)
+
+    @contextmanager
+    def use_frame_transform(self, frame=None):
+        """Make one immutable transform visible to all nested frame consumers in this thread."""
+        snap = self.frame_transform() if frame is None else frame
+        token = self._frame_transform.set(snap)
+        try:
+            yield snap
+        finally:
+            self._frame_transform.reset(token)
+
+    def _T(self, frame=None):
+        """Episode-corrected camera pose, or the immutable transform bound to the current frame."""
+        snap = frame if frame is not None else self._frame_transform.get()
+        if snap is not None:
+            return snap.T
         T = self.pitch_T
         return T if T is not None else self.cal._T(self.cam)
 
-    def _pixel_to_pelvis(self, u, v, depth_mm):
+    def projection_snapshot(self):
+        """Read-only T_pelvis_optical for all consumers of one copied frame."""
+        T = self.current_T()
+        T.setflags(write=False)
+        return T
+
+    def _pixel_to_pelvis(self, u, v, depth_mm, frame=None, transform_snapshot=None):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.pixel_to_pelvis.
-        T = self.pitch_T  # read once: a worker thread may swap it in
-        if T is None:
+        if frame is not None and not isinstance(frame, FrameTransform):   # a raw 4x4 here would be silently transposed
+            raise TypeError(f"frame must be a FrameTransform, got {type(frame).__name__}; pass transform_snapshot=")
+        if transform_snapshot is not None:   # fixvote H4 explicit per-frame pose
+            T = np.asarray(transform_snapshot, float)
+            p = self.cal.deproject(self.cam, u, v, depth_mm)
+            return p @ T[:3, :3].T + T[:3, 3]
+        snap = frame if frame is not None else self._frame_transform.get()
+        T = snap.T if snap is not None else self.pitch_T
+        if T is None and snap is None:
             return self.cal.pixel_to_pelvis(self.cam, u, v, depth_mm)
+        if T is None:
+            T = self.cal._T(self.cam)
         p = self.cal.deproject(self.cam, u, v, depth_mm)
         return p @ T[:3, :3].T + T[:3, 3]
 
-    def _project(self, p_pelvis):
+    def _project(self, p_pelvis, frame=None):
         # Keep the disabled/fallback path byte-for-byte identical to Calibration.project.
-        T = self.pitch_T
-        if T is None:
+        if frame is not None and not isinstance(frame, FrameTransform):   # a raw 4x4 here would be silently transposed
+            raise TypeError(f"frame must be a FrameTransform, got {type(frame).__name__}; pass transform_snapshot=")
+        snap = frame if frame is not None else self._frame_transform.get()
+        T = snap.T if snap is not None else self.pitch_T
+        if T is None and snap is None:
             return self.cal.project(self.cam, p_pelvis)
+        if T is None:
+            T = self.cal._T(self.cam)
         p = (np.asarray(p_pelvis, float) - T[:3, 3]) @ T[:3, :3]
         K = self.cal.cams[self.cam].K
         z = p[..., 2]
@@ -340,9 +556,11 @@ class Perception:
         return PitchCalibration(False, True, 0.0, 0, np.inf, float(elapsed_ms), str(reason), mode=self._pitch_mode())
 
     def commit_pitch(self, out):
-        """Install a result: the extrinsic first, then the record (single attribute stores, atomic under the GIL)."""
-        self.pitch_T = None if not out.success else np.asarray(out.T, float).copy()
-        self.pitch_calibration = out
+        """Install one transform/version atomically; active frame snapshots remain immutable."""
+        with self._transform_lock:
+            self.pitch_T = None if not out.success else np.asarray(out.T, float).copy()
+            self.pitch_calibration = out
+            self._transform_version += 1
         return out
 
     def pitch_frame_valid(self, rgb, depth):
@@ -744,17 +962,20 @@ class Perception:
     def current_T(self):
         """T_pelvis_optical perception uses right now. perception.online_pitch_cal (timi/pitch-cal) keeps its corrected
         pose in self.pitch_T (None = nominal); hand calibration starts from whatever is current, so it chains AFTER it."""
-        T = getattr(self, "pitch_T", None)
-        return np.array(T if T is not None else self.cal._T(self.cam), float)
+        frame = self._frame_transform.get()
+        return np.array(frame.T if frame is not None else self.frame_transform().T, float)
 
     def set_camera_pose(self, T):
         """perception.hand_calibration: use T as this camera's T_pelvis_optical until the next reset, on a copy of the
         calibration (the shared object stays nominal). With online_pitch_cal merged, pitch_T (which wins in _T /
         _pixel_to_pelvis / _project) is set too, so every path sees the refined pose."""
         from .hand_calib import corrected_calibration
-        self.cal = corrected_calibration(self.cal, self.cam, T)
-        if hasattr(self, "pitch_T"):
-            self.pitch_T = np.array(T, float)
+        with self._transform_lock:
+            self.cal = corrected_calibration(self.cal, self.cam, T)
+            if hasattr(self, "pitch_T"):
+                self.pitch_T = np.array(T, float)
+            self._transform_version += 1
+        self.camera_pose_selected = True
 
     def calibration_failure(self, reason, elapsed_ms=0.0):
         """Latch a safe failed result after an unexpected calibration error."""
@@ -763,7 +984,7 @@ class Perception:
                                           float(elapsed_ms), str(reason))
         return self.calibration
 
-    def _counter_plane(self, depth, c, z0=None):
+    def _counter_plane(self, depth, c, z0=None, transform_snapshot=None, wide_seed=False):
         """Pelvis points of `depth` (stride-subsampled) and the counter plane z = ax + by + c fitted to them.
         (P, coef, None) or (None, None, reason). Shared by calibrate_bins and the bin.vote rim vote."""
         dlo, dhi = self.cfg["depth_range_mm"]
@@ -774,12 +995,19 @@ class Perception:
         stride = max(1, int(c.get("pixel_stride", 3)))
         vv, uu = np.nonzero(valid[::stride, ::stride])
         vv, uu = vv * stride, uu * stride
-        P = self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float))
+        P = (self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float)) if transform_snapshot is None else
+             self._pixel_to_pelvis(uu, vv, depth[vv, uu].astype(float), transform_snapshot=transform_snapshot))
         sc = self.scene
 
         # Fit z = ax + by + c to counter points. Bins and objects are positive outliers and are trimmed iteratively.
         pm = sc.pelvis_to_mat(P)
         mat = np.asarray(sc.cfg["counter"]["mat_size"], float)
+        if self.wide and z0 is None and (wide_seed or sc.counter_z_runtime is None):
+            # calib.wide_counter_window: no runtime height yet -> seed the +-window from the dominant z layer inside
+            # nominal -wide_lo .. +wide_hi over the mat (bins / objects are minor layers)
+            z0 = self._wide_seed(P, pm, mat, int(c.get("min_plane_points", 500)))
+            if z0 is None:
+                return (None, None, "counter plane not visible")
         counter = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) &
                    (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03) &
                    (np.abs(P[:, 2] - (sc.counter_z if z0 is None else z0)) < float(c.get("plane_z_window", 0.06))))
@@ -801,7 +1029,189 @@ class Perception:
             return (None, None, "counter plane fit rejected")
         return P, coef, None
 
+    def counter_z_prior(self):
+        """calib.wide_counter_window: configured counter z prior (scene.counter_z_prior, else calib.plane.counter_z_prior_m,
+        pelvis frame), clamped to the window; None if neither is set."""
+        v = getattr(self.scene, "counter_z_prior", None)
+        if v is None:
+            v = self.ah.get("counter_z_prior_m")
+        if v is None or not np.isfinite(float(v)):
+            return None
+        nom = self.scene.nominal_counter_z
+        return float(np.clip(float(v), nom - self.wide_lo, nom + self.wide_hi))
+
+    def _wide_seed(self, P, pm, mat, min_points):
+        """calib.wide_counter_window: z of the counter layer = the lowest well-populated peak of the 1 cm z histogram of
+        mat points inside nominal -wide_lo .. +wide_hi (bin rims / objects are smaller layers ABOVE the counter). None if
+        no layer has min_points."""
+        nom = self.scene.nominal_counter_z
+        lo, hi = nom - self.wide_lo, nom + self.wide_hi
+        on = ((pm[:, 0] >= -0.03) & (pm[:, 0] <= mat[0] + 0.03) & (pm[:, 1] >= -0.03) & (pm[:, 1] <= mat[1] + 0.03)
+              & (P[:, 2] >= lo) & (P[:, 2] <= hi))
+        if int(on.sum()) < min_points:
+            return None
+        z = P[on, 2]
+        edges = np.arange(lo, hi + 0.01, 0.01)
+        h = np.histogram(z, bins=edges)[0].astype(float)
+        smooth = h + np.r_[0.0, h[:-1]] + np.r_[h[1:], 0.0]    # +-1 cm
+        top = smooth.max()
+        if top < min_points:
+            return None
+        for i in np.nonzero(smooth >= 0.6 * top)[0]:           # lowest peak of comparable mass
+            if i == 0 or smooth[i] >= smooth[i - 1]:
+                if i == len(smooth) - 1 or smooth[i] >= smooth[i + 1]:
+                    sel = z[(z >= edges[max(i - 1, 0)]) & (z <= edges[min(i + 2, len(edges) - 1)])]
+                    return float(np.median(sel))
+        return None
+
     def _plane_height(self, depth, a):
+        """(z at the mat centre, tilt deg, n inliers, None) from the existing counter-plane fit, or (nan, tilt, n, why).
+        calib.plane.robust_height: the legacy fit (nominal-centred, tilt/window gated) is kept whenever it is clean AND agrees
+        with the dominant-plane RANSAC fit; otherwise (fails, or disagrees by > robust_agree_m: it locked on a wrong layer) the
+        robust measured table height is returned instead of nothing."""
+        legacy = self._plane_height_legacy(depth, a)
+        if not self.robust_h:
+            return legacy
+        try:
+            rob = self._robust_table_z(depth, a)
+        except Exception as exc:    # never let the estimator take the policy down
+            rob = (float("nan"), float("nan"), 0, f"robust {type(exc).__name__}")
+        if legacy[3] is None and np.isfinite(legacy[0]):
+            if rob[3] is not None or abs(legacy[0] - rob[0]) <= float(a.get("robust_agree_m", 0.03)):
+                return legacy
+        return rob if rob[3] is None else legacy
+
+    def _table_roi_points(self, depth, a):
+        """Optical-frame points (n,3) of the lower-centre table ROI of `depth` (same crop as table_pitch_calibration: bins
+        above, robot hands in the side/bottom bands), stride-subsampled."""
+        c = (self.cfg.get("table_pitch_calibration") or {})
+        dlo, dhi = self.cfg["depth_range_mm"]
+        depth = np.nan_to_num(np.asarray(depth, float), nan=0.0, posinf=0.0, neginf=0.0)
+        h, w = depth.shape
+        u0, u1 = int(float(c.get("roi_left_frac", 0.12)) * w), int(float(c.get("roi_right_frac", 0.88)) * w)
+        v0, v1 = int(float(c.get("roi_top_frac", 0.55)) * h), int(float(c.get("roi_bottom_frac", 0.92)) * h)
+        stride = max(1, int(c.get("pixel_stride", 3)))
+        sub = depth[v0:v1:stride, u0:u1:stride]
+        vv, uu = np.nonzero((sub >= dlo) & (sub <= dhi))
+        vv, uu = vv * stride + v0, uu * stride + u0
+        return self.cal.deproject(self.cam, uu, vv, depth[vv, uu])
+
+    def _robust_table_z(self, depth, a):
+        """calib.plane.robust_height: pelvis z of the table from the DOMINANT near-horizontal plane of the lower-centre ROI
+        (RANSAC in the camera frame, deterministic), independent of the nominal counter height and of whether the pitch
+        calibration was accepted. (z, tilt deg, n inliers, None) or (nan, tilt, n, why).
+        Gates (keep bin rims / hands / objects from being taken as the table): the plane normal must be within
+        robust_max_tilt_deg of vertical in the CURRENT pelvis frame (walls are rejected), >= min_inliers, >= robust_min_ratio of
+        the ROI points (the table is the dominant surface; objects/hands are minorities), RMS <= robust_max_rms_m, the camera
+        must be above it. Height: the plane at the mat-centre xy when the (pitch-corrected) frame sees it level (<= 3 deg);
+        otherwise camera z minus the perpendicular plane distance (rotation-invariant: survives a rejected pitch fit).
+        Falls back to the z-histogram dominant layer when the RANSAC plane is not accepted."""
+        nan = float("nan")
+        if depth is None or np.ndim(depth) != 2 or np.size(depth) == 0:
+            return nan, nan, 0, "no depth"
+        Q = self._table_roi_points(depth, a)
+        n_min = int(a.get("min_inliers", 500))
+        if len(Q) < n_min:
+            return nan, nan, len(Q), "robust: roi too small"
+        T = np.asarray(self._T(), float)
+        up = T[:3, :3].T @ np.array([0.0, 0.0, 1.0])            # world up in the optical frame
+        rng = np.random.default_rng(0)
+        if len(Q) > 4000:
+            Q = Q[rng.choice(len(Q), 4000, replace=False)]
+        thr = float(a.get("robust_inlier_m", 0.008))
+        cos_min = float(np.cos(np.radians(float(a.get("robust_max_tilt_deg", 25.0)))))
+        idx = rng.integers(0, len(Q), size=(300, 3))
+        A, B, C = Q[idx[:, 0]], Q[idx[:, 1]], Q[idx[:, 2]]
+        nrm = np.cross(B - A, C - A)
+        ln = np.linalg.norm(nrm, axis=1)
+        good = ln > 1e-9
+        nrm = nrm[good] / ln[good, None]
+        nrm = nrm * np.where(nrm @ up < 0.0, -1.0, 1.0)[:, None]
+        A = A[good]
+        good2 = (nrm @ up) >= cos_min                           # near-horizontal only (walls / bin sides rejected)
+        nrm, A = nrm[good2], A[good2]
+        if len(nrm) == 0:
+            return self._hist_table_z(Q, T, a, "robust: no horizontal candidate")
+        d0 = np.einsum("ij,ij->i", nrm, A)
+        cnt = (np.abs(Q @ nrm.T - d0[None, :]) <= thr).sum(axis=0)
+        k = int(np.argmax(cnt))
+        n, d = nrm[k], float(d0[k])
+        inl = np.abs(Q @ n - d) <= thr
+        for _ in range(2):
+            if inl.sum() < 3:
+                break
+            q = Q[inl]
+            ctr = q.mean(axis=0)
+            w, v = np.linalg.eigh((q - ctr).T @ (q - ctr))
+            n = v[:, 0] * (1.0 if v[:, 0] @ up >= 0 else -1.0)
+            d = float(n @ ctr)
+            inl = np.abs(Q @ n - d) <= thr
+        n_in = int(inl.sum())
+        rms = float(np.sqrt(np.mean((Q[inl] @ n - d) ** 2))) if n_in else float("inf")
+        tilt = float(np.degrees(np.arccos(np.clip(n @ up, -1.0, 1.0))))
+        if (n_in < n_min or n_in / float(len(Q)) < float(a.get("robust_min_ratio", 0.30))
+                or rms > float(a.get("robust_max_rms_m", 0.006)) or tilt > float(a.get("robust_max_tilt_deg", 25.0))):
+            return self._hist_table_z(Q, T, a, f"robust: plane rejected (n={n_in}/{len(Q)} rms={rms*1e3:.1f}mm tilt={tilt:.1f})")
+        # plane in the pelvis frame: n_p . x = d_p
+        n_p = T[:3, :3] @ n
+        d_p = d + float(n_p @ T[:3, 3])
+        if tilt <= 3.0 and abs(n_p[2]) > 1e-6:
+            xy = self.scene.mat_to_pelvis([*(np.asarray(self.scene.cfg["counter"]["mat_size"], float) / 2), 0.0])[:2]
+            z = float((d_p - n_p[0] * xy[0] - n_p[1] * xy[1]) / n_p[2])
+        else:
+            z = float(T[2, 3]) + d          # camera z minus perpendicular distance (n points up, so d = n.x < 0 for the table below) (rotation about the camera is harmless)
+        if z > T[2, 3] - 0.05:
+            return nan, tilt, n_in, "robust: plane not below the camera"
+        return z, tilt, n_in, None
+
+    def _hist_table_z(self, Q, T, a, why):
+        """Last-resort dominant-layer height: lowest well-populated 1 cm layer of the ROI points' pelvis z (in the current
+        frame), at least robust_min_ratio of the points (a wall / ramp spreads over many layers and is refused). (z, nan, n, None) or (nan, nan, 0, why)."""
+        z = (Q @ T[:3, :3].T + T[:3, 3])[:, 2]
+        if len(z) < int(a.get("min_inliers", 500)):
+            return float("nan"), float("nan"), 0, why
+        edges = np.arange(z.min() - 0.005, z.max() + 0.015, 0.01)
+        h = np.histogram(z, bins=edges)[0].astype(float)
+        sm = h + np.r_[0.0, h[:-1]] + np.r_[h[1:], 0.0]
+        need = max(float(a.get("min_inliers", 500)), float(a.get("robust_min_ratio", 0.30)) * len(z))
+        for i in np.nonzero(sm >= max(need, 0.6 * sm.max()))[0]:
+            if (i == 0 or sm[i] >= sm[i - 1]) and (i == len(sm) - 1 or sm[i] >= sm[i + 1]):
+                sel = z[(z >= edges[max(i - 1, 0)]) & (z <= edges[min(i + 2, len(edges) - 1)])]
+                return float(np.median(sel)), float("nan"), int(len(sel)), None
+        return float("nan"), float("nan"), 0, why
+
+    def ensure_table_height(self, depth, log_prefix="[table_z]"):
+        """calib.plane.robust_height: when NO runtime counter height was committed (apply_height gate exhausted / timed out /
+        inconsistent / pitch guard), measure it from this frame instead of falling back to the nominal/prior height: objects are
+        judged against the table that is actually in the image. True if a runtime height is (now) set."""
+        if not self.robust_h or self.scene.counter_z_runtime is not None:
+            return self.scene.counter_z_runtime is not None
+        if self._ah_on() and not self._ah_done:
+            return False                                     # the pre-motion estimator is still collecting looks
+        a = self.ah
+        try:
+            if self._ah_est:                                  # inconsistent looks: their median still beats the nominal table
+                z, src = float(np.median(self._ah_est)), "median of the apply_height looks"
+            else:
+                z, tilt, n, why = self._robust_table_z(depth, a)
+                src = f"robust plane n={n} tilt={tilt:.1f}deg"
+                if why is not None:
+                    self.log(f"{log_prefix} no table estimate ({why}); counter stays at the prior/nominal")
+                    return False
+        except Exception as exc:
+            self.log(f"{log_prefix} estimator error {type(exc).__name__}; counter stays at the prior/nominal")
+            return False
+        lim = float(a.get("robust_max_dz_m", 0.30))
+        nom = self.scene.nominal_counter_z
+        z = float(np.clip(z, nom - lim, nom + lim))
+        self.scene.counter_z_runtime = z
+        self._ah_committed = z
+        if not self._robust_logged:
+            self._robust_logged = True
+            self.log(f"{log_prefix} runtime counter z={z:.4f} m from {src} (apply_height had no committed height)")
+        return True
+
+    def _plane_height_legacy(self, depth, a):
         """(z at the mat centre, tilt deg, n inliers, None) from the existing counter-plane fit, or (nan, tilt, n, why)."""
         nan = float("nan")
         if depth is None or np.ndim(depth) != 2 or np.size(depth) == 0:
@@ -811,6 +1221,14 @@ class Perception:
         c = {"plane_z_window": float(a.get("window_m", 0.40)), "min_plane_points": int(a.get("min_inliers", 500))}
         xy = sc.mat_to_pelvis([*(np.asarray(sc.cfg["counter"]["mat_size"], float) / 2), 0.0])[:2]
         z = nom
+        if self.wide:   # calib.wide_counter_window: pass 1 seeds z0 from the nominal -wide_lo .. +wide_hi histogram
+            c["plane_z_window"] = 0.03
+            P, coef, why = self._counter_plane(depth, c, wide_seed=True)
+            if why:
+                return nan, nan, 0, why
+            z = float(coef @ np.r_[xy, 1.0])
+            if not nom - self.wide_lo <= z <= nom + self.wide_hi:
+                return z, nan, 0, f"z {z - nom:+.3f} outside the window"
         for _ in range(2):          # pass 1 coarse (wide window), pass 2 tight around pass 1's plane
             P, coef, why = self._counter_plane(depth, c, z0=z)
             if why:
@@ -825,27 +1243,155 @@ class Perception:
             return z, tilt, n, f"tilt {tilt:.1f} deg"
         return z, tilt, n, None
 
-    def update_counter_height(self, depth):
-        """calib.plane.apply_height: one look -> scene.counter_z_runtime = median of the first N valid estimates, clamped.
-        Inert (no state touched) when the flag is off."""
+    def measure_counter_height(self, depth, frame=None):
+        """Pure counter-plane fit for a copied frame; safe to run in a background worker."""
         a = self.ah
-        n_looks = int(a.get("looks", 3))
-        if not a.get("apply_height") or len(self._ah_est) >= n_looks or self._ah_tries >= 3 * n_looks:
-            return
-        self._ah_tries += 1
-        nom = self.scene.nominal_counter_z
         try:
-            z, tilt, n, why = self._plane_height(depth, a)
+            if frame is None:
+                z, tilt, n, why = self._plane_height(depth, a)
+            else:
+                with self.use_frame_transform(frame):
+                    z, tilt, n, why = self._plane_height(depth, a)
         except Exception as exc:
             z, tilt, n, why = float("nan"), float("nan"), 0, f"{type(exc).__name__}"
-        if why is None and np.isfinite(z):
-            self._ah_est.append(z)
-        est = float(np.median(self._ah_est)) if self._ah_est else float("nan")
-        lim = float(a.get("max_dz_m", 0.20))
-        applied = float(np.clip(est, nom - lim, nom + lim)) if self._ah_est else nom
-        self.scene.counter_z_runtime = applied if self._ah_est else None
-        self.log(f"[apply_height] est={est:.4f} applied={applied:.4f} n={len(self._ah_est)} tilt_deg={tilt:.2f} "
-                 f"fallback={why or ('clamped' if applied != est else 'none')}")
+        return CounterHeightSample(float(z), float(tilt), int(n), why)
+
+    def _ah_on(self):
+        """calib.plane.apply_height or calib.wide_counter_window: either runs the counter-height estimator."""
+        return bool(self.ah.get("apply_height")) or self.wide
+
+    def accept_counter_height_sample(self, sample, commit_scene=True):
+        """Apply the N-sample spread/MAD gate and latch at most one runtime height per episode."""
+        a = self.ah
+        if not self._ah_on() or self._ah_done:
+            return self._ah_done, self._ah_committed
+        self._ah_tries += 1
+        n_looks = max(1, int(a.get("looks", 3)))
+        if sample.reason is None and np.isfinite(sample.z):
+            self._ah_est.append(float(sample.z))
+        window = np.asarray(self._ah_est[-n_looks:], float)
+        est = float(np.median(window)) if len(window) else float("nan")
+        spread = float(np.ptp(window)) if len(window) else float("inf")
+        mad = float(np.median(np.abs(window - est))) if len(window) else float("inf")
+        consistent = (len(window) == n_looks and spread <= float(a.get("max_spread_m", 0.015))
+                      and mad <= float(a.get("max_mad_m", 0.006)))
+        applied = None
+        fallback = sample.reason or "collecting"
+        if consistent:
+            nom, lim = self.scene.nominal_counter_z, float(a.get("robust_max_dz_m", 0.30) if self.robust_h else a.get("max_dz_m", 0.20))
+            lo, hi = (nom - self.wide_lo, nom + self.wide_hi) if self.wide else (nom - lim, nom + lim)
+            applied = float(np.clip(est, lo, hi))
+            self._ah_done, self._ah_committed = True, applied
+            if commit_scene:
+                self.scene.counter_z_runtime = applied
+            fallback = "clamped" if applied != est else "none"
+        elif len(window) == n_looks:
+            fallback = f"inconsistent(spread={spread:.4f},mad={mad:.4f})"
+        if not self._ah_done and self._ah_tries >= 3 * n_looks:
+            self._ah_done, self._ah_committed = True, None
+            fallback = "sample_gate_exhausted"
+            if self.robust_h and self._ah_est:      # measured but not mutually consistent: the median still beats nominal
+                nom, lim = self.scene.nominal_counter_z, float(a.get("robust_max_dz_m", 0.30))
+                applied = float(np.clip(float(np.median(self._ah_est[-n_looks:])), nom - lim, nom + lim))
+                self._ah_committed = applied
+                if commit_scene:
+                    self.scene.counter_z_runtime = applied
+                fallback = "sample_gate_exhausted_median"
+        if self.wide and not self._ah_est and commit_scene:   # unmeasured: the configured prior, never the nominal scene value
+            prior = self.counter_z_prior()
+            if prior is not None:
+                self.scene.counter_z_runtime = prior
+        shown = self.scene.nominal_counter_z if applied is None else applied
+        self.log(f"[apply_height] est={est:.4f} applied={shown:.4f} n={len(window)}/{n_looks} "
+                 f"spread={spread:.4f} mad={mad:.4f} tilt_deg={sample.tilt_deg:.2f} fallback={fallback}")
+        return self._ah_done, self._ah_committed
+
+    def update_counter_height(self, depth, frame=None):
+        """Synchronous compatibility helper; policy preflight uses measure/accept in a worker + main thread.
+        calib.counter_after_hand (handcal): height only after the camera pose is selected, via the shared tracker."""
+        if self.counter_after_hand:
+            if not self.camera_pose_selected or self.counter_tracker is None or frame is None:
+                return None
+            if self.counter_tracker.value is not None and not self.refit_per_look:
+                return None
+            try:
+                update = self.counter_tracker.observe(
+                    self.cal, self.cam, depth, self.current_T(), frame["timestamp"], frame["joints"],
+                    frame.get("last_motion_time"))
+            except Exception as exc:
+                self.log(f"[counter_after_hand] rejected: {type(exc).__name__}: {exc}")
+                return None
+            if update.committed and update.counter_z is not None:
+                self.scene.counter_z_runtime = float(update.counter_z)
+            self.log(f"[counter_after_hand] accepted={int(update.accepted)} committed={int(update.committed)} "
+                     f"z={update.counter_z} n={update.n_samples} tilt_deg={update.tilt_deg:.2f} "
+                     f"rms_mm={update.residual_m * 1000.0:.2f} ({update.reason})")
+            return update
+        if not self._ah_on() or self._ah_done:
+            return self._ah_committed
+        return self.accept_counter_height_sample(self.measure_counter_height(depth))[1]
+
+    def _rim_z_looks(self, depth, p):
+        """{bin: (rim z, n wall points)} for one depth frame: p-th percentile of the valid points on each bin's wall ring
+        (outer footprint + margin minus the inner cavity - margin) whose z lies in the nominal rim +- max_delta window.
+        Bins with fewer than min_points such points are absent. Raises on garbage; the caller falls back."""
+        if depth is None or np.ndim(depth) != 2 or np.size(depth) == 0:
+            return {}
+        depth = np.nan_to_num(np.asarray(depth, float), nan=0.0, posinf=0.0, neginf=0.0)
+        dlo, dhi = self.cfg["depth_range_mm"]
+        stride = max(1, int(p.get("stride", 2)))
+        sub = depth[::stride, ::stride]
+        valid = (sub >= dlo) & (sub <= dhi)
+        if valid.mean() < float(self.cfg["min_valid_frac"]):
+            return {}
+        vv, uu = np.nonzero(valid)
+        P = self._pixel_to_pelvis(uu * stride, vv * stride, sub[vv, uu])
+        pm = self.scene.pelvis_to_mat(P)
+        m, delta = float(p.get("margin_m", 0.006)), float(p.get("max_delta_m", 0.04))
+        nominal = self.scene.counter_z + float(self.scene.cfg["bins"]["wall_height"])
+        zwin = (P[:, 2] >= nominal - delta - 0.01) & (P[:, 2] <= nominal + delta + 0.01)
+        out = {}
+        for name, g in self.bin_geometry().items():
+            xy = pm[:, :2]
+            # the frame must agree with the counter around the bin (else flat garbage / a mis-scaled depth passes the window)
+            band = (np.all((xy >= g["outer_lo"] - m - 0.03) & (xy <= g["outer_hi"] + m + 0.03), axis=1) &
+                    ~np.all((xy >= g["outer_lo"] - m) & (xy <= g["outer_hi"] + m), axis=1))
+            zb = P[band, 2]
+            if len(zb) < int(p.get("min_points", 40)) or \
+                    abs(float(np.median(zb)) - self.scene.counter_z) > float(p.get("counter_tol_m", 0.015)):
+                continue
+            outer = np.all((xy >= g["outer_lo"] - m) & (xy <= g["outer_hi"] + m), axis=1)
+            inner = np.all((xy >= g["inner_lo"][:2] + m) & (xy <= g["inner_hi"][:2] - m), axis=1)
+            z = P[outer & ~inner & zwin, 2]
+            if len(z) >= int(p.get("min_points", 40)) and np.isfinite(z).all():
+                out[name] = (float(np.percentile(z, float(p.get("percentile", 90)))), len(z))
+        return out
+
+    def update_rim_z(self, depth):
+        """perception.rim_z_from_depth: one look -> scene.rim_z_runtime[bin] = median of that bin's first N estimates,
+        clamped to nominal +- max_delta_m. Bins without a clean measurement stay nominal. Inert when the flag is off.
+        Cost ~ one strided deprojection (a few ms), runs in the same worker as detect() (never in act())."""
+        p = self.rz
+        n_looks = int(p.get("looks", 3))
+        if not self.rz_on or self._rz_tries >= 3 * n_looks or \
+                (self._rz_est and all(len(v) >= n_looks for v in self._rz_est.values())):
+            return
+        self._rz_tries += 1
+        try:
+            found = self._rim_z_looks(depth, p)
+        except Exception as exc:
+            self.log(f"[rim_z] fallback={type(exc).__name__}")
+            return
+        for name, (z, _) in found.items():
+            if len(self._rz_est.setdefault(name, [])) < n_looks:
+                self._rz_est[name].append(z)
+        nominal = self.scene.counter_z + float(self.scene.cfg["bins"]["wall_height"])
+        delta = float(p.get("max_delta_m", 0.04))
+        applied = {n: float(np.clip(np.median(v), nominal - delta, nominal + delta))
+                   for n, v in self._rz_est.items() if v}
+        self.scene.rim_z_runtime = applied or None   # new dict swapped atomically for the planner
+        self.log("[rim_z] " + (" ".join(f"{n}={z:.4f}(n={len(self._rz_est[n])})" for n, z in applied.items())
+                               or "none") + f" nominal={nominal:.4f}")
 
     def calibrate_bins(self, depth):
         """Estimate a single XY correction by aligning elevated depth points to the fixed bin walls.
@@ -1003,6 +1549,57 @@ class Perception:
             out[color] = m
         return out
 
+    def _counter_image_mask(self, shape):
+        """Projected object-free near-mat band, used only by adaptive saturation sampling."""
+        mat = np.asarray(self.scene.cfg["counter"]["mat_size"], float)
+        object_near = float(self.scene.cfg["layout"]["region_y"][0]) - 0.5 * self.size
+        far = max(0.02, object_near - 0.005)
+        corners = self.scene.mat_to_pelvis(np.array([[0.0, 0.0, 0.0], [mat[0], 0.0, 0.0],
+                                                     [mat[0], far, 0.0], [0.0, far, 0.0]]))
+        uvz = self._project(corners)
+        if not np.all(np.isfinite(uvz)) or np.any(uvz[:, 2] <= 0):
+            return np.ones(shape, bool)
+        poly = np.round(uvz[:, :2]).astype(np.int32)
+        out = np.zeros(shape, np.uint8)
+        cv2.fillConvexPoly(out, poly, 1)
+        return out.astype(bool)
+
+    def _adaptive_saturation_masks(self, hsv, keep):
+        """Blue/purple mask with a counter-relative S threshold and the original H/V bands unchanged."""
+        p = self.cfg.get("sat_floor_adaptive_params") or {}
+        blue = self.hsv.get("blue") or []
+        # The projected strip is deliberately in front of the object region,
+        # so sample all of it. Excluding purple-hued counter pixels would hide
+        # exactly the background competition this adaptive floor must measure.
+        bg = (keep > 0) & self._counter_image_mask(hsv.shape[:2])
+        sat = hsv[..., 1][bg]
+        if len(sat):
+            hist = np.bincount(sat, minlength=256)
+            rank = int(np.ceil(float(p.get("bg_percentile", 90.0)) * hist.sum() / 100.0))
+            bg_p = int(np.searchsorted(np.cumsum(hist), max(rank, 1), side="left"))
+        else:
+            bg_p = 0
+        floor = float(np.clip(max(float(p.get("abs_min", 45.0)),
+                                  bg_p + float(p.get("margin", 10.0))), 0.0, 255.0))
+        self._sat_floors = (dict(self.color_gate_cfg.get("sat_floor_params") or {})
+                            if self.sat_floor_fixed else {})
+        self._sat_floors["blue"] = floor
+        ranges = {name: list(vals) for name, vals in self.hsv.items()}
+        ranges["blue"] = [([int(lo[0]), int(np.ceil(floor)), int(lo[2])], list(hi))
+                           for lo, hi in blue]
+        return self._masks_hsv(hsv, ranges)
+
+    def _topface_hsv(self, px):
+        """Configured hue vote; top35 remains the exact legacy path."""
+        if self.topface_mode != "whole_blob":
+            return top_face_hsv(px)
+        px = np.asarray(px).reshape(-1, 3)
+        top_n = max(1, int(np.ceil(0.35 * len(px))))
+        if top_n < self.topface_min_px:
+            med = np.median(px, axis=0)
+            return float(med[0]), float(med[1]), float(med[2])
+        return top_face_hsv(px)
+
     def _fit_colour_kmeans(self, hsv, keep):
         """One bounded k=3 attempt on robust object-blob pixels per episode."""
         import cv2
@@ -1032,7 +1629,54 @@ class Perception:
         if self._colour_kmeans_tries >= 3:
             self._colour_kmeans_done = True  # give up after the 3rd attempt; robust ranges stay
 
-    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None):
+    def detect(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None, frame=None,
+               calibration_frame=None, still_frame=False):
+        """Detect one frame under one immutable transform/version when online calibration is enabled."""
+        if not self.online_pitch_cal and frame is None:
+            return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q, calibration_frame,
+                                      still_frame)
+        with self.use_frame_transform(frame):
+            out = self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q, calibration_frame,
+                                     still_frame)
+            if self.plan_nominal:
+                dets = out[0] if debug else out
+                self._to_nominal_frame(dets)
+            return out
+
+    def plan_frame_M(self):
+        """perception.plan_frame=nominal: 4x4 M = T0 @ inv(T_fit) (fitted-camera pelvis frame -> the nominal-camera frame the arms
+        and the scene use), or None when no fit is installed. The table-pitch fit rotates the camera about itself to level the
+        table: right for segmentation / heights (kept), wrong as a camera->arm transform (the arms are rigid to the pelvis
+        like the nominal head pose is; on drop_3 the fitted frame puts the arm FK points ~10 cm off)."""
+        Tf = np.asarray(self._T(), float)
+        T0 = np.asarray(self.cal_nominal._T(self.cam), float)
+        if np.allclose(Tf, T0, atol=1e-9):
+            return None
+        return T0 @ np.linalg.inv(Tf)
+
+    def _to_nominal_frame(self, dets):
+        """Map every pelvis-frame position / heading of the detections from the fitted frame to the nominal-camera frame (in place)."""
+        M = self.plan_frame_M()
+        if M is None or not dets:
+            return
+        R, t = M[:3, :3], M[:3, 3]
+        ang = lambda a: None if a is None else float(np.arctan2(*(R @ np.array([np.cos(a), np.sin(a), 0.0]))[1::-1]))
+        for d in dets:
+            if getattr(d, "_plan_nominal", False):
+                continue
+            d.top = R @ np.asarray(d.top, float) + t
+            for k in ("yaw", "apex_yaw", "vertex_yaw", "ridge_yaw"):
+                if getattr(d, k, None) is not None:
+                    setattr(d, k, ang(getattr(d, k)))
+            if d.prism_xy is not None:
+                q = R @ np.array([d.prism_xy[0], d.prism_xy[1], float(d.top[2])]) + t
+                d.prism_xy = (float(q[0]), float(q[1]))
+            if d.shape_diag and d.shape_diag.get("top_xy"):
+                d.shape_diag["top_xy"] = [list((R @ np.array([x, y, 0.0]) + t)[:2]) for x, y in d.shape_diag["top_xy"]]
+            d._plan_nominal = True
+
+    def _detect_frame(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None,
+                      calibration_frame=None, still_frame=False):
         """Detect coloured objects.
 
         ``include_bins`` keeps pixels over the known bin footprints long enough for
@@ -1045,44 +1689,578 @@ class Perception:
         c = self.cfg
         dets, rejected = [], []
         self.color_gate_degraded = False
-        self.update_counter_height(depth)    # calib.plane.apply_height (inert when off)
+        self.bare_stats = {"glare_px": 0, "reflection": 0, "local_bg": 0}   # last detect(): diagnostics only
+        self.update_counter_height(depth, calibration_frame)    # inert when its flags are off
+        self.ensure_table_height(depth)      # calib.plane.robust_height (inert when off): never judge objects against a nominal table
+        self.update_rim_z(depth)             # perception.rim_z_from_depth (inert when off)
+        self._image_bin_gate_active = False
+        self._below_bin_row = None
+        early_hsv = None
+        rim_tape = None
+        if self.bins_from_image:
+            self.bin_rims, trusted = None, self._live_bins_trusted()
+            early_hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+            rims = self._detect_rims(early_hsv)
+            if rims is not None:
+                rim_tape = rims.tape if rims.tape is not None and rims.tape.any() else None
+                if trusted or (not self.bins_img_cfg.get("with_depth", True) and self._depth_ok(depth)):
+                    self._crosscheck_rims(rims)           # depth / runtime bin poses win; the image only cross-checks
+                elif rims.row_limit is not None:
+                    self._below_bin_row, self._below_bin_margin = rims.row_limit, 0.0
+                    self._image_bin_gate_active = True
+        if self.gate_below_bins and not self._image_bin_gate_active and not self._live_bins_trusted():
+            if early_hsv is None:
+                early_hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
+            self._below_bin_row = self._observed_bin_bottom(early_hsv)
+            self._below_bin_margin = float(self.gate_below_cfg.get("margin_px", 3))
+            self._image_bin_gate_active = self._below_bin_row is not None
         keep = self._keep_mask(depth, exclude_bins=not include_bins)
-        if self.fk_mask and robot_q is not None:   # the robot's own arms / hands are never objects
+        blocked_by_image_gate = None
+        keep_before_image_gate = None
+        if rim_tape is not None:
+            keep[rim_tape > 0] = 0                          # rim tape is never an object
+            if debug or self.reject_log:
+                for area, cen in self.bin_rims.tape_blobs:
+                    rejected.append((self._blob_placeholder("orange", area, cen), "rim_tape"))
+        if self._image_bin_gate_active:
+            margin = self._below_bin_margin
+            below = np.arange(keep.shape[0])[:, None] > self._below_bin_row[None, :] + margin
+            keep_before_image_gate = keep.astype(bool)
+            blocked_by_image_gate = ~below
+            keep[~below] = 0
+        self._last_arm_mask = None
+        self._rescue_arm = None
+        arm = None
+        arm_boundary = None
+        if (self.fk_mask or self.depth_blob_recover) and robot_q is not None:   # the robot's own arms / hands are never objects
             arm = self._fk_arm_mask(keep.shape, *robot_q)
             if arm is not None:
-                keep[arm] = 0
+                self._last_arm_mask = arm
+                if self.fk_mask and self.fk_colour_rescue:   # real: the FK silhouette is off by up to ~80 px; judge by height
+                    self._rescue_arm = arm
+                elif self.fk_mask:   # depth_blob_recover alone must not FK-mask the colour blobs
+                    keep[arm] = 0
+                if self.partial_ok_near_hand:
+                    r = max(1, int(self.partial_near_hand_cfg.get("boundary_px", 2)))
+                    outer = cv2.dilate(arm.astype(np.uint8),
+                                       cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+                    arm_boundary = (outer > 0) & ~arm
+        depth_fk_failed = self.depth_blob_recover and robot_q is not None and arm is None
         # Preserve the old path exactly when both new consumers are off.  When
         # either is on, share one RGB->HSV conversion.
-        need_hsv = self.place_gate or self.colour_kmeans or self.hue_guard or self.sat_floor
-        hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None
+        need_hsv = (self.place_gate or self.colour_kmeans or self.hue_guard or self.hue_guard_yellow_fix or self.sat_floor or self.sat_floor_adaptive
+                    or self.depth_blob_recover or self.tape_value_cut or self.split_by_solidity or self.gate_below_bins
+                    or self.glare_reject or self.reflection_reject or self.local_bg or self.neutral_on or self.bins_from_image)
+        self._neutral_new = [] if (self.neutral_on and not include_bins) else None
+        hsv = early_hsv if early_hsv is not None else (
+            cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None)
+        colour_records = [] if self.depth_blob_recover else None
         if self.colour_kmeans and not self._colour_kmeans_done and arm_clear:
             kkeep = self._keep_mask(depth, exclude_bins=True) if include_bins else keep  # never fit on bin pixels
             self._fit_colour_kmeans(hsv, kkeep)
-        masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
-        items = self._hue_guard_items(masks, hsv) if self.hue_guard else masks.items()
+        if self.sat_floor_adaptive:
+            masks = self._adaptive_saturation_masks(hsv, keep)
+        else:
+            masks = self._masks_hsv(hsv) if hsv is not None else self.masks(rgb)
+        if self.glare_reject:
+            masks = self._glare_filter(masks, hsv, depth)
+        all_masks = None
+        if self.local_bg:
+            all_masks = np.zeros(keep.shape, np.uint8)
+            for m_ in masks.values():
+                all_masks |= (m_ > 0).astype(np.uint8)
+        if self.hue_guard:
+            # H1: the red|yellow union is grouped and split before any colour is
+            # assigned.  Each resulting part is then classified and guarded
+            # solely from its own source pixels.
+            for color, blob, area, centroid, mixed, tent in self._hue_guard_parts(masks, hsv, keep, depth,
+                                                                                  arm_boundary):
+                before = len(dets)
+                self._detect_blob(color, blob, area, centroid, depth, include_bins, dets, rejected, hsv,
+                                  hue_mixed=mixed, tentative=tent)
+                if colour_records is not None and len(dets) > before:
+                    colour_records.append((dets[-1], blob))
+            items = ((color, mask) for color, mask in masks.items() if color not in ("red", "yellow"))
+        else:
+            items = masks.items()
+        _ls = {"raw_px": {}, "mask_px": {}, "blobs": {}, "min_area": 0, "blob_hsv": []} if self.look_summary else None
+        _ls_hsv = None
+        if _ls is not None:
+            _ls_hsv = hsv if hsv is not None else cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
         for color, m in items:
+            if _ls is not None:
+                _ls["raw_px"][color] = int(np.count_nonzero(m))
+            if blocked_by_image_gate is not None and (debug or self.reject_log):
+                self._append_fully_masked_rejections(
+                    color, m & keep_before_image_gate, ~blocked_by_image_gate, "gate_below_bins", rejected)
             m = m & keep  # drop bin / counter pixels BEFORE grouping, so an object touching a same-colour bin survives
             k = int(c["open_px"])
             if k > 0:
                 m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
             n, lab, stats, cent = cv2.connectedComponentsWithStats(m, connectivity=8)
+            if _ls is not None:
+                _ls["mask_px"][color] = int(np.count_nonzero(m))
+                _ls["blobs"][color] = int(n - 1)
+            skip = (self._reflection_skip(lab, stats, c["min_area_px"], hsv, depth)
+                    if self.reflection_reject and n > 2 else ())
             for i in range(1, n):
                 area = int(stats[i, cv2.CC_STAT_AREA])
-                if area < c["min_area_px"]:
+                x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+                ww, hh = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+                win = np.s_[y0:y0 + hh, x0:x0 + ww]
+                tentative = bool(arm_boundary is not None and
+                                  np.any(arm_boundary[win] & (lab[win] == i)))
+                floor = (int(self.partial_near_hand_cfg.get("min_area_px", 30))
+                         if tentative else int(c["min_area_px"]))
+                if _ls is not None and len(_ls["blob_hsv"]) < 10 and area >= int(c["min_area_px"]):
+                    hv = np.median(_ls_hsv[lab == i], axis=0)   # white-balance check: mask colour vs the blob's real H/S/V
+                    _ls["blob_hsv"].append(f"{color}:{area}px@({int(x0 + ww / 2)},{int(y0 + hh / 2)}) HSV=({hv[0]:.0f},{hv[1]:.0f},{hv[2]:.0f})")
+                if area < floor:
+                    if _ls is not None:
+                        _ls["min_area"] += 1
+                    if self.reject_log:
+                        rejected.append((self._blob_placeholder(color, area, cent[i]), "min_area"))
+                    continue
+                if i in skip:
                     continue
                 blob = (lab == i).astype(np.uint8)
-                if self.split_blobs:
-                    for part, p_area, p_cent in self.split_blob(blob, area, cent[i], depth):
-                        self._detect_blob(color, part, p_area, p_cent, depth, include_bins, dets, rejected,
-                                          hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None)
+                if i in skip:
                     continue
-                self._detect_blob(color, blob, area, cent[i], depth, include_bins, dets, rejected,
-                                  hsv if (self.place_gate or self.hue_guard or self.sat_floor) else None)
+                if all_masks is not None and self._local_bg_reject(blob, hsv, all_masks):
+                    continue
+                parts = [(blob, area, cent[i])]
+                if self.split_by_solidity:
+                    lo, hi = self.split_solidity_cfg.get("area_px", [520, 15500])
+                    if area < int(lo) or area > int(hi):
+                        rejected.append((self._blob_placeholder(color, area, cent[i]),
+                                         "split_by_solidity:area_low" if area < int(lo) else "split_by_solidity:area_high"))
+                        continue
+                    if not self._compact_single(blob):
+                        parts = self.split_blob(blob, area, cent[i], depth, force=True,
+                                                min_part_px=int(self.split_solidity_cfg.get("min_part_px", 250)))
+                    elif self.split_blobs:
+                        parts = self.split_blob(blob, area, cent[i], depth)
+                elif self.split_blobs:
+                    parts = self.split_blob(blob, area, cent[i], depth)
+                # gatefix relabels split parts from their own pixels only under its flag (r22 keeps the merged label)
+                relabel = self.split_by_solidity and len(parts) > 1
+                for part, p_area, p_cent in parts:
+                    part_color = self._part_colour(color, part, hsv) if relabel else color
+                    if self.tape_value_cut and self._tape_like(part_color, part, hsv):
+                        rejected.append((self._blob_placeholder(part_color, p_area, p_cent), "tape_value_cut"))
+                        continue
+                    part_tentative = tentative if part is blob else bool(
+                        arm_boundary is not None and np.any(arm_boundary[win] & (part[win] > 0)))
+                    before = len(dets)
+                    self._detect_blob(part_color, part, p_area, p_cent, depth, include_bins, dets, rejected,
+                                      hsv if (self.place_gate or self.hue_guard or self.hue_guard_yellow_fix or self.sat_floor or self.neutral_on) else None,
+                                      tentative=part_tentative)
+                    if colour_records is not None and len(dets) > before:
+                        colour_records.append((dets[-1], part))
+        if self.depth_blob_recover and not depth_fk_failed:
+            try:
+                from .depth_recover import recover_depth_blobs
+                recovered, depth_rejected, self.depth_recover_ms, stats = recover_depth_blobs(
+                    self, rgb, depth, hsv, colour_records, arm)
+                dets.extend(recovered)
+                rejected.extend(depth_rejected)
+                self.log(f"[depth_recover] components={stats['components']} matched={stats['matched']} "
+                         f"unknown={stats['unknown']} accepted={stats['accepted']} plane={stats['plane']} "
+                         f"elapsed_ms={self.depth_recover_ms:.2f}")
+            except Exception as exc:   # optional recall path fails closed; the colour detections still pass through
+                self.depth_recover_ms = 0.0
+                self.log(f"[depth_recover] failed ({type(exc).__name__}: {exc}); colour-only")
+        elif depth_fk_failed:
+            self.depth_recover_ms = 0.0
+            self.log("[depth_recover] skipped: FK arm/hand mask unavailable; colour-only")
+        if self.neutral_on and not include_bins and hsv is not None:
+            self.neutral_obstacles = self._neutral_pass(hsv, depth, keep, masks)
         if self.hue_guard:
             dets, rejected = self._hue_guard(dets, rejected)
+        elif self.hue_guard_yellow_fix:
+            dets = self._yellow_relabel(dets)
         if self.color_gate:
             dets = self._color_gate(dets, rejected)
+        if self.reject_log:
+            self._record_rejections(rejected)
+        if _ls is not None:
+            stages = Counter(self._reject_stage(str(why)) for _, why in rejected)
+            if _ls["min_area"]:
+                stages["min_area"] += _ls["min_area"]
+            _ls["rejected"] = dict(stages)
+            _ls["n_dets"] = len(dets)
+            self.last_look_summary = _ls
+        if self.still_vote and still_frame:
+            dets = self._still_vote_frame(dets)
+            if dets is None:
+                return (None, rejected) if debug else None
+        if self.novel_objects:
+            try:
+                from .novel_objects import augment_detections
+                dets = augment_detections(self, rgb, depth, dets, robot_q=robot_q)
+            except Exception as exc:
+                # Novel perception is optional.  A bad frame/classifier must
+                # retain the known, already safety-gated detections.
+                self.log(f"[novel] perception failed closed: {type(exc).__name__}: {exc}")
         return (dets, rejected) if debug else dets
+
+    def _blob_placeholder(self, color, area, centroid):
+        """Small diagnostic-only detection for a candidate rejected before localisation."""
+        det = self._from_plane(color, centroid, area, 0)
+        return det if det is not None else Detection(color, np.full(3, np.nan), area, 0, "plane",
+                                                     uv=(float(centroid[0]), float(centroid[1])))
+
+    def _append_fully_masked_rejections(self, color, mask, survivor_mask, reason, rejected):
+        """Record pre-gate components only when no candidate-sized portion survives the gate."""
+        k = int(self.cfg["open_px"])
+        m = np.asarray(mask, np.uint8)
+        if k > 0:
+            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        n, labels, stats, centroids = cv2.connectedComponentsWithStats(m, connectivity=8)
+        surviving = np.bincount(labels[np.asarray(survivor_mask, bool)], minlength=n)
+        area_floor = int(self.cfg["min_area_px"])
+        for i in range(1, n):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area >= area_floor and int(surviving[i]) < area_floor:
+                rejected.append((self._blob_placeholder(color, area, centroids[i]), reason))
+
+    def _part_colour(self, fallback, blob, hsv):
+        """Re-label a split part from its own pixels instead of inheriting the merged component's label."""
+        if hsv is None or not np.any(blob):
+            return fallback
+        label = classify_hue(top_face_hsv(hsv[blob > 0])[0], self.hsv)
+        return fallback if label is None else label
+
+    def _compact_single(self, blob):
+        """True when solidity and hull aspect both look like one object."""
+        cnts, _ = cv2.findContours(np.asarray(blob, np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return True
+        cnt = max(cnts, key=cv2.contourArea)
+        hull = cv2.convexHull(cnt)
+        hull_area = float(cv2.contourArea(hull))
+        solidity = float(np.count_nonzero(blob)) / max(hull_area, 1.0)
+        _, (w, h), _ = cv2.minAreaRect(hull)
+        aspect = max(float(w), float(h)) / max(min(float(w), float(h)), 1e-6)
+        return (solidity >= float(self.split_solidity_cfg.get("solidity", 0.82)) and
+                aspect <= float(self.split_solidity_cfg.get("max_aspect", 2.0)))
+
+    def _prism_like(self, blob):
+        """perception.prism_speckle_floor: the blob outline fills >= min_fill of its minimum enclosing triangle, is
+        compact (solidity >= min_solidity) and not a sliver (aspect <= max_aspect, short side >= min_short_px)."""
+        try:
+            p = self.prism_speckle_cfg
+            m = (np.asarray(blob) > 0).astype(np.uint8)
+            cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not cnts:
+                return False
+            cnt = max(cnts, key=cv2.contourArea)
+            area = float(cv2.contourArea(cnt))
+            if area < float(p.get("min_px", 60)):
+                return False
+            hull = cv2.convexHull(cnt)
+            if area / max(float(cv2.contourArea(hull)), 1.0) < float(p.get("min_solidity", 0.85)):
+                return False
+            _, (w, h), _ = cv2.minAreaRect(hull)
+            short, long = min(float(w), float(h)), max(float(w), float(h))
+            if short < float(p.get("min_short_px", 22)) or long / max(short, 1e-6) > float(p.get("max_aspect", 2.0)):
+                return False   # thin tape flaps and arm slivers
+            tri_area, _ = cv2.minEnclosingTriangle(hull.astype(np.float32))
+            return bool(tri_area > 0 and area / tri_area >= float(p.get("min_fill", 0.75)))
+        except Exception:
+            return False
+
+    def _tape_like(self, color, blob, hsv):
+        """Thin warm candidate without the configured bright saturated core. Hue never decides rejection."""
+        if color not in ("red", "orange") or hsv is None:
+            return False
+        vv, uu = np.nonzero(blob)
+        if len(uu) < 3:
+            return True
+        p = self.tape_value_cfg
+        _, (w, h), _ = cv2.minAreaRect(np.c_[uu, vv].astype(np.float32))
+        short, long = min(float(w), float(h)), max(float(w), float(h))
+        thin = (long / max(short, 1e-6) >= float(p.get("min_aspect", 3.0)) or
+                short <= float(p.get("max_thickness_px", 18)))
+        px = hsv[blob > 0]
+        core = (px[:, 1] >= float(p.get("min_s", 140))) & (px[:, 2] >= float(p.get("min_v", 140)))
+        weak = float(core.mean()) < float(p.get("min_core_frac", 0.20))
+        return bool(thin and weak)
+
+    def _depth_ok(self, depth):
+        if depth is None:
+            return False
+        dlo, dhi = self.cfg["depth_range_mm"]
+        d = np.asarray(depth)
+        return float(((d >= dlo) & (d <= dhi)).mean()) >= self.cfg["min_valid_frac"]
+
+    def _nominal_bin_px(self):
+        """[(name, centre_u, width_px, near_row)] of the nominal bins (near wall at counter height), by name."""
+        out = []
+        for n, g in bin_geometry(self.scene, {}).items():
+            cx, cy = g["centre_mat"]
+            h = np.asarray(self.scene.cfg["bins"]["outer_size"], float) / 2
+            pts = np.array([[cx - h[0], cy - h[1], 0.0], [cx + h[0], cy - h[1], 0.0], [cx, cy - h[1], 0.0]])
+            uvz = self._project(self.scene.mat_to_pelvis(pts))
+            if np.any(uvz[:, 2] <= 0):
+                continue
+            out.append((n, float(uvz[2, 0]), float(abs(uvz[1, 0] - uvz[0, 0])), float(uvz[2, 1])))
+        return out
+
+    def _detect_rims(self, hsv):
+        """bins_from_image: find the taped bin rims in the picture (rim_detect), name them, set the optional hint."""
+        from . import rim_detect
+        try:
+            nom = self._nominal_bin_px()
+        except ValueError:      # no extrinsics: nominal projection unavailable, detect without the width hint
+            nom = []
+        w_nom = float(np.median([w for _n, _u, w, _r in nom])) if nom else None
+        res = rim_detect.detect_bin_rims(hsv, self.bins_img_cfg.get("detect"), expect_w_px=w_nom)
+        if not res.bins:
+            return None
+        for rb in res.bins:
+            if nom:
+                uc = 0.5 * (rb.u0 + rb.u1)
+                rb.name = min(nom, key=lambda t: abs(t[1] - uc))[0]
+        self.bin_rims = res
+        self.bin_rim_hint = self._rim_hint(res) if self.bins_img_cfg.get("hint", False) else {}
+        return res
+
+    def _rim_hint(self, res):
+        """Bin-distance estimate from each front-rim line: ray through the rim-line pixel at the bin centre column
+        intersected with the counter plane (scene.counter_z_prior if present) gives the near edge's pelvis x; the
+        hint is (dx, 0) against the nominal near edge.  Bins clipped by the image or with a ragged line are skipped."""
+        sc = self.scene
+        z_plane = float(getattr(sc, "counter_z_prior", None) or sc.counter_z) + float(
+            self.bins_img_cfg.get("rim_z_m", 0.0))
+        T = self._T()
+        K = self.cal.cams[self.cam].K
+        out = {}
+        max_dx = float(self.bins_img_cfg.get("hint_max_m", 0.25))
+        for rb in res.bins:
+            if rb.name is None or rb.clipped or rb.resid_px > float(self.bins_img_cfg.get("hint_max_resid_px", 6.0)):
+                continue
+            u = 0.5 * (rb.u0 + rb.u1)
+            d_cam = np.array([(u - K[0, 2]) / K[0, 0], (float(rb.v_at(u)) - K[1, 2]) / K[1, 1], 1.0])
+            d = T[:3, :3] @ d_cam
+            if d[2] >= -1e-6:
+                continue
+            p = T[:3, 3] + d * ((z_plane - T[2, 3]) / d[2])
+            g = bin_geometry(self.scene, {}).get(rb.name)
+            if g is None:
+                continue
+            half = float(np.asarray(sc.cfg["bins"]["outer_size"], float)[1]) / 2
+            nominal_near_x = float(sc.mat_to_pelvis(np.array([g["centre_mat"][0], g["centre_mat"][1] - half, 0.0]))[0])
+            dx = float(p[0]) - nominal_near_x
+            if abs(dx) <= max_dx:
+                out[rb.name] = (dx, 0.0)
+        return out
+
+    def _crosscheck_rims(self, res):
+        """Runtime bin poses are trusted: keep them, only log where the image rim disagrees with the projected one."""
+        try:
+            nom = {n: r for n, _u, _w, r in self._nominal_bin_px()}
+        except ValueError:
+            return
+        for rb in res.bins:
+            if rb.name in nom:
+                dv = float(rb.v_at(0.5 * (rb.u0 + rb.u1))) - nom[rb.name]
+                if abs(dv) > float(self.bins_img_cfg.get("crosscheck_px", 12.0)):
+                    self.log(f"[bins_from_image] {rb.name}: rim line {dv:+.0f} px from the trusted projected rim")
+
+    def _live_bins_trusted(self):
+        """The image gate is unnecessary only when all live bin positions have trusted evidence."""
+        if not self.live_bins:
+            return False
+        if self.calibration is not None and getattr(self.calibration, "success", False):
+            return True
+        src = self.bin_shift_src
+        shift = dict(getattr(src, "bin_shift", None) or {})
+        conf = dict(getattr(src, "bin_conf", None) or {})
+        names = tuple(self.scene.bin_names)
+        floor = float(self.gate_below_cfg.get("trusted_bin_conf", 0.5))
+        return bool(names) and all(n in shift and float(conf.get(n, 0.0)) >= floor for n in names)
+
+    def _observed_bin_bottom(self, hsv):
+        """Lowest observed bin-mass row by column, with the median supported column as fallback."""
+        p = self.gate_below_cfg
+        h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+        warm = (((h <= int(p.get("h_max", 17))) | (h >= 170)) &
+                (s >= int(p.get("s_min", 77))) & (v >= int(p.get("v_min", 50))))
+        bright_object = (s >= int(p.get("object_s_min", 140))) & (v >= int(p.get("object_v_min", 150)))
+        m = (warm & ~bright_object).astype(np.uint8)
+        k = int(p.get("open_px", 5))
+        if k > 0:
+            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+        keep = np.zeros_like(m, bool)
+        min_comp = int(p.get("min_component_px", 2000))
+        for i in range(1, n):
+            if int(stats[i, cv2.CC_STAT_AREA]) >= min_comp:
+                keep |= lab == i
+        if int(keep.sum()) < int(p.get("min_mass_px", 18000)):
+            return None
+        if self.bin_bottom_first_run:
+            keep = self._first_run_columns(keep, p)
+            if int(keep.sum()) < int(p.get("min_mass_px", 18000)) // 4:
+                return None
+        supported = keep.any(axis=0)
+        rows = np.full(keep.shape[1], np.nan)
+        rows[supported] = keep.shape[0] - 1 - np.argmax(keep[::-1, supported], axis=0)
+        fallback = float(np.nanmedian(rows))
+        rows[~np.isfinite(rows)] = fallback
+        return rows
+
+    @staticmethod
+    def _first_run_columns(keep, p):
+        """perception.bin_bottom_first_run: per column keep only the warm vertical runs (gaps <= gap_px bridged) that
+        START in the bin-wall band (top first_run_top_frac of the frame; the front rim ends ~row 190 of 480). A shadowed
+        orange object lying on the mat starts below that band; counting it as bin mass pushed the row limit past the
+        object and gate_below_bins deleted the whole object (drop_3 e9 orange cylinder: 3000 px blob -> 649 px sliver)."""
+        gap = int(p.get("first_run_gap_px", 8))
+        top_max = int(float(p.get("first_run_top_frac", 0.45)) * keep.shape[0])
+        out = np.zeros_like(keep)
+        for x in np.flatnonzero(keep.any(axis=0)):
+            idx = np.flatnonzero(keep[:, x])
+            if idx[0] > top_max:
+                continue    # no bin wall in this column: unsupported (median fallback)
+            cut = np.flatnonzero(np.diff(idx) > gap)
+            starts = np.r_[idx[0], idx[cut + 1]]
+            ends = np.r_[idx[cut], idx[-1]]
+            for s, e in zip(starts, ends):
+                if s <= top_max:
+                    out[s:e + 1, x] = keep[s:e + 1, x]
+        return out
+
+    @staticmethod
+    def _reject_stage(reason):
+        if reason.startswith("height "):
+            return "height"
+        if reason.startswith("in_bin:"):
+            return "in_bin"
+        return reason
+
+    def _record_rejections(self, rejected):
+        frame = {}
+        for det, reason in rejected:
+            color = getattr(det, "color", "unknown")
+            stage = self._reject_stage(str(reason))
+            self.reject_tally.setdefault(color, Counter())[stage] += 1
+            frame.setdefault(color, Counter())[stage] += 1
+        payload = " ".join(f"{color}=" + ",".join(f"{stage}:{n}" for stage, n in sorted(counts.items()))
+                           for color, counts in sorted(frame.items()))
+        self.log(f"[reject_log] {payload or 'none'}")
+
+    def rejection_table(self):
+        """Plain dictionaries suitable for diagnostics tools and JSON."""
+        return {color: dict(counts) for color, counts in sorted(self.reject_tally.items())}
+
+    def _still_vote_frame(self, dets):
+        """Consume one still frame; return a voted list only when the configured window is complete."""
+        n = int(self.still_vote_cfg.get("n_frames", 3))
+        k = int(self.still_vote_cfg.get("min_hits", 2))
+        radius = float(self.still_vote_cfg.get("match_m", 0.02))
+        self._still_frames.append(list(dets))
+        if len(self._still_frames) < n:
+            return None
+        frames, self._still_frames = self._still_frames[:n], []
+        tracks = []
+        for fi, frame in enumerate(frames):
+            for det in frame:
+                best, best_d = None, radius
+                for track in tracks:
+                    if track["color"] != det.color or fi in track["frames"]:
+                        continue
+                    centre = np.median([d.top for d in track["dets"]], axis=0)
+                    dist = float(np.linalg.norm(det.top[:2] - centre[:2]))
+                    if dist < best_d:
+                        best, best_d = track, dist
+                if best is None:
+                    best = {"color": det.color, "frames": set(), "dets": []}
+                    tracks.append(best)
+                best["frames"].add(fi)
+                best["dets"].append(det)
+        voted = []
+        for track in tracks:
+            if len(track["frames"]) < k:
+                continue
+            ds = track["dets"]
+            rep = max(ds, key=lambda d: d.n_px)
+            top = np.median([d.top for d in ds], axis=0)
+            uv = tuple(np.median([d.uv for d in ds], axis=0))
+            voted.append(replace(rep, top=np.asarray(top, float), uv=uv,
+                                 n_px=int(np.median([d.n_px for d in ds]))))
+        return voted
+    def _counter_heights(self, ys, xs, depth, n=12):
+        """Median object-heights above the counter of up to n valid-depth pixels, None = no valid depth / any failure."""
+        if depth is None or np.ndim(depth) != 2 or not len(ys):
+            return None
+        try:
+            dlo, dhi = self.cfg["depth_range_mm"]
+            sel = np.linspace(0, len(ys) - 1, min(n * 4, len(ys))).astype(int)
+            d = np.asarray(depth)[ys[sel], xs[sel]].astype(float)
+            ok = (d >= dlo) & (d <= dhi)
+            if not ok.any():
+                return None
+            P = self._pixel_to_pelvis(xs[sel][ok][:n], ys[sel][ok][:n], d[ok][:n])
+            return float(np.median((P[:, 2] - self.scene.counter_z) / self.height))
+        except Exception:
+            return None
+
+    def _glare_filter(self, masks, hsv, depth):
+        """perception.glare_reject: remove small specular highlights on the counter plane (and their low-S halo) from the
+        colour masks. Fails open: any error returns the masks unchanged."""
+        g = self.glare_cfg
+        try:
+            hmax = float(g.get("plane_h_max", 0.5))
+
+            def on_plane(ys, xs):
+                h = self._counter_heights(ys, xs, depth)
+                return h is None or h < hmax
+            kill = bare_table.glare_kill_mask(hsv, int(g.get("v_min", 245)), int(g.get("s_max", 40)),
+                                              int(g.get("max_px", 900)), int(g.get("dilate_px", 6)),
+                                              int(g.get("halo_s_max", 65)), on_plane)
+        except Exception as exc:
+            self.log(f"[glare_reject] error {type(exc).__name__}: {exc}")
+            return masks
+        if kill is None:
+            return masks
+        self.bare_stats["glare_px"] = int(kill.sum())
+        keep = (kill == 0).astype(np.uint8) * 255
+        return {c: m & keep for c, m in masks.items()}
+
+    def _reflection_skip(self, lab, stats, min_area, hsv, depth):
+        """perception.reflection_reject: component ids (of one colour) that mirror a stronger blob above them."""
+        try:
+            ids = [i for i in range(1, len(stats)) if stats[i, cv2.CC_STAT_AREA] >= min_area]
+            if len(ids) < 2:
+                return ()
+            r = self.reflect_cfg
+            p = {"max_gap_px": float(r.get("max_gap_px", 40)), "dx_frac": float(r.get("dx_frac", 0.6)),
+                 "width_ratio": tuple(r.get("width_ratio", (0.5, 1.8))), "s_ratio": float(r.get("s_ratio", 0.9)),
+                 "min_iou": float(r.get("min_iou", 0.45)), "h_max": float(r.get("h_max", 0.5))}
+            blobs = []
+            for i in ids:
+                x, y, w, h = (int(stats[i, k]) for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
+                blobs.append((lab[y:y + h, x:x + w] == i, x, y))
+            bad = bare_table.reflection_indices(blobs, hsv, p, lambda ys, xs: self._counter_heights(ys, xs, depth))
+            self.bare_stats["reflection"] += len(bad)
+            return {ids[k] for k in bad}
+        except Exception as exc:
+            self.log(f"[reflection_reject] error {type(exc).__name__}: {exc}")
+            return ()
+
+    def _local_bg_reject(self, blob, hsv, all_masks):
+        """perception.local_bg: blob whose median H/S equals its surrounding ring (the table) is not an object."""
+        try:
+            l = self.local_bg_cfg
+            if bare_table.low_contrast_with_ring(hsv, blob, all_masks, int(l.get("ring_px", 10)),
+                                                 float(l.get("dh", 5)), float(l.get("ds", 25))):
+                self.bare_stats["local_bg"] += 1
+                return True
+        except Exception as exc:
+            self.log(f"[local_bg] error {type(exc).__name__}: {exc}")
+        return False
 
     def _hue_guard_items(self, masks, hsv):
         """perception.hue_guard layer 3: red and yellow pixels form one component per object, so an object whose side
@@ -1095,19 +2273,56 @@ class Perception:
         items = []
         for i in range(1, n):
             comp = lab == i
-            top = top_face_hsv(hsv[comp])
+            top = self._topface_hsv(hsv[comp])
             label = classify_hue(top[0], self.hsv)
             if label is None:
                 label = "red" if (masks["red"][comp] > 0).sum() >= (masks["yellow"][comp] > 0).sum() else "yellow"
             items.append((label, comp.astype(np.uint8) * 255))
         return items + [(c, m) for c, m in masks.items() if c not in ("red", "yellow")]
 
+    def _hue_guard_parts(self, masks, hsv, keep, depth, arm_boundary=None):
+        """H1 red/yellow candidates, split before label assignment.
+
+        A part retaining pixels from both disjoint source masks is tagged mixed;
+        `_hue_guard` abstains it even when its brightest pixels look decisive.
+        """
+        import cv2
+        red = masks["red"] & keep
+        yellow = masks["yellow"] & keep
+        union = (red | yellow).astype(np.uint8)
+        k = int(self.cfg["open_px"])
+        if k > 0:
+            union = cv2.morphologyEx(union, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        n, lab, stats, cent = cv2.connectedComponentsWithStats(union, connectivity=8)
+        out = []
+        for i in range(1, n):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            blob = (lab == i).astype(np.uint8)
+            # recall partial_ok_near_hand: an FK-boundary fragment gets the lower floor and is marked tentative
+            tentative = bool(arm_boundary is not None and np.any(arm_boundary & (blob > 0)))
+            floor = (int(self.partial_near_hand_cfg.get("min_area_px", 30)) if tentative
+                     else int(self.cfg["min_area_px"]))
+            if area < floor:
+                continue
+            parts = self.split_blob(blob, area, cent[i], depth) if self.split_blobs else [(blob, area, cent[i])]
+            for part, p_area, p_cent in parts:
+                use = part > 0
+                part_tentative = bool(arm_boundary is not None and np.any(arm_boundary & use))
+                top = self._topface_hsv(hsv[use])   # top35 = legacy; recall topface_mode whole_blob fallback
+                label = classify_hue(top[0], self.hsv)
+                nr, ny = int(np.count_nonzero(red[use])), int(np.count_nonzero(yellow[use]))
+                if label not in ("red", "yellow"):
+                    label = "red" if nr >= ny else "yellow"
+                out.append((label, part, p_area, p_cent, nr > 0 and ny > 0, part_tentative))
+        return out
+
     def _hue_guard(self, dets, rejected):
         """perception.hue_guard: abstain (or resolve by frame evidence) on orange/yellow hues near the boundary."""
         idx = [i for i, d in enumerate(dets) if d.hsv_med is not None]
         cands = [Cand(dets[i].color, *dets[i].hsv_med) for i in idx]
         try:
-            verdict = judge(cands, self.hsv, self.hue_guard_min_gap_deg, self.hue_guard_red_min_s)
+            verdict = judge(cands, self.hsv, self.hue_guard_min_gap_deg, self.hue_guard_red_min_s,
+                            yellow_fix=self.hue_guard_yellow_fix)
         except Exception as exc:   # fail closed: nothing hue-judged is placed
             verdict = [(None, f"error:{type(exc).__name__}")] * len(idx)
             self.log(f"[hue_guard] error {type(exc).__name__}: {exc}")
@@ -1118,15 +2333,20 @@ class Perception:
                 keep.append(d)
                 continue
             label, reason = by_idx[i]
+            if d.hue_mixed:
+                label, reason = None, "mixed"
             if reason is None:
                 if label != d.color:
                     n_relabel += 1
+                    old = d
                     d = replace(d, color=label)
+                    self._copy_tentative(old, d)
                 keep.append(d)
                 continue
             n_amb += 1
             reasons[reason] = reasons.get(reason, 0) + 1
             amb = replace(d, color_conf=AMBIGUOUS_CONF)
+            self._copy_tentative(d, amb)
             if self.place_gate:   # the place gate (colour_min > 0.3) keeps it off the bins; it stays on the table
                 keep.append(amb)
             else:
@@ -1135,10 +2355,27 @@ class Perception:
                  f"moved_rejected={len(moved)} reasons={reasons}")
         return keep, rejected + moved
 
-    def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None):
+    def _yellow_relabel(self, dets):
+        """perception.hue_guard.yellow_fix with hue_guard off: a red-labelled candidate whose own top-face hue is in the
+        yellow range becomes yellow. No abstain layer (that stays in _hue_guard); mixed red|yellow parts keep their label."""
+        out = []
+        for d in dets:
+            if d.color == "red" and d.hsv_med is not None and not d.hue_mixed \
+                    and classify_hue(d.hsv_med[0], self.hsv) == "yellow":
+                new = replace(d, color="yellow")
+                self._copy_tentative(d, new)
+                out.append(new)
+            else:
+                out.append(d)
+        return out
+
+    def _detect_blob(self, color, blob, area, centroid, depth, include_bins, dets, rejected, hsv=None,
+                     hue_mixed=False, tentative=False):
         """One colour blob -> Detection (depth top face, else plane) -> dets or rejected (the stock per-blob body)."""
         import cv2
         c = self.cfg
+        if self.neutral_on and hsv is not None and self._neutral_colour_blob(hsv, blob, area, centroid, depth):
+            return   # dark / colourless blob that happened to pass a colour mask: an obstacle, never a detection
         dlo, dhi = c["depth_range_mm"]
         e = int(c["erode_px"])
         core = cv2.erode(blob, np.ones((2 * e + 1, 2 * e + 1), np.uint8)) if e > 0 else blob
@@ -1165,8 +2402,20 @@ class Perception:
                 self._apply_shape2d(det, blob)
             elif color == "orange":
                 self._log_orange_candidate(blob)
-        if det is not None and hsv is not None and self.hue_guard:
-            det.hsv_med = top_face_hsv(hsv[blob > 0])   # layer 3: colour from the top face, not the whole blob
+        if det is not None and self.tri_vertex_align and det.shape == "triangle":
+            # The pose estimator is preferred by the planner. This rectangle fallback keeps the feature useful when
+            # only a standing triangle label and colour blob survive depth filtering.
+            det.vertex_yaw = self._blob_vertex_yaw(blob, float(det.top[2]))
+        if det is not None and hsv is not None and (self.hue_guard or self.hue_guard_yellow_fix):
+            det.hsv_med = self._topface_hsv(hsv[blob > 0])   # configured top-face / small-blob hue vote
+            det.hue_mixed = bool(hue_mixed)
+        if det is not None and self.real_border_partial:
+            m = int(self.real_border_cfg.get("margin_px", 3))
+            bx, by, bw, bh = cv2.boundingRect(np.asarray(blob, np.uint8))
+            H_, W_ = blob.shape[:2]
+            det.border_touch = bool(bx <= m or bx + bw >= W_ - m or by + bh >= H_ - m)
+        if det is not None and self.prism_speckle_floor and color in ("red", "orange"):
+            det.prism_like = self._prism_like(blob)
         if det is not None and hsv is not None and self.sat_floor:
             det.sat_med = float(np.median(hsv[blob > 0][:, 1]))   # color_gate.sat_floor: shadow / sheen has low S
         if det is not None and hsv is not None and self.place_gate:
@@ -1175,13 +2424,158 @@ class Perception:
             except Exception as exc:  # never raise into act()
                 det.color_conf = 0.0
                 self.log(f"[gate] colour_confidence failed for {color}: {type(exc).__name__}: {exc}")
+        if det is not None and tentative:
+            det.tentative = True
+            det.tentative_reason = "fk_mask_boundary"
         why = self._reject(det, bins_first=include_bins)
+        if why is None and det is not None and getattr(self, "_rescue_arm", None) is not None:
+            why = self._fk_rescue_reject(det, blob, area)
         if self.shape_diag and det is not None and det.shape_diag is not None:
             self._log_diag(det, why)
         if why:
             rejected.append((det, why))
         else:
             dets.append(det)
+
+    def _fk_rescue_reject(self, det, blob, area):
+        """perception.fk_colour_rescue: a blob that overlaps the FK arm silhouette is the robot's own hand / forearm
+        unless its top sits at object height above the counter (hands float 6-9 cm higher)."""
+        ov = float(np.count_nonzero(np.asarray(blob, bool) & self._rescue_arm)) / max(1, int(area))
+        if ov < float(self.fk_rescue_cfg.get("min_overlap_frac", 0.02)):
+            return None
+        if det.method != "depth" or int(det.n_px) < int(self.fk_rescue_cfg.get("min_area_px", 1200)):
+            return "fk_rescue:small"   # plane-only / speckle blobs on the hand were what the silhouette used to remove
+        lo, hi = self.fk_rescue_cfg.get("z_above_counter_m", [0.034, 0.056])
+        dz = float(det.top[2]) - float(self.scene.counter_z)
+        return None if lo <= dz <= hi else "fk_rescue:height"
+
+    def _blob_vertex_yaw(self, blob, z):
+        """Pelvis-frame direction of a triangle vertex line from the blob's minimum-area rectangle, modulo 120 deg.
+
+        For a triangle, the rectangle's shorter axis is an undirected altitude/vertex line. Two points on that pixel
+        axis are ray-intersected with the horizontal object-top plane before measuring yaw, so camera tilt does not
+        turn an image angle into a robot-frame angle. None is the safe fallback for a malformed/tiny blob.
+        """
+        try:
+            import cv2
+            m = (np.asarray(blob) > 0).astype(np.uint8)
+            cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            if not cnts:
+                return None
+            (u, v), (w, h), angle_deg = cv2.minAreaRect(max(cnts, key=cv2.contourArea))
+            if min(float(w), float(h)) <= 1.0:
+                return None
+            # OpenCV's angle follows the width axis. Select the rectangle's shorter axis: a triangle altitude.
+            a = np.radians(float(angle_deg) + (0.0 if w <= h else 90.0))
+            duv = 20.0 * np.array([np.cos(a), np.sin(a)])
+            T, K = self._T(), self.cal.cams[self.cam].K
+
+            def hit(uv):
+                ray_opt = np.array([(uv[0] - K[0, 2]) / K[0, 0], (uv[1] - K[1, 2]) / K[1, 1], 1.0])
+                ray = T[:3, :3] @ ray_opt
+                if abs(ray[2]) <= 1e-9:
+                    return None
+                return T[:3, 3] + ((z - T[2, 3]) / ray[2]) * ray
+
+            p0, p1 = hit(np.array([u, v]) - duv), hit(np.array([u, v]) + duv)
+            if p0 is None or p1 is None or not np.all(np.isfinite([p0, p1])):
+                return None
+            d = p1[:2] - p0[:2]
+            if np.linalg.norm(d) <= 1e-9:
+                return None
+            return float(np.arctan2(d[1], d[0]) % (2.0 * np.pi / 3.0))
+        except Exception:
+            return None
+    # ------------------------------------------------------------------ perception.neutral_obstacles
+    def _neutral_colour_blob(self, hsv, blob, area, centroid, depth):
+        """A target-colour blob whose median V < v_dark (or S < s_grey) is not a target object (dark navy block,
+        grey): record it as a neutral obstacle and return True so the caller drops it."""
+        n = self.neutral_cfg
+        px = hsv[blob > 0]
+        if len(px) == 0:
+            return False
+        s_med, v_med = float(np.median(px[:, 1])), float(np.median(px[:, 2]))
+        if v_med < float(n.get("v_dark", 55)):
+            why = "dark"
+        elif s_med < float(n.get("s_grey", 30)):
+            why = "grey"
+        else:
+            return False
+        if self._neutral_new is not None:
+            ob = self._neutral_obstacle(blob, area, centroid, depth, why)
+            if ob is not None:
+                self._neutral_new.append(ob)
+        return True
+
+    def _neutral_pass(self, hsv, depth, keep, masks):
+        """Non-target neutral blobs: dark (V <= v_dark) or grey (needs depth; S <= s_grey, V <= v_grey_max; bright low-S pixels are
+        overexposed yellow tops, not grey), on pixels the keep mask allows, away from any target colour mask."""
+        n = self.neutral_cfg
+        s, v = hsv[..., 1], hsv[..., 2]
+        dark = v <= int(n.get("v_dark", 55))
+        grey = (s <= int(n.get("s_grey", 30))) & (v <= int(n.get("v_grey_max", 200)))
+        dlo, dhi = self.cfg["depth_range_mm"]
+        if depth is None or ((depth >= dlo) & (depth <= dhi)).mean() < self.cfg["min_valid_frac"]:
+            grey[:] = False   # no usable depth: the grey mat / bin walls cannot be told from a grey block, dark only
+        m = ((dark | grey) & (keep > 0)).astype(np.uint8)
+        tgt = np.zeros_like(m)
+        for cm in masks.values():
+            tgt |= (cm > 0).astype(np.uint8)
+        g = int(n.get("colour_guard_px", 3))
+        if g > 0:
+            tgt = cv2.dilate(tgt, np.ones((2 * g + 1, 2 * g + 1), np.uint8))
+        m &= (1 - tgt)
+        k = int(self.cfg["open_px"])
+        if k > 0:
+            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        out = list(self._neutral_new or [])
+        cnt, lab, stats, cent = cv2.connectedComponentsWithStats(m, connectivity=8)
+        for i in range(1, cnt):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area < int(n.get("min_area_px", 300)):
+                continue
+            blob = (lab == i).astype(np.uint8)
+            why = "dark" if float(np.median(v[blob > 0])) <= int(n.get("v_dark", 55)) else "grey"
+            ob = self._neutral_obstacle(blob, area, cent[i], depth, why)
+            if ob is not None:
+                out.append(ob)
+        out.sort(key=lambda o: -o.n_px)
+        return out[: int(n.get("max_obstacles", 6))]
+
+    def _neutral_obstacle(self, blob, area, centroid, depth, why):
+        """Blob -> NeutralObstacle. 3D footprint (xy bbox of the 2..98 percentile points above the counter, pelvis
+        frame, the detections' xy_offset / y_affine applied) only when depth has enough valid pixels, the blob
+        stands min_height_m above the counter and is at most max_side_m wide; a blob with depth that is flat on the
+        counter is dropped (shadow / mat); otherwise it stays image-only."""
+        n, c = self.neutral_cfg, self.cfg
+        if area > int(n.get("max_area_px", 8000)):
+            return None
+        ys, xs = np.nonzero(blob)
+        ob = NeutralObstacle((float(centroid[0]), float(centroid[1])), int(area),
+                             (int(xs.min()), int(ys.min()), int(np.ptp(xs)) + 1, int(np.ptp(ys)) + 1), why)
+        if depth is None:
+            return ob
+        dlo, dhi = c["depth_range_mm"]
+        d = depth[ys, xs].astype(float)
+        ok = (d >= dlo) & (d <= dhi)
+        if ok.sum() < int(c["min_valid_depth_px"]):
+            return ob
+        P = self._pixel_to_pelvis(xs[ok], ys[ok], d[ok])
+        zc = self.scene.counter_z
+        z_top = float(np.percentile(P[:, 2], c["top_percentile"]))
+        if z_top - zc < float(n.get("min_height_m", 0.015)):
+            return None
+        P = P[P[:, 2] > zc + 0.5 * float(n.get("min_height_m", 0.015))]
+        if len(P) < 5:
+            return ob
+        lo, hi = np.percentile(P[:, :2], 2, axis=0), np.percentile(P[:, :2], 98, axis=0)
+        if float((hi - lo).max()) > float(n.get("max_side_m", 0.15)):
+            return ob
+        pts = np.array([lo, hi]) + self.xy_offset
+        if self.y_affine is not None:
+            pts = np.array([self._y_affine(p) for p in pts])
+        ob.xy_lo, ob.xy_hi, ob.z_top = pts.min(0), pts.max(0), z_top
+        return ob
 
     def expected_area_px(self, blob, centroid, depth):
         """Pixel area of ONE object (split.object_size) at this blob's distance: area_coef * (fx * size / Z)^2.
@@ -1212,7 +2606,7 @@ class Perception:
             return fallback
         return coef * (K[0, 0] * size / z) ** 2
 
-    def split_blob(self, blob, area, centroid, depth):
+    def split_blob(self, blob, area, centroid, depth, force=False, min_part_px=None):
         """[(mask, area, centroid)]: the blob itself, or one part per touching object. Only blobs larger than
         split.area_factor x the expected single-object area are tried. Seeds = connected components of the distance
         transform above peak_frac * max (tried in order); every blob pixel goes to its nearest seed; accepted only if
@@ -1223,19 +2617,25 @@ class Perception:
         s = self.cfg.get("split") or {}
         whole = [(blob, area, centroid)]
         exp = self.expected_area_px(blob, centroid, depth)
-        if area <= float(s.get("area_factor", 1.5)) * exp:
+        af = float(s.get("area_factor", 1.5))
+        mpf = float(s.get("min_part_frac", 0.3))
+        if self.real_merge_split:   # real head cam: the expected area overshoots a real object ~2x, so merged pairs stay under 1.5x
+            af = float(self.real_merge_cfg.get("area_factor", af))
+            mpf = float(self.real_merge_cfg.get("min_part_frac", mpf))
+        if not force and area <= af * exp:
             return whole
         x, y, w, h = cv2.boundingRect(blob)
         crop = np.ascontiguousarray(blob[y:y + h, x:x + w])
         dist = cv2.distanceTransform(crop, cv2.DIST_L2, 5)
         dmax = float(dist.max())
-        min_part = float(s.get("min_part_frac", 0.3)) * exp
+        min_part = (float(min_part_px) if force and min_part_px is not None
+                    else mpf * exp)
         for frac in s.get("peak_frac", [0.5, 0.6, 0.7, 0.8]):
             n, lab = cv2.connectedComponents((dist >= frac * dmax).astype(np.uint8), connectivity=8)
             if n < 3:
                 continue
             # at most as many seeds as objects the blob can hold (strongest peaks), decided BEFORE any per-seed work
-            k_max = min(int(s.get("max_parts", 3)), max(1, int(round(area / exp))))
+            k_max = min(int(s.get("max_parts", 3)), max(2 if force else 1, int(round(area / exp))))
             if k_max < 2:
                 continue
             if n - 1 > k_max:
@@ -1256,8 +2656,31 @@ class Perception:
         vv, uu = np.nonzero(crop)
         pts = np.c_[uu, vv].astype(float)
         evals, evecs = np.linalg.eigh(np.cov((pts - pts.mean(0)).T))
-        if evals[0] <= 0 or np.sqrt(evals[1] / evals[0]) < float(s.get("min_aspect", 1.4)):
+        if evals[0] <= 0 or (not force and np.sqrt(evals[1] / evals[0]) < float(s.get("min_aspect", 1.4))):
             return whole
+        if force:
+            # Deterministic coordinate k-means. Farthest projections give stable seeds and two compact parts even
+            # when a diagonal contact has no clean distance-transform neck.
+            axis = evecs[:, 1]
+            proj = (pts - pts.mean(0)) @ axis
+            centres = np.array([pts[np.argmin(proj)], pts[np.argmax(proj)]], float)
+            idx = np.zeros(len(pts), int)
+            for _ in range(8):
+                idx = np.argmin(((pts[:, None, :] - centres[None, :, :]) ** 2).sum(axis=2), axis=1)
+                if any(not np.any(idx == j) for j in range(2)):
+                    return whole
+                new = np.array([pts[idx == j].mean(axis=0) for j in range(2)])
+                if np.allclose(new, centres):
+                    break
+                centres = new
+            parts = []
+            for j in range(2):
+                p = np.zeros_like(crop, bool)
+                p[vv[idx == j], uu[idx == j]] = True
+                parts.append(p)
+            if min(int(p.sum()) for p in parts) < min_part:
+                return whole
+            return self._parts_out(blob, parts, x, y, w, h)
         k = int(np.clip(round(area / exp), 2, int(s.get("max_parts", 3))))
         proj = (pts - pts.mean(0)) @ evecs[:, 1]
         edges = np.quantile(proj, np.linspace(0, 1, k + 1)[1:-1])
@@ -1286,6 +2709,8 @@ class Perception:
         bin.geometry_runtime is on; flag off: only under bin.vote (gate=False) / color_gate.live_bins (gate=True) as before."""
         on = self.geometry_runtime or (self.live_bins if gate else self.bin_vote_on)
         shift = dict(getattr(self.bin_shift_src, "bin_shift", None) or {}) if on else {}
+        if not shift and self.bin_rim_hint and self.bins_from_image and self.bins_img_cfg.get("hint", False):
+            shift = dict(self.bin_rim_hint)   # image rim estimate, only without any runtime estimate
         return bin_geometry(self.scene, shift)
 
     def _bin_centres_mat(self):
@@ -1297,7 +2722,8 @@ class Perception:
         height over the mat and outside every bin footprint."""
         c, sc = self.cfg, self.scene
         shape = depth.shape if depth is not None else (480, 640)
-        keep = self._bin_hulls_mask(shape) if exclude_bins else np.full(shape, 255, np.uint8)
+        keep = (self._bin_hulls_mask(shape) if exclude_bins and not self._image_bin_gate_active
+                else np.full(shape, 255, np.uint8))
         if depth is None:
             return keep
         dlo, dhi = c["depth_range_mm"]
@@ -1315,7 +2741,7 @@ class Perception:
         # footprints, while bin blobs remain labelled ``in_bin:*``.
         upper = c["height_range"][1] if exclude_bins else max(c["height_range"][1], 4.0)
         ok = (h >= 0.25) & (h <= upper)
-        if exclude_bins:
+        if exclude_bins and not self._image_bin_gate_active:
             half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + c["bin_pixel_margin"]
             for ctr in self._bin_centres_mat().values():
                 ok &= ~np.all(np.abs(pm[:, :2] - ctr) <= half, axis=1)
@@ -1439,12 +2865,39 @@ class Perception:
         if self.want_apex and shape == "triangle":
             from .apex_gate import apex_gate_features
             det.apex_gate = apex_gate_features(top[:, :2], altitude=self.size)
+        if self.prism_orientation:
+            self._apply_prism_orientation(det, P, top)
         if self.generic_fallback:   # flag off: no call, no work
             self._apply_generic_fallback(det, conf, blob, frame_depth)
         if self.shape_diag:
             nb = bool(near_bin) if (self.classify_shape and self.near_bin_guard) else _safe_near_bin(self, top)
             det.shape_diag = self._diag(det, "depth", top[:, :2], blob, conf, path, nb)
         return det
+
+    def _apply_prism_orientation(self, det, P, top):
+        """perception.prism_orientation: sets det.prism_orientation (+ ridge_yaw / prism_xy / prism_conf for a lying prism).
+        A lying prism is a triangle prism whatever the rectangular top face said: shape -> "triangle", path "lying" (so
+        the demo posture, which is for standing prisms, is not chosen). Unsure / error: det untouched."""
+        try:
+            p = self.prism_params
+            length = float(p.get("length_m") or self.height)
+            dims = self.scene.object_dims("triangle")
+            r = prism_orientation(P, top, self.scene.counter_z, 3.0 * dims["apothem"], dims["side"], length,
+                                  float(self.cfg["top_band"]), float(self.cfg["top_percentile"]),
+                                  int(self.cfg["min_valid_depth_px"]), float(p.get("fill_min", 0.75)))
+        except Exception as exc:   # never raise into act()
+            self.log(f"[prism] orientation failed: {type(exc).__name__}: {exc}")
+            return
+        if r is None:
+            return
+        det.prism_orientation, det.prism_conf = r["orientation"], r["conf"]
+        if r["orientation"] != "lying":
+            return
+        xy = np.asarray(r["xy"], float) + self.xy_offset
+        if self.y_affine is not None:
+            xy = self._y_affine(xy)
+        det.ridge_yaw, det.prism_xy = r["ridge_yaw"], (float(xy[0]), float(xy[1]))
+        det.shape, det.shape_conf, det.shape_path = "triangle", r["conf"], "lying"
 
     def _apply_shape2d(self, det, blob):
         """perception.shape_2d_v2, yellow only. A confident metric shape is kept (disagreement logged). Where the shape is
@@ -1537,7 +2990,7 @@ class Perception:
         o = T[:3, 3]
         z_top = self.scene.counter_z + self.height
         # the blob centroid lies between top face and front face: aim a bit below the top
-        z_aim = z_top - 0.25 * self.height
+        z_aim = z_top - float(self.cfg.get("aim_z_frac", 0.25)) * self.height
         if ray[2] >= -1e-6:
             return Detection(color, np.array([np.nan, np.nan, np.nan]), area, n_depth, "plane")
         s = (z_aim - o[2]) / ray[2]
@@ -1564,30 +3017,43 @@ class Perception:
             return "off_mat"
         bm = c["bin_exclusion_margin"]
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + bm
-        for name, ctr in self._bin_centres_mat().items():
-            if np.all(np.abs(pm[:2] - ctr) <= half):
-                return f"in_bin:{name}"
+        if not self._image_bin_gate_active:
+            for name, ctr in self._bin_centres_mat().items():
+                if np.all(np.abs(pm[:2] - ctr) <= half):
+                    return f"in_bin:{name}"
         if bins_first and not lo <= h <= hi:
             return f"height {h:.2f} sizes"
         return None
 
-    def _fk_arm_mask(self, shape, arm_q, hand_q=None):
-        """perception.color_gate.fk_mask: bool image mask of the FK-posed arm + hand surface points projected with the
-        CURRENT camera pose (pitch-cal / B1 corrected), dilated by fk_dilate_px. None on any failure (= no mask)."""
+    def _fk_arm_mask(self, shape, arm_q, hand_q=None, dilate_px=None, fill=None):
+        """FK arm/hand mask from filled per-link silhouettes at the current camera pose.
+
+        Surface samples are 5 mm apart, so marking their projected pixels alone leaves coloured robot pixels between
+        samples.  A convex hull per link fills those gaps without bridging the two arms (or separate fingers), then
+        the flag-param ``fk_dilate_px`` covers the rendered/real RGB-to-FK edge residual.  None on any failure keeps
+        the historical fail-open behaviour of this optional gate.
+        """
         import cv2
         try:
+            if self._arm_surface_error is not None:
+                return None
             if self._arm_surface is None:
                 from .hand_calib import ArmSurface
                 self._arm_surface = ArmSurface()
-            P, _ = self._arm_surface.posed(arm_q, hand_q)
-            uvz = self._project(P)
             h, w = shape
-            ok = np.all(np.isfinite(uvz), axis=1) & (uvz[:, 2] > 0)
-            u, v = np.round(uvz[ok, 0]).astype(int), np.round(uvz[ok, 1]).astype(int)
-            inb = (u >= 0) & (u < w) & (v >= 0) & (v < h)
             m = np.zeros(shape, np.uint8)
-            m[v[inb], u[inb]] = 1
-            r = int(self.color_gate_cfg.get("fk_dilate_px", 15))
+            r = int(self.color_gate_cfg.get("fk_dilate_px", 0)) if dilate_px is None else int(dilate_px)
+            if fill is None:
+                fill = self.fk_silhouette or r > 0   # gatefix fk_silhouette, or fixfk's dilation-coupled per-link fill
+            for P, _ in self._arm_surface.posed_links(arm_q, hand_q):
+                uvz = self._project(P)
+                ok = np.all(np.isfinite(uvz), axis=1) & (uvz[:, 2] > 0)
+                uv = np.round(uvz[ok, :2]).astype(np.int32)
+                uv = uv[(uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h)]
+                if fill and len(uv) >= 3:
+                    cv2.fillConvexPoly(m, cv2.convexHull(uv), 1)
+                elif len(uv):
+                    m[uv[:, 1], uv[:, 0]] = 1
             if r > 0:
                 m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
             self.fk_mask_px = int(m.sum())
@@ -1622,29 +3088,89 @@ class Perception:
     def _color_gate_why(self, det, g):
         """Rules 1 (area floor scaled by distance), 1b (area ceiling: rim / tape / merged blob), 2b (positive workspace:
         only the counter in front of the bin row) and 2 (bin zone). None = keep."""
-        if g.get("sat_floor") and self._color_gate_sat_low(det, g):
+        if self.sat_floor and self._color_gate_sat_low(det, g):
             return "color_gate:sat_floor"
         Z = self._color_gate_depth(det.top)
         if Z is None:
-            if det.n_px < g["min_px_no_z"]:
+            if not getattr(det, "tentative", False) and det.n_px < self._visible_expected_area(det, float(g["min_px_no_z"])):
                 return "color_gate:speckle_no_z"
             if g.get("max_px_no_z") is not None and det.n_px > g["max_px_no_z"]:
                 return "color_gate:too_big_no_z"
+        elif self.area_floor_geometric:
+            p = self.cfg.get("area_floor_geometric_params") or {}
+            prism = self._projected_top_area_px(det.top, self.size * self.size / np.sqrt(3.0))
+            cube = self._projected_top_area_px(det.top, self.size * self.size)
+            if prism is None or cube is None:
+                if not getattr(det, "tentative", False) and det.n_px < g["min_px_no_z"]:
+                    return "color_gate:speckle_no_z"
+                if g.get("max_px_no_z") is not None and det.n_px > g["max_px_no_z"]:
+                    return "color_gate:too_big_no_z"
+            else:
+                if not getattr(det, "tentative", False) and det.n_px < float(p.get("min_frac", 0.35)) * prism:
+                    return "color_gate:speckle"
+                if det.n_px > float(p.get("max_factor", 2.0)) * cube:
+                    return "color_gate:too_big"
         else:
             K = self.cal.cams[self.cam].K
             expected = float(K[0, 0]) * float(K[1, 1]) * (self.size / Z) ** 2   # one object's top face, px
-            if det.n_px < g["area_frac"] * expected:
+            speckle_expected = self._visible_expected_area(det, expected)
+            frac = g["area_frac"]
+            if self.prism_speckle_floor and det.prism_like:
+                frac = min(frac, float(self.prism_speckle_cfg.get("area_frac", 0.08)))   # lying/standing prism: small top
+            if self.real_border_partial and det.border_touch and det.color != "blue":
+                frac = min(frac, float(self.real_border_cfg.get("area_frac", 0.12)))   # cut by the frame edge: partial view
+            if not getattr(det, "tentative", False) and det.n_px < frac * speckle_expected:
                 return "color_gate:speckle"
             if g.get("max_area_frac") is not None and det.n_px > g["max_area_frac"] * expected:
                 return "color_gate:too_big"
         return self._color_gate_workspace(det, g) or self._color_gate_bin(det, g)
 
+    def _visible_expected_area(self, det, expected):
+        """Expected object pixels outside the dilated arm silhouette; masked pixels are not missing evidence."""
+        if not self.fk_silhouette or self._last_arm_mask is None:
+            return expected
+        side = max(1.0, float(np.sqrt(expected)))
+        u, v = det.uv
+        h, w = self._last_arm_mask.shape
+        x0, x1 = max(0, int(np.floor(u - side / 2))), min(w, int(np.ceil(u + side / 2)))
+        y0, y1 = max(0, int(np.floor(v - side / 2))), min(h, int(np.ceil(v + side / 2)))
+        if x1 <= x0 or y1 <= y0:
+            return expected
+        visible = 1.0 - float(self._last_arm_mask[y0:y1, x0:x1].mean())
+        return expected * max(visible, 0.05)
+
     def _color_gate_sat_low(self, det, g):
         """perception.color_gate.sat_floor: a blue (purple) or yellow blob whose median S is below its floor is a
         shadow or sheen. Other colours (red, orange) and blobs without a measured S are never rejected here."""
         name = "blue" if det.color == "purple" else det.color
-        floor = (g.get("sat_floor_params") or {}).get(name)
+        if name == "blue" and self.sat_floor_adaptive:
+            floor = self._sat_floors.get("blue")
+        else:
+            floor = (g.get("sat_floor_params") or {}).get(name) if self.sat_floor_fixed else None
         return floor is not None and det.sat_med is not None and det.sat_med < float(floor)
+
+    @staticmethod
+    def _copy_tentative(source, target):
+        """Preserve opt-in dynamic metadata across dataclass replacements without changing legacy Detection bytes."""
+        if getattr(source, "tentative", False):
+            target.tentative = True
+            target.tentative_reason = getattr(source, "tentative_reason", "fk_mask_boundary")
+        return target
+
+    def _projected_top_area_px(self, top, area_m2):
+        """Local pinhole area of a horizontal top-face patch at ``top`` (row-aware via optical Z)."""
+        try:
+            T = self._T()
+            p = (np.asarray(top, float) - T[:3, 3]) @ T[:3, :3]
+            z = float(p[2])
+            if not np.isfinite(z) or z <= 0:
+                return None
+            n = np.array([0.0, 0.0, 1.0]) @ T[:3, :3]
+            K = self.cal.cams[self.cam].K
+            out = float(K[0, 0]) * float(K[1, 1]) * abs(float(np.dot(n, p))) * float(area_m2) / z ** 3
+            return out if np.isfinite(out) and out > 0 else None
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def _color_gate_workspace(self, det, g):
         """Rule 2b: keep only pelvis x in ws_x, |y| <= ws_abs_y, and in front of the bin row's near edge (nominal or
@@ -1652,7 +3178,28 @@ class Perception:
         ws_x = g.get("ws_x")
         if ws_x is None:
             return None
+        if self.wide and self.scene.counter_z_runtime is None:
+            return None   # calib.wide_counter_window: counter height unmeasured and no prior -> the xy are unreliable: fail OPEN
         x, y = float(det.top[0]), float(det.top[1])
+        if self._image_bin_gate_active:
+            return "color_gate:workspace" if x < ws_x[0] or abs(y) > g["ws_abs_y"] else None
+        if g.get("workspace_fail_open") and self.scene.counter_z_runtime is None and det.method == "plane":
+            # counter height NOT measured: a plane-method top rests on the nominal counter z, so on the real (higher)
+            # counter its ray lands too far out and the rule rejected real objects. Fail open on that bias: re-evaluate
+            # the point along the same camera ray at the assumed real counter z (bin walls / tape still land past the edge).
+            try:
+                o = self._T()[:3, 3]
+                z_aim = float(det.top[2]) - 0.25 * self.height
+                if self.scene.counter_z_prior is not None:
+                    dz = 0.0   # the plane already rests on scene.counter_z (the live prior): no further shift
+                else:
+                    dz = float(g.get("workspace_assumed_counter_z", 0.15)) - self.scene.nominal_counter_z
+                k = (z_aim + dz - o[2]) / (z_aim - o[2])
+                x, y = float(o[0] + k * (x - o[0])), float(o[1] + k * (y - o[1]))
+                # the bin gate and the planner read det.top: write the reprojected point once, dz on its height
+                det.top = np.array([x, y, float(det.top[2]) + dz], float)
+            except Exception:
+                return None   # cannot re-project: fail open
         near_mat_y = min(float(lo[1]) for lo, _ in self._color_gate_boxes(g, hedge=False))
         near_x = float(self.scene.mat_to_pelvis(np.array([0.0, near_mat_y]))[0])
         if not (ws_x[0] <= x <= min(ws_x[1], near_x - float(g.get("ws_edge_m", 0.01)))) or abs(y) > g["ws_abs_y"]:
@@ -1670,6 +3217,8 @@ class Perception:
     def _color_gate_bin(self, det, g):
         """Rule 2, 3D in the mat frame (nominal footprint, no margin). Inside a bin -> in_bin. Within edge_m outside
         one -> kept only as a depth top face edge_h above the counter (a bin rim), else bin_edge. Else keep."""
+        if self._image_bin_gate_active:
+            return None
         sc = self.scene
         pm = sc.pelvis_to_mat(det.top)[:2]
         near_edge = False
@@ -1685,17 +3234,28 @@ class Perception:
         return None
 
     def _color_gate_boxes(self, g, hedge=True):
-        """[(lo, hi)] mat-frame footprint of every bin. Flag live_bins off: nominal scene.yaml. On: the policy's live
-        estimate (bin.vote shift; a calibrate_bins success already moves the DETECTIONS onto the nominal bins), and with
-        no estimate at all the nominal box grown near_margin_m towards the robot (mat -y = pelvis -x, the drop_2 shift)."""
+        """[(lo, hi)] mat-frame footprint of every bin, with a per-bin confidence hedge.
+
+        A confident bin vote uses its tight live footprint.  Missing, prior-only, and disagreeing votes use the union
+        of the nominal footprint and its full allowed displacement towards the robot (mat -y = pelvis -x).  Trust is
+        keyed only by ``planner.bin_conf[name]``: a populated ``bin_shift`` is not evidence by itself (M1).
+        """
         sc = self.scene
-        shift = dict(getattr(self.bin_shift_src, "bin_shift", None) or {}) if self.live_bins else {}
-        estimate = bool(shift) or (self.calibration is not None and self.calibration.success)
+        src = self.bin_shift_src
+        conf = dict(getattr(src, "bin_conf", None) or {}) if self.live_bins else {}
+        nominal = bin_geometry(sc)
         out = []
-        for g_ in self.bin_geometry(gate=True).values():
+        for name, g_ in self.bin_geometry(gate=True).items():
             lo, hi = g_["outer_lo"], g_["outer_hi"]
-            if hedge and self.live_bins and not estimate:
-                lo = lo - np.array([0.0, float(g.get("near_margin_m", 0.10))])
+            trusted = float(conf.get(name, 0.0)) >= 1.0
+            if hedge and self.live_bins and not trusted:
+                margin = float(g.get("near_margin_m", 0.0))
+                nlo, nhi = nominal[name]["outer_lo"], nominal[name]["outer_hi"]
+                # A shift paired with prior/disagree/missing confidence is not evidence.  Ignore it and sweep the
+                # nominal footprint through the full allowed near displacement; only CONF_AGREE may tighten around
+                # a live shifted box.
+                lo = nlo - np.array([0.0, margin])
+                hi = nhi
             out.append((lo, hi))
         return out
 
@@ -1708,8 +3268,9 @@ class Perception:
         """Rule 4: a triangle that is not a depth top face (2D blob) has no trusted shape: unknown."""
         if det.shape == "triangle" and det.method != "depth":
             diag = dict(det.shape_diag, label=None, gate="color_gate:no_depth_triangle") if det.shape_diag else None
-            return replace(det, shape=None, shape_conf=0.0, shape_path="abstain_color_gate", shape_diag=diag,
-                           apex_yaw=None, apex_conf=0.0, apex_gate=None)
+            out = replace(det, shape=None, shape_conf=0.0, shape_path="abstain_color_gate", shape_diag=diag,
+                          apex_yaw=None, apex_conf=0.0, apex_gate=None)
+            return self._copy_tentative(det, out)
         return det
 
 

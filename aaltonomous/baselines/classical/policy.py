@@ -18,36 +18,78 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import dataclasses
+from dataclasses import dataclass
 import os
 import re
 import sys
 import threading
 import time
+import zlib
+from types import MappingProxyType
 
 import numpy as np
 
 from aaltonomous.interface.calibration import Calibration
-from aaltonomous.interface.tasks import FIXED_MAPPING
+from aaltonomous.interface.tasks import COLORS, FIXED_MAPPING
 from aaltonomous.interface.safety import JointSpec, SafetyConfig
 from aaltonomous.scene.scene import Scene
 
 from . import decision as dec
+from . import landing
+from .kinematics import PlanBudget, PlanBudgetExceeded
 from .bin_vote import vote_bins
-from .config import hand_postures, home_arm, load_config
+from .config import equalize_index_middle, hand_postures, home_arm, load_config, soft_detector_active, soft_hand_active, soft_overclose
 from .held import HeldDetector
+from .online_bias import OnlineBias
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
 from .perception import Perception
-from .planner import Plan, Planner, lookup_bin, lookup_detection_bin, ramp
+from .planner import MotionOutputLimiter, Plan, Planner, lookup_bin, lookup_detection_bin, ramp, staggered_release_ramp
 from .safety_shell import reserve_pair, reserve_plan
-from .brain import BrainLayer, build_world
+from .brain import AgentLoop, BrainLayer, PlanLayer, build_world, instruction_needs_plan
+from .brain.planner import forced_skill_plan, validate_plan
 from .brain.find import FindClient, extract_queries, match_found
 
 HZ = 30.0
 _HOLE = re.compile(r"\bholes?\b")   # policy.insert_guard: the rung-3 sentence names a hole AND the lid
 _LID = re.compile(r"\blids?\b")
+FALLBACK_INSTRUCTION_CHARS = 20000   # DoS bound when instruction.max_chars is 0 (off)
 _TRUNC_CUT = ".;!?\n"   # instruction.max_chars: sentence / clause boundaries, then whitespace
 _WS = " \t\r\n"
+
+
+@dataclass(frozen=True)
+class _BinVoteResult:
+    """Thread result with no mutable arrays/dicts; only the matching episode may publish it."""
+    generation: int
+    shift: tuple
+    extra: tuple
+    confidence: tuple
+    messages: tuple
+
+    @classmethod
+    def freeze(cls, generation, raw, messages):
+        shift, extra, confidence = raw
+        vecs = tuple((str(k), tuple(float(x) for x in np.asarray(v, float))) for k, v in sorted(shift.items()))
+        return cls(int(generation), vecs,
+                   tuple((str(k), float(v)) for k, v in sorted(extra.items())),
+                   tuple((str(k), float(v)) for k, v in sorted(confidence.items())),
+                   tuple(str(m) for m in messages))
+
+    def mutable_copies(self):
+        return ({k: np.asarray(v, float) for k, v in self.shift}, dict(self.extra), dict(self.confidence))
+
+
+@dataclass(frozen=True)
+class _LookResult:
+    generation: int
+    outcome: tuple
+    state: tuple
+    perception_state: tuple
+    counter_z_runtime: object
+    logs: tuple
+    rim_z_runtime: object = None   # perception.rim_z_from_depth: the worker's scene.rim_z_runtime, committed with the look
 
 
 def _lower_thread_priority(nice=10):
@@ -58,23 +100,81 @@ def _lower_thread_priority(nice=10):
         pass
 
 
+def _generality_apply(cfg, log, text, mapping):
+    """instruction.generality. (1) veto: unsafe verb/target, a count, a spatial relation / retraction, or a blanket rule
+    beside keyed rules -> abstain on every object. (2) closed-vocabulary parser: used when the stack placed nothing, or
+    when it agrees with every placement the stack made (a superset); a disagreement keeps the stack's mapping. NEVER raises."""
+    try:
+        if not (cfg.get("instruction") or {}).get("generality", False):
+            return mapping
+        from .generality import general_mapping, veto
+        icfg = cfg.get("instruction") or {}
+        why = veto(text, venue=bool(icfg.get("venue_veto", False)), ordinal=bool(icfg.get("venue_veto_ordinal", True)))
+        if why:
+            log(f"[instruction] generality veto ({why}): abstain on every object")
+            return {"default": None}
+        got = general_mapping(text)
+        if not got:
+            return mapping
+        from aaltonomous.scene.scene import resolve_bin
+        from aaltonomous.interface.tasks import SHAPES
+        for c in COLORS:
+            for sh in SHAPES:
+                old = resolve_bin(mapping or {}, c, sh)
+                if old in ("left", "center", "right") and resolve_bin(got, c, sh) != old:
+                    log(f"[instruction] generality parser disagrees with the stack on {c}/{sh}; keeping the stack")
+                    return mapping
+        log(f"[instruction] generality parser: {got}")
+        return got
+    except Exception:
+        return mapping
+
+
 class ClassicalPolicy:
+    _LOOK_COMMIT_FIELDS = (
+        "last_detections", "last_bin_detections", "scheduled_corrections", "plans", "retry_pass_used",
+        "_xrel_n", "_sweeps_used", "_sweep_xy", "_choose_t",
+        "attempts", "attempt_tracks", "retry_allow", "slot_pending", "slot_used", "_bin_misses", "gate_skipped",
+        "budget_abandoned", "failed", "too_long", "verification_pending", "last_verification",
+        "verify_relooks_remaining", "retry_colors", "retry_targets", "used_drop_slots", "reserved_drop_slots",
+        "_skill_pending", "_pend_out", "_stab", "_stab_last", "_dec_warned", "_cap_logged", "_prior_side",
+        "_brain_reg", "_brain_n", "_last_pick", "_brain_looks", "_brain_finds", "tiers", "tier", "C",
+        "_target_cooldowns",
+    )
+    _LOOK_PERCEPTION_FIELDS = ("_ah_est", "_ah_tries", "hsv", "_colour_kmeans_done", "_colour_kmeans_tries",
+                               "colour_kmeans_info", "color_gate_degraded", "fk_mask_px", "_rz_est", "_rz_tries")
+    _LOOK_DEEP_FIELDS = {"attempt_tracks", "gate_skipped", "slot_used", "verification_pending", "last_verification",
+                         "used_drop_slots", "reserved_drop_slots", "_skill_pending", "_pend_out", "tiers"}
     @staticmethod
     def _safety_hand_limits(spec, safety):
         """SafetyFilter._shrink for the hand, kept read-only and Pinocchio-free."""
         margin = np.minimum(safety.hand_pos_margin, 0.25 * (spec.hand_upper - spec.hand_lower))
         return spec.hand_lower + margin, spec.hand_upper - margin
 
+    _obias = None   # grasp.online_bias state (instance attribute once enabled)
+    _ob_pending = ()
+
     def __init__(self, config=None, scene=None, calibration=None, safety: SafetyConfig | None = None,
-                 require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None):
-        self.cfg = config if isinstance(config, dict) else load_config(config, overrides)
+                 require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None,
+                 profile=None, overlay=None):
+        self.cfg = config if isinstance(config, dict) else load_config(
+            config, overrides, profile=profile, overlay=overlay)
+        self._rgb_ref = None            # frozen_rgb_guard: (hash, scene epoch) of the last fresh look; persists across reset()
+        self._scene_epoch = 0           # frozen_rgb_guard: +1 per started pick and per reset(); never decreases
         self.held_detector = HeldDetector(self.cfg["grasp"].get("held_detector", "stall"),
                                           self.cfg["grasp"].get("held_threshold_rad", 0.045))
         self.scene = scene if isinstance(scene, Scene) else Scene.load(scene)
         self.cal = calibration if isinstance(calibration, Calibration) else Calibration.load(calibration)
         self.spec = JointSpec()
         self.post = hand_postures(self.cfg, self.spec)
+        self._mirror_im = bool(self.cfg["hand"].get("mirror_index_middle", False))
         self.home = home_arm(self.cfg, self.spec)
+        self._soft_det = soft_detector_active(self.cfg)    # held.soft_detector on a soft hand (default OFF)
+        if self._soft_det:
+            h, g = self.cfg["held"], self.cfg["grasp"]
+            self.held_detector.configure_soft(
+                self.post["preshape"], h["soft_margin_rad"], h["soft_lift_margin_rad"], h["soft_prior_ratio"],
+                float(g["soft_lag_s"]) + float(g["soft_settle_s"]) + float(h["soft_read_after_s"]))
         self.kin = ArmKinematics(self.cfg, self.spec)
         self.safety = safety or SafetyConfig(dt=1.0 / HZ)
         # Mirror SafetyFilter's hand position clamp without constructing or
@@ -100,21 +200,66 @@ class ClassicalPolicy:
             except Exception as e:
                 self.hand_calib = None
                 (log or print)(f"hand calibration disabled: {type(e).__name__}: {e}")
+        # calib.hand_icp_primary: self-contained fitter + generation-guarded executor. Construction (URDF/FK asset load)
+        # is outside the episode watchdog. The policy only polls it and emits holds until the result is ready.
+        self.primary_calibration = None
+        ccfg = self.cfg.get("calib") or {}
+        self.primary_calibration_enabled = bool(ccfg.get("hand_icp_primary", False))
+        if ccfg.get("hand_icp_primary", False) or ccfg.get("counter_after_hand", False):
+            try:
+                from .calibration_fit import AsyncCalibrationPhase, CounterHeightTracker, PrimaryCalibrationFitter
+                primary = PrimaryCalibrationFitter(ccfg.get("primary_fit") or {},
+                                                   crosscheck=ccfg.get("refit_per_look", False))
+                if ccfg.get("hand_icp_primary", False):
+                    self.primary_calibration = AsyncCalibrationPhase(primary, ccfg.get("primary_fit") or {})
+                if ccfg.get("counter_after_hand", False):
+                    self.perception.counter_tracker = CounterHeightTracker(
+                        primary, ccfg.get("counter_fit") or {}, self.scene.nominal_counter_z)
+            except Exception as exc:
+                self.primary_calibration = None
+                (log or print)(f"primary calibration disabled: {type(exc).__name__}: {exc}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
+        self.perception.hand_opening_m = self.planner.generic_hand_opening   # novel: no-handle width gate
+        self._obias = None          # grasp.online_bias: per-hand learned grasp bias; lives as long as this instance
+        self._ob_pending = []
+        if self.cfg["grasp"].get("online_bias", False):
+            self._obias = OnlineBias(self.cfg["grasp"].get("arm_xy_offset") or {}, log=lambda m: self.log(m))
+            self.planner.online_bias = self._obias
+        mo = self.cfg["motion"]
+        self.output_limiter = (MotionOutputLimiter(
+            mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"], mo["hand_max_acc"], 1.0 / HZ,
+            arm_lim=(self.spec.arm_lower, self.spec.arm_upper), hand_lim=(self.spec.hand_lower, self.spec.hand_upper),
+            hold_on_late=bool(mo.get("output_hold_on_late", False)))
+            if mo.get("output_caps") is not None else None)
         # calib.fk_xcheck (FLAG, default OFF, log-only): RGB head-pose cross-check vs the Dex3 hand FK. Its own
         # ArmKinematics: the worker thread must never touch the planner's pinocchio data.
         self.fk_xcheck_enabled = bool((self.cfg.get("calib") or {}).get("fk_xcheck", False))
         if self.fk_xcheck_enabled:
             self._fk_xcheck_kin = ArmKinematics(self.cfg, self.spec)
             self._fk_xcheck = FkHandXCheck(self.cfg["calib"]["fk_xcheck_config"], self.perception)
+        if self.cfg["perception"].get("neutral_obstacles", False):
+            self.planner.log = log or print
+            self.planner.neutral_src = self.perception   # perception.neutral_obstacles: the planner reads the latest obstacles
+        self.planner.frame_src = self.perception   # perception.plan_frame
         self.perception.bin_shift_src = self.planner   # perception.color_gate.live_bins reads planner.bin_shift (bin.vote)
         self.perception.geometry_runtime = bool((self.cfg.get("bin") or {}).get("geometry_runtime"))   # perception follows the shift without bin.vote/live_bins gates
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
         self.require_confirm = require_confirm
+        self._jobs = {}   # bounded background work; reset swaps the dict so stale jobs cannot publish into a new episode
+        self._forced_skill_ids = set()   # AALTO_FORCE_SKILL: objects already sent through the forced skill
+        self._plan_skill = None          # skill name of the plan being executed (planner.skill during place_at)
+        self._universal_inert = False   # known-task guard: set per episode in reset(); read by _cl_on/_ftd_on/_match_novel before then
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
+        bv = (self.cfg.get("bin") or {}).get("vote") or {}
+        self._async_bin_vote = bool(bv.get("enabled", False) and bv.get("async_extract", False))
+        # A detector deadline can only be non-blocking when the look runs away from act().
+        if self._async_bin_vote or self.cfg["perception"].get("look_timeout_s") is not None:
+            threaded = True
         if self._shell:   # policy.safety_shell: all heavy work off the 30 Hz loop (look/plan thread), plans within the reserve
             threaded = True
             self._shell_init()
+        if (self.cfg.get("brain") or {}).get("enabled") and (self.cfg.get("brain") or {}).get("planner"):
+            threaded = True     # brain.planner: plan validation runs IK dry runs; keep them off the act thread
         self.threaded = threaded
         if threaded:  # pure-Python planning holds the GIL: hand it back to act() sooner (default 5 ms)
             sys.setswitchinterval(min(sys.getswitchinterval(), 0.001))
@@ -122,8 +267,8 @@ class ClassicalPolicy:
         self.log = log or (lambda *a: None)
         bc = self.cfg.get("brain") or {}
         self.brain = BrainLayer(bc, log=self.log) if bc.get("enabled", False) else None   # FLAG brain.enabled
-        fm = (self.cfg.get("policy") or {}).get("fixed_mapping")   # FLAG policy.fixed_mapping (validated at load)
-        self.fixed_mapping = dict(fm) if fm else dict(FIXED_MAPPING)   # the ONE fallback accessor (real robot vs sim)
+        fm = (self.cfg.get("policy") or {}).get("fixed_mapping")   # FLAG: explicit finals scene metadata
+        self.fixed_mapping = dict(fm) if fm else dict(FIXED_MAPPING)   # used only by an identified sort_fixed reset
         self.skill_memory = None   # skills.memory (FLAG, default OFF): learned order of the retry-vary arms
         if (self.cfg.get("skills") or {}).get("memory", False):
             try:
@@ -131,9 +276,58 @@ class ClassicalPolicy:
                 self.skill_memory = SkillMemory(path=self.cfg["skills"].get("memory_path"), log=self.log)
             except Exception as exc:  # learning is optional and must never prevent policy construction
                 self.log(f"[skills] unavailable ({type(exc).__name__}: {exc}); using stock retry order")
+        self.plan_brain = (PlanLayer(bc, backend=self.brain.backend, log=self.log)
+                           if self.brain is not None and bc.get("planner", False) else None)   # FLAG brain.planner
+        if self.plan_brain is not None and bc.get("closed_loop", False):   # FLAG brain.closed_loop (needs planner)
+            self.plan_brain = AgentLoop(bc, backend=self.brain.backend, log=self.log)
         self.reset()
 
     # ------------------------------------------------------------------ API
+    @staticmethod
+    def _perception_snapshot(perception):
+        """Stable episode state captured before a deadline-controlled detector starts."""
+        state = {}
+        for name in ("cal", "pitch_calibration", "calibration", "_ah_tries", "_colour_kmeans_done",
+                     "_colour_kmeans_tries", "colour_kmeans_info", "color_gate_degraded"):
+            if hasattr(perception, name):
+                state[name] = copy.deepcopy(getattr(perception, name))
+        for name in ("pitch_T", "xy_offset", "_ah_est", "hsv"):
+            if hasattr(perception, name):
+                state[name] = copy.deepcopy(getattr(perception, name))
+        scene = getattr(perception, "scene", None)
+        if scene is not None:
+            state["counter_z_runtime"] = scene.counter_z_runtime
+        return state
+
+    def _insert_perception_flag(self):
+        """insert.reach_gated: the triangle hole needs the apex yaw + robust centre (perception.triangle_pose), in an insert
+        episode only (every other episode keeps the configured value, so sort behaviour is untouched)."""
+        base = bool(self.cfg["perception"].get("triangle_pose", False))
+        ins = bool(getattr(getattr(self, "planner", None), "insert_active", False)
+                   and (self.cfg.get("insert") or {}).get("reach_gated", False))
+        self.perception.triangle_pose = base or ins
+
+    def _replace_stale_perception(self, state=None):
+        """Give an unfinished detector sole ownership of its mutable perception state."""
+        scene = copy.copy(self.scene)
+        self.scene = scene
+        self.planner.scene = scene
+        self.perception = Perception(self.cfg, scene, self.cal, log=self.log)
+        self.perception.hand_opening_m = getattr(getattr(self, "planner", None), "generic_hand_opening", None)
+        self._insert_perception_flag()
+        state = state or {}
+        for name, value in state.items():
+            if name != "counter_z_runtime" and hasattr(self.perception, name):
+                setattr(self.perception, name, value)
+        if "counter_z_runtime" in state:
+            scene.counter_z_runtime = state["counter_z_runtime"]
+        self.perception.bin_shift_src = self.planner
+        self.planner.frame_src = self.perception
+        self.perception.geometry_runtime = bool((self.cfg.get("bin") or {}).get("geometry_runtime"))
+        self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))
+        if self.fk_xcheck_enabled:
+            self._fk_xcheck.perception = self.perception
+
     def _cap_text(self, text):
         """instruction.max_chars: cut a long instruction at the last boundary within the cap (logged). Unchanged when off."""
         mc = int((self.cfg.get("instruction") or {}).get("max_chars", 0) or 0)
@@ -147,30 +341,58 @@ class ClassicalPolicy:
         return text[:cut]
 
     def _instruction_mapping(self, info):
-        """Instruction text -> mapping for `scene.resolve_bin`, or None to fall back to FIXED.
+        """Instruction text -> mapping for `scene.resolve_bin`, or a truthy fail-closed abstain.
 
         Off unless `instruction.resolve` is true in config.yaml, so the reference measurement is
         unchanged by default. NEVER raises: reset() is under a 1.0 s watchdog (safety.py:69) and an
         exception here would end the episode as a BAD_END, which is worse than any wrong mapping.
         The resolver is pure stdlib and measured at ~0.13 ms per sentence.
         """
+        strict = bool((self.cfg.get("instruction") or {}).get("strict", False))
         try:                                        # the WHOLE body, not just the resolve call
-            if not (self.cfg.get("instruction") or {}).get("resolve", False):
+            instruction_cfg = self.cfg.get("instruction") or {}
+            strict = instruction_cfg.get("strict", False)
+            hazard_guard = bool(instruction_cfg.get("hazard_guard", False))
+            if not instruction_cfg.get("resolve", False):
                 return None
             text = self._cap_text((info or {}).get("instruction") or "")
-            if not str(text).strip():               # empty / whitespace: no instruction -> the fixed fallback
+            if not str(text).strip():               # fixed mapping is reserved for an identified sort_fixed task
+                return {"default": None}
+            mc = int(instruction_cfg.get("max_chars", 0) or 0)
+            limit = mc if mc > 0 else FALLBACK_INSTRUCTION_CHARS   # DoS bound; stock never sees >20k instructions
+            bcfg = self.cfg.get("brain") or {}
+            if bcfg.get("enabled", False) or bcfg.get("planner", False):
+                from .brain.planner import MAX_INSTRUCTION_CHARS   # brain on only: tighter 2000-char cap (bounded brain reset)
+                limit = min(limit, MAX_INSTRUCTION_CHARS)
+            if len(str(text)) > limit:               # bounded reset() watchdog (1.0 s)
+                self.log(f"instruction resolve skipped ({len(str(text))} chars): no fixed fallback")
                 return None
             from .instruction import resolve
+            orig_text = text
+            if (self.cfg.get("instruction") or {}).get("venue_colour_aliases", False):   # T10: venue colour words
+                from .normalize import venue_colour_aliases
+                text = venue_colour_aliases(text)
+            if (self.cfg.get("instruction") or {}).get("multilingual", False):   # FI/CZ + 10 languages (Timi)
+                from .normalize import canonicalize_multilingual
+                text = canonicalize_multilingual(text)
             if (self.cfg.get("instruction") or {}).get("normalize", False):   # typo/synonym normaliser (Felix)
                 from .normalize import normalize
-                text = normalize(text)
-            if (self.cfg.get("instruction") or {}).get("strict", False):   # never guess: abstain (Felix strict)
+                if strict and (self.cfg.get("instruction") or {}).get("structured", False):
+                    from .normalize import structured_normalize
+                    text = structured_normalize(text, hazard_guard=hazard_guard)
+                else:
+                    text = normalize(text)
+            if strict:                              # never guess: abstain (Felix strict)
                 from .normalize import strict_mapping
-                return strict_mapping(text, resolve(text, fallback={}))
-            return resolve(text, fallback=getattr(self, "fixed_mapping", None)) or None
+                if (self.cfg.get("instruction") or {}).get("structured", False):
+                    from .normalize import structured_final
+                    return _generality_apply(
+                        self.cfg, getattr(self, "log", lambda *_: None), orig_text, structured_final(text, hazard_guard=hazard_guard))  # structured grammars then strict hazards
+                return _generality_apply(self.cfg, getattr(self, "log", lambda *_: None), orig_text, strict_mapping(text, resolve(text, fallback={})))
+            return resolve(text, fallback={}) or {"default": None}
         except Exception as e:                      # a parse bug must not cost the whole episode
-            self.log(f"instruction resolve failed ({e}), using FIXED_MAPPING")
-            return None
+            self.log(f"instruction resolve failed ({e}), abstaining")
+            return {"default": None}
 
     def _insert_guard_mapping(self, info):
         """policy.insert_guard: rung 3 (insert_shapes) -> {"default": "abstain"}, i.e. pick nothing; else None.
@@ -192,18 +414,123 @@ class ClassicalPolicy:
             self.log(f"insert_guard failed ({e})")
             return None
 
+    def _insert_on(self):
+        """policy.insert_shapes or insert.reach_gated (the reach-gated insert implies the insert_shapes planner)."""
+        return bool((self.cfg.get("policy") or {}).get("insert_shapes", False)
+                    or (self.cfg.get("insert") or {}).get("reach_gated", False))
+
+    def _insert_shapes_mapping(self, info):
+        """policy.insert_shapes: an insert_shapes episode (same detection as insert_guard) -> every colour goes to the lid
+        bin (planner.plan_insert picks the hole per SHAPE and abstains per object); else None. NEVER raises."""
+        try:
+            if not ClassicalPolicy._insert_on(self):
+                return None
+            task = (info or {}).get("task")
+            text = str((info or {}).get("instruction") or "").lower()
+            if task == "insert_shapes" or (_HOLE.search(text) and _LID.search(text)):
+                lid = Scene.load().lid_bin if getattr(self, "scene", None) is None else self.scene.lid_bin
+                self.log("[insert_shapes] insert_shapes: each object through the hole of its own shape (abstain when unsure)")
+                out = {c: lid for c in COLORS}
+                out["default"] = lid
+                return out
+            return None
+        except Exception as e:
+            self.log(f"insert_shapes failed ({e})")
+            return None
+
+    def _log_fixed_conflict(self, info, used):
+        """Logging only: sort_fixed ignores the instruction sentence. Say so when the sentence names a different mapping.
+        NEVER raises and never changes `used` (the mapping the episode runs with)."""
+        try:
+            parsed = self._instruction_mapping(info) or {}
+            said = {k: v for k, v in parsed.items() if k != "default" and v}
+            if said and any(used.get(k) != v for k, v in said.items()):
+                self.log(f"[fixed_mapping] conflict: instruction says {said}, using venue {used}")
+        except Exception as e:
+            self.log(f"[fixed_mapping] conflict check failed ({e})")
+
+    def _instruction_fixed(self, info, venue):
+        """sort_fixed with policy.fixed_instruction_first: the instruction's mapping when it names a valid bin for
+        EVERY venue colour, else None (venue). NEVER raises: any error falls back to the venue map."""
+        try:
+            parsed = self._instruction_mapping(info) or {}
+            if venue and all(parsed.get(c) in ("left", "center", "right") for c in venue):
+                given = {c: parsed[c] for c in venue}
+                self.log(f"[fixed_mapping] instruction resolves all colours, using it: {given}")
+                return given
+            return None
+        except Exception as e:
+            self.log(f"[fixed_mapping] instruction-first failed ({e}), using venue")
+            return None
+
+    def _episode_mapping(self, info):
+        """Return (mapping, insert_guard_mapping) for one reset without touching motion/perception state."""
+        # Episode mapping precedence is explicit and task-scoped. A reset-supplied mapping is authoritative; otherwise
+        # only sort_fixed may consume the configured venue scene mapping. Language blank/errors stay on the counter.
+        given = info.get("mapping")
+        if not given and info.get("task") == "sort_fixed":
+            given = dict(self.fixed_mapping)
+            first = (self.cfg.get("policy") or {}).get("fixed_instruction_first", False) and self._instruction_fixed(info, given)
+            if first:
+                given = first
+            else:
+                self._log_fixed_conflict(info, given)
+        inserting = None if given or not ClassicalPolicy._insert_on(self) \
+            else ClassicalPolicy._insert_shapes_mapping(self, info)   # flag off: not even a call
+        guarded = None if given or inserting else self._insert_guard_mapping(info)
+        resolved = None if given or guarded or inserting else self._instruction_mapping(info)
+        legacy = dict(FIXED_MAPPING) if not (self.cfg.get("instruction") or {}).get("resolve", False) else {"default": None}
+        self._insert_episode = bool(inserting)
+        return (dict(given) if given else inserting or guarded or resolved or legacy), guarded
+
     def reset(self, info=None):
+        self._forced_skill_ids, self._plan_skill = set(), None   # AALTO_FORCE_SKILL: object ids repeat across episodes
+        generation_workers = bool((self.cfg.get("policy") or {}).get("generation_workers", False))
+        if generation_workers:
+            # Invalidate first.  No lock/join: reset is constant-time with respect
+            # to stale work, which can only publish to its detached job object.
+            self._look_generation = getattr(self, "_look_generation", 0) + 1
+            current = getattr(self, "_job", None)
+            if current is not None and current.get("result") is None and "deadline_lock" in current:
+                with current["deadline_lock"]:
+                    current["cancelled"] = True
+                self._stale_detect_jobs = [*getattr(self, "_stale_detect_jobs", []), current]
+            self._job = None
         if isinstance(info, str):
             info = {"instruction": info}
         info = info or {}
         if self.skill_memory is not None:
             self.skill_memory.reseed(info.get("seed", 0))   # seed: reproducible skill sampling
-        given = info.get("mapping")
-        guarded = None if given else self._insert_guard_mapping(info)
-        resolved = None if given or guarded else self._instruction_mapping(info)
-        self.mapping = given or guarded or resolved or dict(self.fixed_mapping)
+        self.mapping, guarded = self._episode_mapping(info)
         self.planner.mapping = self.mapping
+        self.planner.insert_active = bool(getattr(self, "_insert_episode", False))
+        self._insert_perception_flag()
+        self._ig = None
+        if self.planner.insert_active and ((self.cfg.get("insert") or {}).get("perception_gated", False)
+                                           or (self.cfg.get("insert") or {}).get("reach_gated", False)):
+            self.planner.insert_lid, self._lid_pending, self._lid_ticks = None, True, 0   # insert.perception_gated
+            self._lid_fits = []
+        else:
+            self._lid_pending = False
         self._task, self._instruction = info.get("task"), info.get("instruction")
+        self._universal_inert, inert_reason = self._known_task_inert(info)
+        self.perception.novel_objects = bool(self.cfg["perception"].get("novel_objects", False)) and not self._universal_inert
+        if inert_reason and self.brain is not None:
+            self.log(f"[universal] inert: known task ({inert_reason})")
+        # FLAG brain.known_task_hard_off: a KNOWN task (resolver / sort_fixed, no novel noun named) runs with NO brain at all
+        # this episode (no find / planner / closed-loop after_* / ev_gate).  Novel perception is already off when inert, so no
+        # novel_matched object can exist; the brain stays armed for any episode that is not inert (novel noun / unresolved).
+        stash = self.__dict__.get("_brain_stash")   # (brain, plan_brain) parked by an earlier hard-off episode, else None
+        self._brain_hard_off = bool((self.cfg.get("brain") or {}).get("known_task_hard_off", False)) and self._universal_inert
+        if self._brain_hard_off:
+            if stash is None:
+                self._brain_stash = (self.brain, self.plan_brain)
+                if self.brain is not None:
+                    self.log(f"[brain] hard_off: known task ({inert_reason}); no brain calls this episode")
+            self.brain, self.plan_brain = None, None
+        elif stash is not None:
+            self.brain, self.plan_brain = stash
+            self._brain_stash = None
         self._brain_looks = 0
         self._brain_finds = 0
         self._brain_find_fn = getattr(self, "_brain_find_fn", None)
@@ -212,11 +539,38 @@ class ClassicalPolicy:
         self._brain_mapping, self._brain_mapping_source = self._resolver_mapping(info, guarded)
         self._brain_abstain = self._resolver_abstains(self._brain_mapping)
         self._brain_reg, self._brain_n, self._last_pick = [], 0, None
+        self._novel_brain_candidates = []
+        self._novel_brain_bin = None
+        self._brain_wait, self._brain_wait_spent = None, False     # brain down on an open instruction (_brain_down_wait)
+        self._novel_store, self._found, self._agent_dirty, self._last_find_items = [], {}, False, []
+        self._parser_unreachable = 0
+        self._open_vocab = False
+        if (self.cfg.get("brain") or {}).get("grounded_picks", False):
+            try:
+                from .novel_objects import unknown_words
+                self._open_vocab = bool(self._brain_abstain) or bool(unknown_words(self._instruction))
+            except Exception:
+                self._open_vocab = bool(self._brain_abstain)
+        self._parser_verdicts = {}          # universal: VLM cross-check verdicts of shape-noun parser matches (per episode)
         if self.brain is not None:
             self.brain.reset()
+            if not self._universal_inert:   # open / novel instruction only: async health re-probe, never latched
+                self.brain.probe()
+        if self.plan_brain is not None:
+            self.plan_brain.reset()
+        self._planner_needed = (self.plan_brain is not None and not self._universal_inert and
+                                (instruction_needs_plan(self._instruction, self._brain_abstain)
+                                 or self._strict_leaves_colour()))
+        self._planner_place_cache = {}
+        self._planner_pending = None
+        self._planner_execution = None
         self.time_limit = info.get("time_limit", self.time_limit)
         self._resolve_time_alias()
-        self.state = "init"
+        calib = self.cfg.get("calib") or {}
+        preflight = bool(self.cfg["perception"].get("online_pitch_cal", False)
+                         or calib.get("plane", {}).get("apply_height", False)
+                         or calib.get("hand_icp_primary", False))
+        self.state = "calibrate" if preflight else "init"
         self.queue_a = self.queue_h = None
         self.arm_cmd = self.hand_cmd = None
         self.attempts = []          # (position, count) of objects we tried to pick
@@ -225,12 +579,46 @@ class ClassicalPolicy:
         self.budget_abandoned = []  # (color, xy) objects whose hard per-object budget was exhausted
         self.gate_skipped = []      # (color, xy) objects deliberately left on the counter by place_gate
         self.failed = []            # positions whose plans failed
+        self._novel_looks = {}      # novel ungraspable: (2 cm xy, reason) -> looks seen this episode
         self.pending = None         # Plan waiting for the operator
         self.pending_text = ""      # what the operator is asked to confirm
         self.waiting = False
         self.events = []
         self.plans = []
-        self._job = None
+        stale_detect_jobs = [job for job in getattr(self, "_stale_detect_jobs", []) if job["result"] is None]
+        active_detect_job = getattr(self, "_job", None)
+        if active_detect_job is not None and active_detect_job.get("result") is None \
+                and "deadline_lock" in active_detect_job:
+            with active_detect_job["deadline_lock"]:
+                active_detect_job["cancelled"] = True
+            stale_detect_jobs.append(active_detect_job)
+        if not generation_workers:
+            self._job = None
+        # Preserve unfinished calls across episode reset. The next detector uses an isolated copy until these exit.
+        self._stale_detect_jobs = stale_detect_jobs
+        owner = next((job for job in stale_detect_jobs if job.get("detector") is self.perception), None)
+        if owner is not None:
+            # reset_calibration mutates perception and scene state. Do not touch either while a cancelled native call
+            # still owns them; move the new episode to fresh state instead.
+            self._replace_stale_perception(owner.get("perception_state"))
+        self._clear_looks = 0
+        self._clear_since = None
+        self._frozen_looks = 0          # frozen_rgb_guard: consecutive frozen looks (per episode; the hash ref is NOT reset)
+        self._scene_epoch = getattr(self, "_scene_epoch", 0) + 1   # new episode = scene re-placed
+        self._target_cooldowns = []     # [{color, xy, until}], planner.per_target_guard only
+        self._budget_scale = 1.0        # planner.budget_escalate: >1 only inside the escalation re-plan
+        self._budget_relooks = 0
+        self._esc_failed, self._esc_extra_used = [], False   # planner.budget_escalate memory (episode-wide)
+        self._deferred_cands = []       # [(color, xy)] candidates deferred once by planner.candidate_budget (episode-wide)
+        self._latest_t = 0.0            # newest episode clock seen by act(); planning workers use it for cooldown start
+        # A stale generation owns its detached snapshot and may finish in the
+        # background.  The new episode gets a fresh worker slot immediately.
+        self._look_thread = None
+        look_lock = self.__dict__.setdefault("_look_lock", threading.Lock())
+        with look_lock:
+            self._look_generation = getattr(self, "_look_generation", 0) + 1
+            self._bv_job = None
+        self._jobs = {}
         self._decision = None
         self.last_detections = []
         self.mapping_conf = dict(info.get("mapping_conf") or {})   # colour -> confidence (default 1.0), triage tie-break
@@ -242,12 +630,44 @@ class ClassicalPolicy:
         self.slot_pending = None    # (bin, slot, grasp xy, colour) of the last standalone-slot placement
         self._gdiag = None          # policy.grasp_diag_log: the pick being watched
         self.held_detector.reset()
+        self._held_cal_phase = None
+        self._held_cal_done = not (self.held_detector.mode == "finger_sum" and
+                                   bool((self.cfg["grasp"].get("held_calibration") or {}).get("enabled", False)))
+        self._softcal = None        # held.soft_detector: the episode-start empty close being watched
+        self._softcal_done = False
         self._bin_misses = []       # (colour, xy) already logged as [bin_lookup] miss this episode
         self._stall = None          # motion.lift_on_stall: the close hold being watched
         self.retry_pass_used = False
+        self._xrel_n = 0            # policy.retry_cross_relocate: relocations started this episode
+        self._sweeps_used = 0       # policy.late_sweep: sweeps this episode
+        self._contact_start_tries = 0   # policy.contact_start_unblock: failed startup lift proofs
+        self._n_held_yes = 0        # picks whose close sample read HELD this episode (zero_det_relook: has anything worked yet)
+        self._zero_looks = 0        # policy.zero_det_relook: consecutive 0-detection looks
+        self._zero_since = None     # ... episode time of the first of them
+        self._contact_aborts = 0    # policy.descend_contact_guard: aborted descents this episode
+        self._sweep_xy = []         # policy.late_sweep: object positions a repeat grasp is allowed for
+        self._choose_t = 0.0        # episode time of the look being planned
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
+        self._ob_pending = []       # grasp.online_bias: this episode's started picks awaiting evidence (state b persists)
+        if self._obias is not None:
+            self._obias.begin_episode()
         self._summary_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
+        self._encoder_hold = None    # M2: last complete finite encoder sample; never synthesize an unobserved joint
+        self._encoder_latched = False
+        if self._shell:
+            # A calibration hold must start from this episode's encoders, never a target cached by the shell in the
+            # previous episode.  _act() installs the measured pose before the first _hold().
+            self._shell_last = None
+        if self.output_limiter is not None:
+            self.output_limiter.reset()
+        if self._sag:   # keep kappa (same robot), drop the offset + still history: the limiter restarts from the encoders
+            self._sag.soft_reset()
+        self._partial_relooks = 0   # partial_ok_near_hand: bounded retract/re-observe attempts
+        self._final_relook_used = False
+        self._relook_fresh = 0
+        self._relook_last_t = None
+        self._relook_reason = None
         # Bump the episode token under the lock: a stale worker from the previous episode then fails its token check
         # and can never write into this one. act() never waits on the worker (nominal extrinsics until it lands).
         lock = self.__dict__.setdefault("_pitch_lock", threading.Lock())
@@ -257,16 +677,26 @@ class ClassicalPolicy:
             self.pitch_calibration = None
             self._pitch_calibration_done = False   # = the worker was started this episode
         self._pitch_thread = None
+        self._calib_phase_t0 = None
+        self._height_phase_t0 = None
         self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = {}, {}, {}   # bin.vote: nominal until voted
         self._bv_frames, self._bv_done = [], False
         self.calibration = None
         self._calibration_done = False
+        self._empty_recovery = None
+        self._stg = None                # no-deadlock staging state (init / empty recovery)
         self.hand_calibration = None    # HeadCalibResult of this episode (perception.hand_calibration)
         self._hc_done = self.hand_calib is None
         self._hc_tries = 0
         self._hc_prev_q = None
         self._hc_job = None
         self._hc_still = 0
+        self._primary_done = not self.primary_calibration_enabled
+        self._primary_result = None
+        self._primary_counter_tries = 0
+        self._last_motion_time = None
+        if self.primary_calibration is not None:
+            self.primary_calibration.reset()
         self.last_bin_detections = []
         self.used_drop_slots = {name: set() for name in self.scene.bin_names}
         self.reserved_drop_slots = {name: set() for name in self.scene.bin_names}
@@ -276,6 +706,14 @@ class ClassicalPolicy:
         self.retry_targets = []
         self.verify_relooks_remaining = 0
         self.scheduled_corrections = []
+        self._landing = None        # policy.verify_landing: the release whose outcome the next look classifies
+        self._occ_prev = None       # verify_landing: {bin: occupancy} of the previous look
+        self.landing_events = []    # verify_landing: (kind, colour, bin) per classified release
+        self.landing_regrants = 0
+        self._late_rg = {"n": 0}    # policy.late_regrant: regrants used (a dict: the look worker shares it in place)
+        self.landing_refunds = 0
+        self.bounce_count = {}
+        self._landing_excl_logged = set()
         self._skill_pending = None  # skills.memory: the started pick whose outcome is not settled yet
         self._joint_offset_t0 = None                      # debug.log_joint_offset: start of the first-second window
         self._last_policy_arm_cmd = self._last_policy_hand_cmd = None
@@ -289,6 +727,9 @@ class ClassicalPolicy:
         self._stab_last = None
         self._pend_out = None       # D3: the pick whose outcome the next look judges
         self._exec = None           # D2 T-8 s: the plan being executed {"plan", "n", "cut", "t8"}
+        self._rel = None            # grasp.release_confirm: the plan's release watcher
+        self._rel_fail = False      # release_confirm: the hand never read empty -> stop picking
+        self._ig = None             # insert.reach_gated: the plan's pre-release gate {"plan", "n", "stops", "i", "t0"}
         self._cap_logged = set()
         self._dec_warned = set()    # F7: decision helpers that already fell back to stock this episode
         self._prior_side = set()    # F1: side bins already attempted in PRIOR-ONLY
@@ -353,12 +794,12 @@ class ClassicalPolicy:
     def _start_pitch_worker(self, rgb, depth):
         """Run the camera-pitch fit ONCE per episode in a daemon thread, started on the first valid frame."""
         self._pitch_calibration_done = True
-        token, rgb, depth = self._pitch_token, np.array(rgb), np.array(depth)
+        token = self._pitch_token
 
         def work():
             started = time.perf_counter()
             try:
-                out = self.perception.compute_pitch(rgb, depth)
+                out = self.perception.compute_pitch(np.array(rgb, copy=True), np.array(depth, copy=True))
             except Exception as exc:  # optional calibration must never hurt the episode
                 out = self.perception.make_pitch_failure(f"{type(exc).__name__}: {exc}",
                                                          (time.perf_counter() - started) * 1000.0)
@@ -386,6 +827,86 @@ class ClassicalPolicy:
                      f"residual={pitch_cal.residual_m * 1000.0:.1f} mm, "
                      f"points={pitch_cal.n_points}, time={pitch_cal.elapsed_ms:.1f} ms "
                      f"({pitch_cal.reason})")
+
+    def _pitch_timeout(self, t):
+        """Freeze nominal extrinsics and invalidate a late worker before any motion is allowed."""
+        with self._pitch_lock:
+            if self.pitch_calibration is not None:
+                return
+            self._pitch_token += 1
+            out = self.perception.make_pitch_failure("pre-motion calibration timeout",
+                                                     max(0.0, t - self._calib_phase_t0) * 1000.0)
+            self.perception.commit_pitch(out)
+            self.pitch_calibration = out
+        self._log_pitch(out)
+
+    def _preflight_calibration(self, obs, t):
+        """Hold measured joints while pitch then N-gated table height calibrate; never performs a fit in act()."""
+        if self._calib_phase_t0 is None:
+            self._calib_phase_t0 = t
+            self._note(t, "pre-motion calibration: holding measured joints")
+
+        # handcal: the hand/forearm ICP fit (calib.hand_icp_primary) selects the full extrinsic first, off-thread;
+        # the pitch-only fit is then skipped and the height below is measured in the corrected frame.
+        if self._primary_calibration_step(obs, t):
+            return self._hold()
+        calib = self.cfg.get("calib") or {}
+        pitch_on = (bool(self.cfg["perception"].get("online_pitch_cal", False))
+                    and not calib.get("hand_icp_primary", False))
+        if pitch_on and self.pitch_calibration is None:
+            if (not self._pitch_calibration_done
+                    and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
+                self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
+            if t - self._calib_phase_t0 >= self.PITCH_WAIT_S:
+                self._pitch_timeout(t)
+            else:
+                return self._hold()
+
+        plane = (self.cfg.get("calib") or {}).get("plane") or {}
+        if plane.get("apply_height", False) and not self.perception._ah_done and not calib.get("counter_after_hand", False):
+            if self._height_phase_t0 is None:
+                self._height_phase_t0 = t
+            timeout = float(plane.get("timeout_s", 3.0))
+            if t - self._height_phase_t0 >= timeout:
+                self.perception._ah_done, self.perception._ah_committed = True, None
+                self.planner.commit_counter_height(None)
+                self._jobs.pop("counter_height", None)
+                if self.perception.ensure_table_height(obs.get("head_depth"), "[table_z/timeout]"):   # calib.plane.robust_height
+                    self._note(t, f"runtime height fallback: pre-motion timeout ({timeout:.1f} s); measured "
+                                  f"{self.scene.counter_z:.4f} m (not nominal)")
+                else:
+                    self._note(t, f"runtime height fallback: pre-motion timeout ({timeout:.1f} s); nominal keepout")
+            else:
+                job = self._jobs.get("counter_height")
+                if job is None:
+                    depth = obs.get("head_depth")
+                    frame = self.perception.frame_transform()
+                    r = self._bg("counter_height", self._measure_counter_height, depth, frame)
+                else:
+                    r = self._bg("counter_height", self._measure_counter_height, None, None)
+                if r is None:
+                    return self._hold()
+                if r[0] == "err":
+                    from .perception import CounterHeightSample
+                    sample = CounterHeightSample(np.nan, np.nan, 0, f"{type(r[1]).__name__}: {r[1]}")
+                else:
+                    sample = r[1]
+                done, height = self.perception.accept_counter_height_sample(sample, commit_scene=False)
+                if done:
+                    self.planner.commit_counter_height(height)
+                    state = "nominal fallback" if height is None else f"{height:.4f} m"
+                    self._note(t, f"runtime height committed once: {state}; planner keepout={self.planner.counter_keepout_z:.4f} m")
+                else:
+                    return self._hold()
+
+        self.state = "init"
+        self._note(t, f"pre-motion calibration complete: transform v{self.perception.frame_transform().version}")
+        return self._hold()
+
+    def _measure_counter_height(self, depth, frame):
+        """Worker-only copy + fit; copying a full depth frame never runs in act()."""
+        depth = None if depth is None else np.array(depth, copy=True)
+        return self.perception.measure_counter_height(depth, frame)
 
     def _hand_calibrate(self, obs, t):
         """perception.hand_calibration, ASYNC: on a still frame (encoders vs depth in sync) the 30-300 ms ICP runs on a
@@ -453,6 +974,74 @@ class ClassicalPolicy:
         self._note(t, f"hand calibration {'accepted' if res.success else 'fallback'} (try {self._hc_tries}): "
                       f"{res.summary()}")
 
+    def _calibration_frame(self, obs):
+        """Metadata consumed only by the opt-in stale-frame guards."""
+        aq = np.asarray(obs.get("arm_q"), float)
+        hq = np.asarray(obs.get("hand_q"), float)
+        stamps = [float(obs.get("t", 0.0))]
+        stamps.extend(float(obs[k]) for k in ("head_timestamp", "joint_timestamp") if obs.get(k) is not None)
+        return {"timestamp": min(stamps),
+                "joints": np.r_[aq, hq], "last_motion_time": self._last_motion_time}
+
+    def _primary_calibration_step(self, obs, t):
+        """Return True while the pre-motion phase owns the state machine and act() must emit only a hold."""
+        if self._primary_done:
+            return False
+        if self.primary_calibration is None:
+            prior = self.scene.nominal_counter_z + float(
+                self.cfg["calib"]["primary_fit"].get("fallback_counter_dz_m", 0.15))
+            self.perception.set_camera_pose(self.perception.current_T())
+            self.scene.counter_z_runtime = prior
+            self._primary_done = True
+            self._note(t, f"[primary_calib] unavailable: nominal extrinsic, counter_z prior={prior:.3f}")
+            return False
+        if self._primary_result is None:
+            try:
+                update = self.primary_calibration.advance(
+                    self.perception.cal, self.perception.cam, obs.get("head_depth"), obs.get("arm_q"),
+                    obs.get("hand_q"), self._calibration_frame(obs)["timestamp"], self.scene.nominal_counter_z,
+                    self._last_motion_time)
+            except Exception as exc:
+                update = None
+                self._note(t, f"[primary_calib] worker adapter failed: {type(exc).__name__}: {exc}")
+            if update is None or (not update.hold and update.result is None):
+                # The worker itself failed/timed out. Preserve the explicit final fallback.
+                self.perception.set_camera_pose(self.perception.current_T())
+                self.scene.counter_z_runtime = self.scene.nominal_counter_z + float(
+                    self.cfg["calib"]["primary_fit"].get("fallback_counter_dz_m", 0.15))
+                self._primary_done = True
+                self._note(t, f"[primary_calib] nominal fallback ({'unknown' if update is None else update.reason})")
+                return False
+            if update.result is None:
+                return True
+            result = update.result
+            self._primary_result = result
+            self.perception.set_camera_pose(result.T)
+            for name, passed, detail in result.checks:
+                self._note(t, f"[primary_calib/check] {name}: {'PASS' if passed else 'FAIL'} {detail}")
+            self._note(t, f"[primary_calib] {result.summary()}")
+            if result.source == "nominal":
+                self.scene.counter_z_runtime = result.counter_z
+                self._primary_done = True
+                return False
+        if self.cfg["calib"].get("counter_after_hand", False):
+            self._primary_counter_tries += 1
+            update = self.perception.update_counter_height(obs.get("head_depth"), self._calibration_frame(obs))
+            if update is not None and update.committed:
+                self._primary_done = True
+                return False
+            limit = int((self.cfg["calib"].get("counter_fit") or {}).get("max_tries", 12))
+            if self._primary_counter_tries >= limit:
+                prior = self.scene.nominal_counter_z + float(
+                    self.cfg["calib"]["primary_fit"].get("fallback_counter_dz_m", 0.15))
+                self.scene.counter_z_runtime = prior
+                self._primary_done = True
+                self._note(t, f"[counter_after_hand] fallback after {limit} tries: counter_z prior={prior:.3f}")
+                return False
+            return True
+        self._primary_done = True
+        return False
+
     def confirm(self):
         self._decision = "go"
 
@@ -463,19 +1052,111 @@ class ClassicalPolicy:
         self._decision = "stop"
 
     def act(self, obs):
+        res = self._act_entry(obs)
+        res = self._with_tau_ff(res)
+        if self._mirror_im:   # hand.mirror_index_middle (R42a): last stop before the runner, every return path
+            h = np.asarray(res["hand_q_target"], float)
+            if h.size:   # zero-row hold (no encoder sample yet): nothing to mirror
+                res = dict(res, hand_q_target=np.stack([self._im_emit(r) for r in h]) if h.ndim == 2 else self._im_emit(h))
+        return res
+
+    _gff = None
+
+    def _with_tau_ff(self, res):
+        """motion.arm_tau_ff = gravity (default off: res untouched): add arm_tau_ff, gravity torque per emitted row."""
+        if self.cfg["motion"].get("arm_tau_ff") != "gravity":
+            return res
+        try:
+            if self._gff is None:
+                from .gravity_ff import GravityFF
+                self._gff = GravityFF(self.spec)
+            a = np.asarray(res["arm_q_target"], float)
+            if not a.size:
+                return res
+            tau = self._gff.rows(a, res.get("hand_q_target"))
+        except Exception as e:   # never let the feed-forward break an action: no key = torque 0
+            self.log(f"[arm_tau_ff] disabled for this reply: {type(e).__name__}: {e}")
+            return res
+        return res if tau is None else {**res, "arm_tau_ff": tau}
+
+    def _im_emit(self, r):
+        """Posture-aware index/middle repair at emission: a hand flexed past the open/closed midpoint keeps the more
+        closed value (closed_demo reaches its full -1.41, no under-grip on soft real fingers); otherwise the more open."""
+        f = np.r_[3:7, 10:14]
+        mid = (np.abs(self.post["open"][f]).mean() + np.abs(self.post["closed"][f]).mean()) / 2
+        return equalize_index_middle(r, closed=bool(np.abs(r[f]).mean() > mid))
+
+    def _act_entry(self, obs):
         ng = bool((self.cfg.get("safety") or {}).get("nan_guard", False))
+        hold = None
         if ng:
             obs, hold = self._nan_guard(obs)
-            if hold is not None:
-                return hold
-        if self.fk_xcheck_enabled:   # before both paths: the safety shell's act() is the same entry point
-            self._poll_fk_xcheck(obs, float(obs.get("t", 0.0)))
-        res = self._act_shell(obs) if self._shell else self._act(obs)
+        if hold is None:
+            if self.fk_xcheck_enabled:   # before both paths: the safety shell's act() is the same entry point
+                self._poll_fk_xcheck(obs, float(obs.get("t", 0.0)))
+            res = self._act_shell(obs) if self._shell else self._act(obs)
+            if not getattr(self, "_last_action_steady", True):   # handcal stale-frame guard: last commanded motion
+                self._last_motion_time = float(obs.get("t", 0.0))
+        else:
+            res = hold
+        if self.output_limiter is not None:
+            res = self._limit_motion_output(res, obs)
         if ng:
             a, h = np.asarray(res["arm_q_target"], float), np.asarray(res["hand_q_target"], float)
             if len(a) and len(h):
                 self._emitted = (a[-1].copy(), h[-1].copy())
         return res
+
+    _sag = None
+
+    def _sag_comp(self):
+        if self._sag is False or self.output_limiter is None or not self.cfg["motion"].get("sag_comp", False):
+            return None
+        if self._sag is None:
+            try:
+                from .gravity_ff import GravityFF
+                from .sag_comp import SagComp
+                self._sag = SagComp(self._gff or GravityFF(self.spec), 1.0 / HZ, log=lambda m: self.log(m))
+            except Exception as exc:
+                self.log(f"[sag_comp] disabled: {type(exc).__name__}: {exc}")
+                self._sag = False
+                return None
+        return self._sag
+
+    def _limit_motion_output(self, action, obs):
+        """M4 final boundary: cap every route, including holds, home, endgame and empty-grasp queue replacement."""
+        a, h = np.asarray(action["arm_q_target"], float), np.asarray(action["hand_q_target"], float)
+        if not a.size or not h.size:   # zero-row hold: no command to cap, and no a[0] start target to read
+            return action
+
+        def start(key, target):
+            try:
+                q = np.asarray(obs.get(key), float).reshape(-1)
+            except (AttributeError, TypeError, ValueError):
+                q = np.asarray(target, float)
+            return q if q.shape == (14,) and np.all(np.isfinite(q)) else np.asarray(target, float)
+
+        sag = self._sag_comp()   # motion.sag_comp (default off: None -> this path is untouched)
+        if sag is not None:
+            try:
+                sag.observe(float(obs.get("t", 0.0)), obs.get("arm_q"), obs.get("hand_q"))
+                a = sag.process(a, h)   # BEFORE the limiter: its velocity/acceleration caps bound the offset change too
+            except Exception as exc:
+                self.log(f"[sag_comp] disabled: {type(exc).__name__}: {exc}")
+                self._sag, sag = False, None
+        a, h = self.output_limiter.limit(
+            a, h, start("arm_q", a[0]), start("hand_q", h[0]), float(obs.get("t", 0.0)))
+        out = {**action, "arm_q_target": a, "hand_q_target": h}
+        if len(a):
+            self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()
+            if sag is not None:
+                sag.note_emitted(a[-1])
+                self.arm_cmd = a[-1] - sag.off   # planner state stays in the uncompensated frame
+            if self._shell:
+                self._shell_last = (self.arm_cmd.copy(), self.hand_cmd.copy())
+            if (self.cfg.get("debug") or {}).get("log_joint_offset", False):
+                self._last_policy_arm_cmd, self._last_policy_hand_cmd = self.arm_cmd.copy(), self.hand_cmd.copy()
+        return out
 
     # ------------------------------------------------------------------ safety.nan_guard
     _nan_t = -1e9
@@ -487,48 +1168,63 @@ class ClassicalPolicy:
             self.log(f"[nan_guard] {msg}")
 
     @staticmethod
-    def _fallback_pose(q, home):
-        """Per joint: the measured value where it is finite, else the home value of that joint (self.home =
-        config home_arm_q, hand: self.post['open'] from config hand.open). A missing or wrong-shape reading gives the
-        whole home pose. Never zeros: a zero target is a large move for the arms."""
-        home = np.asarray(home, float)
+    def _encoder_vector(q):
+        """Return an exact 14-vector or None.  Never fills an unobserved joint."""
         try:
             v = np.asarray(q, float).reshape(-1)
         except (TypeError, ValueError):
-            return home.copy()
-        if v.shape != home.shape:
-            return home.copy()
-        return np.where(np.isfinite(v), v, home)
+            return None
+        return v if v.shape == (14,) else None
+
+    def _complete_encoder(self, obs):
+        a, h = self._encoder_vector(obs.get("arm_q")), self._encoder_vector(obs.get("hand_q"))
+        if a is None or h is None or not (np.all(np.isfinite(a)) and np.all(np.isfinite(h))):
+            return None
+        return a.copy(), h.copy()
 
     def _nan_guard(self, obs):
-        """Non-finite arm_q / hand_q: skip the planner this tick and hold the last emitted action (before any action this
-        episode: measured-or-home pose, see _fallback_pose). Non-finite head_depth pixels -> 0 = missing depth: perception keeps only
+        """Non-finite arm_q / hand_q: latch the planner until a complete finite encoder frame. Hold the last emitted
+        or complete measured pose; before either exists return no action rather than filling an unobserved joint.
+        Non-finite head_depth pixels -> 0 = missing depth: perception keeps only
         depth_range_mm (config.yaml, 150..2000 mm) so 0 is invalid there (perception.py:369, :336). All-finite obs: returned
         as is. Returns (obs, hold_action or None)."""
         if not isinstance(obs, dict):
             return obs, None
-        bad_q = False
+        complete = self._complete_encoder(obs)
+        if complete is not None:
+            self._encoder_hold = complete
+            self._encoder_latched = False
+        bad_q = complete is None
         for k in ("arm_q", "hand_q"):
             v = obs.get(k)
             if v is not None:
                 try:
                     bad_q = bad_q or not bool(np.all(np.isfinite(np.asarray(v, float))))
                 except (TypeError, ValueError):
-                    pass   # malformed: _act's own handling is unchanged
+                    bad_q = True
         dep = obs.get("head_depth")
         if isinstance(dep, np.ndarray) and dep.dtype.kind == "f" and not np.isfinite(dep).all():
             obs = {**obs, "head_depth": np.where(np.isfinite(dep), dep, dep.dtype.type(0))}
             self._nan_log(f"head_depth: {int((~np.isfinite(dep)).sum())} non-finite px -> 0 (missing depth)")
         if not bad_q:
             return obs, None
+        self._encoder_latched = True
         if self._emitted is not None:
             a, h = self._emitted
             what = "last emitted action"
-        else:   # nothing emitted yet: per joint the measured value where finite, else home (never zeros)
-            a = self._fallback_pose(obs.get("arm_q"), self.home)
-            h = self._fallback_pose(obs.get("hand_q"), self.post["open"])
-            what = "measured-or-home pose (none emitted yet)"
-        self._nan_log(f"non-finite arm_q/hand_q: planner skipped, holding {what}")
+        elif self._encoder_hold is not None:
+            a, h = self._encoder_hold
+            what = "last complete encoder sample"
+        else:
+            # The runner treats a zero-row chunk as no new action and holds the
+            # SafetyFilter command established from the measured reset pose.
+            # This neither invents an absolute joint target nor records a
+            # nonfinite safety clip while encoder trust is still unavailable.
+            self._nan_log("non-finite arm_q/hand_q: no-motion latch, returning no action "
+                          "until the first complete encoder sample")
+            empty = np.empty((0, 14), float)
+            return obs, {"arm_q_target": empty.copy(), "hand_q_target": empty.copy(), "done": False}
+        self._nan_log(f"non-finite arm_q/hand_q: no-motion latch, holding {what}")
         k = max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
         return obs, {"arm_q_target": np.repeat(np.asarray(a, float)[None], k, 0),
                      "hand_q_target": np.repeat(np.asarray(h, float)[None], k, 0), "done": False}
@@ -549,6 +1245,60 @@ class ClassicalPolicy:
             setattr(pl, name, lambda d, a, h, *args, _fn=fn, **kw: reserve_plan(_fn(d, a, h, *args, **kw), a, h, *lim))
         go = pl.go_to
         pl.go_to = lambda af, hf, at, ht: reserve_pair(*go(af, hf, at, ht), af, hf, *lim)
+
+    def _insert_lid_step(self, obs, t):
+        """insert.perception_gated: once per insert episode fit the lid to the head depth on a worker (holding at home);
+        True = keep holding. No / weak fit = planner.insert_lid stays None = every object abstains."""
+        ic = self.cfg.get("insert") or {}
+        self._lid_ticks += 1
+        if self._lid_ticks < 15 and getattr(self, "_lid_job_started", None) is None:
+            return True          # let the pitch / counter calibration settle first
+        rgb, depth = obs.get("head_rgb"), obs.get("head_depth")
+        if depth is None or self._lid_ticks > int(ic.get("pg_ticks", 600)):
+            self._lid_pending = False
+            self._note(t, "insert pg: no depth / timeout, abstain")
+            return False
+        self._lid_job_started = True
+        res = self._bg("insert_lid", self._fit_lid, None if rgb is None else np.array(rgb, copy=True), np.array(depth, copy=True))
+        if res is None:
+            return True
+        nfr = int(ic.get("pg_frames", 1)) if ic.get("reach_gated", False) else 1
+        if nfr > 1 and res[0] == "ok" and res[1] is not None:   # insert.reach_gated: several independent frames must agree
+            self._lid_fits = list(getattr(self, "_lid_fits", [])) + [res[1]]
+            if len(self._lid_fits) < nfr:
+                return True              # next tick starts the next frame's fit
+            res = ("ok", self._merge_lid_fits(self._lid_fits, float(ic.get("pg_max_spread_m", 0.002)), t))
+        self._lid_fits = []
+        self._lid_pending, self._lid_job_started = False, None
+        if res[0] == "ok" and res[1] is not None:
+            self.planner.insert_lid = res[1]
+            e = res[1]
+            self._note(t, f"insert pg: lid conf {e.conf:.2f} sigma {1000 * e.sigma[0]:.1f}/{1000 * e.sigma[1]:.1f} mm "
+                          f"centre ({e.centre_xy[0]:.3f}, {e.centre_xy[1]:.3f}) yaw {np.degrees(e.yaw):.1f} z {e.z_top:.3f}")
+        else:
+            self._note(t, f"insert pg: lid fit failed ({res[1] if res[0] == 'err' else 'not confident'}), abstain")
+        return False
+
+    def _merge_lid_fits(self, fits, max_spread, t):
+        """Median of independent lid fits; None (= abstain) when their centres or yaws spread more than the budget."""
+        from . import insert_perception as ip
+        cs = np.array([f.centre_xy for f in fits], float)
+        yw = np.array([f.yaw for f in fits], float)
+        spread = float(np.max(np.linalg.norm(cs - np.median(cs, axis=0), axis=1)))
+        yspread = float(np.degrees(np.max(np.abs(yw - np.median(yw)))))
+        self._note(t, f"insert pg: {len(fits)} fits, centre spread {1000 * spread:.1f} mm, yaw spread {yspread:.1f} deg")
+        if spread > max_spread or yspread > 1.0:
+            return None
+        sig = tuple(float(max(max(f.sigma[i] for f in fits), spread)) for i in range(3))
+        return ip._make(ip.LidModel.from_scene(self.scene), np.median(cs, axis=0), float(np.median(yw)),
+                        float(np.median([f.z_top for f in fits])), float(min(f.conf for f in fits)), sig,
+                        {"frames": len(fits), "spread": spread})
+
+    def _fit_lid(self, rgb, depth):
+        from . import insert_perception as ip
+        ic = self.cfg.get("insert") or {}
+        return ip.estimate_lid(rgb, depth, self.perception, self.scene, search_m=float(ic.get("pg_search_m", 0.14)),
+                               search_deg=9.0, min_conf=float(ic.get("pg_min_conf", 0.8)), coarse_step=0.01, coarse_yaw_deg=3.0)
 
     def _bg(self, key, fn, *args):
         """Run fn(*args) once in a low-priority thread; None while running, then ("ok", value) / ("err", exc)."""
@@ -572,10 +1322,19 @@ class ClassicalPolicy:
             a, h = self._shell_last
         elif self.arm_cmd is not None:
             a, h = self.arm_cmd, self.hand_cmd
+        elif self._encoder_hold is not None:
+            a, h = self._encoder_hold
         else:
-            # nothing commanded yet: measured where finite, else home (same rule as _nan_guard; never zeros)
-            a = self._fallback_pose(obs.get("arm_q"), self.home)
-            h = self._fallback_pose(obs.get("hand_q"), self.post["open"])
+            # The shell can be enabled without nan_guard, so capture a complete
+            # finite first observation here as an exact (non-invented) hold.
+            complete = self._complete_encoder(obs) if isinstance(obs, dict) else None
+            if complete is not None:
+                a, h = complete
+            else:
+                # With any unobserved joint, return no target and let the runner
+                # retain its measured reset command without a safety clip.
+                empty = np.empty((0, 14), float)
+                return {"arm_q_target": empty.copy(), "hand_q_target": empty.copy(), "done": False}
         k = max(1, int(self.cfg["motion"].get("hold_ticks", 1)))
         return {"arm_q_target": np.repeat(np.asarray(a, float)[None], k, 0),
                 "hand_q_target": np.repeat(np.asarray(h, float)[None], k, 0), "done": False}
@@ -615,6 +1374,59 @@ class ClassicalPolicy:
             return np.clip(np.asarray(self.hand_cmd, float), self._held_hand_lo, self._held_hand_hi)
         return self.hand_cmd
 
+    def _held_calibration_tick(self, obs, t):
+        """M3 empty-close calibration, entirely in the normal non-blocking action state machine."""
+        if self._held_cal_done or self.held_detector.mode != "finger_sum":
+            return None
+        p = self.cfg["grasp"].get("held_calibration") or {}
+        if not p.get("enabled", False) or self.state not in ("look", "held_calibration"):
+            return None
+        if self._held_cal_phase is None:
+            # settle sets state=look as soon as it enqueues the hold.  Do not
+            # replace that queue: calibration starts only after every settle
+            # target has actually been returned to the runner.
+            if self.queue_a is not None and len(self.queue_a):
+                return None
+            if (self.cfg.get("policy") or {}).get("startup_overlap", False) and not self._bv_done and self._bv_job is None \
+                    and ((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled") and self._async_bin_vote:
+                return None   # capture the bin-vote frames first (hands open, still); the empty close runs while that job computes
+            self.state = "held_calibration"
+            self._held_cal_phase = "sample"
+            self.held_detector.require_empty_close_calibration(
+                t, steady_samples=p.get("steady_samples", 4),
+                max_velocity_rad_s=p.get("max_velocity_rad_s", 0.08),
+                hold_after_settle_s=p.get("hold_after_settle_s", 0.4),
+                timeout_s=p.get("timeout_s", 5.0))
+            g = self.cfg["grasp"]
+            posture = "cage_cylinder" if g.get("cage_mode", False) else g.get("close_posture", "closed")
+            target = self.post[posture]
+            h = ramp(self.hand_cmd, target, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
+            n = max(1, int(np.ceil(float(p.get("hold_after_settle_s", 0.4)) * HZ)))
+            h = np.vstack([h, np.repeat(target[None], n, 0)])
+            self._enqueue(np.repeat(self.arm_cmd[None], len(h), 0), h)
+            self._note(t, "held calibration: empty close at home")
+            return self._pop()
+        if self._held_cal_phase == "sample":
+            status = self.held_detector.sample_empty_close(t, self._held_command(), obs.get("hand_q"))
+            if self.queue_a is not None and len(self.queue_a):
+                return None
+            if status == "pending":
+                return self._hold()
+            target = self.post["open"]
+            h = ramp(self.hand_cmd, target, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
+            n = max(1, int(np.ceil(float(self.cfg["motion"].get("open_hold_s", 0.4)) * HZ)))
+            h = np.vstack([h, np.repeat(target[None], n, 0)])
+            self._enqueue(np.repeat(self.arm_cmd[None], len(h), 0), h)
+            self._held_cal_phase = "reopen"
+            state = "accepted" if status == "ready" else "invalid; early abort disabled"
+            self._note(t, f"held calibration {state}: {self.held_detector.calibration_reason}")
+            return self._pop()
+        if self._held_cal_phase == "reopen" and not (self.queue_a is not None and len(self.queue_a)):
+            self._held_cal_phase = None
+            self._held_cal_done = True
+            self.state = "look"
+        return None
+
     def _act(self, obs):
         first = self.arm_cmd is None
         if first:  # first call: start from the measured pose
@@ -624,9 +1436,11 @@ class ClassicalPolicy:
             self.arm_cmd = np.clip(np.asarray(obs["arm_q"], float), sp.arm_lower, sp.arm_upper)
             self.hand_cmd = np.clip(np.asarray(obs["hand_q"], float), sp.hand_lower, sp.hand_upper)
         t = float(obs.get("t", 0.0))
+        self._latest_t = t
         if first:
             self._ep_t0 = t
-        if self.held_detector.mode == "finger_sum":
+        held_cal_on = bool((self.cfg["grasp"].get("held_calibration") or {}).get("enabled", False))
+        if self.held_detector.mode == "finger_sum" and not held_cal_on:
             if first:
                 # The first command is synthesized from this same measurement,
                 # so it carries no tracking-bias information. Start the window
@@ -635,9 +1449,8 @@ class ClassicalPolicy:
             elif obs.get("hand_q") is not None:
                 self.held_detector.observe(t, self._held_command(), obs["hand_q"])
         self._joint_offset_diag(obs, t)
-        if (not self._pitch_calibration_done and self.cfg["perception"].get("online_pitch_cal", False)
-                and self.perception.pitch_frame_valid(obs.get("head_rgb"), obs.get("head_depth"))):
-            self._start_pitch_worker(obs.get("head_rgb"), obs.get("head_depth"))
+        if self.state == "calibrate":
+            return self._preflight_calibration(obs, t)
         if not self._calibration_done and (self.cfg["perception"].get("self_calibration") or {}).get("enabled", False):
             started = time.perf_counter()
             try:
@@ -666,8 +1479,26 @@ class ClassicalPolicy:
             self._hand_calibrate(obs, t)
         if self._gdiag is not None:
             self._grasp_diag(obs)
+        if self._softcal is not None:
+            self._soft_baseline_step(obs)
+        if self._empty_recovery is not None:
+            return self._empty_recovery_step(t)
         if self._stall is not None:
             self._lift_on_stall(obs)
+        held_cal_action = self._held_calibration_tick(obs, t)
+        if held_cal_action is not None:
+            return held_cal_action
+        if getattr(self, "_ig", None) is not None:
+            try:
+                r = self._insert_gate(obs, t)
+            except Exception as e:   # fail safe: never release, carry the object home (a hold over the lid would score -1)
+                r = self._insert_gate_failsafe(t, e)
+            if r is not None:
+                return r
+        if self._rel is not None:
+            r = self._release_confirm(obs, t)
+            if r is not None:
+                return r
         if self._exec is not None and self.queue_a is not None and len(self.queue_a):
             try:
                 r = self._endgame(t)      # policy.object_time_cap: T-8 s release over the bin / retract (inert when off)
@@ -678,8 +1509,69 @@ class ClassicalPolicy:
                 return r
         if self.queue_a is not None and len(self.queue_a):
             return self._pop()
+        if self.state == "brain_wait":   # brain down on an open instruction: arms home, re-probe (_brain_down_wait)
+            return self._brain_wait_step(t)
+        if self.state == "relook_settle":
+            n = int(round(self.cfg["motion"]["settle_s"] * HZ))
+            self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
+            self.state = "relook_fresh"
+            return self._pop()
+        if self.state == "relook_fresh":
+            # A request may repeat an observation while a command chunk is consumed. Count only increasing episode time.
+            if self._relook_last_t is None or t > self._relook_last_t:
+                self._relook_fresh += 1
+                self._relook_last_t = t
+            need = int(self.cfg["perception"].get("relook_fresh_frames", 2))
+            if self._relook_fresh < need:
+                return self._hold()
+            self._note(t, f"{self._relook_reason}: {self._relook_fresh} fresh frames; re-detect")
+            self.state = "look"
         if self.state == "init":
-            a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
+            if (self.cfg.get("calib") or {}).get("plane", {}).get("apply_height", False):
+                if self._stg is None:
+                    self._stg = {"phase": "safe", "t0": t, "why": []}
+                if self.planner._lift_from_contact_on() and self._stg["phase"] == "safe" and not self._stg.get("lift_logged"):
+                    self._stg["lift_logged"] = True
+                    c0 = min(self.planner.clearance(sd, self.arm_cmd, self.hand_cmd) for sd in ("left", "right"))
+                    self._note(t, f"[stage] lift_from_contact: start clearance {c0 * 1000:.1f} mm")
+                route, reason = self._stage_route(t, self._stg, "startup_route", self.arm_cmd.copy(),
+                                                  self.hand_cmd.copy(), ("left", "right"), None)
+                if route is None and reason is None:
+                    return self._hold()
+                self._stg = None
+                if route is None:   # never deadlock: the rc6 home route replaces a forever staging_hold
+                    c_now = min(self.planner.clearance(sd, self.arm_cmd, self.hand_cmd) for sd in ("left", "right")) \
+                        if self.planner._lift_from_contact_on() else 1.0
+                    if c_now <= 0.003:   # in contact: never the joint-space go_to through the table; retry the lift
+                        self._contact_start_tries += 1
+                        if self._contact_start_tries <= int(self.cfg["policy"].get("contact_start_retries", 3)) \
+                                or not self.cfg["policy"].get("contact_start_unblock", False):
+                            self._note(t, f"[stage] lift_from_contact: hold (clearance {c_now * 1000:.1f} mm)")
+                            self._stg = None
+                            return self._hold()
+                        # policy.contact_start_unblock: a 'hand below the table clearance' check never blocks forever.
+                        # Unproved but still PURE VERTICAL half-speed lift (no lateral motion over the objects), then
+                        # the stage proof runs again from the lifted pose.
+                        lift = None
+                        for sides in (("left", "right"), ("left",), ("right",)):
+                            lift = self.planner._contact_lift(sides, self.arm_cmd, self.hand_cmd, rise=0.08)
+                            if lift is not None:
+                                break
+                        if lift is not None:
+                            self._note(t, f"[stage] lift_from_contact: proof failed {self._contact_start_tries}x "
+                                          f"(clearance {c_now * 1000:.1f} mm); unproved vertical lift {len(lift[0]) / HZ:.1f} s")
+                            self._stg = None
+                            self._contact_start_tries = 0
+                            self._enqueue(*lift)
+                            return self._pop()
+                        self._note(t, f"[stage] lift_from_contact: no vertical lift possible ({c_now * 1000:.1f} mm); "
+                                      f"rc6 home route as the last resort")
+                    self._note(t, f"[staging] fallback rc6 home route: {reason}")
+                    a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
+                else:
+                    a, h = route.arm, route.hand
+            else:
+                a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
             self._home_move = (a, h)
             dq = np.abs(self.home - self.arm_cmd).max()
             self.pending_text = f"move both arms to home_arm_q (max joint change {dq:.2f} rad, {len(a) / HZ:.1f} s)"
@@ -707,19 +1599,33 @@ class ClassicalPolicy:
             n = int(round(self.cfg["motion"]["settle_s"] * HZ))
             self._enqueue(np.repeat(self.arm_cmd[None], n, 0), np.repeat(self.hand_cmd[None], n, 0))
             self.state = "look"
+            if self._soft_det and not self._softcal_done:
+                self._soft_baseline_start(t)   # one empty close per hand at home, queued: act() never blocks
             return self._pop()
-        if self.state == "look" and not self._bv_done and (self.cfg.get("bin") or {}).get("vote", {}).get("enabled"):
-            # bin.vote: first n_frames looks at home, before any pick; then freeze the median, never again
-            v = self.cfg["bin"]["vote"]
-            self._bv_frames.append({"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth")})
-            if len(self._bv_frames) < int(v["n_frames"]):
-                return self._hold()
-            self._bv_done = True
-            shift, extra, conf = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg, log=lambda m: self._note(t, m))
-            self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = shift, extra, conf
-            self._bv_frames = []
         if self.state == "look" and self._await_pitch_cal(t):
+            # H3/H4: no bin-vote frame (or any look) is captured while the first pitch commit is pending.
             return self._hold()
+        if self.state == "look" and getattr(self, "_lid_pending", False) and self._insert_lid_step(obs, t):
+            return self._hold()      # insert.perception_gated: lid fit in flight (flag off: attribute never set)
+        vote_cfg = (self.cfg.get("bin") or {}).get("vote", {})
+        if self.state == "look" and not self._bv_done and vote_cfg.get("enabled"):
+            # bin.vote: first n_frames looks at home, before any pick; then freeze the median, never again
+            if self._async_bin_vote:
+                if self._async_bin_vote_step(obs, t):
+                    return self._hold()
+            else:
+                frame = {"head_rgb": obs.get("head_rgb"), "head_depth": obs.get("head_depth"),
+                         "transform": self.perception.frame_transform()}
+                if vote_cfg.get("frame_transform_snapshot", False):
+                    frame["transform_snapshot"] = self.perception.projection_snapshot()
+                self._bv_frames.append(frame)
+                if len(self._bv_frames) < int(vote_cfg["n_frames"]):
+                    return self._hold()
+                self._bv_done = True
+                shift, extra, conf = vote_bins(self.perception, self.planner, self._bv_frames, self.cfg,
+                                                log=lambda m: self._note(t, m))
+                self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = shift, extra, conf
+                self._bv_frames = []
         if self.state == "look":
             if self._dflag("confidence_tiers") and self.tier is None:
                 try:
@@ -729,20 +1635,95 @@ class ClassicalPolicy:
                     self.tier, r = dec.CONFIDENT, None
                 if r is not None:
                     return r
+            robust_look = (self.cfg["policy"].get("done_confirm", False)
+                           or self.cfg["perception"].get("look_timeout_s") is not None
+                           or (self.cfg.get("planner") or {}).get("per_target_guard", False))
+            if robust_look and t >= self.time_limit:
+                self._note(t, "episode time limit reached")
+                self.state = "done"
+                return self._hold(done=True)
             cap = self.cfg["policy"].get("max_total_attempts")
             if cap is not None and self.n_started >= int(cap):   # knocked objects reappear as 'new': hard stop
                 self._note(t, f"attempt cap reached ({self.n_started} >= max_total_attempts {int(cap)}): done")
                 self.state = "done"
                 return self._hold(done=True)
+            if self._job is None and self._frozen_rgb_look(obs, t):
+                return self._frozen_rgb_action(t)
+            if self.threaded:
+                self._stale_detect_jobs = [job for job in self._stale_detect_jobs if job["result"] is None]
+                max_inflight = int(self.cfg["perception"].get("detect_max_inflight", 2))
+                if self.cfg["perception"].get("look_timeout_s") is not None \
+                        and len(self._stale_detect_jobs) >= max_inflight:
+                    return self._hold()
+                if self._job is None:
+                    if self.cfg["policy"].get("generation_workers", False):
+                        # A detached stale worker owns its snapshot.  Do not start
+                        # another planner user until it exits; act() only polls.
+                        # With look_timeout_s a wedged thread is bounded by detect_max_inflight (checked above).
+                        if self._look_thread is not None and self._look_thread.is_alive() \
+                                and self.cfg["perception"].get("look_timeout_s") is None:
+                            return self._hold()
+                        generation = self._look_generation
+                        worker, logs = self._look_snapshot()
+                        job_obs = {k: (np.asarray(v).copy() if isinstance(v, np.ndarray) else copy.deepcopy(v))
+                                   for k, v in obs.items()}
+                        self._job = {"generation": generation, "obs": job_obs, "result": None}
+                        if self.cfg["perception"].get("look_timeout_s") is not None:
+                            # The snapshot isolates perception/scene, so a timed-out call needs no perception replacement.
+                            self._job.update(started_wall=time.monotonic(), phase="detect", cancelled=False,
+                                             deadline_lock=threading.Lock())
+                        self._look_thread = threading.Thread(target=self._look_job,
+                                                             args=(self._job, worker, logs), daemon=True)
+                        self._look_thread.start()
+                    else:
+                        self._job = {"obs": obs, "result": None, "detector": self.perception}
+                        if self.cfg["perception"].get("look_timeout_s") is not None:
+                            self._job.update(started_wall=time.monotonic(), phase="detect", cancelled=False,
+                                             deadline_lock=threading.Lock(),
+                                             perception_state=self._perception_snapshot(self.perception))
+                        threading.Thread(target=self._look_job, args=(self._job,), daemon=True).start()
+                if self._job["result"] is None:
+                    deadline = self.cfg["perception"].get("look_timeout_s")
+                    job = self._job
+                    timed_out = False
+                    if deadline is not None and time.monotonic() - job["started_wall"] >= float(deadline):
+                        with job["deadline_lock"]:
+                            if job["phase"] == "detect":
+                                job["cancelled"] = timed_out = True
+                    if timed_out:
+                        self._job = None
+                        self._stale_detect_jobs.append(job)
+                        if job.get("detector") is self.perception:
+                            # Retire perception + scene together. The retry then updates the same fresh scene used by
+                            # planning, while the unkillable native call keeps exclusive ownership of the old pair.
+                            self._replace_stale_perception(job.get("perception_state"))
+                        res = ("error", f"detector deadline exceeded ({float(deadline):g} s)")
+                        return self._after_look(res, t)
+                    return self._hold()
+                res, self._job = self._job["result"], None
+                if self.cfg["policy"].get("generation_workers", False):
+                    if not isinstance(res, _LookResult) or res.generation != self._look_generation:
+                        return self._hold()
+                    self._commit_look_result(res)
+                    res = res.outcome
+            else:
+                res = self._look(obs)
+            return self._after_look(res, t)
+        if self.state == "planner_wait":
+            # brain.planner: the whole-plan request/validation polls while HOLD chunks run at 30 Hz
+            dets, verify = self._planner_pending
             if self.threaded:
                 if self._job is None:
                     self._job = {"obs": obs, "result": None}
-                    threading.Thread(target=self._look_job, args=(self._job,), daemon=True).start()
+                    threading.Thread(target=self._choose_job, args=(self._job, dets, verify), daemon=True).start()
                 if self._job["result"] is None:
                     return self._hold()
                 res, self._job = self._job["result"], None
             else:
-                res = self._look(obs)
+                res = self._choose(dets, obs, verify)
+            if res[0] == "planner_pending":
+                return self._hold()
+            self._planner_pending = None
             return self._after_look(res, t)
         if self.state == "await":
             d, self._decision = self._decision, None
@@ -764,63 +1745,312 @@ class ClassicalPolicy:
                 self.state = "done"
                 self._note(t, "operator stop")
             return self._hold(done=self.state == "done")
+        if self.state == "executing" and self._rel_fail:   # release_confirm: hand not empty after the re-open
+            self.state = "done"
+            self._note(t, "release not confirmed: stop picking")
+            return self._hold(done=True)
         if self.state == "executing":  # queue drained -> back home: look again after settling
             self.state = "settle"
             return self._act(obs)
+        if self.state == "staging_hold":
+            return self._hold()
+        if self.state == "empty_hold":
+            return self._hold()
         return self._hold(done=True)
 
-    PITCH_WAIT_S = 1.0   # perception.online_pitch_cal: the first look waits at most this long (sim time) for the commit
+    PITCH_WAIT_S = 1.0   # perception.online_pitch_cal: pre-motion hold waits at most this long (observation time)
 
     def _await_pitch_cal(self, t):
         """online_pitch_cal ON: the first look must not run on the nominal extrinsics before the fit committed (it would
-        see 0 detections and end the episode). True = hold this tick (max PITCH_WAIT_S from the episode start). Threaded:
-        never blocks. Not threaded: bounded join of the fit worker. Flag off: always False."""
-        if not self.cfg["perception"].get("online_pitch_cal", False) or self.pitch_calibration is not None:
+        see 0 detections and end the episode). Timeout is measured from calibration-phase entry, never episode reset.
+        This poll never joins a worker, so act() cannot block. Flag off: always False."""
+        if ((self.cfg.get("calib") or {}).get("hand_icp_primary", False)   # handcal: the hand fit owns the pose
+                or not self.cfg["perception"].get("online_pitch_cal", False) or self.pitch_calibration is not None):
             return False
-        if t - getattr(self, "_ep_t0", t) >= self.PITCH_WAIT_S:
+        entered = self._calib_phase_t0 if self._calib_phase_t0 is not None else t
+        if t - entered >= self.PITCH_WAIT_S:
             return False
-        th = self._pitch_thread
-        if not self.threaded and th is not None:
-            th.join(timeout=2.0)
-            return self.pitch_calibration is None and th.is_alive()
         return True
 
     # ------------------------------------------------------------------ look + plan
-    def _look_job(self, job):
-        _lower_thread_priority()  # planning must not starve act() (the control loop's thread)
+    def _frozen_rgb_look(self, obs, t):
+        """policy.frozen_rgb_guard: True when this look's head RGB is bit-identical to the previous fresh look's
+        frame although a pick was started (or the episode was reset) since then. A live camera never repeats a
+        frame bit for bit (sensor noise), so equal crc32 after the scene changed = frozen stream. Arm displacement
+        is not used: every look starts at home after settle. Runs once per look, in act() before the look is
+        launched (inline and threaded/generation-worker paths alike). Never raises; a fresh look updates the ref."""
+        pol = self.cfg["policy"]
+        if not pol.get("frozen_rgb_guard", False):
+            return False
         try:
-            job["result"] = self._look(job["obs"])
+            rgb = obs.get("head_rgb")
+            if rgb is None:
+                return False
+            arr = np.ascontiguousarray(rgb)
+            h = (zlib.crc32(arr), arr.shape)
+            ref = self._rgb_ref
+            if ref is not None and ref[0] == h and ref[1] != self._scene_epoch:
+                self._frozen_looks += 1
+                self._note(t, f"[frozen_rgb] head RGB identical to the previous look after "
+                              f"{self._scene_epoch - ref[1]} pick/reset event(s); look discarded, waiting + re-look "
+                              f"(frozen streak {self._frozen_looks})")
+                return True
+            self._frozen_looks = 0
+            self._rgb_ref = (h, self._scene_epoch)
+            return False
         except Exception as e:  # never kill the control loop
-            job["result"] = ("error", repr(e))
+            try:
+                self._note(t, f"[frozen_rgb] guard error {e!r}; ignored")
+            except Exception:
+                pass
+            return False
+
+    def _frozen_rgb_action(self, t):
+        # Never abort, never skip: a frozen frame is a failed look -> home, settle (wait), re-look until the stream
+        # recovers or the episode time limit ends it (retry_failed below).
+        return self._after_look(("error", "frozen_rgb"), t)
+
+    def _look_snapshot(self):
+        """Fast copy-on-launch transaction for one look/plan worker."""
+        worker = copy.copy(self)
+        for name in self._LOOK_COMMIT_FIELDS:
+            if hasattr(self, name):
+                value = getattr(self, name)
+                if name in self._LOOK_DEEP_FIELDS:
+                    value = copy.deepcopy(value)
+                elif isinstance(value, (list, dict, set)):
+                    value = value.copy()
+                setattr(worker, name, value)
+        worker.planner = copy.copy(self.planner)
+        worker.planner.__dict__ = self.planner.__dict__.copy()
+        # Pinocchio Model is read-only after construction, but Data and the
+        # temporary IK hints/offsets are mutated by FK/IK.  Give every worker
+        # its own transaction-local state so stale and current generations may
+        # finish concurrently after a reset.
+        worker.kin = copy.copy(self.kin)
+        worker.kin.data = worker.kin.model.createData()
+        worker.kin.budget = None
+        worker.kin.offset = {side: np.asarray(value, float).copy() for side, value in self.kin.offset.items()}
+        worker.kin.hint = np.asarray(self.kin.hint, float).copy()
+        worker.planner.kin = worker.kin
+        for name in ("mapping", "bin_shift", "drop_extra", "bin_conf"):
+            setattr(worker.planner, name, copy.deepcopy(getattr(self.planner, name)))
+        # Scene configuration is read-only; only counter_z_runtime changes per
+        # look, so a shallow object copy isolates that write without copying the
+        # full scene/config synchronously in act().
+        worker.scene = copy.copy(self.scene)
+        worker.planner.scene = worker.scene
+        worker.perception = copy.copy(self.perception)
+        worker.perception.__dict__ = self.perception.__dict__.copy()
+        worker.perception._arm_surface = None  # lazily rebuilt inside this worker; its Pinocchio Data is mutable
+        for name in self._LOOK_PERCEPTION_FIELDS:
+            if hasattr(self.perception, name):
+                setattr(worker.perception, name, copy.deepcopy(getattr(self.perception, name)))
+        worker.perception.scene = worker.scene
+        worker.perception.bin_shift_src = worker.planner
+        worker.planner.frame_src = worker.perception
+        logs = []
+        worker.log = logs.append
+        worker.perception.log = logs.append
+        return worker, logs
+
+    def _commit_look_result(self, result):
+        before = {id(x) for x in self._target_cooldowns}
+        for name, value in result.state:
+            setattr(self, name, value)
+        for x in self._target_cooldowns:      # cooldowns the worker just started: run from the live clock, not the launch snapshot
+            if id(x) not in before:
+                x["until"] = float(self._latest_t) + float(self.cfg["planner"]["per_target_cooldown_s"])
+        for name, value in result.perception_state:
+            setattr(self.perception, name, value)
+        self.scene.counter_z_runtime = result.counter_z_runtime
+        self.scene.rim_z_runtime = result.rim_z_runtime
+        for message in result.logs:
+            self.log(message)
+
+    def _look_job(self, job, worker=None, logs=None):
+        _lower_thread_priority()  # planning must not starve act() (the control loop's thread)
+        if job.get("kind") == "bin_vote":
+            self._bin_vote_look_job(job)
+            return
+        try:
+            if worker is None:
+                if self.cfg["perception"].get("look_timeout_s") is None:
+                    job["result"] = self._look(job["obs"])
+                else:
+                    job["result"] = self._look(job["obs"], deadline_job=job, detector=job["detector"])
+                return
+            outcome = worker._look(job["obs"], deadline_job=job) if "deadline_lock" in job else worker._look(job["obs"])
+            state = tuple((name, getattr(worker, name)) for name in self._LOOK_COMMIT_FIELDS if hasattr(worker, name))
+            perception_state = tuple((name, getattr(worker.perception, name))
+                                     for name in self._LOOK_PERCEPTION_FIELDS if hasattr(worker.perception, name))
+            if job["generation"] == self._look_generation:
+                job["result"] = _LookResult(job["generation"], outcome, state, perception_state,
+                                             worker.scene.counter_z_runtime, tuple(logs),
+                                             getattr(worker.scene, "rim_z_runtime", None))
+        except Exception as e:  # never kill the control loop
+            if worker is None:
+                job["result"] = ("error", repr(e))
+            else:
+                if job["generation"] == self._look_generation:
+                    job["result"] = _LookResult(job["generation"], ("error", repr(e)), (), (),
+                                                 worker.scene.counter_z_runtime, tuple(logs),
+                                                 getattr(worker.scene, "rim_z_runtime", None))
+
+    def _copy_bin_vote_frame(self, obs):
+        """Copy camera buffers before returning to the runner; the worker never observes reused frame storage."""
+        frame = {}
+        for key in ("head_rgb", "head_depth"):
+            value = obs.get(key)
+            if value is None:
+                frame[key] = None
+            else:
+                value = np.asarray(value).copy()
+                value.setflags(write=False)
+                frame[key] = value
+        frame["transform"] = self.perception.frame_transform()
+        if self.cfg["bin"]["vote"].get("frame_transform_snapshot", False):
+            frame["transform_snapshot"] = self.perception.projection_snapshot()
+        return MappingProxyType(frame)
+
+    def _async_bin_vote_step(self, obs, t):
+        """Collect/start/poll only. Return True while act() must hold; extraction runs in the look worker."""
+        job = self._bv_job
+        if job is not None:
+            if not job["done"].is_set():
+                return True
+            result = job["result"]
+            if result is None or result.generation != self._look_generation:
+                return True
+            self._bv_job = None
+            self._bv_done = True
+            self.planner.bin_shift, self.planner.drop_extra, self.planner.bin_conf = result.mutable_copies()
+            for message in result.messages:
+                self._note(t, message)
+            return False
+
+        self._bv_frames.append(self._copy_bin_vote_frame(obs))
+        if len(self._bv_frames) < int(self.cfg["bin"]["vote"]["n_frames"]):
+            return True
+        job = {"kind": "bin_vote", "generation": self._look_generation,
+               "frames": tuple(self._bv_frames), "result": None, "done": threading.Event()}
+        self._bv_frames = []
+        with self._look_lock:
+            if job["generation"] != self._look_generation:
+                return True
+            self._bv_job = job
+        threading.Thread(target=self._look_job, args=(job,), name="bin-vote", daemon=True).start()
+        return True
+
+    def _bin_vote_look_job(self, job):
+        messages = []
+        try:
+            raw = vote_bins(self.perception, self.planner, job["frames"], self.cfg, log=messages.append)
+            result = _BinVoteResult.freeze(job["generation"], raw, messages)
+        except Exception as exc:  # vote_bins is defensive; keep the worker boundary defensive too
+            names = self.scene.bin_names
+            v = self.cfg["bin"]["vote"]
+            raw = ({}, {n: float(v["low_conf_extra_m"]) for n in names}, {n: 0.5 for n in names})
+            messages.append(f"[bin.vote] worker failed ({type(exc).__name__}: {exc}); prior positions")
+            result = _BinVoteResult.freeze(job["generation"], raw, messages)
+        try:
+            with self._look_lock:
+                if job["generation"] == self._look_generation and self._bv_job is job:
+                    job["result"] = result
+        finally:
+            job["done"].set()
 
     def _detect_kw(self):
-        """Only with perception.colour_kmeans: tell detect() whether the arm is out of view (parked at home)."""
-        if not self.cfg["perception"].get("colour_kmeans", False):
-            return {}
-        return {"arm_clear": bool(np.abs(self.arm_cmd - self.home).max() < 0.05)}
+        """Optional context for a settled policy look."""
+        out = {}
+        if self.cfg["perception"].get("colour_kmeans", False):
+            out["arm_clear"] = bool(np.abs(self.arm_cmd - self.home).max() < 0.05)
+        if self.cfg["perception"].get("still_vote", False):
+            out["still_frame"] = True
+        return out
 
     def _fk_kw(self, obs):
-        """Only with perception.color_gate.fk_mask: the measured arm / hand pose for detect()'s arm mask."""
-        if not (self.cfg["perception"].get("color_gate") or {}).get("fk_mask", False) or obs.get("arm_q") is None:
+        """Measured pose for an enabled colour-gate, depth-recovery or novel-object FK mask."""
+        need_fk = ((self.cfg["perception"].get("color_gate") or {}).get("fk_mask", False) or
+                   self.cfg["perception"].get("depth_blob_recover", False) or
+                   self.cfg["perception"].get("novel_objects", False))
+        if not need_fk or obs.get("arm_q") is None:
             return {}
+        # novel fp_filter: the 3-D near-robot exemption is only trusted with a still arm (image lags joints)
+        dq = obs.get("arm_dq")
+        self.perception.novel_arm_speed = None if dq is None else float(np.max(np.abs(np.asarray(dq, float))))
         return {"robot_q": (np.asarray(obs["arm_q"], float),
                             None if obs.get("hand_q") is None else np.asarray(obs["hand_q"], float))}
 
-    def _look(self, obs):
+    def _counter_kw(self, obs):
+        if not self.cfg.get("calib", {}).get("counter_after_hand", False):
+            return {}
+        return {"calibration_frame": self._calibration_frame(obs)}
+
+    @staticmethod
+    def _detector_finished(deadline_job):
+        if deadline_job is None:
+            return False
+        with deadline_job["deadline_lock"]:
+            deadline_job["phase"] = "plan"
+            return bool(deadline_job.get("cancelled"))
+
+    def _log_zero_look(self, detector):
+        """perception.look_summary: why did this look end with 0 detections? (passive; never raises)"""
+        try:
+            s = getattr(detector, "last_look_summary", None)
+            if not s:
+                return
+            rej = s.get("rejected") or {}
+            self.log(f"[look0] 0 detections: {sum(s.get('blobs', {}).values())} colour blobs "
+                     f"(min_area-rejected {s.get('min_area', 0)}), {sum(rej.values())} rejected, reasons "
+                     f"{dict(sorted(rej.items()))}; colour px raw {s.get('raw_px')} after depth/bin/arm keep {s.get('mask_px')}; "
+                     f"blob HSV (OpenCV H 0-179) {s.get('blob_hsv') or 'none'}")
+        except Exception as e:   # diagnostics only
+            self.log(f"[look0] summary failed ({type(e).__name__})")
+
+    def _look(self, obs, deadline_job=None, detector=None):
+        detector = self.perception if detector is None else detector
+        rgb, depth = obs.get("head_rgb"), obs.get("head_depth")
+        if rgb is None or depth is None or getattr(rgb, "dtype", None) == object or getattr(depth, "dtype", None) == object:
+            return ("error", "no head frame")   # missing/invalid head image: never crash the look (no-op on valid frames)
         verify = self._verify_on()
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
-            dets = self.perception.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs))
+            dets = detector.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs),
+                                   **self._counter_kw(obs))
+            if self._detector_finished(deadline_job):
+                return ("error", "late detector result discarded")
+            if dets is None:
+                return ("still_vote_pending",)
+            if not dets:
+                self._log_zero_look(detector)
+            if (self.cfg.get("instruction") or {}).get("novel_objects", False):
+                self._match_novel(dets, obs)
             self.last_detections = dets
             self._settle_skill_attempt(dets, float(obs.get("t", 0.0)))
+            self._planner_observe(dets, obs)
+            if self._landing_on():   # policy.verify_landing: classify the last release, never target an in-bin object
+                relook, dets = self._landing_review(obs, dets)
+                if relook is not None:
+                    return relook
             return self._choose_retry(dets, obs, verify=False)
-        dets, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
-                                                   **self._detect_kw(), **self._fk_kw(obs))
+        dets, rejected = detector.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
+                                         **self._detect_kw(), **self._fk_kw(obs), **self._counter_kw(obs))
+        if self._detector_finished(deadline_job):
+            return ("error", "late detector result discarded")
+        if dets is None:
+            return ("still_vote_pending",)
+        if not dets:
+            self._log_zero_look(detector)
+        if (self.cfg.get("instruction") or {}).get("novel_objects", False):
+            self._match_novel(dets, obs)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
         self.last_detections = dets
         self.last_bin_detections = bin_dets
         t = float(obs.get("t", 0.0))
         if self.verification_pending is None:   # a pending release is settled by _review_bins instead
             self._settle_skill_attempt(dets, t)
+        self._planner_observe(dets, obs)
         corrections = self._review_bins(bin_dets, t)
 
         # A known wrong-bin object is the largest score swing, so repair it before
@@ -828,10 +2058,15 @@ class ClassicalPolicy:
         # stale corrective targets are never retained between camera frames.
         self.scheduled_corrections = corrections
         cap = self.cfg["policy"].get("max_corrections_per_episode")
+        guarded_corrections = False
         if cap is None:  # stock #6: corrections first; none plannable -> stop
             if corrections:
-                res = self._plan_corrections(corrections, dets)
-                return res if res is not None else ("uncorrectable", corrections, len(dets))
+                res = self._plan_corrections(corrections, dets, t)
+                if res is not None:
+                    return res
+                if not self._target_guard_on():
+                    return ("uncorrectable", corrections, len(dets))
+                guarded_corrections = True
         # max_corrections_per_episode set (Felix review): a correction never blocks a new pick while a pickable
         # object is on the counter -> counter picks first, corrections (within the cap) only when nothing else is
         # left; an unplannable correction no longer ends the episode.
@@ -851,16 +2086,93 @@ class ClassicalPolicy:
                 self.verify_relooks_remaining -= 1
                 return ("relook", None, len(dets))
         res = self._choose_retry(dets, obs, verify=True)
+        if guarded_corrections and res[0] == "none":
+            return ("relook", None, len(dets))
         if cap is not None and corrections and res[0] in ("none", "notime") and self.n_corrections < int(cap):
-            alt = self._plan_corrections(corrections, dets)
+            alt = self._plan_corrections(corrections, dets, t)
             if alt is not None:
                 return alt
+            if self._target_guard_on() and res[0] == "none":
+                return ("relook", None, len(dets))
         return res
 
-    def _plan_corrections(self, corrections, dets):
+    def _match_novel(self, dets, obs=None):
+        """Attach a bin only to one deterministic visible novel match.
+
+        Unknown nouns expose a closed visible-novel list to the already
+        bounded asynchronous brain.  With no brain, or on timeout, every such
+        object keeps ``novel_target_bin=None`` and is therefore unpickable.
+        """
+        self._novel_brain_candidates, self._novel_brain_bin = [], None
+        novels = [d for d in dets if getattr(d, "novel", False)]
+        for d in novels:
+            d.novel_target_bin, d.novel_matched = None, False
+        if not novels or self._universal_inert or not (self.cfg.get("instruction") or {}).get("novel_objects", False):
+            return
+        from .novel_objects import match_instruction
+        match = match_instruction(self._instruction, novels)
+        if match.matched is not None:
+            match.matched.novel_target_bin = match.target_bin
+            match.matched.novel_matched = True
+            self.log(f"[novel] matched {match.matched.color} {match.matched.shape} -> {match.target_bin}")
+            if not self._parser_match_confirmed(match.matched, obs):
+                match.matched.novel_target_bin, match.matched.novel_matched = None, False
+        elif match.brain_candidates and self.brain is not None:
+            self._novel_brain_candidates = list(match.brain_candidates)
+            self._novel_brain_bin = match.target_bin
+            self.log(f"[novel] unresolved noun {match.unresolved_noun!r}; offered "
+                     f"{len(match.brain_candidates)} visible novel candidates to brain")
+
+    def _parser_match_confirmed(self, d, obs):
+        """universal (brain.ev_gate + brain.find): VLM cross-check of a deterministic SHAPE-NOUN-ONLY match ("the ball" ->
+        the only round blob).  A synonym is a heuristic: a round pan body is not a ball.  find(noun) must put a point on this
+        candidate; points elsewhere or none = contradicted -> the object is left (0 beats -1) and marked ungraspable so the
+        brain planner cannot pick it either.  VLM unavailable / error / colour named = the parser stands (classical fallback)."""
+        bc = self.cfg.get("brain") or {}
+        if obs is None or not bc.get("ev_gate", False) or not bc.get("find", False) or self.brain is None:
+            return True
+        from .novel_objects import named_noun
+        noun, coloured = named_noun(self._instruction)
+        if noun is None or coloured:
+            return True
+        key = (noun, round(float(d.top[0]), 2), round(float(d.top[1]), 2))
+        cache = self.__dict__.setdefault("_parser_verdicts", {})
+        if key not in cache and self.__dict__.get("_parser_unreachable", 0) >= 2:
+            return True                # the server failed twice this episode: stop spending look time on it
+        if key not in cache:
+            try:
+                fn = self._brain_find_fn
+                if fn is None:
+                    self._brain_find(noun, obs, [])        # lazily builds the FindClient; the result is not used
+                    fn = self._brain_find_fn
+                if hasattr(fn, "detect_checked"):
+                    raw, reachable = fn.detect_checked(obs["head_rgb"], noun)
+                else:
+                    raw, reachable = (fn.detect(obs["head_rgb"], noun) if hasattr(fn, "detect") else fn(obs["head_rgb"], noun)), True
+                if not reachable:
+                    raise ConnectionError("brain server unreachable")
+                pts = [tuple(map(float, (it["point"] if isinstance(it, dict) else it))) for it in raw]
+                cache[key] = bool(match_found(pts, [d]))
+                self.log(f"[universal] VLM find({noun!r}) {'confirms' if cache[key] else 'CONTRADICTS'} the parser match "
+                         f"({len(pts)} points)")
+            except Exception as e:
+                self.log(f"[universal] VLM cross-check unavailable ({type(e).__name__}); the parser match stands")
+                self._parser_unreachable = self.__dict__.get("_parser_unreachable", 0) + 1
+                return True            # not cached: the next look asks again (at most twice per episode)
+        if not cache[key]:
+            d.ungraspable = d.graspable = False
+            self.failed.append(np.asarray(d.top[:2], float).copy())
+        return cache[key]
+
+    def _plan_corrections(self, corrections, dets, t=0.0):
         """First plannable corrective pick: wrong/unscored bin -> a target-bin slot, else -> counter. None if none."""
         for d, source_bin, target_bin in corrections:
+            if getattr(d, "tentative", False):
+                continue  # partial_ok_near_hand: never grasp an FK-boundary fragment directly
+            if self._target_guarded(d, t):
+                continue
             budget_blocked = False
+            target_blocked = False
             if self._vary_on():   # no place gate: the object is already in a bin
                 n = self._attempt_count(d.top[:2], d.color)
                 limit = self._attempt_limit(d.top[:2])
@@ -869,27 +2181,53 @@ class ClassicalPolicy:
                     self.log(f"[classical] correction attempt limit reached for {d.color} in {source_bin}")
                     continue
             for slot in self._free_drop_slots(target_bin) or self._overflow_slots(target_bin):
-                p = self._plan_pick(d, dict(bin_name=target_bin, relocate=False,
-                                            drop_slot=slot, source_bin=source_bin))
+                try:
+                    p = self._plan_pick(d, dict(bin_name=target_bin, relocate=False,
+                                                drop_slot=slot, source_bin=source_bin))
+                except Exception as exc:
+                    if not self._target_guard_on():
+                        raise
+                    self._cool_target(d, t, f"{type(exc).__name__}: {exc}")
+                    target_blocked = True
+                    break
                 self.plans.append(p)
                 if p.ok and not self._object_time_allows(d, p.duration):
                     budget_blocked = True
                     break
                 if p.ok:
                     return ("plan", p, len(dets))
-                self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
-            if budget_blocked:
+                if self._target_guard_on():
+                    self._cool_target(d, t, p.reason or "infeasible")
+                    target_blocked = True
+                    break
+                if getattr(d, "novel", False):
+                    self.log(f"[novel] plan reject: {p.reason} (cannot correct {d.color} from {source_bin} to slot {slot})")
+                else:
+                    self.log(f"[classical] cannot correct {d.color} from {source_bin} to slot {slot}: {p.reason}")
+            if budget_blocked or target_blocked:
                 continue
             def cleanup(det, arm, hand, planner=None, **_):
                 return (planner or self.planner).plan_to_counter(det, arm, hand, source_bin,
                                                     obstacles=[o.top[:2] for o in dets])
-            p = self._plan_pick(d, {}, plan_fn=cleanup)
+            try:
+                p = self._plan_pick(d, {}, plan_fn=cleanup)
+            except Exception as exc:
+                if not self._target_guard_on():
+                    raise
+                self._cool_target(d, t, f"{type(exc).__name__}: {exc}")
+                continue
             self.plans.append(p)
             if p.ok and not self._object_time_allows(d, p.duration):
                 continue
             if p.ok:
                 return ("plan", p, len(dets))
-            self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
+            if self._target_guard_on():
+                self._cool_target(d, t, p.reason or "infeasible")
+            else:
+                if getattr(d, "novel", False):
+                    self.log(f"[novel] plan reject: {p.reason} (cannot remove {d.color} from wrong {source_bin} bin)")
+                else:
+                    self.log(f"[classical] cannot remove {d.color} from wrong {source_bin} bin: {p.reason}")
         return None
 
     def _overflow_slots(self, bin_name):
@@ -902,7 +2240,12 @@ class ClassicalPolicy:
         """_choose + #3 retry pass (Oliver 40fb22a, policy.retry_pass, default off)."""
         if not verify and self._slots_on():
             self._settle_slot(dets)
-        res = self._choose(dets, obs, verify)
+        choose_dets = dets
+        tentative = []
+        if self.cfg["perception"].get("partial_ok_near_hand", False):
+            tentative = [d for d in dets if getattr(d, "tentative", False)]
+            choose_dets = [d for d in dets if not getattr(d, "tentative", False)]
+        res = self._choose(choose_dets, obs, verify)
         pol = self.cfg["policy"]
         if res[0] == "none" and dets and pol.get("retry_pass", False) and not self.retry_pass_used:
             # Retry pass (once per episode): objects excluded only by max_attempts get retry_extra_attempts more
@@ -921,8 +2264,245 @@ class ClassicalPolicy:
                                                   for color, xy in excluded)]
                 self.retry_allow += [(xy, extra) for xy in excl]
                 self._note(float(obs.get("t", 0.0)), f"retry pass: {len(excl)} object(s) get {extra} more attempts")
-                res = self._choose(dets, obs, verify)
+                res = self._choose(choose_dets, obs, verify)
+        if res[0] == "none" and dets and pol.get("late_sweep", False):
+            res = self._late_sweep(res, choose_dets, obs, verify)
+        max_relooks = int((self.cfg["perception"].get("partial_ok_near_hand_params") or {}).get("max_relooks", 2))
+        if res[0] == "none" and tentative and self._partial_relooks < max_relooks:
+            return ("partial", None, len(dets))
+        if res[0] == "none" and choose_dets and self._landing_on():
+            res = self._landing_regrant(res, choose_dets, obs)
+        if res[0] == "none" and choose_dets and pol.get("late_regrant", False):
+            res = self._late_regrant(res, choose_dets, obs, verify)
         return res
+
+    # ------------------------------------------------------------------ policy.late_sweep
+    def _late_sweep(self, res, dets, obs, verify):
+        """Nothing was planned although objects are still detected: they were excluded by the attempt limit or skipped
+        after a failed retry plan. With >= late_sweep_min_s left give each late_sweep_extra more tries (attempt counts
+        and grasp history are kept: retry_jitter_m / variants continue; an identical grasp is allowed in the sweep).
+        At most late_sweep_max sweeps per episode. Any error keeps `res`."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        try:
+            if self._sweeps_used >= int(pol.get("late_sweep_max", 3)) \
+                    or self.time_limit - t < float(pol.get("late_sweep_min_s", 28.0)):
+                return res
+            rad = self._attempt_radius()
+            same_r = float(pol["same_object_radius"])
+            hit = [d for d in dets if self._attempt_excluded(d.top[:2], d.color)
+                   or any(np.linalg.norm(d.top[:2] - f) < same_r for f in self.failed)]
+            if not hit:
+                return res
+            extra = int(pol.get("late_sweep_extra", 1))
+            self._sweeps_used += 1
+            for d in hit:
+                xy = np.asarray(d.top[:2], float).copy()
+                self.failed = [f for f in self.failed if np.linalg.norm(xy - f) >= same_r]
+                n = self._attempt_count(xy, d.color)
+                self.retry_allow = [(p, e) for p, e in self.retry_allow if np.linalg.norm(xy - p) >= rad]
+                self.retry_allow.append((xy, n + extra))
+                self._sweep_xy.append(xy)
+            self._note(t, f"late sweep {self._sweeps_used}: {len(hit)} object(s) get {extra} more attempt(s), "
+                          f"{self.time_limit - t:.0f} s left")
+            return self._choose(dets, obs, verify)
+        except Exception as e:
+            self.log(f"[late_sweep] error {type(e).__name__}: {e}; keeping the stock result")
+            return res
+
+    def _in_sweep(self, xy):
+        r = float(self.cfg["policy"]["same_object_radius"])
+        return any(np.linalg.norm(np.asarray(xy, float) - s_) < r for s_ in self._sweep_xy)
+
+    # ------------------------------------------------------------------ policy.retry_cross_relocate
+    def _cross_relocate(self, d, hist, kw):
+        """After a LEFT-arm miss on a cross-body object (y < retry_cross_relocate_y) plan a relocation: the right arm
+        (ipsilateral there) picks it and puts it on the counter where the left arm can finish. None = not applicable
+        / infeasible / no time: the stock retry continues."""
+        pol = self.cfg["policy"]
+        try:
+            if not pol.get("retry_cross_relocate", False) or not hist or hist[-1]["side"] != "left":
+                return None
+            y_max = float(pol.get("retry_cross_relocate_y", -0.03))
+            if float(d.top[1]) > y_max or self._xrel_n >= int(pol.get("retry_cross_relocate_max", 2)):
+                return None
+            bin_name = kw.get("bin_name") or self._bin_of(d)
+            if bin_name is None or self.planner.bin_xy(bin_name)[1] < 0.0:
+                return None       # the left arm only finishes left/centre jobs; a right-bin object has no cross-body miss
+            with self._decision_motion() as pl:
+                pl = self._first_object_planner(pl)
+                p = pl.plan_relocation(self._jittered_retry_detection(d), bin_name, self.arm_cmd, self.hand_cmd,
+                                       kw.get("obstacles", ()), drop_slot=kw.get("drop_slot"),
+                                       clearance_obstacles=kw.get("clearance_obstacles", ()))
+            if not p.ok:
+                self.log(f"[retry_xrel] {d.color} no relocation: {p.reason}")
+                return None
+            left = self.time_limit - self._choose_t - float(p.duration)
+            if left < float(pol.get("retry_cross_relocate_min_left_s", 30.0)):
+                self.log(f"[retry_xrel] {d.color} relocation {p.duration:.1f} s leaves {left:.0f} s: skipped")
+                return None
+            p.grasp_key = self._grasp_key(p)
+            self._xrel_n += 1
+            self.log(f"[retry_xrel] {d.color} left miss at y={d.top[1]:+.3f}: {p.side} arm relocates it ({p.reason}), "
+                     f"{self._xrel_n}/{int(pol.get('retry_cross_relocate_max', 2))}")
+            return p
+        except Exception as e:
+            self.log(f"[retry_xrel] error {type(e).__name__}: {e}; stock retry")
+            return None
+
+    def _late_regrant(self, res, dets, obs, verify):
+        """policy.late_regrant (default off): nothing is pickable but a counter object that was tried (or given up on:
+        `failed`, attempt limit) is still visible with a full pick+place cycle of time left. Its attempt count, its
+        `failed` entry and its grasp history are cleared so it gets a fresh run of tries (stock grasp, then the
+        retry-vary variants). At most late_regrants_max per episode, late_regrant_min_s of time left; max_total_attempts
+        still caps the episode. Never touches an object that was never attempted (unmapped / abstain stays on the counter)."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        rg = getattr(self, "_late_rg", None)
+        if rg is None:
+            rg = self._late_rg = {"n": 0}
+        if rg["n"] >= int(pol.get("late_regrants_max", 2)) or self.time_limit - t < float(pol.get("late_regrant_min_s", 25.0)):
+            return res
+        rad = self._attempt_radius()
+        same = float(pol["same_object_radius"])
+        stuck = []
+        for d in dets:
+            if getattr(d, "tentative", False):
+                continue
+            xy = np.asarray(d.top[:2], float)
+            failed = any(np.linalg.norm(xy - np.asarray(f, float)) < same for f in self.failed)
+            if failed or self._attempt_count(xy, d.color) >= 1:
+                stuck.append((d.color, xy))
+        if not stuck:
+            return res
+        rg["n"] += 1
+
+        def near(color, xy, c, q):
+            return c == color and np.linalg.norm(xy - np.asarray(q, float)) < rad
+        self.failed[:] = [f for f in self.failed if not any(np.linalg.norm(xy - np.asarray(f, float)) < rad for _, xy in stuck)]
+        self.attempts = [(q, c) for q, c in self.attempts
+                         if not any(np.linalg.norm(xy - q) < rad for _, xy in stuck)]
+        self.attempt_tracks = [tr for tr in self.attempt_tracks
+                               if not any(near(color, xy, tr["color"], tr["xy"]) for color, xy in stuck)]
+        self.vary_hist[:] = [h for h in self.vary_hist
+                             if h["held"] is True or not any(near(color, xy, h["color"], h["xy"]) for color, xy in stuck)]
+        self._note(t, f"late regrant {rg['n']}: {len(stuck)} object(s) left on the counter get a fresh run of attempts "
+                      f"({self.time_limit - t:.0f} s left)")
+        return self._choose(dets, obs, verify)
+
+    # ------------------------------------------------------------------ policy.verify_landing
+    def _landing_on(self):
+        """verify_landing is the observe-only verifier; the old verify_placement (#6) keeps its own machinery."""
+        return bool(self.cfg["policy"].get("verify_landing", False)) and not self._verify_on()
+
+    def _landing_review(self, obs, dets):
+        """-> (relook result | None, dets). Never raises: any error keeps the stock detections."""
+        try:
+            return self._landing_review_inner(obs, dets)
+        except Exception as exc:
+            self.log(f"[landing] disabled for this look: {type(exc).__name__}: {exc}")
+            return None, dets
+
+    def _landing_review_inner(self, obs, dets):
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        occ = landing.bin_occupancy(self.perception, obs.get("head_depth"))
+        pend = self._landing
+        if pend is not None:
+            min_delta = float(pol.get("landing_min_delta", 0.5))
+            kind, info = landing.classify_landing(pend, self._occ_prev, occ, dets, min_delta)
+            if kind in ("lost", "unknown"):
+                cb = self._landing_colour_bin(obs, pend["color"])
+                if cb is not None:
+                    kind, info = landing.classify_landing(pend, self._occ_prev, occ, dets, min_delta, colour_bin=cb)
+            if kind in ("lost", "unknown") and pend.get("relooks", int(pol.get("landing_relooks", 1))) > 0:
+                pend["relooks"] = pend.get("relooks", int(pol.get("landing_relooks", 1))) - 1
+                return ("relook", None, len(dets)), dets   # a bounce may still roll: one more settled frame
+            self._landing = None
+            self.landing_events.append((kind, pend["color"], pend["bin"]))
+            dtxt = {k: round(v, 2) for k, v in info["delta"].items()}
+            self.log(f"[landing] t={t:.1f} {pend['color']}->{pend['bin']}: {kind} delta={dtxt}")
+            if kind == "wrong_bin":
+                self.log(f"[landing] {pend['color']} landed in {info['bin']} (wrong bin, -1): logged, not corrected")
+            elif kind == "bounce":
+                dets = self._landing_requeue(pend, info["det"], dets)
+        self._occ_prev = occ
+        margin = float(pol.get("landing_in_bin_margin_m", 0.01))
+        keep = []
+        for d in dets:
+            b = landing.inside_bin(self.perception, d.top[:2], margin)
+            if b is None:
+                keep.append(d)
+            elif (d.color, b) not in self._landing_excl_logged:
+                self._landing_excl_logged.add((d.color, b))
+                self.log(f"[landing] {d.color} inside the {b} bin footprint: never a pick target")
+        self.last_detections = keep
+        return None, keep
+
+    def _landing_colour_bin(self, obs, color):
+        """Bin name of a same-colour blob inside a bin footprint (colour fallback when depth is inconclusive)."""
+        try:
+            _, rejected = self.perception.detect(obs["head_rgb"], obs["head_depth"], debug=True, include_bins=True,
+                                                 **self._detect_kw(), **self._fk_kw(obs))
+        except Exception:
+            return None
+        for d, why in rejected:
+            if d is not None and d.color == color and why.startswith("in_bin:"):
+                return why.split(":", 1)[1]
+        return None
+
+    def _landing_requeue(self, pend, det, dets):
+        """A bounced object is a normal counter target again: refund the attempt, forget the old give-ups, jitter the grasp."""
+        pol = self.cfg["policy"]
+        src = np.asarray(pend["src_xy"], float)
+        if self.landing_refunds < int(pol.get("landing_max_refunds", 4)):
+            self.landing_refunds += 1
+            rad = self._attempt_radius()
+            for i in range(len(self.attempts) - 1, -1, -1):
+                if np.linalg.norm(np.asarray(self.attempts[i][0], float) - src) < rad:
+                    self.attempts.pop(i)
+                    break
+            near = [tr for tr in self.attempt_tracks
+                    if tr["color"] == pend["color"] and np.linalg.norm(src - tr["xy"]) < rad]
+            if near:
+                tr = min(near, key=lambda item: np.linalg.norm(src - item["xy"]))
+                tr["count"] = max(0, tr["count"] - 1)
+                tr["xy"] = np.asarray(det.top[:2], float).copy()     # the track follows the object to its new spot
+        if pend.get("slot") is not None:                             # the bounced object left its drop slot: free it
+            for slots in (self.slot_used, self.reserved_drop_slots):
+                slots.get(pend["bin"], set()).discard(pend["slot"])
+        rad = float(pol["same_object_radius"])
+        self.failed = [f for f in self.failed if np.linalg.norm(det.top[:2] - f) >= rad
+                       and np.linalg.norm(src - f) >= rad]
+        n = self.bounce_count.get(pend["color"], 0)
+        self.bounce_count[pend["color"]] = n + 1
+        jit = landing.jitter(n, float(pol.get("landing_jitter_m", 0.01)), det.top[:2])
+        moved = dataclasses.replace(det, top=det.top + np.r_[jit, 0.0])
+        self.log(f"[landing] {pend['color']} bounced back to the counter at ({det.top[0]:+.3f},{det.top[1]:+.3f}): "
+                 f"re-queued, jitter ({jit[0] * 100:+.1f},{jit[1] * 100:+.1f}) cm")
+        return [moved if d is det else d for d in dets]
+
+    def _landing_regrant(self, res, dets, obs):
+        """Nothing pickable but objects were skipped for max_attempts only: with a full pick+place cycle of time left
+        they get one fresh attempt (vary_hist keeps the retry from repeating a grasp). At most landing_regrants_max."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        if (self.landing_regrants >= int(pol.get("landing_regrants_max", 2))
+                or self.time_limit - t < float(pol.get("landing_regrant_min_s", 14.0))):
+            return res
+        rad = self._attempt_radius()
+        excluded = [(d.color, d.top[:2]) for d in dets if self._attempt_excluded(d.top[:2], d.color)]
+        if not excluded:
+            return res
+        self.landing_regrants += 1
+        self.attempts = [(p, c) for p, c in self.attempts
+                         if not any(np.linalg.norm(xy - p) < rad for _, xy in excluded)]
+        self.attempt_tracks = [tr for tr in self.attempt_tracks
+                               if not any(tr["color"] == color and np.linalg.norm(xy - tr["xy"]) < rad
+                                          for color, xy in excluded)]
+        self.retry_allow += [(xy, 1) for _, xy in excluded]
+        self._note(t, f"landing regrant {self.landing_regrants}: {len(excluded)} object(s) get one more attempt")
+        return self._choose(dets, obs, False)
 
     def _bin_of(self, d):
         """lookup_bin for a counter candidate; a miss (None / abstain) is logged once per object per episode."""
@@ -950,6 +2530,20 @@ class ClassicalPolicy:
         rad = 2 * self.cfg["policy"]["same_object_radius"]
         if any(d.color == color and np.linalg.norm(d.top[:2] - xy) < rad for d in dets):
             self.slot_used[bin_name].discard(slot)
+
+    def _novel_leave(self, dets):
+        """A novel blob ungraspable for the same reason at the same 2 cm spot on 2 looks is left alone (into failed)."""
+        for d in dets:
+            reason = getattr(d, "ungraspable_reason", None)
+            if not (getattr(d, "novel", False) and d.ungraspable and reason):
+                continue
+            key = (round(float(d.top[0]) / 0.02), round(float(d.top[1]) / 0.02), reason)
+            self._novel_looks[key] = n = self._novel_looks.get(key, 0) + 1
+            if n == 2:
+                xy = np.asarray(d.top[:2], float).copy()
+                self.failed.append(xy)
+                self.log(f"[novel] leave ({xy[0]:.2f}, {xy[1]:.2f}): {reason}")
+        return dets
 
     def _attempt_excluded(self, xy, color=None):
         """True when the object at xy is skipped for its attempt count only (not in `failed`)."""
@@ -1036,8 +2630,13 @@ class ClassicalPolicy:
 
     def _attempt_radius(self):
         """Association radius for executed attempts. Retry-vary uses its wider pushed-object track."""
-        pol = self.cfg["policy"]
-        return float(pol.get("retry_assoc_radius", 0.06) if self._vary_on() else pol["same_object_radius"])
+        return self._assoc_radius() if self._vary_on() else float(self.cfg["policy"]["same_object_radius"])
+
+    def _assoc_radius(self):
+        """Same-colour detection-to-target association radius across camera frames."""
+        perception = self.cfg.get("perception") or {}
+        # The policy fallback keeps small isolated unit-test configs compatible; production config owns the value.
+        return float(perception.get("assoc_radius_m", self.cfg.get("policy", {}).get("retry_assoc_radius", 0.06)))
 
     def _attempt_count(self, xy, color=None):
         rad = self._attempt_radius()
@@ -1077,6 +2676,8 @@ class ClassicalPolicy:
         pol = self.cfg["policy"]
         for d in dets:
             xy = d.top[:2]
+            if self._target_guarded(d, float(obs.get("t", 0.0))):
+                continue
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
                 continue
             if pol.get("place_gate", False):
@@ -1135,15 +2736,94 @@ class ClassicalPolicy:
                                                   self._is_centre if tiered else (lambda d: 0))
             except Exception as e:
                 self._dec_fail("isolated_first", e)
+        if decision and pol.get("score_order", False):
+            try:
+                cands = self._score_order(cands, obs)
+            except Exception as e:
+                self._dec_fail("score_order", e)
         if extra:
             extra.sort(key=base)
             cands += extra
         return cands, extra
 
+    # ------------------------------------------------------------------ policy.score_order (EV per second)
+    def _so_estimate(self, d, t):
+        """(p_success, p_wrong, t_cost_s, arm, bin) for one counter candidate. Pure arithmetic, no IK."""
+        pol = self.cfg["policy"]
+        tab = pol.get("score_p_success", {}) or {}
+        shape = getattr(d, "shape", None) or "unknown"
+        ps = float(tab.get(shape, tab.get("unknown", 0.5)))
+        sc = float(getattr(d, "shape_conf", 0.0) or 0.0)
+        if getattr(d, "shape", None) and 0.0 < sc < 1.0:
+            ps *= 0.8 + 0.2 * sc                        # unsure shape -> unsure grasp posture
+        xy = np.asarray(d.top[:2], float)
+        arm_y = float(pol.get("score_arm_y_m", 0.2))
+        side = "left" if xy[1] >= 0 else "right"        # pelvis frame: x forward, y left
+        anchor = np.array([0.0, arm_y if side == "left" else -arm_y])
+        reach = float(np.linalg.norm(xy - anchor))
+        r_max = float(pol.get("score_reach_m", 0.55))
+        if reach > r_max:                               # past the comfortable reach: success drops off linearly
+            ps *= max(0.1, 1.0 - (reach - r_max) / 0.15)
+        if self._skills_on():                           # skill memory: shrink the prior towards the observed rate
+            try:
+                st = self.skill_memory._stats[self._skill_key(d, side)]["stock"]
+                n = float(st["n"])
+                if n > 0:
+                    ps = (ps * 2.0 + float(st["reward"])) / (2.0 + n)
+            except Exception:
+                pass
+        b = lookup_detection_bin(self.cfg, self.mapping, d)
+        if b is None:                                   # abstain class: never a guess
+            return float(np.clip(ps, 0, 1)), 1.0, 1.0, side, None
+        conf = float(np.clip(getattr(d, "color_conf", 1.0), 0.0, 1.0)) * self._bin_confidence(d)
+        if getattr(d, "shape", None) is None and self.cfg.get("policy", {}).get("bin_lookup") == "resolve_bin":
+            conf *= 0.9                                 # shape-dependent mapping with an unknown shape
+        pw = float(np.clip(1.0 - conf, 0.0, 1.0))
+        bxy = np.asarray(self.planner.bin_xy(b), float)
+        path = 2.0 * reach + float(np.linalg.norm(xy - bxy))   # home -> object -> bin, back
+        tc = float(pol.get("score_overhead_s", 8.0)) + path / float(pol.get("score_speed_mps", 0.12))
+        return float(np.clip(ps, 0, 1)), pw, max(tc, 1.0), side, b
+
+    def _score_order(self, cands, obs):
+        """EV per second: ps * (2 (1 - pw) - pw) / t_cost. EV <= 0 goes last (pickable when time allows); pw >= 0.8
+        is dropped. A pick must finish before time_limit - reserve - score_safety_s; in the last score_endgame_s
+        only the quickest certain object."""
+        pol = self.cfg["policy"]
+        t = float(obs.get("t", 0.0))
+        left = self.time_limit - t - self._time_reserve(corrective=False) - float(pol.get("score_safety_s", 3.0))
+        rows = []
+        for d in cands:
+            ps, pw, tc, side, b = self._so_estimate(d, t)
+            ev = ps * (2.0 * (1.0 - pw) - pw)
+            rows.append((ev / tc, ev, ps, pw, tc, side, b, d))
+        rows.sort(key=lambda r: -r[0])
+        out, notes = [], []
+        for r in rows:
+            why = "ok"
+            if r[3] >= 0.8:
+                why = "pw>=0.8"
+            elif r[1] <= 0.0:
+                why = "ev<=0 (last)"
+            elif r[4] > left:
+                why = "est. over time left (real plan decides)"   # an estimate never drops a pick; _choose checks the real plan
+            notes.append((r, why))
+            if why != "pw>=0.8":                # rows are sorted by EV/s, so EV <= 0 rows already sit after the rest
+                out.append(r)
+        if out and left < float(pol.get("score_endgame_s", 25.0)):
+            certain = [r for r in out if r[3] <= float(pol.get("score_certain_pw", 0.1))]
+            out = sorted(certain, key=lambda r: r[4])     # every certain object, quickest first; "none" only when all are gone
+        for r, why in notes:
+            self.log(f"[score_order] t={t:.1f} {r[7].color:<6} {str(getattr(r[7], 'shape', None)):<8} arm={r[5]:<5} "
+                     f"bin={r[6]} ps={r[2]:.2f} pw={r[3]:.2f} t={r[4]:.1f}s EV={r[1]:+.2f} EV/s={r[0]:+.3f} {why}")
+        if out:
+            self.log(f"[score_order] t={t:.1f} -> {out[0][7].color} ({out[0][5]} arm, EV/s={out[0][0]:+.3f})")
+        return [r[7] for r in out]
+
     def _choose(self, dets, obs, verify):
         """Pick the next counter object and plan it (stock order; #3 time triage and #6 drop slots when on)."""
         pol = self.cfg["policy"]
         t = float(obs.get("t", 0.0))
+        self._choose_t = t
         try:
             stop = self._decision_stop(dets, t)
         except Exception as e:
@@ -1151,82 +2831,273 @@ class ClassicalPolicy:
             stop = None
         if stop is not None:
             return stop
+        if self._ftd_on():   # brain.find_to_detection: novel objects from find() points join the detections (re-grown per look)
+            dets = self._with_novel(dets, obs)
+        dets = self._novel_leave(dets)
         cands, extra = self._ordered_cands(dets, obs, verify)
         triage = bool(pol.get("time_triage", False))
-        forced = None   # (det, bin, variant) from the brain (brain.enabled)
-        if self.brain is not None:
-            sel = self._brain_select(cands, dets, obs)
+        forced = None   # (det, bin, variant, table_xy) from the brain or the whole-plan planner
+        planner_forced = False
+        forced_skill = False   # brain.skill: the forced place_at-style plan runs with planner.skill = the plan's skill
+        # universal: the deterministic parser/synonym match (instruction.novel_objects) is consulted FIRST; when it names a
+        # visible novel object and its bin, the classical loop acts on it and the brain is not asked at all.
+        parser_first = bool((self.cfg.get("instruction") or {}).get("novel_objects", False)) and \
+            any(getattr(d, "novel_matched", False) for d in dets)
+        if parser_first:
+            pass
+        elif self._planner_needed:   # brain.planner (default off): a whole-instruction plan replaces the brain override
+            sel = self._planner_select(cands, dets, obs)
+            if sel is None and self.plan_brain.steps is None and self.plan_brain.req.status == "pending":
+                return ("planner_pending", dets, verify)
+            if sel is None and self.plan_brain.replans and self.plan_brain.steps is None:
+                return ("none", None, len(dets))        # failed replan: fail closed, do not improvise
             if sel is not None:
-                kind, d0, b0, var = sel
+                kind, d0, b0, var, table_xy = sel
                 if kind == "look":
                     return ("relook", None, len(dets))
-                if kind == "done":
+                if kind in ("done", "stop"):
                     return ("none", None, len(dets))
-                if kind == "skip":
+                if kind in ("pick", "place", "skill"):
+                    cands = [d0] + [d for d in cands if d is not d0]
+                    forced, planner_forced = (d0, b0, var, table_xy), True
+                    forced_skill = kind == "skill"
+        elif self.brain is not None:
+            brain_only_novel = bool(self._novel_brain_candidates)
+            offered = [d for d in self._novel_brain_candidates if any(d is x for x in dets)]
+            sel = self._brain_select(offered, offered, obs) if brain_only_novel else self._brain_select(cands, dets, obs)
+            if sel is not None:
+                kind, d0, b0, var = sel
+                if brain_only_novel:
+                    valid = (kind == "pick" and any(d0 is d for d in offered)
+                             and getattr(d0, "novel", False) and b0 == self._novel_brain_bin
+                             and getattr(d0, "graspable", False))
+                    if valid and not self._novel_grounded(d0):
+                        valid = False
+                        self.log(f"[novel] brain pick not grounded: {getattr(d0, 'label', '') or getattr(d0, 'color', '?')}")
+                    if valid:
+                        d0.novel_target_bin, d0.novel_matched = b0, True
+                    else:
+                        # The novel hook may neither stop the known task nor
+                        # select a known/ungraspable object or another bin.
+                        sel = None
+                if sel is None:
+                    kind = None
+                if kind is None:
+                    pass
+                elif kind == "look":
+                    return ("relook", None, len(dets))
+                elif kind == "done":
+                    return ("none", None, len(dets))
+                elif kind == "skip":
                     self.failed.append(d0.top[:2])          # the brain gave this object up: no more tries
                     cands = [d for d in cands if d is not d0]
                 elif kind in ("pick", "retry"):
                     cands = [d0] + [d for d in cands if d is not d0]
-                    forced = (d0, b0, var)
+                    forced = (d0, b0, var, None)
         left = self.time_limit - t - self._time_reserve(corrective=False)
         n_long, shortest = 0, None
         cap_s, over_cap = None, []
+        guarded_failure = False
+        budget_failed = []
         if self._dflag("object_time_cap"):   # D2: per-object cap (remaining - 15 s) / objects left, 15..35 s
             cap_s = dec.object_cap(self.time_limit - t, len(cands) - len(extra) or len(cands), self._dcfg())
+
+        def planner_fail(reason):
+            """The forced primitive cannot run: one async re-plan, or fail closed (never a classical guess)."""
+            self._planner_failed(dets, reason, obs)
+            if self._cl_on():   # closed loop: retry / abandon is decided by the agent, never end the episode here
+                return ("relook", None, len(dets))
+            return ("planner_pending", dets, verify) if self.plan_brain.req.status == "pending" \
+                else ("none", None, len(dets))
+
+        if self._candidate_budget() is not None and self._deferred_cands:   # deferred earlier: only after the others
+            cands = [d for d in cands if not self._was_deferred(d)] + [d for d in cands if self._was_deferred(d)]
+        else:
+            cands = list(cands)
         for d in cands:
+            mine = forced is not None and d is forced[0]
+            fp = mine and planner_forced
             if triage:  # a plan that did not fit before cannot fit now (time only runs out; plans start from home)
                 rad = pol["same_object_radius"]
                 if any(np.linalg.norm(d.top[:2] - p) < rad and dur > left for p, dur in self.too_long):
+                    if fp:
+                        return planner_fail("no time left for this primitive")
                     n_long += 1
                     continue
             others = [o.top[:2] for o in dets if o is not d]
-            mine = forced is not None and d is forced[0]
+            common = {"obstacles": others}
+            if pol.get("novel_obstacles", False) and not self._universal_inert:
+                clearance = []
+                for o in dets:
+                    if o is d or not getattr(o, "novel_matched", False):
+                        continue
+                    dims = np.asarray(getattr(o, "footprint_dims", [0.05, 0.05]), float)
+                    radius = 0.5 * float(np.max(dims))
+                    top_z = self.scene.counter_z + float(getattr(o, "height", o.top[2] - self.scene.counter_z))
+                    centre = np.asarray(getattr(o, "obstacle_center", o.top[:2]), float)
+                    clearance.append([centre[0], centre[1], radius, top_z])
+                common["clearance_obstacles"] = clearance
             target_bin = forced[1] if mine else self._bin_of(d)
+            table_xy = forced[3] if mine else None
             pfn = self._variant_plan_fn(forced[2]) if mine else None
-            if target_bin is None:
+            if target_bin is None and table_xy is None:
                 continue  # unmapped / abstain: 0 points on the counter, never a -1 guess
-            if not self._place_gate_allows(d, target_bin):
+            if table_xy is None and self._ev_leave(d, target_bin, mine):
+                if fp:
+                    return planner_fail("EV gate")
                 continue
-            if verify:  # #6: explicit target bin + a free, verified drop slot
-                slot = self._next_drop_slot(target_bin)
-                if slot is None:
-                    slot = next(iter(self._overflow_slots(target_bin)), None)
-                if slot is None:
-                    self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
-                    continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
-            elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
-                free = [i for i in range(len(self.planner.drop_slots(target_bin)))
-                        if i not in self.slot_used[target_bin]]
-                slot = free[0] if free else next(iter(self._overflow_slots(target_bin)), None)
-                if slot is None:
-                    self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
-                    continue
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others, drop_slot=slot), pfn)
-            elif mine:   # brain override: the classical planner still checks reach
-                p = self._plan_pick(d, dict(bin_name=target_bin, obstacles=others), pfn)
-            else:
-                p = self._plan_pick(d, dict(obstacles=others))
+            if table_xy is None and not self._place_gate_allows(d, target_bin):
+                if fp:
+                    return planner_fail("placement gate")
+                continue
+            try:
+                if table_xy is not None:   # brain.planner place_at: dry-run was done when the plan was validated
+                    ids_now = self._brain_ids(dets)
+                    dmap_now = {ids_now[i]: obj for i, obj in enumerate(dets)}
+                    oid_now = next((oid for oid, obj in dmap_now.items() if obj is d), None)
+                    skill_now = mine and forced_skill
+                    if skill_now:
+                        self.planner.skill = self._plan_skill
+                        near = [o for o in dets if o is not d and float(np.linalg.norm(o.top[:2] - d.top[:2])) <= 0.25]
+                        self.planner.skill_target_xy = (min(near, key=lambda o: float(np.linalg.norm(o.top[:2] - d.top[:2]))).top[:2]
+                                                       if near else None)   # "use": the nearest other object
+                        self.log(f"[skill] {self._plan_skill} {d.color} -> back to ({float(table_xy[0]):.3f},{float(table_xy[1]):.3f})")
+                    try:
+                        ok_place, why_place, _ = self._planner_place_at(dmap_now, dets, oid_now, table_xy)
+                    finally:
+                        if skill_now:
+                            self.planner.skill = None
+                            self.planner.skill_target_xy = None
+                    p = self._planner_place_cache.pop(
+                        (id(d), round(float(table_xy[0]), 4), round(float(table_xy[1]), 4)), None)
+                    if not ok_place or p is None:
+                        p = Plan(False, color=d.color, target_bin="counter",
+                                 reason=why_place or "place_at dry-run failed")
+                elif verify:  # #6: explicit target bin + a free, verified drop slot
+                    slot = self._next_drop_slot(target_bin)
+                    if slot is None:
+                        slot = next(iter(self._overflow_slots(target_bin)), None)
+                    if slot is None:
+                        self.log(f"[classical] no free drop slot in {target_bin}; leave {d.color} on counter")
+                        if fp:
+                            return planner_fail("no free drop slot")
+                        continue
+                    p = self._plan_pick(d, dict(bin_name=target_bin, drop_slot=slot, **common), pfn)
+                elif self._slots_on():  # grasp.drop_slots standalone: each successive object in a bin -> next slot
+                    free = [i for i in range(len(self.planner.drop_slots(target_bin)))
+                            if i not in self.slot_used[target_bin]]
+                    slot = free[0] if free else next(iter(self._overflow_slots(target_bin)), None)
+                    if slot is None:
+                        self.log(f"[classical] drop slots of {target_bin} used up; leave {d.color} on counter")
+                        if fp:
+                            return planner_fail("no free drop slot")
+                        continue
+                    p = self._plan_pick(d, dict(bin_name=target_bin, drop_slot=slot, **common), pfn)
+                elif mine:   # brain override: the classical planner still checks reach
+                    p = self._plan_pick(d, dict(bin_name=target_bin, **common), pfn)
+                else:
+                    p = self._plan_pick(d, common)
+            except Exception as exc:
+                if not self._target_guard_on():
+                    raise
+                self._cool_target(d, t, f"{type(exc).__name__}: {exc}")
+                guarded_failure = True
+                continue
             self.plans.append(p)
+            if getattr(p, "deferred", False) and not fp and not self._was_deferred(d):
+                # planner.candidate_budget: over budget -> try the next candidate now, this one once more after the others
+                self._deferred_cands.append((d.color, np.asarray(d.top[:2], float).copy()))
+                cands.append(d)
+                continue
             if p.ok and not self._object_time_allows(d, p.duration):
+                if fp:
+                    return planner_fail("object time budget")
+                continue
+            if p.ok and pol.get("score_order", False) and \
+                    t + p.duration + float(pol.get("score_safety_s", 3.0)) + self._time_reserve(p.corrective) > self.time_limit:
+                n_long += 1                      # score_order: do not start a pick that cannot finish in time
+                shortest = p if shortest is None or p.duration < shortest.duration else shortest
                 continue
             if p.ok and any(d is e for e in extra) and not self._has_time(p, t):   # max_attempts_vary: only with time to spare
                 self.log(f"[retry_vary] no time for an extra try at {d.color} ({p.duration:.1f} s)")
+                if fp:
+                    return planner_fail("no time for the extra try")
                 continue
             if p.ok and cap_s is not None and p.duration > cap_s:
+                if fp:
+                    return planner_fail(f"plan {p.duration:.1f} s exceeds the object time cap")
                 over_cap.append(p)   # too slow for its share of the time: try the next object, this one is the fallback
                 self.log(f"[time_cap] {d.color} plan {p.duration:.1f} s > cap {cap_s:.1f} s: trying the next candidate")
                 continue
             if p.ok:
                 if triage and p.duration > left:  # feasible but too slow for the time left: try the next candidate
+                    if fp:
+                        return planner_fail(f"plan {p.duration:.1f} s exceeds the time left")
                     self.too_long.append((d.top[:2], p.duration))
                     n_long += 1
                     shortest = p if shortest is None or p.duration < shortest.duration else shortest
                     self.log(f"[classical] {d.color} takes {p.duration:.1f} s > {left:.1f} s left: trying the next candidate")
                     continue
+                if fp:   # the primitive is now executing: the next settled look confirms it (_planner_observe)
+                    call = self.plan_brain.next_call()
+                    self._planner_execution = {"call": call, "source_xy": np.asarray(d.top[:2], float).copy(),
+                                               "color": d.color,
+                                               "table_xy": None if table_xy is None else np.asarray(table_xy, float).copy()}
                 return ("plan", p, len(dets))
-            self.failed.append(d.top[:2])
-            self.log(f"[classical] skip {d}: {p.reason}")
+            if getattr(p, "deferred", False) and self._escalate_on():
+                budget_failed.append(d)    # planner.budget_escalate: over budget, not infeasible -> never blacklisted
+                self.log(f"[classical] skip {d}: {p.reason}")
+                continue
+            if self._target_guard_on():
+                self._cool_target(d, t, p.reason or "infeasible")
+                guarded_failure = True
+            else:
+                self.failed.append(d.top[:2])
+                if getattr(d, "novel", False):
+                    self.log(f"[novel] plan reject: {p.reason} (skip {d})")
+                else:
+                    self.log(f"[classical] skip {d}: {p.reason}")
+            if fp:
+                return planner_fail(p.reason)
+        if budget_failed and self._escalate_on():
+            # planner.budget_escalate: every candidate of this look was only budget-deferred (slow / loaded machine): re-plan the
+            # best 2 NOT YET escalation-failed with 3x the budget (wall capped at 12 s); still nothing -> re-look and retry.
+            # Escalation-failed candidates persist across looks (colour+shape, xy within 3 cm; cleared when the object is gone or
+            # picked). Once all failed, ONE more full round is allowed, then they are skipped (no endless loop, others not starved).
+            def _ekey(d):
+                return (d.color, getattr(d, "shape", None), np.asarray(d.top[:2], float).copy())
+            def _same(k, d):
+                return k[0] == d.color and k[1] == getattr(d, "shape", None) and np.linalg.norm(k[2] - np.asarray(d.top[:2], float)) < 0.03
+            self._esc_failed = [k for k in self._esc_failed if any(_same(k, o) for o in dets)]   # disappeared -> cleared
+            eligible = [d for d in budget_failed if not any(_same(k, d) for k in self._esc_failed)]
+            if not eligible and not self._esc_extra_used:
+                self._esc_extra_used = True
+                self._esc_failed = []
+                eligible = list(budget_failed)
+                self.log("[budget_escalate] every candidate failed escalation: one more full round")
+            if eligible:
+                self._budget_scale = 3.0
+                try:
+                    for d in eligible[:2]:
+                        others = [o.top[:2] for o in dets if o is not d]
+                        p = self._plan_pick(d, {"obstacles": others}, None)
+                        self.plans.append(p)
+                        self.log(f"[budget_escalate] {d.color} re-planned with 3x budget: ok={p.ok} ({p.reason})")
+                        if p.ok:
+                            self._budget_relooks = 0
+                            self._esc_failed = [k for k in self._esc_failed if not _same(k, d)]
+                            self._esc_extra_used = False
+                            return ("plan", p, len(dets))
+                        self._esc_failed.append(_ekey(d))
+                finally:
+                    self._budget_scale = 1.0
+                self._deferred_cands = []
+                self._budget_relooks += 1
+                self.log(f"[budget_escalate] {len(budget_failed)} candidates deferred for budget ({len(self._esc_failed)} escalation-failed): re-look #{self._budget_relooks}")
+                return ("relook", None, len(dets))
+            for d in budget_failed:   # all failed twice: skipped like an infeasible candidate
+                self.failed.append(d.top[:2])
+                self.log(f"[budget_escalate] skip {d}: failed escalation twice")
         if over_cap:   # nothing within the cap: the quickest over-cap plan beats leaving points on the counter
             best = min(over_cap, key=lambda q: q.duration)
             if not triage or best.duration <= left:
@@ -1237,7 +3108,32 @@ class ClassicalPolicy:
             return ("relook", None, len(dets))
         if n_long:
             return ("notime", shortest, len(dets))
+        cooling = self._target_guard_on() and any(self._target_guarded(d, t) for d in dets)
+        if guarded_failure or cooling:
+            return ("relook", None, len(dets))
         return ("none", None, len(dets))
+
+    def _target_guard_on(self):
+        return bool((self.cfg.get("planner") or {}).get("per_target_guard", False))
+
+    def _target_guarded(self, d, t):
+        if not self._target_guard_on():
+            return False
+        self._target_cooldowns = [x for x in self._target_cooldowns if x["until"] > t]
+        radius = float(self.cfg["policy"]["same_object_radius"])
+        xy = np.asarray(d.top[:2], float)
+        return any(x["color"] == d.color and np.linalg.norm(x["xy"] - xy) < radius
+                   for x in self._target_cooldowns)
+
+    def _cool_target(self, d, t, reason):
+        cooldown = float(self.cfg["planner"]["per_target_cooldown_s"])
+        t = max(float(t), float(self._latest_t))
+        xy = np.asarray(d.top[:2], float).copy()
+        self._target_cooldowns = [x for x in self._target_cooldowns
+                                  if not (x["color"] == d.color and np.linalg.norm(x["xy"] - xy) <
+                                          float(self.cfg["policy"]["same_object_radius"]))]
+        self._target_cooldowns.append({"color": d.color, "xy": xy, "until": t + cooldown})
+        self.log(f"[plan_guard] {d.color} target cooled for {cooldown:g} s: {reason}")
 
     # ------------------------------------------------------------------ decision layer D1-D4 (decision.py)
     def _resolve_time_alias(self):
@@ -1361,12 +3257,11 @@ class ClassicalPolicy:
         return [it["d"] for it in out]
 
     def _observe_outcome(self, dets):
-        """D3: judge the last pick at the next look: the object (same colour, within retry_assoc_radius of the grasp
-        point) is still on the counter = failure, gone = clean success."""
+        """D3: judge the last pick at the next look; the attempt track uses perception.assoc_radius_m."""
         po, self._pend_out = self._pend_out, None
         if po is None:
             return
-        rad = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
+        rad = self._assoc_radius()
         near = [d for d in dets if d.color == po["color"] and np.linalg.norm(np.asarray(d.top[:2]) - po["xy"]) <= 0.03]
         if near and self.attempt_tracks:   # retry-vary on: the survivor must belong to this attempt's track
             same = [tr for tr in self.attempt_tracks if tr["color"] == po["color"]
@@ -1555,14 +3450,21 @@ class ClassicalPolicy:
         if what == "release":
             rel = self.hand_cmd.copy()
             rel[sl] = self.post[self.cfg["grasp"].get("release_posture", "preshape")][sl]
-            h1 = ramp(self.hand_cmd, rel, self.cfg["motion"]["hand_max_vel"], 1.0 / HZ)
+            mo = self.cfg["motion"]
+            if self.cfg["grasp"].get("staggered_release", False):
+                h1, _ = staggered_release_ramp(
+                    self.hand_cmd, rel, plan.side, mo["hand_max_vel"], 1.0 / HZ,
+                    float(self.cfg["grasp"].get("staggered_release_delay_s", 0.30)))
+            else:
+                amax = mo.get("hand_max_acc") if mo.get("output_caps") is not None else None
+                h1 = ramp(self.hand_cmd, rel, mo["hand_max_vel"], 1.0 / HZ, amax=amax)
             h1 = np.vstack([h1, np.repeat(rel[None], int(round(float(self.cfg["motion"]["open_hold_s"]) * HZ)), 0)])
             a1 = np.repeat(self.arm_cmd[None], len(h1), 0)
             a2, h2 = self.planner.go_to(self.arm_cmd, rel, home, self.post["open"])
             a, h = np.vstack([a1, a2]), np.vstack([h1, h2])
         else:
             a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
-        self._stall = self._gdiag = None
+        self._stall = self._gdiag = self._rel = self._ig = None
         self._enqueue(a, h)
         return self._pop()
 
@@ -1580,8 +3482,8 @@ class ClassicalPolicy:
 
     def _hist_for(self, d):
         """Earlier picks of this object that did not hold it (held no / unknown): same colour, within
-        retry_assoc_radius of the earlier grasp point (a missed object is often pushed a few cm)."""
-        r = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
+        perception.assoc_radius_m of the earlier grasp point (a missed object is often pushed a few cm)."""
+        r = self._assoc_radius()
         xy = np.asarray(d.top[:2], float)
         return [h for h in self.vary_hist if h["held"] is not True and h["color"] == d.color
                 and np.linalg.norm(xy - h["xy"]) < r]
@@ -1589,7 +3491,10 @@ class ClassicalPolicy:
     def _same_grasp(self, key, h):
         pol = self.cfg["policy"]
         xy, yaw, posture = key
-        if posture != h["posture"] or np.linalg.norm(np.asarray(xy) - h["xy"]) >= float(pol.get("retry_same_xy_m", 0.01)):
+        same_xy = float(pol.get("retry_same_xy_m", 0.01))
+        if self._obias is not None:
+            same_xy = min(same_xy, 0.008)   # a 1 cm bias step must count as a different grasp
+        if posture != h["posture"] or np.linalg.norm(np.asarray(xy) - h["xy"]) >= same_xy:
             return False
         if yaw is None or h["yaw"] is None:
             return True
@@ -1600,6 +3505,34 @@ class ClassicalPolicy:
         fh = getattr(self.planner, "finger_heading", None)
         yaw = fh(plan) if fh is not None else None
         return (np.asarray(plan.waypoints["grasp"][:2], float).copy(), yaw, self._posture_of(plan))
+
+    def _jittered_retry_detection(self, d):
+        """Shallow-copy a retry detection with deterministic +x, -x, +y, -y grasp-point jitter (policy.retry_jitter_m)
+        and/or the per-attempt xy offset (policy.retry_xy_offsets) on top of the detection passed in (the CURRENT,
+        re-detected object position). Both off: d itself."""
+        pol = self.cfg["policy"]
+        magnitude = float(pol.get("retry_jitter_m", 0.0))
+        offsets = pol.get("retry_xy_offsets")
+        if magnitude <= 0.0 and not offsets:
+            return d
+        attempt = self._attempt_count(np.asarray(d.top[:2], float), getattr(d, "color", None))
+        if attempt <= 0:
+            return d
+        shift = np.zeros(2)
+        if magnitude > 0.0:
+            pattern = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0))
+            shift += magnitude * np.asarray(pattern[(attempt - 1) % len(pattern)], float)
+        if offsets and attempt <= len(offsets):   # try k+1 uses offsets[k-1]; beyond the list: no extra shift
+            off = np.asarray(offsets[attempt - 1], float)
+            if pol.get("retry_xy_mirror_right", False):   # side-aware: y mirrored for a right-hand miss
+                hist = self._hist_for(d)
+                if hist and hist[-1].get("side") == "right":
+                    off = off * np.array([1.0, -1.0])
+            shift += off
+        shifted = copy.copy(d)
+        shifted.top = np.asarray(d.top, float).copy()
+        shifted.top[:2] += shift
+        return shifted
 
     def _variants(self, d, hist):
         """Grasp changes to try, best first: {"posture": name | None, "yaw": rad | None} (None = the stock choice).
@@ -1642,10 +3575,88 @@ class ClassicalPolicy:
         pl.object_speed_scale = float(scale)
         return pl
 
+    def _escalate_on(self):
+        return bool((self.cfg.get("planner") or {}).get("budget_escalate", False)) and self._candidate_budget() is not None
+
+    def _candidate_budget(self):
+        cb = (self.cfg.get("planner") or {}).get("candidate_budget")
+        ic = self.cfg.get("insert") or {}
+        if cb and ic.get("reach_gated", False) and getattr(getattr(self, "planner", None), "insert_active", False) and ic.get("plan_budget"):
+            cb = ic["plan_budget"]   # insert.reach_gated: an insert plan (margin IK + 2 headings) needs more than a sort pick's budget
+        return dict(cb) if cb else None
+
+    def _was_deferred(self, d):
+        rad = float(self.cfg["policy"]["same_object_radius"])
+        xy = np.asarray(d.top[:2], float)
+        return any(c == d.color and np.linalg.norm(xy - p) < rad for c, p in self._deferred_cands)
+
     def _plan_pick(self, d, kw, plan_fn=None):
+        """planner.candidate_budget (default off = exactly _plan_pick_inner): one candidate's planning may use at most
+        max_ik_calls kin.solve calls and max_wall_s monotonic seconds; over budget -> Plan(ok=False, deferred=True)."""
+        cb = self._candidate_budget()
+        if cb is None:
+            return self._plan_pick_inner(d, kw, plan_fn)
+        kin = self.kin
+        sc = float(self._budget_scale)
+        kin.budget = PlanBudget(int(cb["max_ik_calls"] * sc), min(float(cb["max_wall_s"]) * sc, 12.0) if sc != 1.0 else cb["max_wall_s"])
+        t0 = time.monotonic()
+        try:
+            res = self._plan_pick_inner(d, kw, plan_fn)
+            self.log(f"[plan_budget] {d.color} planned: {kin.budget.calls} IK calls, {time.monotonic() - t0:.2f} s ok={res.ok}")
+            return res
+        except PlanBudgetExceeded as e:
+            self.log(f"[plan_budget] {d.color} at ({d.top[0]:+.3f},{d.top[1]:+.3f}): planning budget exceeded ({e}); "
+                     f"{time.monotonic() - t0:.2f} s, candidate deferred")
+            return Plan(False, color=d.color, reason=f"planning budget exceeded ({e})", deferred=True)
+        finally:
+            kin.budget = None
+
+    def _plan_pick_inner(self, d, kw, plan_fn=None):
+        if self._obias is None:
+            return self._plan_pick_core(d, kw, plan_fn)
+        self._ob_resolve(d)
+        p = self._plan_pick_core(d, kw, plan_fn)
+        if p is not None and getattr(p, "ok", False):
+            p.ob_obj_xy = np.asarray(d.top[:2], float).copy()   # the object as detected before any bias / retry shift
+        return p
+
+    def _ob_resolve(self, d):
+        """grasp.online_bias: a re-detection of an object whose earlier grasp missed is the evidence: the displacement
+        since that grasp (0 = closed on air) feeds the per-hand update BEFORE the retry is planned."""
+        xy = np.asarray(d.top[:2], float)
+        rad = self._assoc_radius()
+        hits = [r for r in self._ob_pending if r["held"] is False and not r["done"] and r["color"] == d.color
+                and np.linalg.norm(xy - r["obj_xy"]) < rad]
+        if not hits:
+            return
+        for r in self._ob_pending:
+            if r in hits:
+                r["done"] = True
+        self._obias.miss(hits[-1]["side"], xy - hits[-1]["obj_xy"])
+        self._ob_pending[:] = [r for r in self._ob_pending if not r["done"]]
+
+    def _ob_started(self, plan):
+        if self._obias is not None and plan.side in ("left", "right") and not plan.corrective \
+                and getattr(plan, "source_bin", None) is None and getattr(plan, "ob_obj_xy", None) is not None:
+            plan.ob_rec = {"color": plan.color, "side": plan.side, "obj_xy": plan.ob_obj_xy, "held": None, "done": False}
+            self._ob_pending.append(plan.ob_rec)
+
+    def _ob_held(self, plan, held):
+        rec = getattr(plan, "ob_rec", None)
+        if self._obias is None or rec is None or held is None or rec["held"] is not None:
+            return
+        rec["held"] = bool(held)
+        if held:
+            rec["done"] = True
+            self._obias.success(plan.side)
+            self._ob_pending[:] = [r for r in self._ob_pending if not r["done"]]
+
+    def _plan_pick_core(self, d, kw, plan_fn=None):
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
         differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""
+        plan_detection = self._jittered_retry_detection(d)
+
         def plan(relocate=None):
             args = dict(kw)
             if relocate is not None and plan_fn is None:
@@ -1653,10 +3664,10 @@ class ClassicalPolicy:
             with self._decision_motion() as pl:   # D3/D4 speed scale + first-object clearance (stock planner when off)
                 pl = self._first_object_planner(pl)
                 if plan_fn is None:
-                    return pl.plan(d, self.arm_cmd, self.hand_cmd, **args)
+                    return pl.plan(plan_detection, self.arm_cmd, self.hand_cmd, **args)
                 if pl is not self.planner:
                     args["planner"] = pl
-                return plan_fn(d, self.arm_cmd, self.hand_cmd, **args)
+                return plan_fn(plan_detection, self.arm_cmd, self.hand_cmd, **args)
 
         if not self._vary_on():
             p = plan()
@@ -1669,6 +3680,10 @@ class ClassicalPolicy:
             if not self._skills_on() or not p.ok:
                 return self._tag_skill_plan(p, d, "stock")
             return self._skill_first_try(d, p, plan)
+        if plan_fn is None:
+            xp = self._cross_relocate(d, hist, kw)
+            if xp is not None:
+                return self._tag_skill_plan(xp, d, "stock")
         for arm, v in self._ordered_skill_variants(d, hist, self._variants(d, hist)):
             self.planner.vary = v
             try:
@@ -1691,7 +3706,13 @@ class ClassicalPolicy:
         p = plan()
         if p.ok:
             p.grasp_key = self._grasp_key(p)
-            if any(self._same_grasp(p.grasp_key, h) for h in hist):
+            if any(self._same_grasp(p.grasp_key, h) for h in hist) \
+                    and not (self.cfg["policy"].get("late_sweep", False) and self._in_sweep(d.top[:2])):
+                lim = self._max_attempts_vary() or int(self.cfg["policy"]["max_attempts"])
+                if self.cfg["policy"].get("retry_repeat_ok", False) and len(hist) < lim:
+                    # policy.retry_repeat_ok: no other grasp is feasible; the same grasp again beats giving the object up
+                    self.log(f"[retry_vary] {d.color}: no other feasible grasp, repeating the tried one (try {len(hist) + 1})")
+                    return self._tag_skill_plan(p, d, "stock")
                 return Plan(False, color=d.color, reason="retry_vary: every grasp repeats a tried (point, yaw, posture)")
         return self._tag_skill_plan(p, d, "stock")
 
@@ -1766,30 +3787,381 @@ class ClassicalPolicy:
         y = "n/a" if yaw is None else f"{np.degrees(yaw):.0f}"
         return f"({xy[0]:+.3f},{xy[1]:+.3f}) yaw={y} {posture}"
 
+    # ---------------------------------------------------------- whole-plan brain
+    def _choose_job(self, job, dets, verify):
+        _lower_thread_priority()
+        try:
+            job["result"] = self._choose(dets, job["obs"], verify)
+        except Exception as e:
+            job["result"] = ("error", repr(e))
+
+    def _planner_select(self, cands, dets, obs):
+        """Return one validated plan primitive, or None so classical behaviour continues unchanged."""
+        try:
+            if self.mapping.get("default") == "abstain" and len(self.mapping) == 1:
+                return None                 # policy.insert_guard: pick nothing, no plan (as _brain_select)
+            ids = self._brain_ids(dets)
+            dmap = {ids[i]: d for i, d in enumerate(dets)}
+            world = self._brain_world(dets, ids, None)
+            for o in world["objects"]:
+                d = dmap[o["id"]]
+                o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
+            world["table_region"] = self._planner_table_region()
+            world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            self._ground_flag(world)
+            if self._found:
+                world["found"] = dict(self._found)
+            classical_has_work = any(self._lookup(d) is not None for d in cands)
+            cl = self._cl_on()
+            wkey = (float(obs.get("t", 0.0)), tuple(ids)) if cl else None   # one world JSON per look
+
+            def reach(oid, bin_name):
+                p = self.planner.plan(dmap[oid], self.arm_cmd, self.hand_cmd, bin_name=bin_name, relocate=False,
+                                      obstacles=[d.top[:2] for d in dets if d is not dmap[oid]])
+                return p.ok, p.reason
+
+            def place(oid, xy, virtual_xy=None):
+                return self._planner_place_at(dmap, dets, oid, xy, virtual_xy)
+
+            forced = forced_skill_plan(
+                os.environ.get("AALTO_FORCE_SKILL"), world,
+                handle_ids={oid for oid, d in dmap.items() if getattr(d, "grasp_kind", None) == "handle"},
+                exclude=self._forced_skill_ids)
+            if forced is not None:   # demo override: same validator and skill path as a model plan, no VLM call
+                steps, errors = validate_plan(forced, world, reach_fn=reach, place_fn=place, find_enabled=False,
+                                              classical_has_work=classical_has_work)
+                for e in errors:
+                    self.log(f"[planner] rejected {e}")
+                if steps and steps[0].get("valid"):
+                    oid = steps[0]["args"]["obj_id"]
+                    self._forced_skill_ids.add(oid)
+                    self._plan_skill = steps[0]["args"]["skill"]
+                    self.log(f"[skill] forced by AALTO_FORCE_SKILL={os.environ.get('AALTO_FORCE_SKILL')}")
+                    return ("skill", dmap[oid], None, None, np.asarray(dmap[oid].top[:2], float))
+                return None
+            if not self.plan_brain.requested:
+                if cl:
+                    self.plan_brain.request(world, key=wkey)
+                else:
+                    self.plan_brain.request(world)    # first scene: async episode prefetch, never blocks act()
+            elif cl and self.plan_brain.steps is None:
+                self.plan_brain.request(world, key=wkey)   # the first answer was late / failed: ask again (capped)
+            if self.cfg["brain"].get("debug_wait", False):
+                self.plan_brain.wait(float(self.cfg["brain"].get("plan_timeout_s", 2.0)))
+
+            steps = self.plan_brain.take(
+                world, reach_fn=reach, place_fn=place,
+                find_enabled=bool(self.cfg["brain"].get("find", False)),
+                classical_has_work=classical_has_work,
+            )
+            if cl:
+                self.plan_brain.note_initial()
+            if steps is None:
+                return None
+            if cl:
+                self.plan_brain.poll_next(world, reach_fn=reach, place_fn=place,
+                                          find_enabled=bool(self.cfg["brain"].get("find", False)),
+                                          classical_has_work=classical_has_work)
+                if self._agent_dirty and self.plan_brain.request_next(world, key=wkey):
+                    self._agent_dirty = False        # an outcome happened: ask again with this look's fresh world
+            while True:
+                call = self.plan_brain.next_call()
+                for skipped in self.plan_brain.skipped_ids:
+                    dskip = dmap.get(skipped)
+                    if dskip is not None and not any(np.linalg.norm(dskip.top[:2] - f) <
+                                                     self.cfg["policy"]["same_object_radius"] for f in self.failed):
+                        self.failed.append(np.asarray(dskip.top[:2], float).copy())
+                if call is None:
+                    if cl:
+                        if self.plan_brain.next_req is not None:
+                            return ("look", None, None, None, None)     # answer in flight: look again, never stall
+                        if classical_has_work:
+                            return None                                 # classical resolver finishes the targets
+                        if self._agent_dirty and self.plan_brain.request_next(world, key=wkey):
+                            self._agent_dirty = False
+                            return ("look", None, None, None, None)
+                    return ("stop", None, None, None, None) if self.plan_brain.adopted else None
+                tool, a = call["tool"], call["args"]
+                if tool == "skip":
+                    d = dmap.get(a["obj_id"])
+                    if d is not None:
+                        self.failed.append(np.asarray(d.top[:2], float).copy())
+                    self.plan_brain.mark("ok", "left on table")
+                    self._agent_dirty = cl or self._agent_dirty
+                    continue
+                if tool == "find":
+                    try:
+                        found, dets_f, ids_f = self._brain_find_ids(a["description"], obs, dets)
+                        self.log(f"[planner] find({a['description']!r}) -> {found}")
+                        self.plan_brain.mark("ok", f"found={found}")
+                        if cl or self._ftd_on():
+                            self._found[a["description"]] = found
+                        if cl:   # the world changed (found ids, maybe a novel object): re-plan from it, async
+                            w2 = self._agent_world(dets_f, ids_f)
+                            self._agent_dirty = not self.plan_brain.request_next(
+                                w2, key=(float(obs.get("t", 0.0)), tuple(ids_f), "find"), why="find")
+                    except Exception as e:
+                        self.plan_brain.mark("failed", repr(e))
+                        self.plan_brain.replan(world, call, repr(e))
+                        return None
+                    continue
+                if tool == "wait":
+                    self.plan_brain.mark("ok")
+                    return ("look", None, None, None, None)
+                if tool == "done":
+                    if not self.plan_brain.can_done(classical_has_work):
+                        self.plan_brain.mark("rejected", "no-early-done guard")
+                        continue
+                    self.plan_brain.mark("ok")
+                    self._agent_dirty = False
+                    return ("done", None, None, None, None)
+                d = dmap.get(a["obj_id"])
+                if d is None:                       # scene changed after validation: skip, never improvise
+                    self.plan_brain.mark("invalid", "object no longer in scene")
+                    continue
+                if tool == "skill":   # brain.planner skill: pick, run the skill, put it back at its current xy
+                    self._plan_skill = a["skill"]
+                    return ("skill", d, None, None, np.asarray(d.top[:2], float))
+                if tool == "pick_place":
+                    authority = self._lookup(d)     # a known target bin binds the planner (never overridden)
+                    if authority is not None and a["bin"] != authority:
+                        self.plan_brain.mark("invalid", f"bin-authority: {d.color} is {authority}, not {a['bin']}")
+                        continue
+                    return ("pick", d, a["bin"], call.get("variant"), None)
+                return ("place", d, None, None, np.asarray(a["table_xy"], float))
+        except Exception as e:
+            self.log(f"[planner] select failed ({e!r})")
+            return (("stop", None, None, None, None)
+                    if self.plan_brain is not None and self.plan_brain.adopted else None)
+
+    # ---------------------------------------------------------- brain agent (find_to_detection / closed_loop)
+    def _cl_on(self):
+        return isinstance(self.plan_brain, AgentLoop) and not self._universal_inert
+
+    def _known_task_inert(self, info):
+        """Known-task guard: a sort_fixed or resolver-mapped instruction that names no novel noun keeps the whole
+        universal layer inert (r23 behaviour). -> (inert, reason)."""
+        from .novel_objects import novel_noun_named
+        if novel_noun_named(self._instruction):
+            return False, None
+        if info.get("task") == "sort_fixed":
+            return True, "sort_fixed"
+        if not self._resolver_abstains(self.mapping):
+            return True, "resolver"
+        return False, None
+
+    def _ftd_on(self):
+        bc = self.cfg.get("brain") or {}
+        return (self.brain is not None and not self._universal_inert and bool(bc.get("find_to_detection", False))
+                and bool(bc.get("find", False)))
+
+    def _variant_chooser(self, untried):
+        """Order of the untried grasp variants: the skill-memory bandit when it exists, else the registry order."""
+        if self.skill_memory is None:
+            return list(untried)
+        ordered = self.skill_memory.choose(("brain_variant",), list(untried))   # only knows its own arms: [] -> default
+        return [v for v in ordered if v in untried] or list(untried)
+
+    def _agent_world(self, dets, ids):
+        world = self._brain_world(dets, ids, None)
+        for o, d in zip(world["objects"], dets):
+            o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
+        world["table_region"] = self._planner_table_region()
+        world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+        self._ground_flag(world)
+        if self._found:
+            world["found"] = dict(self._found)
+        return world
+
+    def _novel_grounded(self, d):
+        """brain.grounded_picks: a novel object may receive a bin from the brain only when the flag is on AND the last
+        find() point lies on it (match_found, same 40 px radius as the find mapping)."""
+        if not (self.cfg.get("brain") or {}).get("grounded_picks", False):
+            return False
+        return bool(match_found([it["point"] for it in self.__dict__.get("_last_find_items", [])], [d]))
+
+    def _ground_flag(self, world):
+        """brain.grounded_picks (universal): for an open-vocabulary instruction (parser abstains / unknown nouns) a blind plan
+        may only pick objects the VLM located with find() -- a text-only 8B planner happily "finds" fruit among cubes."""
+        if (self.cfg.get("brain") or {}).get("grounded_picks", False) and self.__dict__.get("_open_vocab", False):
+            world["grounded_only"] = True
+
+    def _ev_leave(self, d, target_bin, brain_chosen):
+        """brain.ev_gate (universal): per-object expected-value gate for a NOVEL object.  Score is +2 correct, -1 wrong
+        bin, 0 left, a failed grasp scores 0 -> EV = p_grasp * (3 p_bin - 1).  p_grasp = the depth-geometry grasp confidence,
+        p_bin = 1 for a deterministic parser/synonym match, else the confidence of the brain's bin (token probability when the
+        backend reports it, otherwise brain.ev_default_conf).  EV below brain.ev_min -> leave the object (0 beats -1)."""
+        bc = self.cfg.get("brain") or {}
+        if not bc.get("ev_gate", False) or not getattr(d, "novel", False) or target_bin is None:
+            return False
+        p_grasp = float(getattr(d, "generic_confidence", 1.0) or 0.0)
+        if getattr(d, "novel_matched", False) and not brain_chosen:
+            p_bin = 1.0
+        else:
+            conf = getattr(getattr(getattr(self, "plan_brain", None), "backend", None), "last_plan_conf", None)
+            p_bin = float(conf) if conf is not None else float(bc.get("ev_default_conf", 0.7))
+        ev = p_grasp * (3.0 * p_bin - 1.0)
+        if ev >= float(bc.get("ev_min", 0.5)):
+            return False
+        self.log(f"[ev] leave {getattr(d, 'label', d.color)!r}: EV {ev:.2f} < {float(bc.get('ev_min', 0.5)):.2f} "
+                 f"(p_grasp {p_grasp:.2f}, p_bin {p_bin:.2f}) -> counter, 0 points")
+        self.failed.append(np.asarray(d.top[:2], float).copy())
+        return True
+
+    def _with_novel(self, dets, obs):
+        """Known detections + the novel ones, each re-grown from the CURRENT depth at its remembered pixel (gone = placed
+        or moved away -> dropped; the colour detector sees it now -> dropped). An ungraspable one is skipped once."""
+        from .brain.novel import novel_detection
+        known = list(dets)    # classical + depth-blob novel (perception.novel_objects): a VLM find never duplicates either
+        keep, out, bc = [], [], self.cfg["brain"]
+        for ent in self._novel_store:
+            try:
+                d = novel_detection(self.perception, obs["head_rgb"], obs["head_depth"], ent["uv"], ent["label"],
+                                    ent["box"], bc)
+            except Exception as e:
+                self.log(f"[novel] re-grow failed ({e!r})")
+                d = None
+            if d is None or any(np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04 for k in known + out):
+                continue          # universal: deduplicated by 3D position against every detection and the other finds
+            ent["uv"] = d.uv
+            keep.append(ent)
+            out.append(d)
+            if d.ungraspable and not ent.get("skipped"):
+                ent["skipped"] = True
+                self.failed.append(np.asarray(d.top[:2], float).copy())
+                self.log(f"[novel] {d.label!r} ungraspable ({d.ungraspable_reason or 'low confidence'}; "
+                         f"footprint {d.footprint}, height {d.height_m}) -> skip")
+        self._novel_store = keep
+        return known + out
+
+    def _planner_table_region(self):
+        L = self.scene.cfg["layout"]
+        corners = self.scene.mat_to_pelvis(np.array([[x, y, 0.0] for x in L["region_x"] for y in L["region_y"]]))
+        lo, hi = corners[:, :2].min(0), corners[:, :2].max(0)
+        return {"x": [round(float(lo[0]), 4), round(float(hi[0]), 4)],
+                "y": [round(float(lo[1]), 4), round(float(hi[1]), 4)],
+                "required_margin": 0.02, "clearance": 0.06}
+
+    def _planner_place_at(self, dmap, dets, oid, xy, virtual_xy=None):
+        """Geometry gate plus the classical motion/IK/SafetyFilter dry run for place_at."""
+        xy = np.asarray(xy, float)
+        reg = self._planner_table_region()
+        lo = np.array([reg["x"][0], reg["y"][0]])
+        hi = np.array([reg["x"][1], reg["y"][1]])
+        margin = float(np.min(np.r_[xy - lo, hi - xy]))
+        if margin < 0.02:
+            return False, "outside reachable table region or within its 2 cm IK margin", margin
+        # Distance to each bin's outer footprint, not merely its centre.
+        outer = np.asarray(self.scene.cfg["bins"]["outer_size"], float) / 2
+        for name, centre in self.scene.cfg["bins"]["centers"].items():
+            c = np.asarray(centre, float)
+            corners = self.scene.mat_to_pelvis(np.array([[c[0] + sx * outer[0], c[1] + sy * outer[1], 0.0]
+                                                         for sx in (-1, 1) for sy in (-1, 1)]))[:, :2]
+            blo, bhi = corners.min(0), corners.max(0)
+            delta = np.maximum(np.maximum(blo - xy, 0.0), xy - bhi)
+            if np.linalg.norm(delta) < 0.06:
+                return False, f"less than 6 cm from {name} bin", margin
+        positions = virtual_xy or {k: v.top[:2] for k, v in dmap.items()}
+        for other_id, other_xy in positions.items():
+            if other_id != oid and len(other_xy) == 2 and np.linalg.norm(xy - np.asarray(other_xy, float)) < 0.06:
+                return False, f"less than 6 cm from object {other_id}", margin
+        d = dmap[oid]
+        obstacles = [o.top[:2] for o in dets if o is not d]
+        p = self.planner.plan_place_at(d, self.arm_cmd, self.hand_cmd, xy, obstacles=obstacles)
+        key = (id(d), round(float(xy[0]), 4), round(float(xy[1]), 4))
+        if p.ok:
+            self._planner_place_cache[key] = p
+        return p.ok, p.reason, margin
+
+    def _planner_track_move(self, color, source_xy, table_xy):
+        """Keep a plan object's id stable when place_at moves it farther than the normal 5 cm tracker gate."""
+        old = np.asarray(source_xy, float)
+        candidates = [(np.linalg.norm(old - pxy), row) for row in self._brain_reg
+                      for oid, col, pxy in [row] if col == color]
+        if candidates:
+            min(candidates, key=lambda x: x[0])[1][2] = np.asarray(table_xy, float).copy()
+
+    def _planner_failed(self, dets, reason, obs):
+        call = self.plan_brain.next_call()
+        self.plan_brain.mark("failed", reason)
+        if self._cl_on():   # retry / abandon in code (same grasp, then another variant, then skip); async re-plan next look
+            if call is not None and call["tool"] == "pick_place":
+                self.plan_brain.on_grasp_failed(call["args"]["obj_id"], call["args"]["bin"], self._variant_chooser)
+            self._agent_dirty = True
+            return
+        try:
+            ids = self._brain_ids(dets)
+            world = self._brain_world(dets, ids, None)
+            for o in world["objects"]:
+                d = dets[ids.index(o["id"])]
+                o["size"] = round(float(getattr(d, "generic_width", None) or self.scene.size), 4)
+            world["table_region"] = self._planner_table_region()
+            world["find_enabled"] = bool(self.cfg["brain"].get("find", False))
+            self._ground_flag(world)
+            self.plan_brain.replan(world, call, reason)   # one async retry, 0.5 s deadline
+        except Exception as e:
+            self.log(f"[planner] replan failed ({e!r})")
+
+    def _planner_observe(self, dets, obs):
+        """Confirm the prior primitive from the first settled post-motion look, then advance/replan."""
+        ex = self._planner_execution
+        if ex is None or self.plan_brain is None:
+            return
+        self._planner_execution = None
+        if self._ftd_on():   # a novel object is invisible to detect(): confirm it from its re-grown depth blob
+            dets = self._with_novel(dets, obs)
+        rad = 2 * self.cfg["policy"]["same_object_radius"]
+        source = ex["source_xy"]
+        at_source = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - source) < rad for d in dets)
+        target = ex["table_xy"]
+        if target is None:
+            ok = not at_source                    # bin placement: object left the counter source
+        else:
+            # a skill (flip, rotate) may end at any yaw: its xy is confirmed within 5 cm whatever the orientation
+            tol = 0.05 if (ex.get("call") or {}).get("tool") == "skill" else rad
+            ok = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - target) < tol for d in dets)
+        if ok:
+            if target is not None:
+                self._planner_track_move(ex["color"], source, target)
+            self.plan_brain.mark("ok", "settled look confirmed")
+            self._agent_dirty = self._cl_on() or self._agent_dirty
+        else:
+            self._planner_failed(dets, "settled look did not confirm primitive", obs)
+
     # ------------------------------------------------------------------ brain (policy.brain)
     def _resolver_mapping(self, info, guarded=None):
-        """Mapping opinions that may bind the brain: explicit reset mapping, the fixed task, or keys actually parsed
-        by the resolver. The classical fallback remains unchanged but is not presented as an opinion for open vocab."""
+        """The finalized planner mapping is the brain guard's sole parser opinion.
+
+        reset() has already applied aliases, multilingual canonicalization, normalization, structured parsing and
+        strict filtering to self.mapping. Re-running the raw resolver here would let the brain override those results.
+        """
         if self.brain is None:
             return {}, "disabled"
         try:
+            parsed = dict(self.mapping or {})
             if (info or {}).get("mapping"):
-                return dict(info["mapping"]), "explicit"
+                return parsed, "explicit"
             if guarded:
-                return dict(guarded), "insert_guard"
+                return parsed, "insert_guard"
             if (info or {}).get("task") == "sort_fixed":
-                return dict(self.mapping), "fixed"
-            if not (self.cfg.get("instruction") or {}).get("resolve", False):
-                return {}, "unresolved"
-            from .instruction import resolve
-            parsed = resolve(str(self._cap_text((info or {}).get("instruction") or "")), fallback={}) or {}
-            return dict(parsed), "resolver" if parsed else "unresolved"
+                return parsed, "fixed"
+            source = ("resolver" if any(value in ("left", "center", "right") for value in parsed.values())
+                      else "unresolved")
+            return parsed, source
         except Exception:
             return {}, "unresolved"
 
+    def _strict_leaves_colour(self):
+        """instruction.strict + brain.planner: a scene colour the strict mapping does not bind (and no catch-all
+        default) is an abstention the planner must see. False unless strict."""
+        if not (self.cfg.get("instruction") or {}).get("strict", False):
+            return False
+        m = self._brain_mapping
+        return m.get("default") is None and any(m.get(c) is None for c in COLORS)
+
     @staticmethod
     def _resolver_abstains(mapping):
-        return not bool(mapping)
+        return not any(value in ("left", "center", "right") for value in (mapping or {}).values())
 
     def _brain_ids(self, dets):
         """Stable object ids across looks: a detection takes the id of the nearest same-colour registry entry
@@ -1832,14 +4204,78 @@ class ClassicalPolicy:
         return bool(bc.get("find", False)) and bool(self._brain_queries) \
             and self._brain_finds < int(bc.get("max_finds", 2))
 
-    def _brain_find(self, query, obs, dets):
-        """Run the find tool for one phrase: image points -> ids of OUR detections (nearest uv)."""
+    def _find_hit(self, it, query, obs, dets, grown):
+        """Which detection a find point is: (index into dets or None, grown depth blob or None).
+        (a) uv within match_found's radius; else (b) the depth blob grown at the point (once per point, cached in
+        `grown`) has its top within 0.04 m of a detection's top: a long object's blob centre can sit >40 px from its uv."""
+        from .brain.novel import novel_detection
+        pt = tuple(map(float, it["point"]))
+        hit = match_found([pt], dets)
+        if hit:
+            return hit[0], None
+        if pt not in grown:
+            grown[pt] = novel_detection(self.perception, obs["head_rgb"], obs["head_depth"], pt, query,
+                                        it.get("bbox") or None, self.cfg["brain"])
+        d = grown[pt]
+        if d is None:
+            return None, None
+        for i, k in enumerate(dets):
+            if np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04:
+                return i, d
+        return None, d
+
+    def _brain_find(self, query, obs, dets, grown=None):
+        """Run the find tool for one phrase: image points -> ids of OUR detections (nearest uv, or the 3D blob match)."""
         if self._brain_find_fn is None:
             bc = self.cfg["brain"]
             self._brain_find_fn = FindClient(bc.get("find_path", "/data/brain/find/find_tool.py"), bc.get("find_url"),
-                                             float(bc.get("find_timeout_s", 1.5)))
-        pts = self._brain_find_fn(obs["head_rgb"], query)
-        return [d_i for d_i in match_found(pts, dets)]
+                                             float(bc.get("find_timeout_s", 1.5)),
+                                             int(bc.get("image_max_side_px", 0) or 0), int(bc.get("find_n_predict", 400)),
+                                             str(bc.get("find_layout", "image_first")))
+        if not self._ftd_on():
+            pts = self._brain_find_fn(obs["head_rgb"], query)
+            return [d_i for d_i in match_found(pts, dets)]
+        fn = self._brain_find_fn
+        raw = fn.detect(obs["head_rgb"], query) if hasattr(fn, "detect") else fn(obs["head_rgb"], query)
+        items = [it if isinstance(it, dict) else {"point": tuple(it), "bbox": None, "label": query} for it in raw]
+        self._last_find_items = items
+        grown = {} if grown is None else grown
+        hits = [self._find_hit(it, query, obs, dets, grown) for it in items]
+        idx = []
+        for i, _ in hits:
+            if i is not None and i not in idx:
+                idx.append(i)
+        bc = self.cfg["brain"]
+        for it, (i, _) in zip(items, hits):
+            pt = tuple(map(float, it["point"]))
+            if i is not None or len(self._novel_store) >= int(bc.get("novel_max_objects", 3)):
+                continue
+            if any(((e["uv"][0] - pt[0]) ** 2 + (e["uv"][1] - pt[1]) ** 2) ** 0.5 < 30 for e in self._novel_store):
+                continue
+            d = grown[pt]
+            if d is None:
+                self.log(f"[novel] find({query!r}) point {pt}: no depth blob above the counter plane")
+                continue
+            self._novel_store.append({"uv": d.uv, "label": str(query)[:80], "box": it.get("bbox") or None})
+            self.log(f"[novel] find({query!r}) -> novel {d.color} object at {np.round(d.top[:2], 3).tolist()} "
+                     f"footprint={d.footprint} height={d.height_m} graspable={not d.ungraspable}")
+        return idx
+
+    def _brain_find_ids(self, query, obs, dets):
+        """find(query) -> (found object ids, detections incl. novel, their ids). Flag off: the old mapping onto dets."""
+        if not self._ftd_on():
+            ids = self._brain_ids(dets)
+            return [ids[i] for i in self._brain_find(query, obs, dets)], dets, ids
+        grown = {}
+        self._brain_find(query, obs, dets, grown)
+        all_dets = self._with_novel(dets, obs)
+        ids_all = self._brain_ids(all_dets)
+        idx = []
+        for it in self._last_find_items:
+            i = self._find_hit(it, query, obs, all_dets, grown)[0]
+            if i is not None and i not in idx:
+                idx.append(i)
+        return [ids_all[i] for i in idx], all_dets, ids_all
 
     def _brain_points(self, lp, dets, cands, ids):
         """The decision points of the next cycle, with the classical call for each: [(point, state, classical, resolver_abstains)].
@@ -1948,6 +4384,11 @@ class ClassicalPolicy:
                         return ("done", None, None, None)
                     continue
                 if tool == "pick_place" and a["obj_id"] in dmap:
+                    pb = lookup_bin(self.cfg, self._brain_mapping, dmap[a["obj_id"]].color,
+                                    getattr(dmap[a["obj_id"]], "shape", None))
+                    if pb is not None and pb != a["bin"]:       # abstain-only: the parser's bin is never overridden
+                        self.log(f"[brain_guard] override dropped: {a['obj_id']} brain={a['bin']} parser={pb}")
+                        continue
                     return ("pick", dmap[a["obj_id"]], a["bin"], None)
                 if tool == "retry" and a["obj_id"] in dmap and self._lookup(dmap[a["obj_id"]]) is not None:
                     return ("retry", dmap[a["obj_id"]], self._lookup(dmap[a["obj_id"]]), a["variant"])
@@ -1967,7 +4408,9 @@ class ClassicalPolicy:
         try:
             import base64
             import cv2
-            ok, buf = cv2.imencode(".jpg", cv2.cvtColor(np.asarray(obs["head_rgb"]), cv2.COLOR_RGB2BGR))
+            from .brain.find import downscale_rgb
+            rgb, _ = downscale_rgb(obs["head_rgb"], (self.cfg.get("brain") or {}).get("image_max_side_px", 0))
+            ok, buf = cv2.imencode(".jpg", cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR))
             return base64.b64encode(buf.tobytes()).decode() if ok else None
         except Exception:
             return None
@@ -2029,6 +4472,8 @@ class ClassicalPolicy:
         corrections = []
         yellow_unknown = bool(self.cfg["policy"].get("verify_yellow_unknown", False))
         for d, footprint_bin in bin_dets:
+            if getattr(d, "tentative", False):
+                continue  # re-observe with retracted arms; never score or correct this fragment
             target_bin = lookup_detection_bin(self.cfg, self.mapping, d)
             score_bin = self._score_bin(d)
             scored.append((d, footprint_bin, score_bin))
@@ -2077,6 +4522,8 @@ class ClassicalPolicy:
         return corrections
 
     def _after_look(self, res, t):
+        if res[0] == "still_vote_pending":
+            return self._hold()
         if self.last_verification is not None:
             status, pending = self.last_verification
             if status == "ok":
@@ -2087,7 +4534,21 @@ class ClassicalPolicy:
                 self._note(t, f"release of {pending['color']} not verified in {pending['target_bin']}; retry")
             self.last_verification = None
         kind = res[0]
+        confirm = bool(self.cfg["policy"].get("done_confirm", False))
+        retry_failed = confirm or self.cfg["perception"].get("look_timeout_s") is not None
+        retry_failed = retry_failed or res[:2] == ("error", "frozen_rgb")   # policy.frozen_rgb_guard: retry, never stop on one
+        if (confirm or retry_failed or self._target_guard_on()) and t >= self.time_limit:
+            self._clear_looks, self._clear_since = 0, None
+            self._note(t, "episode time limit reached")
+            self.state = "done"
+            return self._hold(done=True)
+        if confirm and kind != "none":
+            self._clear_looks, self._clear_since = 0, None
         if kind == "error":
+            if retry_failed:
+                self._note(t, f"look failed ({res[1]}); retrying while time remains")
+                self.state = "settle"
+                return self._hold()
             self._note(t, f"look/plan error {res[1]}: stopping")
             self.state = "done"
             return self._hold(done=True)
@@ -2095,11 +4556,51 @@ class ClassicalPolicy:
             self._note(t, "placement unresolved; take one more settled verification frame")
             self.state = "settle"
             return self._hold()
+        if kind == "partial":
+            self._partial_relooks += 1
+            return self._begin_retracted_relook(t, "tentative FK-boundary candidate",
+                                                f"partial relook {self._partial_relooks}")
+        if kind == "planner_pending":
+            self._planner_pending = (res[1], bool(res[2]))
+            self.state = "planner_wait"
+            return self._hold()
         if kind == "uncorrectable":
+            if confirm:   # a visible known-bin object is never a reason to finish: keep looking until time runs out
+                self._note(t, "known wrong-bin object has no safe corrective or cleanup plan yet; retrying")
+                self.state = "settle"
+                return self._hold()
             self._note(t, "known wrong-bin object has no safe corrective or cleanup plan; stopping")
             self.state = "done"
             return self._hold(done=True)
+        if kind == "none" and int(res[2]) == 0 and self.cfg["policy"].get("zero_det_relook", False):
+            r = self._zero_det_relook(t)
+            if r is not None:
+                return r
+        elif kind != "none" or int(res[2]) != 0:
+            self._zero_looks, self._zero_since = 0, None
+        if kind == "none" and self._brain_down_wait(t):
+            return self._pop()
         if kind == "none":
+            if self.cfg["perception"].get("relook_before_done", False) and not self._final_relook_used:
+                self._final_relook_used = True
+                return self._begin_retracted_relook(t, "nothing-left guard", "final relaxed relook")
+            if confirm:
+                n_dets = int(res[2])
+                if n_dets:
+                    self._clear_looks, self._clear_since = 0, None
+                    self._note(t, f"{n_dets} detection(s), but no plan; retrying")
+                    self.state = "settle"
+                    return self._hold()
+                if self._clear_since is None:
+                    self._clear_since = float(t)
+                self._clear_looks += 1
+                need = int(self.cfg["policy"]["done_confirm_looks"])
+                span = float(t) - self._clear_since
+                min_span = float(self.cfg["policy"]["done_confirm_span_s"])
+                if self._clear_looks < need or span < min_span:
+                    self._note(t, f"clear look {self._clear_looks}/{need}, span {span:.1f}/{min_span:g} s; confirming")
+                    self.state = "settle"
+                    return self._hold()
             self._note(t, f"nothing left to sort ({res[2]} detections)")
             self.state = "done"
             return self._hold(done=True)
@@ -2119,6 +4620,78 @@ class ClassicalPolicy:
             self._note(t, f"waiting for confirm: {plan.summary()}")
             return self._hold()
         return self._start(plan, t)
+
+    def _zero_det_relook(self, t):
+        """policy.zero_det_relook (real only): a look with 0 detections never ends the episode by itself. Re-look every
+        settle (~1 s) with fresh frames while time remains. Nothing has worked yet (no pick read HELD): keep looking until
+        the end margin. Something was sorted: end after zero_det_clear_looks empty looks spanning zero_det_clear_span_s
+        (a genuinely cleared counter must not idle to the time limit). Returns an action, or None = stock 'nothing left'."""
+        pol = self.cfg["policy"]
+        self._zero_looks += 1
+        if self._zero_since is None:
+            self._zero_since = float(t)
+        span = float(t) - self._zero_since
+        left = self.time_limit - float(t)
+        margin = float(pol.get("zero_det_end_margin_s", 3.0))
+        if left <= margin:
+            self._note(t, f"[look0] {self._zero_looks} empty looks over {span:.1f} s, {left:.0f} s left: stopping")
+            return None
+        if self._n_held_yes > 0 and self._zero_looks >= int(pol.get("zero_det_clear_looks", 3)) \
+                and span >= float(pol.get("zero_det_clear_span_s", 3.0)):
+            self._note(t, f"[look0] counter looks clear after {self._n_held_yes} successful pick(s): "
+                          f"{self._zero_looks} empty looks over {span:.1f} s")
+            return None
+        self._note(t, f"[look0] look {self._zero_looks}: 0 detections ({span:.1f} s, picks held so far "
+                      f"{self._n_held_yes}); re-looking with fresh frames, {left:.0f} s left")
+        self.state = "settle"
+        return self._hold()
+
+    def _begin_retracted_relook(self, t, reason, note):
+        """Queue a normal home/open trajectory, then let `_act` settle and count fresh frames without sleeping."""
+        a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
+        self._enqueue(a, h)
+        self.state = "relook_settle"
+        self._relook_fresh = 0
+        self._relook_last_t = None
+        self._relook_reason = reason
+        self._note(t, f"{note}: retract arms to home before re-detection")
+        return self._pop()
+
+    def _brain_down_wait(self, t):
+        """Open / novel instruction whose brain call failed and the brain is down: go home and wait instead of ending
+        the episode. True = episode held in state brain_wait. Known tasks (no brain, or inert) never reach this.
+        Once per episode; brain.down_retry_s (3 s) re-probe interval, brain.down_wait_s (60 s) limit."""
+        if getattr(self, "brain", None) is None or self._universal_inert or self._brain_wait is not None or self._brain_wait_spent:
+            return False
+        if not any(getattr(getattr(b, "req", None), "status", None) in ("error", "timeout", "busy")
+                   for b in (self.brain, self.plan_brain) if b is not None):
+            return False
+        bc = self.cfg["brain"]
+        self._brain_wait_spent = True
+        self._brain_wait = {"t0": float(t), "probe": float(t), "retry": float(bc.get("down_retry_s", 3.0)),
+                            "limit": float(bc.get("down_wait_s", 60.0))}
+        self.brain.probe()
+        self.state = "brain_wait"
+        self._note(t, "brain down on an open instruction: arms home, re-probing "
+                      f"for up to {self._brain_wait['limit']:.0f} s")
+        a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
+        self._enqueue(a, h)
+        return True
+
+    def _brain_wait_step(self, t):
+        w = self._brain_wait
+        if self.brain.up:
+            self._brain_wait, self.state = None, "settle"
+            self._note(t, "brain healthy again: re-looking")
+            return self._hold()
+        if float(t) - w["t0"] >= w["limit"]:
+            self._brain_wait, self.state = None, "done"
+            self._note(t, f"brain still down after {w['limit']:.0f} s: ending the episode")
+            return self._hold(done=True)
+        if float(t) - w["probe"] >= w["retry"]:
+            w["probe"] = float(t)
+            self.brain.probe()
+        return self._hold()
 
     def _verify_on(self):
         return bool(self.cfg["policy"].get("verify_placement", False))
@@ -2143,7 +4716,8 @@ class ClassicalPolicy:
         self._track_attempt(plan.color, xy)
         self._record_object_time(plan.color, xy, plan.duration)
         self.n_started += 1
-        if self.brain is not None:
+        self._scene_epoch += 1          # frozen_rgb_guard: a pick ran, the next frame must differ
+        if self.brain is not None and not self._planner_needed:
             self._brain_prefetch(plan)
         if self._dflag("speed_tiers") and not plan.corrective:   # D3: the next look judges this pick
             self._pend_out = {"color": plan.color, "xy": np.asarray(xy, float).copy()}
@@ -2157,6 +4731,11 @@ class ClassicalPolicy:
             self._exec = {"plan": plan, "n": len(plan.arm), "cut": 0, "t8": False}
         if plan.corrective:
             self.n_corrections += 1
+        if self._landing_on() and not plan.corrective and plan.target_bin in self.scene.bin_names:
+            self._landing = {"color": plan.color, "bin": plan.target_bin, "src_xy": np.asarray(xy, float).copy(),
+                             "slot": plan.drop_slot,
+                             "pre_xy": [d.top[:2].copy() for d in self.last_detections if d.color == plan.color],
+                             "t": float(t)}
         if plan.posture is not None and self.cfg["policy"].get("grasp_diag_log", False):
             nm, label, conf, path = plan.posture[:4]
             gate = ""
@@ -2167,6 +4746,17 @@ class ClassicalPolicy:
             self.log(f"[grasp_posture] t={t:.1f} {plan.color} {plan.side} label={label} conf={conf:.2f} path={path} "
                      f"posture={'pinch_demo' if nm == 'closed_demo' else 'pinch_v1'} ({nm})" + gate)
         ls = self.cfg["motion"].get("lift_on_stall") or {}
+        self._rel = None
+        if self.cfg["grasp"].get("release_confirm", False) and plan.side in ("left", "right"):
+            ph = {name: e for name, _, e in (plan.phases or [])}
+            if "open" in ph:
+                self._rel = {"plan": plan, "n": len(plan.arm), "open_end": ph["open"], "phase": "wait", "reopened": False}
+        self._ig = None
+        if getattr(plan, "insert", None) is not None and plan.side in ("left", "right"):   # insert.reach_gated
+            ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
+            if "carry" in ph and "lower" in ph and "open" in ph:
+                self._ig = {"plan": plan, "n": len(plan.arm), "stops": [ph["carry"][1], ph["open"][0]], "i": 0, "t0": None, "corr": 0, "delta": np.zeros(14),
+                            "retreat": ph.get("retreat")}
         self._stall = None
         if ls.get("enabled", False) and plan.close_hold is not None and plan.side in ("left", "right"):
             self._stall = {"n": len(plan.arm), "hold": plan.close_hold, "sl": ArmKinematics.sl(plan.side),
@@ -2177,11 +4767,19 @@ class ClassicalPolicy:
         diag_on = self.cfg["policy"].get("grasp_diag_log", False) or self.held_detector.mode == "finger_sum"
         if (diag_on or skill_side) and plan.side in ("left", "right"):
             ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
-            if "close" in ph and "lift" in ph:
-                check = self.held_detector.evaluation_tick(*ph["close"], HZ)
+            lift_key = "lift_check" if "lift_check" in ph else "lift"   # grasp.soft_squeeze: re-read after the first 2 cm
+            if "close" in ph and lift_key in ph:
+                check = self.held_detector.evaluation_tick(
+                    *ph["close"], HZ, hold_start=plan.close_hold[0] if plan.close_hold else None)
                 # skill_only: watched for skills.memory alone -> no empty-grasp abort, no [grasp_diag] line
                 self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": check,
-                               "lift_end": ph["lift"][1], "t": t, "samples": {}, "skill_only": not diag_on}
+                               "lift_end": ph[lift_key][1], "t": t, "samples": {}, "skill_only": not diag_on,
+                               "descend": ph.get("descend"), "contact_hist": []}
+                if lift_key == "lift_check" and self.held_detector.soft is not None:
+                    self._gdiag["lift_check"] = True
+                if bool((self.cfg.get("held") or {}).get("read_through_carry", False)) \
+                        and self.held_detector.mode == "finger_sum" and "carry" in ph:
+                    self._gdiag["carry"] = ph["carry"]
         hist = None
         if self._vary_on() and plan.side in ("left", "right"):
             key = plan.grasp_key or (np.asarray(xy, float).copy(), None, self._posture_of(plan))
@@ -2189,6 +4787,7 @@ class ClassicalPolicy:
                  "side": plan.side, "held": None}
             self.vary_hist.append(h)
             hist = h
+        self._ob_started(plan)
         if skill_side:
             self._skill_pending = {"key": getattr(plan, "skill_key", ("unknown", plan.color, plan.side)),
                                    "arm": getattr(plan, "skill_arm", "stock"), "color": plan.color,
@@ -2211,7 +4810,61 @@ class ClassicalPolicy:
     def _enqueue(self, a, h):
         self.queue_a, self.queue_h = np.asarray(a, float), np.asarray(h, float)
 
-    def _held_abort_due(self, g, hq, hc):
+    def _thr(self, key):
+        m = self._soft_margin(key)
+        return self.held_detector.threshold_rad if m is None else m
+
+    def _soft_margin(self, key):
+        """Soft detector margin for a read: the close read uses soft.margin, the lift_check / carry reads the (smaller)
+        lift margin. None when the soft detector is off (held() then ignores it)."""
+        soft = self.held_detector.soft
+        if soft is None:
+            return None
+        return soft["margin"] if key == "close" else soft["lift_margin"]
+
+    def _soft_baseline_start(self, t):
+        """held.soft_detector: once per episode, at home with both hands open, close both hands on nothing with the
+        grasp command (over-closed, same ramp and hold as a pick), read how far the soft fingers lag, reopen. The
+        ratio error/travel is the empty-hand expectation the pick reads are compared against."""
+        self._softcal_done = True
+        g = self.cfg["grasp"]
+        base = self.post[g.get("close_posture", "closed")]
+        cls = soft_overclose(self.cfg, self.spec, base, self.post["preshape"]) if soft_hand_active(self.cfg) else base
+        hv, dt = float(self.cfg["motion"]["hand_max_vel"]), 1.0 / HZ
+        hold = max(float(self.cfg["motion"]["close_hold_s"]),
+                   float(g["soft_lag_s"]) + float(g["soft_settle_s"]) + float(self.cfg["held"]["soft_read_after_s"]))
+        up = ramp(self.hand_cmd, cls, hv, dt)
+        hold_n = int(round(hold / dt))
+        down = ramp(cls, self.post["open"], hv, dt)
+        h = np.vstack([up, np.repeat(np.asarray(cls, float)[None], hold_n, 0), down])
+        a = np.repeat(self.arm_cmd[None], len(h), 0)
+        if self.queue_a is not None and len(self.queue_a):
+            self.queue_a, self.queue_h = np.vstack([self.queue_a, a]), np.vstack([self.queue_h, h])
+        else:
+            self._enqueue(a, h)
+        base_n = len(self.queue_a) - len(a)
+        self._softcal = {"n": len(self.queue_a), "read": base_n + len(up) + hold_n, "t": t, "samples": []}
+        self._note(t, f"soft baseline: empty close of both hands ({len(h) / HZ:.1f} s)")
+
+    def _soft_baseline_step(self, obs):
+        c = self._softcal
+        q = obs.get("hand_q")
+        left = 0 if self.queue_a is None else len(self.queue_a)
+        done = c["n"] - left
+        if q is not None and c["read"] - 12 <= done <= c["read"]:   # the last ~0.4 s of the empty hold
+            c["samples"].append((self._held_command().copy(), np.asarray(q, float).copy()))
+        if done > c["read"] or left == 0:
+            self._softcal = None
+            ok = {}
+            for side in ("left", "right"):
+                good = [(cm, m) for cm, m in c["samples"] if np.all(np.isfinite(m)) and m.shape == (14,)]
+                ok[side] = self.held_detector.soft_calibrate(side, good)
+            ratios = {s_: self.held_detector.soft_ratio(s_) for s_ in ("left", "right")}
+            self.log(f"[soft_baseline] n={len(c['samples'])} ok={ok} empty-close error/travel "
+                     f"left={ {k: round(v, 3) for k, v in ratios['left'].items()} } "
+                     f"right={ {k: round(v, 3) for k, v in ratios['right'].items()} }")
+
+    def _held_abort_due(self, g, hq, hc, margin=None):
         """grasp.held_detector=finger_sum only: the close sample is clearly empty. Unsure (no bias reference, missing
         or non-finite joint data) is never empty, so the placement runs as before."""
         det = self.held_detector
@@ -2219,23 +4872,279 @@ class ClassicalPolicy:
             return False
         if not (np.all(np.isfinite(hq)) and np.all(np.isfinite(hc))):
             return False
+        if det.soft is not None:
+            return not det.held(g["plan"].side, hc, hq, margin)[0]
         return not det.held(g["plan"].side, hc, hq)[0]
 
-    def _abort_empty_grasp(self, g):
-        """Skip the carry of an empty grasp: open and return home. The pick counts as a miss (attempt counted at
-        start, vary_hist held=False), so the next look sees the object still on the table and retry-vary runs.
-        Standalone-slot bookkeeping is left to _settle_slot, which frees the slot when the object remains."""
+    def _abort_empty_grasp(self, g, sample="close"):
+        """Cancel carry and request a proved open -> vertical lift -> home recovery in a worker."""
         plan = g["plan"]
         self._gdiag = None
+        self._rel = self._ig = None
         self._stall = self._exec = None      # per-plan watchers: their indices no longer match the queue
         if self._vary_on() and self.vary_hist:   # the entry _start appended for this plan
             self.vary_hist[-1]["held"] = False
+        self._ob_held(plan, False)
         self.log(f"[held_abort] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
-                 f"close sample empty: carry skipped, object remains")
-        home = self.arm_cmd.copy()
-        home[ArmKinematics.sl(plan.side)] = self.home[ArmKinematics.sl(plan.side)]
-        a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
+                 f"{sample} sample empty: carry cancelled, proving vertical escape")
+        self.queue_a = np.empty((0, 14)); self.queue_h = np.empty((0, 14))
+        self._jobs.pop("empty_recovery", None)
+        self._empty_recovery = {"arm": self.arm_cmd.copy(), "hand": self.hand_cmd.copy(), "side": plan.side,
+                                "source_bin": plan.source_bin, "t": g["t"]}
+
+    STAGING_BUDGET_S = 1.5   # episode time to prove a height-safe route before the rc6 home route takes over
+
+    def _stage_route(self, t, rec, key, arm, hand, sides, allowed_inside):
+        """No-deadlock staging: (a) proved open-lift-home, (b) lift-first-then-open, (c) fallback after the budget.
+        Returns (route, None) when proved, (None, None) while a proof runs, (None, reason) for the fallback."""
+        while True:
+            ph = rec["phase"]
+            jobkey = f"{key}_{ph}"
+            if ph != "fallback" and t - rec["t0"] > self.STAGING_BUDGET_S:
+                self._jobs.pop(jobkey, None)
+                rec["why"].append(f"{ph} proof over {self.STAGING_BUDGET_S:.1f} s budget")
+                rec["phase"] = ph = "fallback"
+            if ph == "fallback":
+                return None, "; ".join(rec["why"]) or "staging unproved"
+            r = self._bg(jobkey, self.planner.safe_home_route, arm, hand, sides, allowed_inside, ph == "safe")
+            if r is None:
+                return None, None
+            if r[0] == "ok" and r[1].ok:
+                if ph == "lift":
+                    self._note(t, f"[staging] open-first route unproved ({'; '.join(rec['why'])}); lift-first route proved")
+                return r[1], None
+            rec["why"].append(f"{ph}: " + (f"{type(r[1]).__name__}: {r[1]}" if r[0] == "err" else r[1].reason))
+            rec["phase"] = "lift" if ph == "safe" else "fallback"
+
+    def _empty_recovery_step(self, t):
+        """Poll only; route generation/IK/dry-run stays off the control loop."""
+        rec = self._empty_recovery
+        if self._stg is None:
+            self._stg = {"phase": "safe", "t0": t, "why": []}
+        route, reason = self._stage_route(t, self._stg, "empty_recovery", rec["arm"], rec["hand"],
+                                          (rec["side"],), rec["source_bin"])
+        if route is None and reason is None:
+            return self._hold()
+        self._stg = None
+        if route is None:   # never hold forever: rc6-style open + joint-space home
+            self._empty_recovery = None
+            a, h = self.planner.go_to(rec["arm"], rec["hand"], self.home, self.post["open"])
+            self._enqueue(a, h)
+            self.state = "executing"
+            self._note(t, f"[staging] fallback rc6 home route: empty-grasp recovery: {reason}")
+            return self._pop() if len(a) else self._hold()
+        self._empty_recovery = None
+        self._enqueue(route.arm, route.hand)
+        self.state = "executing"
+        self._note(t, "empty-grasp recovery: open -> vertical lift -> checked home")
+        return self._pop() if len(route.arm) else self._hold()
+
+    def _release_confirm(self, obs, t):
+        """grasp.release_confirm: at the end of the open hold stop the plan (retreat + home stashed) and poll the finger
+        state for release_confirm_s. Not empty: wiggle open -> release once and poll again; still not empty: go home
+        and stop picking (state done). Returns an action while it owns the tick, else None."""
+        r = self._rel
+        side, hq = r["plan"].side, obs.get("hand_q")
+        if r["phase"] == "wait":
+            if self.queue_a is None or self.queue_h is None or r["n"] - len(self.queue_a) < r["open_end"]:
+                return None
+            r.update(phase="check", rest=(self.queue_a, self.queue_h), t0=t)
+            self.queue_a = self.queue_h = None
+            self._exec = None     # ponytail: the T-8 s watcher is dropped once a release is being confirmed
+        if r["phase"] == "reopen":
+            if self.queue_a is not None and len(self.queue_a):
+                return None       # the wiggle is still being popped
+            r.update(phase="check", t0=t)
+        cmd = self._held_command()
+        ok = hq is not None and np.shape(hq) == (14,) and np.all(np.isfinite(hq)) and self.held_detector.empty(side, cmd, hq)
+        if ok:
+            self._rel = None
+            self.queue_a, self.queue_h = r["rest"]
+            self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: hand empty after {t - r['t0']:.2f} s"
+                     f"{' (re-opened)' if r['reopened'] else ''}")
+            return None
+        if t - r["t0"] < float(self.cfg["grasp"].get("release_confirm_s", 1.5)):
+            return self._hold()
+        arm = self.arm_cmd
+        if not r["reopened"]:
+            r["reopened"], r["phase"] = True, "reopen"
+            sl = ArmKinematics.sl(side)   # only this hand wiggles; the other keeps its posture
+            hv, h0 = self.cfg["motion"]["hand_max_vel"], self.hand_cmd.copy()
+            wide, rel = h0.copy(), h0.copy()
+            wide[sl] = self.post["open"][sl]
+            rel[sl] = self.post[self.cfg["grasp"].get("release_posture", "preshape")][sl]
+            wait = int(round(float(self.cfg["grasp"].get("release_wait_s") or 0.5) * HZ))
+            h = np.vstack([ramp(h0, wide, hv, 1.0 / HZ), ramp(wide, rel, hv, 1.0 / HZ), np.repeat(rel[None], wait, 0)])
+            self._enqueue(np.repeat(arm[None], len(h), 0), h)
+            self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: hand still not empty -> re-open once")
+            return self._pop()
+        self._rel, self._rel_fail = None, True
+        home = arm.copy()
+        home[ArmKinematics.sl(side)] = self.home[ArmKinematics.sl(side)]
+        a, h = self.planner.go_to(arm, self.hand_cmd, home, self.post["open"])
         self._enqueue(a, h)
+        self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: still not empty after the re-open -> home, stop")
+        return self._pop()
+
+    def _insert_gate(self, obs, t):
+        """insert.reach_gated: stop over the hole (end of the carry = hover, end of the slow lower = release height), hold
+        gate_hold_s, read the MEASURED arm (FK of the encoders) and servo it onto the hole: a position error above the budget is
+        corrected by shifting the commanded pose (<= gate_max_corr times, remaining plan rows shifted too), then re-read. Still
+        off, tilted, unsettled or no reading -> never open: keep holding, retreat, home (state done): 0 points, never the -1 of a
+        bad release. Returns an action while it owns the tick."""
+        g = self._ig
+        if self.queue_a is None or not len(self.queue_a) or g["i"] >= len(g["stops"]):
+            self._ig = None
+            return None
+        if g["n"] - len(self.queue_a) < g["stops"][g["i"]]:
+            return None
+        rp = g.get("ramp")
+        if rp is not None:      # a servo correction in flight: glide onto the corrected pose (no joint-velocity step), then re-read
+            k0 = rp["k"]
+            k1 = min(rp["K"], k0 + max(1, int(self.cfg["motion"]["chunk"])))
+            u = np.arange(k0 + 1, k1 + 1) / float(rp["K"])
+            u = u * u * (3.0 - 2.0 * u)           # smoothstep: zero velocity at both ends
+            a = rp["from"][None, :] + u[:, None] * rp["dq"][None, :]
+            h = np.repeat(self.hand_cmd[None], len(a), 0)
+            rp["k"] = k1
+            if k1 >= rp["K"]:
+                g["ramp"], g["t0"] = None, t
+            self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()
+            self._popped = (a, h) if self._shell else None
+            return self._remember_policy_action(a, h, False)
+        if g["t0"] is None:
+            g["t0"] = t
+        ic = self.cfg.get("insert") or {}
+        if t - g["t0"] < float(ic.get("gate_hold_s", 0.6)):
+            return self._hold()
+        m = self._insert_measure(obs, g)
+        name = ("hover", "release")[g["i"]]
+        self.log(f"[insert_gate] t={t:.1f} {g['plan'].color} {name} corr={g['corr']}: {'pass' if m['ok'] else 'FAIL'} {m['txt']}")
+        if m["ok"]:
+            g["i"] += 1
+            g["t0"], g["corr"], g["last_err"] = None, 0, None
+            if g["i"] >= len(g["stops"]):
+                self._ig = None
+            return None
+        err3 = float(np.linalg.norm(m["e"])) if "e" in m else None
+        # a servo that does not shrink the error (< 30 % per step) means the hand is held by contact (lid plate): stop pushing, abort
+        progress = g.get("last_err") is None or (err3 is not None and err3 < 0.7 * g["last_err"])
+        if m.get("fixable") and progress and g["corr"] < int(ic.get("gate_max_corr", 3)) and self._insert_correct(g, m):
+            g["corr"] += 1
+            g["last_err"] = err3
+            g["t0"] = t
+            self._note(t, f"insert gate {name}: servo correction {g['corr']} ({m['txt']})")
+            return self._insert_gate(obs, t)
+        why = m["txt"]
+        plan = g["plan"]
+        side = plan.side
+        sl = ArmKinematics.sl(side)
+        closed = self.hand_cmd.copy()
+        home = np.asarray(self.arm_cmd, float).copy()
+        home[sl] = self.home[sl]
+        if g["i"] >= 1 and g["retreat"] is not None:   # at the release height: the planned vertical retreat, then home, hand stays closed
+            r0, r1 = g["retreat"]
+            rows = plan.arm[r0:r1] + g["delta"]
+            a = np.vstack([rows, self.planner.go_to(rows[-1], closed, home, closed)[0]])
+        else:
+            a = self.planner.go_to(self.arm_cmd, closed, home, closed)[0]
+        h = np.repeat(closed[None], len(a), 0)
+        self._ig = self._rel = self._stall = self._exec = self._gdiag = None
+        self._rel_fail = True      # state -> done once the queue drains (no further pick, no release)
+        self._enqueue(a, h)
+        self._note(t, f"insert gate abort ({name}): {why}")
+        return self._pop()
+
+    def _insert_gate_failsafe(self, t, exc):
+        """insert.reach_gated: the gate itself raised -> abort for good: hand stays closed, arm goes home, no more picks."""
+        self.log(f"[insert_gate] t={t:.1f} gate error {exc!r}: abort, home")
+        g, self._ig = self._ig, None
+        self._rel = self._stall = self._exec = self._gdiag = None
+        self._rel_fail = True
+        try:
+            side = g["plan"].side
+            closed = self.hand_cmd.copy()
+            home = np.asarray(self.arm_cmd, float).copy()
+            home[ArmKinematics.sl(side)] = self.home[ArmKinematics.sl(side)]
+            a = self.planner.go_to(self.arm_cmd, closed, home, closed)[0]
+            self._enqueue(a, np.repeat(closed[None], len(a), 0))
+            return self._pop()
+        except Exception:
+            self.queue_a = self.queue_h = None
+            return self._hold()
+
+    def _insert_measure(self, obs, g):
+        """Gate reading: dict(ok, fixable, txt, e (measured - target grasp point, 3), pt_cmd). NEVER raises (exception = not ok)."""
+        try:
+            ic = self.cfg.get("insert") or {}
+            plan, ins = g["plan"], g["plan"].insert
+            aq = np.asarray(obs.get("arm_q"), float)
+            if aq.shape != (14,) or not np.all(np.isfinite(aq)):
+                return {"ok": False, "fixable": False, "txt": "no measured arm"}
+            kin = self.planner.kin
+            pt, axis = kin.grasp_pose(plan.side, aq)
+            tgt = np.asarray(ins["pts"][g["i"]], float).copy() if ins.get("pts") and ins["pts"][g["i"]] is not None else np.r_[ins["xy"], pt[2]]
+            tgt[:2] = ins["xy"]
+            e = np.asarray(pt, float) - tgt
+            xy_err = float(np.linalg.norm(e[:2]))
+            tilt = float(np.degrees(np.arccos(np.clip(axis @ np.array([0.0, 0.0, -1.0]), -1.0, 1.0))))
+            sl = ArmKinematics.sl(plan.side)
+            track = float(np.max(np.abs(aq[sl] - (np.asarray(self.arm_cmd, float)[sl] ))))
+            bottom = float(pt[2]) - float(self.cfg["grasp"]["height_frac"]) * self.planner.height
+            gap = bottom - float(ins["z_top"])
+            txt = f"xy {1000 * xy_err:.1f} mm z {1000 * e[2]:+.1f} mm tilt {tilt:.1f} deg track {track:.3f} rad gap {1000 * gap:.1f} mm"
+            out = {"ok": False, "fixable": False, "txt": txt, "e": e, "pt_cmd": np.asarray(kin.grasp_pose(plan.side, np.asarray(self.arm_cmd, float))[0], float)}
+            zmax = float(ic.get("gate_max_z_m", 0.004)) if g["i"] >= 1 else 4 * float(ic.get("gate_max_z_m", 0.004))
+            if tilt > float(ic.get("gate_max_tilt_deg", 6.0)):
+                out["txt"] = txt + " > tilt budget"; return out
+            zhi = float(ic.get("gate_max_z_hi_m", 0.0008)) if g["i"] >= 1 else zmax   # at the release a hand HIGHER than the target = held up by the lid edge
+            if not (xy_err <= float(ic.get("gate_max_xy_m", 0.0035)) and -zmax <= e[2] <= zhi):
+                out["txt"] = txt + " > position budget"
+                out["fixable"] = bool(xy_err < 0.03 and abs(e[2]) < 0.04)
+                return out
+            if g["i"] >= 1 and not (float(ins["gap"]) - 0.004 <= gap <= float(ic.get("release_gap_max_m", 0.015))):
+                out["txt"] = txt + " gap out of range"; return out
+            out["ok"] = True
+            return out
+        except Exception as ex:
+            return {"ok": False, "fixable": False, "txt": f"gate error {ex!r}"}
+
+    def _insert_correct(self, g, m):
+        """Servo step: shift the commanded grasp point by -e (measured error), re-solve the arm IK (same release heading hint),
+        add the joint delta to every remaining plan row through the retreat (faded out over the home move) and to the command.
+        True when applied; False (-> abort) if the IK does not converge or the shift is implausible."""
+        try:
+            plan, ins = g["plan"], g["plan"].insert
+            side, sl = plan.side, ArmKinematics.sl(plan.side)
+            kin = self.planner.kin
+            tgt = np.asarray(m["pt_cmd"], float) - np.asarray(m["e"], float)
+            saved = (kin.hint, kin.w_hint)
+            try:
+                if ins.get("hint") is not None:
+                    kin.hint, kin.w_hint = ins["hint"]
+                q, ok, perr, tilt = kin.solve(side, tgt, np.asarray(self.arm_cmd, float), top_down=True, restarts=False)
+            finally:
+                kin.hint, kin.w_hint = saved
+            ic = self.cfg.get("insert") or {}
+            if not ok or perr > float(ic.get("reach_max_pos_err_m", 0.002)) or tilt > np.radians(float(ic.get("max_tilt_deg", 8.0))):
+                return False
+            dq = np.zeros(14)
+            dq[sl] = q[sl] - np.asarray(self.arm_cmd, float)[sl]
+            if float(np.max(np.abs(dq))) > 0.15:
+                return False
+            n, done = g["n"], g["n"] - len(self.queue_a)
+            ph = {name: (s_, e_) for name, s_, e_ in plan.phases}
+            h0, h1 = ph.get("home", (n, n))
+            idx = np.arange(done, n)
+            w = np.where(idx < h0, 1.0, np.clip(1.0 - (idx - h0) / max(h1 - h0 - 1, 1), 0.0, 1.0))
+            self.queue_a = np.asarray(self.queue_a, float) + w[:, None] * dq[None, :]
+            g["delta"] = g["delta"] + dq
+            dt = 1.0 / HZ
+            K = int(np.ceil(float(np.max(np.abs(dq))) / (0.15 * dt))) + 2     # <= ~0.15 rad/s peak joint speed
+            g["ramp"] = {"from": np.asarray(self.arm_cmd, float).copy(), "dq": dq, "k": 0, "K": max(K, 4)}
+            return True
+        except Exception:
+            return False
 
     def _joint_offset_diag(self, obs, t):
         """debug.log_joint_offset (passive): cmd-minus-measured over the first second of steady holds, from the policy's
@@ -2261,6 +5170,7 @@ class ClassicalPolicy:
         """Build the action dict; keep its last command for debug.log_joint_offset only (flag off: nothing retained)."""
         out = {"arm_q_target": np.asarray(a, float).copy(), "hand_q_target": np.asarray(h, float).copy(),
                "done": bool(done)}
+        self._last_action_steady = bool(steady)
         if (self.cfg.get("debug") or {}).get("log_joint_offset", False):
             self._last_policy_arm_cmd = out["arm_q_target"][-1].copy()
             self._last_policy_hand_cmd = out["hand_q_target"][-1].copy()
@@ -2274,6 +5184,11 @@ class ClassicalPolicy:
         q = obs.get("hand_q")
         left = 0 if self.queue_a is None else len(self.queue_a)
         done = g["n"] - left
+        if (self.cfg.get("policy") or {}).get("descend_contact_guard", False) and self._contact_due(g, obs, done):
+            self._abort_empty_grasp(g, "descend-contact")
+            self._log_aborted_diag(g)
+            return
+        read_through = "carry" in g and self.held_detector.mode == "finger_sum"
         if q is not None:
             cmd = self._held_command()
             for key, at in (("close", g["close_end"]), ("lift", g["lift_end"])):
@@ -2282,12 +5197,76 @@ class ClassicalPolicy:
                     if key == "close" and not g.get("skill_only") \
                             and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
                         self._abort_empty_grasp(g)   # queue replaced; _act pops it on this same tick
+                        self._log_aborted_diag(g)
                         return
+                    if key == "lift" and (read_through or g.get("lift_check")) and not g.get("skill_only") \
+                            and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float),
+                                                     self._soft_margin("lift")):
+                        self._abort_empty_grasp(g, "post-lift")
+                        self._log_aborted_diag(g)
+                        return
+            if read_through:
+                carry_start, carry_end = g["carry"]
+                if carry_start < done <= carry_end:
+                    carry = g["samples"].setdefault("carry", [])
+                    if not carry or carry[-1][0] != done:
+                        carry.append((done, np.asarray(q, float).copy(), np.asarray(cmd, float).copy()))
+        if read_through and left > 0 and done < g["carry"][1]:
+            return
         need = ("close", "lift") if self.held_detector.mode == "finger_sum" else ("lift",)
         if any(key not in g["samples"] for key in need) and left > 0:
             return
         self._gdiag = None
         plan = g["plan"]
+        held, parts = self._diag_body(g)
+        self._ob_held(plan, held)
+        if held:
+            self._n_held_yes += 1
+        pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
+        if pend is not None and pend["color"] == plan.color:
+            pend["held"] = None if held is None else bool(held)
+            if pend["hist"] is not None:
+                pend["hist"]["held"] = pend["held"]
+        if not g.get("skill_only"):
+            self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
+                     f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
+
+    def _contact_due(self, g, obs, done):
+        """policy.descend_contact_guard (real only): during the DESCEND phase the measured grasp point stopped
+        (< contact_still_mm over two consecutive requests) while the commanded one is still contact_gap_mm or more
+        below it: the hand is resting on the table (wrong table height / object under the palm). Abort at once (open,
+        vertical lift, home) instead of pressing on for the rest of the descend + close + hold (video: ~8 s).
+        Never raises; unsure = False."""
+        try:
+            d = g.get("descend")
+            aq = obs.get("arm_q")
+            if g.get("skill_only") or d is None or aq is None or not (d[0] < done <= d[1]):
+                return False
+            pol = self.cfg["policy"]
+            side = g["plan"].side
+            zm = float(self.kin.grasp_pose(side, np.asarray(aq, float))[0][2])
+            zc = float(self.kin.grasp_pose(side, self.arm_cmd)[0][2])
+            hist = g["contact_hist"]
+            hist.append((float(obs.get("t", 0.0)), zm, zc))
+            if len(hist) < 3:
+                return False
+            (_, z0, _), (_, z1, zc1), (_, z2, zc2) = hist[-3], hist[-2], hist[-1]
+            still = float(pol.get("contact_still_mm", 3.0)) / 1000.0
+            gap = float(pol.get("contact_gap_mm", 25.0)) / 1000.0
+            if abs(z1 - z0) < still and abs(z2 - z1) < still and (z2 - zc2) >= gap and (z1 - zc1) >= gap:
+                self._contact_aborts += 1
+                self.log(f"[contact] t={float(obs.get('t', 0.0)):.1f} {g['plan'].color} {side}: hand stopped at z={z2:+.3f} m "
+                         f"({(z2 - zc2) * 1000:.0f} mm above the commanded {zc2:+.3f} m) during the descend: table contact, abort")
+                return True
+        except Exception as e:
+            self.log(f"[contact] guard error {type(e).__name__}: {e}; ignored")
+        return False
+
+    def _diag_body(self, g):
+        """Formats the [grasp_diag] fields for a watched pick: (headline held, field parts). Shared by the normal
+        line and the aborted line; reads only, so it never changes a command or the detector state."""
+        plan = g["plan"]
+        read_through = "carry" in g and self.held_detector.mode == "finger_sum"
         sl = ArmKinematics.sl(plan.side)
         closed = self.post[(plan.posture[0] if plan.posture else self.cfg["grasp"].get("close_posture", "closed"))][sl]
         parts = []
@@ -2298,7 +5277,10 @@ class ClassicalPolicy:
                 parts.append(f"{key}=n/a")
                 continue
             tick, hq, hc = g["samples"][key]
-            held, scores = self.held_detector.held(plan.side, hc, hq)
+            if self.held_detector.soft is not None:
+                held, scores = self.held_detector.held(plan.side, hc, hq, self._soft_margin(key))
+            else:
+                held, scores = self.held_detector.held(plan.side, hc, hq)
             if key == "close":
                 close_held = held
             if self.held_detector.mode == "stall":
@@ -2308,26 +5290,40 @@ class ClassicalPolicy:
             else:
                 parts.append(f"{key}@{tick}: finger_sum={scores['finger_sum']:.3f} "
                              f"index_sum={scores['index']:.3f} middle_sum={scores['middle']:.3f} "
-                             f"threshold={self.held_detector.threshold_rad:.3f} sample_held={'yes' if held else 'no'} "
+                             f"threshold={self._thr(key):.3f} sample_held={'yes' if held else 'no'} "
                              f"stall_vs_closed="
                              f"{np.round(closed - hq[sl], 3).tolist()} cmd_vs_closed={np.round(closed - hc[sl], 3).tolist()}")
         if self.held_detector.mode == "finger_sum" and close_held is not None:
             held = close_held       # headline is the post-wait close sample; lift stays separately labelled above
-        pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
-        if pend is not None and pend["color"] == plan.color:
-            pend["held"] = None if held is None else bool(held)
-            if pend["hist"] is not None:
-                pend["hist"]["held"] = pend["held"]
-        if not g.get("skill_only"):
+        if read_through:
+            post = ([g["samples"]["lift"]] if "lift" in g["samples"] else []) + list(g["samples"].get("carry", []))
+            if post:
+                held, scores = self.held_detector.held_max(plan.side, [(hc, hq) for _, hq, hc in post],
+                                                           self._soft_margin("lift"))
+                parts.append(f"carry_max@n={len(post)}: finger_sum={scores['finger_sum']:.3f} "
+                             f"threshold={self._thr('lift'):.3f} "
+                             f"sample_held={'yes' if held else 'no'}")
+        return held, parts
+
+    def _log_aborted_diag(self, g):
+        """policy.grasp_diag_log: an aborted pick still gets its [grasp_diag] line (same formatter, aborted=1).
+        Logging only; called after the abort has queued its recovery and never raises into the control path."""
+        if g.get("skill_only"):
+            return
+        try:
+            held, parts = self._diag_body(g)
+            plan = g["plan"]
             self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
-                     f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
+                     f"held={'n/a' if held is None else ('yes' if held else 'no')} aborted=1 " + " ".join(parts))
+        except Exception as exc:   # diagnostics only
+            self.log(f"[grasp_diag] aborted=1 format_error={type(exc).__name__}")
 
     def _settle_skill_attempt(self, dets, t):
         """The object still on the counter = that try failed; gone = it was held (or the release is judged later)."""
         if not self._skills_on() or self._skill_pending is None:
             return
         pending = self._skill_pending
-        radius = float(self.cfg["policy"].get("retry_assoc_radius", 0.06))
+        radius = self._assoc_radius()
         still = any(d.color == pending["color"] and np.linalg.norm(d.top[:2] - pending["xy"]) < radius for d in dets)
         if still:
             outcome = "dropped" if pending["held"] is True else "miss"
@@ -2383,8 +5379,21 @@ class ClassicalPolicy:
 
     def _pop(self):
         k = int(self.cfg["motion"]["chunk"])
+        if self._rel is not None and self._rel["phase"] == "wait":   # stop exactly at the end of the open hold
+            k = max(1, min(k, self._rel["open_end"] - (self._rel["n"] - len(self.queue_a))))
+        ig = getattr(self, "_ig", None)
+        if ig is not None and ig["i"] < len(ig["stops"]):   # insert.reach_gated: stop exactly at the gate tick
+            done = ig["n"] - len(self.queue_a)
+            if done < ig["stops"][ig["i"]] < done + k:
+                k = ig["stops"][ig["i"]] - done
         if self._stall is not None and self._in_hold():
             k = 1  # lift_on_stall: one tick per request inside the close hold, so every tick's hand_q is seen
+        if self._gdiag is not None and "carry" in self._gdiag:
+            done = self._gdiag["n"] - len(self.queue_a)
+            # Stop exactly at lift end so the post-lift measurement is read before any carry target is emitted.
+            for boundary in (self._gdiag["lift_end"], self._gdiag["carry"][1]):
+                if done < boundary < done + k:
+                    k = boundary - done
         a, h = self.queue_a[:k], self.queue_h[:k]
         self.queue_a, self.queue_h = self.queue_a[k:], self.queue_h[k:]
         if not len(a):

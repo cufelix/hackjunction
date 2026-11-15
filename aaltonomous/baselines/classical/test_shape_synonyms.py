@@ -6,7 +6,7 @@ Run: python -m unittest aaltonomous.baselines.classical.test_shape_synonyms -v
 import unittest
 
 from .instruction import resolve
-from .normalize import normalize
+from .normalize import normalize, strict_mapping
 
 
 class TestShapeSynonyms(unittest.TestCase):
@@ -14,6 +14,10 @@ class TestShapeSynonyms(unittest.TestCase):
         for s, want in cases.items():
             with self.subTest(sentence=s):
                 self.assertEqual(resolve(normalize(s), fallback={}), want, (s, normalize(s)))
+
+    def _strict(self, sentence):
+        text = normalize(sentence)
+        return text, strict_mapping(text, resolve(text, fallback={}))
 
     def test_cylinder_synonyms(self):
         self._check({
@@ -85,6 +89,49 @@ class TestShapeSynonyms(unittest.TestCase):
                 {"red": "left", "yellow": "center", "blue": "right"},
             "Yellow box gets the blue cubes; red cubes go right.": {("red", "cube"): "right"},
         })
+
+    def test_box_copular_bin_description_does_not_create_a_cube_key(self):
+        sentence = "The left one is the orange box, the middle one is yellow, the right one is purple."
+        text, mapping = self._strict(sentence)
+        self.assertEqual(text, sentence)
+        self.assertNotIn(("red", "cube"), mapping)
+        self.assertNotIn("red", mapping)
+        self.assertEqual(mapping, {"yellow": "center", "blue": "right"})
+
+    def test_box_bin_descriptions_both_orders_and_labels_abstain(self):
+        cases = (
+            "The orange box is the left one; yellow goes center.",
+            "The left one is the orange box; yellow goes center.",
+            "Box A is orange; yellow goes center.",
+            "The orange one is box A; yellow goes center.",
+        )
+        for sentence in cases:
+            with self.subTest(sentence=sentence):
+                text, mapping = self._strict(sentence)
+                self.assertNotIn("cube", text.lower())
+                self.assertNotEqual(mapping.get("red"), "left")
+
+    def test_ambiguous_shape_scene_language_abstains_only_that_key(self):
+        cases = (
+            "The red roof is above the left bin; put yellow cubes right.",
+            "The red rod points to the left bin; put yellow cubes right.",
+            "The red pipe is over the left bin; put yellow cubes right.",
+            "The red ridge is with the left bin; put yellow cubes right.",
+        )
+        for sentence in cases:
+            with self.subTest(sentence=sentence):
+                text, mapping = self._strict(sentence)
+                self.assertNotIn(("red", "triangle"), mapping)
+                self.assertNotIn(("red", "cylinder"), mapping)
+                self.assertIsNone(mapping.get("red"))
+                self.assertEqual(mapping.get(("yellow", "cube")), "right")
+                self.assertEqual(text.split()[2].lower(), sentence.split()[2].lower())
+
+    def test_leading_question_can_is_not_a_cylinder(self):
+        text, mapping = self._strict("Can red go left?")
+        self.assertEqual(text, "Can red go left?")
+        self.assertNotIn(("red", "cylinder"), mapping)
+        self.assertIsNone(mapping.get("red"))
 
 
 if __name__ == "__main__":

@@ -142,10 +142,10 @@ class TestPrincipalPointReset(unittest.TestCase):
         from .policy import ClassicalPolicy
         pol = ClassicalPolicy(log=None, overrides={"perception.principal_point": "center"})
         w = pol.cal.cams["head"].width
-        self.assertEqual(pol.perception.cal.cams["head"].K[0, 2], w / 2.0)
+        self.assertEqual(pol.perception.cal.cams["head"].K[0, 2], (w - 1) / 2.0)
         pol.reset()
-        self.assertEqual(pol.perception.cal.cams["head"].K[0, 2], w / 2.0)
-        self.assertEqual(pol.perception.cal.cams["head"].K[0, 2], 320.0)
+        self.assertEqual(pol.perception.cal.cams["head"].K[0, 2], (w - 1) / 2.0)
+        self.assertEqual(pol.perception.cal.cams["head"].K[0, 2], 319.5)
 
 
 class TestPolicyFlag(unittest.TestCase):

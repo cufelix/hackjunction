@@ -172,6 +172,43 @@ class TestLayer(unittest.TestCase):
         self.assertIsNone(L.take())
         self.assertEqual(L.req.status, "timeout")
 
+    def test_abstain_only_guard(self):
+        """Bug 1: brain may bin only objects the parser abstained on; every dropped override is logged."""
+        logs = []
+        known = {**WORLD, "objects": [{**WORLD["objects"][0], "resolver_bin": "left"},
+                                      {**WORLD["objects"][1], "resolver_bin": None}]}
+        # (1) different bin for a parser-mapped object -> ignored and logged
+        L = self.layer(Scripted({"choice": idx("pick_place", obj_id="o0", bin="right"), "confidence": 1.0}))
+        L.log = logs.append
+        L.request("after_look", known, STATE, self.CL, abstain=False)
+        L.wait(1.0)
+        self.assertIsNone(L.take())
+        self.assertTrue(any("[brain_guard] override dropped" in m for m in logs), logs)
+        # (2) bin for an abstained object -> used
+        L = self.layer(Scripted({"choice": idx("pick_place", obj_id="o1", bin="right"), "confidence": 0.9}))
+        L.request("after_look", known, STATE, self.CL, abstain=False)
+        L.wait(1.0)
+        self.assertEqual(L.take()["args"], {"obj_id": "o1", "bin": "right"})
+
+    def test_brain_not_asked_when_nothing_abstained(self):
+        class Count(PlannerBackend):
+            n = 0
+
+            def decide(self, rj):
+                Count.n += 1
+                return json.dumps({"choice": 0, "confidence": 1.0})
+
+        allknown = {**WORLD, "objects": [{**WORLD["objects"][0], "resolver_bin": "left"},
+                                         {**WORLD["objects"][1], "resolver_bin": "right"}]}
+        L = self.layer(Count())
+        L.request("after_look", allknown, STATE, self.CL, abstain=False)
+        L.prefetch("after_look", allknown, STATE, self.CL, None, False)
+        L.wait(0.2)
+        self.assertIsNone(L.take())
+        time.sleep(0.2)
+        self.assertEqual(Count.n, 0)
+        self.assertEqual(L.stats["no_abstain"], 1)
+
     def test_known_bin_cannot_be_overridden_but_unknown_object_can(self):
         known = {**WORLD, "objects": [{**WORLD["objects"][0], "resolver_bin": "left"},
                                       {**WORLD["objects"][1], "resolver_bin": None}]}
@@ -390,7 +427,7 @@ class TestPrefetch(unittest.TestCase):
                 "objects": [{"id": "o0", "color": "red", "shape": None, "shape_conf": 0, "xy": [x, 0.1],
                              "reachable": None, "near_bin": None, "resolver_bin": "left"},
                             {"id": "o1", "color": "blue", "shape": None, "shape_conf": 0, "xy": [0.2, -0.1],
-                             "reachable": None, "near_bin": None, "resolver_bin": "right"}]}
+                             "reachable": None, "near_bin": None, "resolver_bin": None}]}   # o1 abstained: the brain is asked
 
     def test_hit_uses_prefetched_answer_without_new_request(self):
         b = Counting()
@@ -425,8 +462,7 @@ OPEN_VOCAB = "The object farthest from the robot goes in the right bin."
 
 
 class TestResolverAbstain(unittest.TestCase):
-    """resolve() never abstains by itself (unparsed -> FIXED_MAPPING). The brain guard asks with fallback={}: {} = the
-    resolver has no answer, so the model may decide; the classical path keeps the plain resolve()."""
+    """The finalized parser mapping is shared by the classical planner and brain guard; None lets the model decide."""
     CL = {"tool": "pick_place", "args": {"obj_id": "o0", "bin": "left"}}     # the planner's FIXED default
     RIGHT = {"choice": idx("pick_place", obj_id="o0", bin="right"), "confidence": 0.99}
 
@@ -448,6 +484,7 @@ class TestResolverAbstain(unittest.TestCase):
         pol.mapping = dict(FIXED_MAPPING)
         mapping, source = pol._resolver_mapping({"task": "sort_fixed", "instruction": ""})
         self.assertEqual((mapping, source), (dict(FIXED_MAPPING), "fixed"))
+        pol.mapping = {"red": "right"}       # reset() finalizes an explicit mapping before building the brain guard
         mapping, source = pol._resolver_mapping({"instruction": OPEN_VOCAB, "mapping": {"red": "right"}})
         self.assertEqual((mapping, source), ({"red": "right"}, "explicit"))
 
@@ -482,7 +519,8 @@ class TestResolverAbstain(unittest.TestCase):
 
         env = make_mock_env(seed=0)
         pol = ClassicalPolicy(log=None, safety=env.filter.cfg, time_limit=120.0,
-                              overrides={"brain.enabled": True, "brain.debug_wait": True, "brain.prefetch": False})
+                              overrides={"brain.enabled": True, "brain.debug_wait": True, "brain.prefetch": False,
+                                         "instruction.resolve": True})
         pol.brain = BrainLayer(pol.cfg["brain"], backend=Right())
         obs = env.reset()
         pol.reset({"instruction": OPEN_VOCAB, "time_limit": 120.0})
@@ -547,7 +585,7 @@ class TestFind(unittest.TestCase):
         env = make_mock_env(seed=0)
         pol = ClassicalPolicy(log=None, safety=env.filter.cfg, time_limit=120.0,
                               overrides={"brain.enabled": True, "brain.debug_wait": True, "brain.prefetch": False,
-                                         "brain.find": True})
+                                         "brain.find": True, "instruction.resolve": True})
         pol.brain = BrainLayer(pol.cfg["brain"], backend=FindThenRight())
         calls = []
         pol._brain_find_fn = lambda rgb, q: (calls.append(q), [pol.last_detections[-1].uv if pol.last_detections else (0, 0)])[1]

@@ -1,6 +1,7 @@
 """Feature flags + the submission overlay (integration branch). Run:
     python -m unittest aaltonomous.baselines.classical.test_flags -v
 """
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,13 @@ from .config import BAKED_OVERLAY, FLAGS, OVERLAY_DIR, STOCK, _get, effective_fl
 
 
 class TestFlags(unittest.TestCase):
+    def test_no_finals_overlay_uses_center_principal_point(self):
+        """finals overlays must keep the file principal point; the sim centre is perception.sim_center_principal_point only."""
+        import glob
+        offenders = [p for p in glob.glob(str(OVERLAY_DIR / "finals_*.yaml"))
+                     if re.search(r"principal_point:\s*center\b", Path(p).read_text())]
+        self.assertEqual(offenders, [])
+
     def test_every_flag_defaults_off(self):
         cfg = load_config(overlay="none")
         for k, (_, off, _) in FLAGS.items():
@@ -22,6 +30,76 @@ class TestFlags(unittest.TestCase):
         cfg = load_config(overlay="none")
         self.assertFalse(cfg["skills"]["memory"])
         self.assertIsNone(cfg["skills"]["memory_path"])   # unset: in-memory, no /tmp file
+
+    def test_h7_m3_flags_default_off(self):
+        cfg = load_config(overlay="none")
+        self.assertFalse(cfg["policy"]["generation_workers"])
+        self.assertFalse(cfg["grasp"]["held_calibration"]["enabled"])
+
+    def test_calibration_and_empty_recovery_remain_existing_opt_ins(self):
+        """C5/H6, H3, and C4 fixes must not change the flags-off policy."""
+        stock = load_config(overlay="none")
+        finals = load_config(overlay="finals_r21")
+        self.assertIn("calib.plane.apply_height", FLAGS)
+        self.assertIn("perception.online_pitch_cal", FLAGS)
+        self.assertIn("grasp.held_detector", FLAGS)
+        self.assertFalse(stock["calib"]["plane"]["apply_height"])
+        self.assertFalse(stock["perception"]["online_pitch_cal"])
+        self.assertEqual(stock["grasp"]["held_detector"], "stall")
+        self.assertTrue(finals["calib"]["plane"]["apply_height"])
+        self.assertEqual(finals["perception"]["online_pitch_cal"], "table")
+        self.assertEqual(finals["grasp"]["held_detector"], "finger_sum")
+
+    def test_depth_blob_recover_flag_defaults_off(self):
+        cfg = load_config(overlay="none")
+        self.assertFalse(cfg["perception"]["depth_blob_recover"])
+        self.assertIn("perception.depth_blob_recover", FLAGS)
+        self.assertFalse(load_config(overlay="submission")["perception"]["depth_blob_recover"])
+
+    def test_finals_r22_auto_is_r22_plus_only_the_auto_profile_flag(self):
+        base = load_config(overlay="finals_r22")
+        got = load_config(overlay="finals_r22_auto")
+        base["overlay"] = "finals_r22_auto"
+        base["profile_auto"]["auto_detect"] = True
+        self.assertEqual(got, base)
+        self.assertEqual({k for k, _, on, _, _ in effective_flags(got) if on}
+                         - {k for k, _, on, _, _ in effective_flags(load_config(overlay="finals_r22")) if on},
+                         {"profile_auto.auto_detect"})
+
+    def test_finals_r22_enables_only_the_grasp_reliability_flags_over_r22(self):
+        base = load_config(overlay="finals_r22")
+        got = load_config(overlay="finals_r22_grasp")
+        base["overlay"] = "finals_r22_grasp"
+        base["grasp"]["staggered_release"] = True
+        base["policy"]["retry_jitter_m"] = 0.004
+        base["perception"]["assoc_radius_m"] = 0.10
+        base["held"]["read_through_carry"] = True
+        self.assertEqual(got, base)
+
+    def test_finals_r22_softgrip_adds_only_the_three_soft_flags_over_r22(self):
+        base = load_config(overlay="finals_r22")
+        got = load_config(overlay="finals_r22_softgrip")
+        base["overlay"] = "finals_r22_softgrip"
+        base["grasp"]["soft_hand"] = base["grasp"]["soft_squeeze"] = True
+        base["held"]["soft_detector"] = True
+        self.assertEqual(got, base)
+
+    def test_no_finals_overlay_combines_cage_mode_with_softgrip(self):
+        names = sorted(f.stem for f in OVERLAY_DIR.glob("finals_r2[23]*.yaml"))
+        self.assertTrue(names)
+        for name in names:
+            cfg = load_config(overlay=name)
+            both = cfg["grasp"]["cage_mode"] and cfg["grasp"]["soft_squeeze"]
+            self.assertFalse(both, f"{name}: grasp.cage_mode and grasp.soft_squeeze are both ON")
+
+    def test_soft_flags_default_off_and_need_finger_sum(self):
+        cfg = load_config(overlay="none")
+        self.assertEqual((cfg["grasp"]["soft_squeeze"], cfg["grasp"]["soft_hand"], cfg["held"]["soft_detector"]),
+                         (False, False, False))
+        with self.assertRaises(ValueError):
+            load_config(overlay="none", overrides={"held.soft_detector": True})
+        with self.assertRaises(ValueError):
+            load_config(overlay="none", overrides={"grasp.soft_overshoot": [0, 0, 0, 3.0, 0, 0, 0]})
 
     def test_no_baked_overlay_in_the_repo(self):
         self.assertFalse(BAKED_OVERLAY.exists(), "overlay.yaml is only created inside the submission image")
@@ -48,13 +126,24 @@ class TestFlags(unittest.TestCase):
                        ("grasp", "posture_apex_gate")):                     # final = cand_r14 (r14: 32/38, 28/36)
             sub[sec][k] = stock[sec][k]
         self.assertEqual(sub, stock)
-        self.assertEqual(set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"]), set(FLAGS))
+        # The frozen submission is unchanged; only the newly registered, default-off overrides may be absent.
+        sub_keys = set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"])
+        self.assertEqual(set(FLAGS) - sub_keys, {"motion.arm_tau_ff", "motion.sag_comp", "motion.output_hold_on_late", "policy.chunk_ticks", "policy.hold_ticks",
+                                                  "policy.retry_cross_relocate", "policy.late_sweep",
+                                                  "policy.frozen_rgb_guard",
+                                                  "perception.prism_speckle_floor", "perception.real_border_partial",
+                                                  "perception.real_merge_split", "perception.bin_bottom_first_run", "perception.fk_colour_rescue", "grasp.approach_slow_mps", "grasp.approach_slow_dist_m",
+                                                  "policy.retry_repeat_ok", "policy.late_regrant", "profile_auto.force", "profile_auto.second_cue",
+                                                  "brain.known_task_hard_off", "planner.candidate_budget",
+                                                  "perception.table_pitch_calibration.max_abs_pitch_deg",
+                                                  "policy.zero_det_relook", "policy.startup_overlap",
+                                                  "policy.descend_contact_guard", "perception.look_summary", "policy.contact_start_unblock", "calib.plane.robust_height", "perception.plan_frame", "calib.plane.robust_agree_m", "perception.height_range", "bin.fallback_centre_x", "bin.fallback_drop_z", "bin.reach_x_max", "bin.reach_drop_z", "planner.budget_escalate"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):
             return {k for k, _, is_on, _, _ in effective_flags(load_config(overlay=name)) if is_on}
         self.assertEqual(on("ab_safety"), on("cand_r17") | {"policy.safety_shell"})
-        self.assertNotIn("policy.safety_shell", on("submission"))
+        self.assertNotIn("policy.safety_shell", on("cand_r17"))
         self.assertEqual(load_config(overlay="ab_safety")["policy"]["safety_shell_vel_reserve"], 0.0)
 
     def test_overlay_flips_only_its_flags(self):
@@ -101,10 +190,12 @@ class TestFlags(unittest.TestCase):
                                      "policy.max_corrections_per_episode"},
                   "ab_realcolour": {"instruction.resolve", "policy.bin_lookup", "grasp.point_in_palm",
                                     "grasp.close_posture", "hand.closed_tight", "motion.close_hold_s",
-                                    "perception.hsv_set", "perception.split_blobs"}}
-        r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="submission")) if is_on}
-        expect["ab_retry_vary"] = r14 | {"policy.retry_vary_grasp", "policy.max_attempts_vary",
-                                            "policy.max_total_attempts"}
+                                    "perception.hsv_set", "perception.split_blobs"},
+                  "ab_langzip": {"instruction.resolve", "instruction.normalize", "instruction.strict",
+                                 "instruction.structured", "instruction.max_chars", "policy.bin_lookup"}}
+        r14 = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r14")) if is_on}
+        expect["ab_retry_vary"] = r14 | {"policy.insert_guard", "policy.retry_vary_grasp",
+                                         "policy.max_attempts_vary", "policy.max_total_attempts"}
         expect["ab_retry_vary_slots"] = expect["ab_retry_vary"] | {"grasp.drop_slots"}
         nopp = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="cand_r17")) if is_on}
         expect["ab_shape2d"] = nopp | {"perception.shape_2d_v2"}
@@ -113,6 +204,7 @@ class TestFlags(unittest.TestCase):
         expect["ab_object_time_budget_s"] = nopp | {"policy.object_time_budget_s"}
         expect["ab_colour_kmeans"] = nopp | {"perception.colour_kmeans"}
         expect["ab_cgate"] = nopp | {"perception.color_gate.enabled"}
+        expect["ab_neutral_obstacles"] = nopp | {"perception.neutral_obstacles"}
         expect["ab_sat_floor"] = nopp | {"perception.color_gate.enabled", "perception.color_gate.sat_floor"}
         expect["ab_plane_cgate"] = nopp | {"perception.color_gate.enabled", "perception.online_pitch_cal"}
         expect["ab_cgate_fk"] = nopp | {"perception.color_gate.enabled", "perception.color_gate.fk_mask"}
@@ -139,15 +231,66 @@ class TestFlags(unittest.TestCase):
         expect["ab_fk_xcheck"] = nopp | {"calib.fk_xcheck"}   # rebased on cand_r17: log-only B2 arm
         expect["ab_cylinder"] = nopp | {"grasp.cylinder_no_yaw_vary"}   # cand_r17 + the cylinder yaw flag
         expect["cand_r18"] = expect["ab_plane_cgate_live_fk"] | {"motion.arm_vel_cap"}   # candidate, not ON
-        expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize"}   # finals candidate
+        expect["finals_r18"] = expect["cand_r18"] | {"instruction.normalize", "grasp.release_wait_s", "grasp.release_confirm"}   # finals candidate + lag R44/R49
         expect["finals_r19"] = expect["finals_r18"] | {"perception.hue_guard.enabled", "instruction.max_chars", "safety.nan_guard",
                                                         "instruction.strict"}   # r18 + hue + fuzz + strict
         expect["finals_r19b"] = expect["finals_r19"] | {"policy.safety_shell", "perception.color_gate.sat_floor"}   # P0 Hz
-        expect["finals_r19c"] = (expect["finals_r19"] | {"policy.safety_shell"}) - {"perception.online_pitch_cal", "perception.color_gate.enabled",
+        expect["finals_r19c"] = (expect["finals_r19"] | {"policy.safety_shell", "grasp.drop_slot_grid"}) - {"perception.online_pitch_cal", "perception.color_gate.enabled",
                                                                               "perception.color_gate.live_bins", "perception.color_gate.fk_mask"}
         expect["finals_r20"] = expect["finals_r19b"] | {"bin.geometry_runtime", "grasp.held_detector",
-                                                          "calib.plane.apply_height"}
-        expect["finals_r21"] = expect["finals_r20"]   # R29: same flags, rc6 code
+                                                          "calib.plane.apply_height", "grasp.drop_slot_grid"}
+        expect["finals_r21"] = expect["finals_r20"] | {"perception.color_gate.fk_dilate_px",
+                                                         "perception.color_gate.near_margin_m",
+                                                         "policy.generation_workers", "grasp.held_calibration.enabled",
+                                                         "motion.output_caps"}   # R29 + fixfk + H7/M3 + M4
+        expect["finals_r22"] = (expect["finals_r21"] | {"bin.vote.enabled", "bin.vote.signed_rim_fit", "bin.vote.async_extract",
+                                                       "bin.vote.frame_transform_snapshot", "instruction.multilingual"}) \
+            - {"perception.hue_guard.enabled", "policy.safety_shell"}   # r22: fixvote ON, bisect rc1->r19c
+        expect["finals_r22_recall"] = expect["finals_r22"] | {
+            "perception.sat_floor_adaptive", "perception.area_floor_geometric", "perception.topface_mode",
+            "perception.partial_ok_near_hand", "perception.relook_before_done"}   # recall A/B on top of r22
+        expect["finals_r22_cal"] = expect["finals_r22"] | {"calib.hand_icp_primary", "calib.counter_after_hand",
+                                                       "calib.refit_per_look", "perception.sim_center_principal_point"}   # handcal A/B (file principal point, sim centre only)
+        expect["finals_r22_grasp"] = expect["finals_r22"] | {"perception.assoc_radius_m", "policy.retry_jitter_m",
+                                                         "grasp.staggered_release", "held.read_through_carry"}   # release A/B
+        expect["finals_r22_gate"] = expect["finals_r22"] | {
+            "perception.reject_log", "perception.gate_below_bins", "perception.tape_value_cut",
+            "perception.split_by_solidity", "perception.color_gate.sat_floor_params.blue",
+            "perception.color_gate.fk_silhouette", "perception.sim_center_principal_point", "perception.aim_z_frac",
+            "perception.still_vote"}   # gatefix A/B
+        expect["finals_r22_chunk"] = expect["finals_r22"] | {"policy.chunk_ticks", "policy.hold_ticks"}   # handin rate A/B
+        expect["finals_r22_novel"] = expect["finals_r22"] | {
+            "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles"}   # novel R22 on r22
+        expect["finals_r22_verify"] = expect["finals_r22"] | {"policy.verify_landing"}   # r22: + the landing verifier
+        expect["finals_r22_cage"] = expect["finals_r22"] | {"grasp.cage_mode", "grasp.tri_vertex_align"}   # cage A/B
+        expect["finals_r22_order"] = expect["finals_r22"] | {"policy.score_order"}   # EV/s pick order A/B
+        expect["finals_r22_done"] = expect["finals_r22"] | {
+            "policy.done_confirm", "perception.look_timeout_s", "planner.per_target_guard"}   # done hardening A/B
+        expect["finals_r22_langzip"] = expect["finals_r22"] | {
+            "instruction.structured", "instruction.hazard_guard"}   # langzip + conservative parser hazards A/B
+        expect["finals_r22_counter"] = expect["finals_r22"] | {"calib.wide_counter_window", "planner.bin_wall_extra_m"}   # counter-z A/B
+        expect["finals_r22_coloralias"] = expect["finals_r22"] | {"instruction.venue_colour_aliases"}   # T10 colour aliases A/B
+        expect["finals_r22_lyingprism"] = expect["finals_r22"] | {"perception.prism_orientation", "grasp.lying_prism"}   # prism A/B
+        expect["finals_r22_brain"] = expect["finals_r22"] | {"brain.enabled", "brain.backend", "brain.timeout_s", "brain.request_timeout_s",
+                                                           "brain.image_max_side_px", "brain.find_n_predict"}   # brain R22 at 1.0 s deadlines
+        expect["finals_r22_lyingarm"] = expect["finals_r22_lyingprism"] | {"grasp.lying_prism_arm_by_reach"}   # T6 arm by reach A/B
+        expect["finals_r22_softgrip"] = expect["finals_r22"] | {"grasp.soft_hand", "grasp.soft_squeeze",
+                                                                 "held.soft_detector"}   # softgrip A/B: r22 + its 3 flags
+        expect["finals_r22_failopen"] = expect["finals_r22"] | {"perception.color_gate.workspace_fail_open",
+                                                              "perception.hue_guard.yellow_fix"}   # gate-failopen recall A/B
+        expect["finals_r22_rimz"] = expect["finals_r22"] | {"perception.rim_z_from_depth"}   # rim z A/B
+        expect["finals_r22_agent"] = expect["finals_r22"] | {"brain.enabled", "brain.backend", "brain.planner", "brain.find",
+                                                           "brain.find_to_detection", "brain.closed_loop", "brain.timeout_s", "brain.request_timeout_s",
+                                                           "brain.image_max_side_px", "brain.find_n_predict"}
+        expect["finals_r22_neutral"] = expect["finals_r22"] | {"perception.neutral_obstacles"}   # Oliver neutral A/B
+        expect["finals_r22_bins"] = expect["finals_r22"] | {"perception.bins_from_image"}   # rim-mask A/B
+        expect["finals_r23_candidate"] = expect["finals_r22"] | {"perception.gate_below_bins", "instruction.structured", "instruction.hazard_guard"}   # r23 candidate: r22 + gate_below_bins + structured + hazard_guard
+        expect["finals_r23_universal"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="finals_r23")) if is_on} | {
+            "perception.novel.max_area_px", "grasp.novel_near_rim_retry", "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles",
+            "brain.enabled", "brain.backend", "brain.planner", "brain.find", "brain.find_to_detection",
+            "brain.closed_loop", "brain.image_max_side_px", "brain.find_n_predict", "brain.ev_gate",
+            "brain.grounded_picks", "brain.call_timeout_s", "brain.plan_timeout_s",
+            "grasp.novel_near_rim_retry", "perception.novel.fp_filter"}   # UNIVERSAL.md (SHA2 additions)
         expect["rc1_strict"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="rc1")) if is_on} \
             | {"instruction.strict"}   # rc1 + the strict flag and nothing else
         inj = {"perception.inject_cam_error"}
@@ -155,8 +298,22 @@ class TestFlags(unittest.TestCase):
         expect["ab_plane_inj_p7"] = nopp | inj | {"perception.online_pitch_cal"}
         expect["ab_plane_b1_inj_p7"] = nopp | inj | {"perception.online_pitch_cal", "perception.hand_calibration.enabled"}
         expect["ab_b1_inj_p7"] = nopp | inj | {"perception.hand_calibration.enabled"}
-        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21"):
+        expect["finals_r22_bare"] = expect["finals_r22"] | {"perception.glare_reject.enabled",
+                                                             "perception.reflection_reject.enabled", "perception.local_bg.enabled"}   # bare-table A/B
+        for n in ("finals_r18", "finals_r19", "finals_r19b", "finals_r19c", "finals_r20", "finals_r21", "finals_r22",
+                  "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk",
+                  "finals_r22_novel", "finals_r22_verify", "finals_r22_cage", "finals_r22_order", "finals_r22_done",
+                  "finals_r22_langzip", "finals_r22_counter", "finals_r22_bare", "finals_r22_coloralias",
+                  "finals_r22_lyingprism", "finals_r22_lyingarm", "finals_r22_softgrip", "finals_r22_failopen", "finals_r22_rimz",
+                  "finals_r22_brain", "finals_r22_agent", "finals_r22_neutral", "finals_r22_bins", "finals_r23_candidate", "finals_r23_universal"):
             expect[n] = expect[n] | {"policy.fixed_mapping"}   # real-robot fixed fallback
+        for n in ("finals_r20", "finals_r21", "finals_r22", "finals_r22_recall", "finals_r22_cal", "finals_r22_grasp", "finals_r22_gate", "finals_r22_chunk", "finals_r22_cage", "finals_r22_novel", "finals_r22_verify", "finals_r22_counter", "finals_r22_coloralias",
+                  "finals_r22_order", "finals_r22_done", "finals_r22_softgrip", "finals_r22_langzip", "finals_r22_bare", "finals_r22_lyingprism",
+                  "finals_r22_lyingarm", "finals_r22_failopen", "finals_r22_rimz",
+                  "finals_r22_brain", "finals_r22_agent", "finals_r22_neutral", "finals_r22_bins", "finals_r23_candidate", "finals_r23_universal"):   # only where apply_height measures depth; r18-r19c/real would apply the prior even WITH depth
+            expect[n] = expect[n] | {"scene.counter_z_prior"}
+        for n in [k for k in expect if k.startswith("finals_")]:
+            expect[n] = expect[n] | {"hand.mirror_index_middle"}   # R42a
         for name, keys in expect.items():
             keys = keys | {"policy.grasp_diag_log"}     # passive diagnostics ride along in every A/B arm
             cfg = load_config(overlay=name)
@@ -180,6 +337,9 @@ class TestFlags(unittest.TestCase):
         sim["overlay"] = real["overlay"]
         sim["perception"]["principal_point"] = "file"
         sim["policy"]["fixed_mapping"] = real["policy"]["fixed_mapping"]   # organisers P0
+        self.assertTrue(real["hand"]["mirror_index_middle"])
+        sim["hand"]["mirror_index_middle"] = True                          # R42a
+        sim["grasp"].update(release_wait_s=0.5, release_confirm=True)   # lag R44/R49 (finals only)
         self.assertEqual(real, sim)
 
         calibration = Calibration.load()
@@ -187,39 +347,118 @@ class TestFlags(unittest.TestCase):
         np.testing.assert_array_equal(perception.cal.cams[perception.cam].K,
                                       calibration.cams[perception.cam].K)
 
+    def test_finals_r22_cal_is_r22_plus_calibration_and_sim_principal_point(self):
+        r21, r22 = load_config(overlay="finals_r22"), load_config(overlay="finals_r22_cal")
+        self.assertEqual(r22["profile"], "sim")
+        self.assertEqual(r22["perception"]["principal_point"], "file")
+        self.assertTrue(r22["perception"]["sim_center_principal_point"])
+        for key in ("hand_icp_primary", "counter_after_hand", "refit_per_look"):
+            self.assertTrue(r22["calib"][key])
+            r22["calib"][key] = r21["calib"][key]
+        r22["perception"]["principal_point"] = r21["perception"]["principal_point"]
+        r22["perception"]["sim_center_principal_point"] = r21["perception"]["sim_center_principal_point"]
+        r22["overlay"] = r21["overlay"]
+        self.assertEqual(r22, r21)
+
     def test_every_retry_vary_overlay_has_the_global_safety_cap(self):
         retry = {f.stem: load_config(overlay=str(f)) for f in OVERLAY_DIR.glob("*.yaml")
                  if load_config(overlay=str(f))["policy"]["retry_vary_grasp"]}
-        self.assertEqual(set(retry), {"ab_apply_height", "ab_b1_inj_p7", "ab_bingeo", "ab_binvote",
+        self.assertEqual(set(retry) - {"ab_grasp_xrel", "ab_grasp_sweep", "ab_grasp_both", "ab_lang_repeat", "ab_lang_regrant", "ab_lang_both"}, {"ab_apply_height", "ab_b1_inj_p7", "ab_bingeo", "ab_binvote",
                                       "ab_cgate", "ab_cgate_fk", "ab_cgate_live",
                                       "ab_colour_kmeans", "ab_cylinder", "ab_decision",
                                       "ab_drop_height_extra_m", "ab_drop_lateral_margin_m",
-                                      "ab_first_object_speed_scale", "ab_fk_xcheck",
+                                      "ab_first_object_speed_scale", "ab_fk_xcheck", "ab_frozen_rgb",
                                       "ab_generic_fallback", "ab_hand_calib", "ab_held_detector",
                                       "ab_hue_guard", "ab_hue_v2", "ab_inj_p4", "ab_inj_p7",
-                                      "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_isolated_first",
-                                      "ab_log_joint_offset", "ab_object_time_budget_s",
-                                      "ab_place_gate", "ab_plane_b1_inj_p7", "ab_plane_cgate",
-                                      "ab_plane_cgate_live", "ab_plane_cgate_live_fk",
-                                      "ab_plane_cgate_live_vote", "ab_plane_inj_p7",
-                                      "ab_retry_vary", "ab_retry_vary_slots", "ab_robust_input",
-                                      "ab_safety", "ab_sat_floor", "ab_shape2d", "ab_skills",
-                                      "ab_vel80", "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
+                                      "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_insert", "ab_insert_pg", "ab_isolated_first",
+                                      "ab_lh_face", "ab_lh_face_both", "ab_lh_face_y",
+                                      "ab_lh_retryxy", "ab_lh_retryxy2", "ab_lh_z_m10", "ab_lh_z_m20", "ab_lh_z_p10", "ab_lh_z_p20",
+                                      "ab_log_joint_offset", "ab_neutral_obstacles",
+                                      "ab_obias", "ab_obias_retry", "ab_obias_wrong", "ab_object_time_budget_s", "ab_place_gate",
+                                      "ab_plane_b1_inj_p7", "ab_plane_cgate", "ab_plane_cgate_live",
+                                      "ab_plane_cgate_live_fk", "ab_plane_cgate_live_vote",
+                                      "ab_plane_inj_p7", "ab_planner", "ab_retry_vary",
+                                      "ab_retry_vary_slots", "ab_robust_input", "ab_safety",
+                                      "ab_sat_floor", "ab_shape2d", "ab_skills", "ab_vel80",
+                                      "ab_vel85", "ab_vel90", "brain_llm", "cand_r16",
                                       "cand_r16_nopp", "cand_r17", "cand_r18", "finals_r18",
                                       "finals_r19", "finals_r19b", "finals_r19c", "finals_r20",
-                                      "finals_r21", "finals_real", "rc1", "rc1_strict",
-                                      "safe_profile"})
+                                      "finals_r21", "finals_r22", "finals_r22_agent",
+                                      "finals_r22_auto", "finals_r22_bare", "finals_r22_bins",
+                                      "finals_r22_brain", "finals_r22_cage", "finals_r22_cal",
+                                      "finals_r22_chunk", "finals_r22_coloralias",
+                                      "finals_r22_counter", "finals_r22_done",
+                                      "finals_r22_failopen", "finals_r22_gate", "finals_r22_grasp",
+                                      "finals_r22_langzip", "finals_r22_lyingarm",
+                                      "finals_r22_lyingprism", "finals_r22_neutral",
+                                      "finals_r22_novel", "finals_r22_order", "finals_r22_recall",
+                                      "finals_r22_rimz", "finals_r22_softgrip", "finals_r22_verify",
+                                      "finals_r23", "finals_r23_candidate", "finals_r23_realperc", "finals_r23_realperc3",
+                                      "finals_r23_universal", "finals_r24", "finals_r24_classic", "finals_r25", "finals_r26_gen", "finals_r25_face", "finals_r25_gen", "finals_r25_obias", "finals_r25_xy",
+                                      "finals_real", "rc1", "rc1_strict", "safe_profile"})
         self.assertTrue(all(cfg["policy"]["max_total_attempts"] == 18 for n, cfg in retry.items()
                             if n != "cand_r16_nopp"))   # cand_r16_nopp = HISTORICAL, pre-fix (None)
 
     def test_instruction_normalize_flag_is_off_by_default_and_rc1_adds_only_it(self):
         self.assertFalse(load_config(overlay="none")["instruction"]["normalize"])
+        self.assertFalse(load_config(overlay="none")["instruction"]["multilingual"])
+        self.assertFalse(load_config(overlay="submission")["instruction"]["multilingual"])
+        description = FLAGS["instruction.multilingual"][2]
+        for language in ("FI", "CS", "DE", "SV", "ES", "FR", "IT", "PL", "PT", "UK", "RU", "SK"):
+            self.assertIn(language, description)
         self.assertFalse(load_config(overlay="cand_r17")["instruction"]["normalize"])
         base = load_config(overlay="cand_r17")
         rc1 = load_config(overlay="rc1")
         self.assertTrue(rc1["instruction"]["normalize"])
         base["overlay"], base["instruction"]["normalize"] = "rc1", True
         self.assertEqual(rc1, base)
+
+    def test_recall_flags_default_off_and_r22_adds_exactly_them(self):
+        keys = {"perception.sat_floor_adaptive", "perception.area_floor_geometric",
+                "perception.topface_mode", "perception.partial_ok_near_hand",
+                "perception.relook_before_done"}
+        stock = load_config(overlay="none")
+        self.assertFalse(stock["perception"]["sat_floor_adaptive"])
+        self.assertFalse(stock["perception"]["area_floor_geometric"])
+        self.assertEqual(stock["perception"]["topface_mode"], "top35")
+        self.assertFalse(stock["perception"]["partial_ok_near_hand"])
+        self.assertFalse(stock["perception"]["relook_before_done"])
+        base_on = {k for k, _, on, _, _ in effective_flags(load_config(overlay="finals_r22")) if on}
+        r22 = {k for k, _, on, _, _ in effective_flags(load_config(overlay="finals_r22_recall")) if on}
+        self.assertEqual(r22, base_on | keys)
+        base = load_config(overlay="finals_r22")
+        recall = load_config(overlay="finals_r22_recall")
+        base.pop("overlay")
+        recall.pop("overlay")
+        for key, off in (("sat_floor_adaptive", False), ("area_floor_geometric", False),
+                         ("topface_mode", "top35"), ("partial_ok_near_hand", False),
+                         ("relook_before_done", False)):
+            recall["perception"][key] = off
+        self.assertEqual(recall, base)
+    def test_done_hardening_defaults_off_and_r22_adds_only_three_flags(self):
+        stock = load_config(overlay="none")
+        self.assertFalse(stock["policy"]["done_confirm"])
+        self.assertIsNone(stock["perception"]["look_timeout_s"])
+        self.assertFalse(stock["planner"]["per_target_guard"])
+        self.assertEqual(stock["policy"]["done_confirm_looks"], 2)
+        self.assertEqual(stock["policy"]["done_confirm_span_s"], 10.0)
+
+        old, new = load_config(overlay="finals_r22"), load_config(overlay="finals_r22_done")
+        old["overlay"] = new["overlay"]
+        old["policy"]["done_confirm"] = True
+        old["perception"]["look_timeout_s"] = 5.0
+        old["planner"]["per_target_guard"] = True
+        self.assertEqual(new, old)
+
+    def test_finals_r22_cage_is_r22_plus_only_the_two_cage_flags(self):
+        r22 = load_config(overlay="finals_r22")
+        cage = load_config(overlay="finals_r22_cage")
+        self.assertEqual((r22.pop("overlay"), cage.pop("overlay")), ("finals_r22", "finals_r22_cage"))
+        self.assertFalse(r22["grasp"]["cage_mode"])
+        self.assertFalse(r22["grasp"]["tri_vertex_align"])
+        cage["grasp"]["cage_mode"] = False
+        cage["grasp"]["tri_vertex_align"] = False
+        self.assertEqual(cage, r22)
 
     def test_cand_r17_differs_from_historical_r16_nopp_only_in_max_total_attempts(self):
         r16, r17 = load_config(overlay="cand_r16_nopp"), load_config(overlay="cand_r17")
@@ -274,6 +513,29 @@ class TestFlags(unittest.TestCase):
             expected[section][key] = value
             self.assertEqual(load_config(overlay=overlay), expected, overlay)
 
+    def test_ab_planner_is_brain_llm_plus_the_planner_flag(self):
+        base = load_config(overlay="brain_llm")
+        planner = load_config(overlay="ab_planner")
+        self.assertFalse(base["brain"]["planner"])
+        base["brain"]["planner"] = True
+        base["overlay"] = "ab_planner"
+        self.assertEqual(planner, base)
+
+    def test_agent_flags_registered_and_finals_r22_agent_is_r22_plus_the_brain(self):
+        for k in ("brain.find_to_detection", "brain.closed_loop", "brain.timeout_s", "brain.request_timeout_s"):
+            self.assertIn(k, FLAGS)
+        base = load_config(overlay="finals_r22")
+        agent = load_config(overlay="finals_r22_agent")
+        self.assertEqual(agent["brain"]["url"], "http://127.0.0.1:8080/completion")   # one container: loopback
+        for k in ("enabled", "planner", "find", "find_to_detection", "closed_loop"):
+            self.assertTrue(agent["brain"][k], k)
+            base["brain"][k] = True
+        base["brain"]["backend"] = "llamacpp"
+        base["brain"]["timeout_s"] = base["brain"]["request_timeout_s"] = 1.0
+        base["brain"]["image_max_side_px"], base["brain"]["find_n_predict"] = 448, 128   # BRAINSPEED.md
+        base["overlay"] = "finals_r22_agent"
+        self.assertEqual(agent, base)
+
     def test_every_overlay_loads_and_its_postures_are_in_urdf_limits(self):
         from .config import hand_postures, home_arm
         from .kinematics import ArmKinematics
@@ -315,7 +577,8 @@ class TestFlags(unittest.TestCase):
         """Overlays can never make anything faster than the stock sim profile."""
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
                           ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
-                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap")])   # arm_vel_cap: min() only
+                           "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap",
+                           "motion.output_caps", "motion.output_hold_on_late", "motion.arm_tau_ff", "motion.sag_comp")])   # cap flags only reduce motion
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",
@@ -327,8 +590,11 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(load_config(overlay="none")["motion"]["close_hold_s"], 0.25)   # sim profile
         for overrides in ({"policy.first_object_speed_scale": 0.0}, {"policy.first_object_speed_scale": 1.01},
                           {"policy.first_object_speed_scale": float("nan")},
+                          {"grasp.drop_slot_grid": 1},
                           {"grasp.drop_height_extra_m": -0.01}, {"grasp.drop_height_extra_m": float("inf")},
                           {"grasp.drop_lateral_margin_m": -0.01},
+                          {"planner.bin_wall_extra_m": -0.01}, {"planner.bin_wall_extra_m": float("nan")},
+                          {"calib.wide_counter_window": "yes"},
                           {"policy.first_object_speed_scale": 0.7, "policy.safety_shell": True,
                            "policy.safety_shell_vel_reserve": 0.2}):
             with self.assertRaises(ValueError, msg=overrides):
@@ -337,6 +603,31 @@ class TestFlags(unittest.TestCase):
                            ("policy.object_time_budget_s", 0.0), ("policy.object_time_budget_s", float("inf"))):
             with self.assertRaises(ValueError, msg=f"{key}={value}"):
                 load_config(overrides={key: value})
+
+    def test_chunk_tick_flags_override_motion_only_when_enabled(self):
+        stock = load_config(overlay="none")
+        self.assertEqual((stock["policy"]["chunk_ticks"], stock["policy"]["hold_ticks"]), (None, None))
+        self.assertEqual((stock["motion"]["chunk"], stock["motion"]["hold_ticks"]), (10, 6))
+        tuned = load_config(overlay="finals_r22_chunk")
+        self.assertEqual((tuned["policy"]["chunk_ticks"], tuned["policy"]["hold_ticks"]), (15, 10))
+        self.assertEqual((tuned["motion"]["chunk"], tuned["motion"]["hold_ticks"]), (15, 10))
+        base = load_config(overlay="finals_r22")
+        base.pop("overlay")
+        tuned.pop("overlay")
+        tuned["policy"]["chunk_ticks"] = tuned["policy"]["hold_ticks"] = None
+        tuned["motion"]["chunk"], tuned["motion"]["hold_ticks"] = 10, 6
+        self.assertEqual(tuned, base)   # the new overlay changes only the two reply-size flags
+        for key in ("policy.chunk_ticks", "policy.hold_ticks"):
+            for bad in (0, -1, 1.5, True):
+                with self.assertRaises(ValueError, msg=f"{key}={bad!r}"):
+                    load_config(overrides={key: bad})
+
+    def test_chunk_flags_off_preserve_pre_change_action_bytes(self):
+        from tools.equivalence_check import episode_digest
+        self.assertEqual(episode_digest(0, 25.0),
+                         "episode seed=0 tl=25 acts=65 end=done clips=0 "
+                         "outcomes=['correct', 'counter', 'counter', 'counter', 'correct'] plans=3 "
+                         "sha=8a38277f5cddb04c")   # repinned: 40f4c0d (pre-gatefix, pre-handin) already gives this; 7a17757d was the stale older-base pin
 
     def test_placeholder_overlay_is_refused(self):
         with tempfile.TemporaryDirectory() as d:

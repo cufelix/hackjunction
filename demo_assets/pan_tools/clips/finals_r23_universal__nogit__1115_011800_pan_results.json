@@ -1,0 +1,272 @@
+[
+ {
+  "variant": "meat_right",
+  "instruction": "take the pan and hold it steady",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.35,
+    "y": 0.16,
+    "yaw": -3.14159,
+    "z": 0.03
+   },
+   {
+    "color": "brown",
+    "shape": "meat",
+    "x": 0.35,
+    "y": 0.16,
+    "yaw": -1.5708,
+    "z": 0.015
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.65,
+    "y": 0.13,
+    "yaw": -1.5708
+   },
+   {
+    "color": "yellow",
+    "shape": "cylinder",
+    "x": 0.72,
+    "y": 0.19,
+    "yaw": -1.5708
+   },
+   {
+    "color": "blue",
+    "shape": "cube",
+    "x": 0.73,
+    "y": 0.11,
+    "yaw": -1.5708
+   },
+   {
+    "color": "red",
+    "shape": "triangle",
+    "x": 0.18,
+    "y": 0.16,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 7.4,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 52,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.001,
+  "touched": false,
+  "min_palm_dist_m": 0.1454,
+  "verdict": "no_lift",
+  "in_center_bin": false,
+  "final_pos": [
+   0.3006,
+   -0.1011,
+   0.04
+  ],
+  "closest": {
+   "left": {
+    "pinch_mid_to_handle_mm": 202,
+    "t": 2.2,
+    "links_mm": {
+     "palm_link": [
+      126,
+      85,
+      155
+     ],
+     "thumb_2_link": [
+      61,
+      65,
+      142
+     ],
+     "index_1_link": [
+      97,
+      -15,
+      227
+     ],
+     "middle_1_link": [
+      114,
+      -39,
+      178
+     ]
+    }
+   },
+   "right": {
+    "pinch_mid_to_handle_mm": 264,
+    "t": 2.2,
+    "links_mm": {
+     "palm_link": [
+      -235,
+      82,
+      155
+     ],
+     "thumb_2_link": [
+      -170,
+      64,
+      142
+     ],
+     "index_1_link": [
+      -205,
+      -17,
+      227
+     ],
+     "middle_1_link": [
+      -221,
+      -42,
+      178
+     ]
+    }
+   }
+  },
+  "meat": {
+   "end_of_episode": {
+    "in": true,
+    "t": 7.82,
+    "meat_in_pan_frame_mm": [
+     9,
+     4,
+     -8
+    ]
+   }
+  }
+ },
+ {
+  "variant": "meat_left",
+  "instruction": "take the pan and hold it steady",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.55,
+    "y": 0.16,
+    "yaw": 0.0,
+    "z": 0.03
+   },
+   {
+    "color": "brown",
+    "shape": "meat",
+    "x": 0.55,
+    "y": 0.16,
+    "yaw": -1.5708,
+    "z": 0.015
+   },
+   {
+    "color": "yellow",
+    "shape": "cube",
+    "x": 0.25,
+    "y": 0.13,
+    "yaw": -1.5708
+   },
+   {
+    "color": "blue",
+    "shape": "cylinder",
+    "x": 0.18,
+    "y": 0.19,
+    "yaw": -1.5708
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.17,
+    "y": 0.11,
+    "yaw": -1.5708
+   },
+   {
+    "color": "yellow",
+    "shape": "triangle",
+    "x": 0.72,
+    "y": 0.16,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 5.6,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 39,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.001,
+  "touched": false,
+  "min_palm_dist_m": 0.1497,
+  "verdict": "no_lift",
+  "in_center_bin": false,
+  "final_pos": [
+   0.303,
+   0.0991,
+   0.04
+  ],
+  "closest": {
+   "left": {
+    "pinch_mid_to_handle_mm": 267,
+    "t": 5.02,
+    "links_mm": {
+     "palm_link": [
+      -234,
+      -86,
+      163
+     ],
+     "thumb_2_link": [
+      -178,
+      -84,
+      143
+     ],
+     "index_1_link": [
+      -193,
+      9,
+      233
+     ],
+     "middle_1_link": [
+      -211,
+      34,
+      185
+     ]
+    }
+   },
+   "right": {
+    "pinch_mid_to_handle_mm": 205,
+    "t": 5.02,
+    "links_mm": {
+     "palm_link": [
+      126,
+      -79,
+      163
+     ],
+     "thumb_2_link": [
+      69,
+      -80,
+      143
+     ],
+     "index_1_link": [
+      81,
+      14,
+      233
+     ],
+     "middle_1_link": [
+      97,
+      40,
+      185
+     ]
+    }
+   }
+  },
+  "meat": {
+   "end_of_episode": {
+    "in": true,
+    "t": 6.07,
+    "meat_in_pan_frame_mm": [
+     2,
+     -1,
+     -6
+    ]
+   }
+  }
+ }
+]

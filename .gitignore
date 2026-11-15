@@ -11,14 +11,7 @@ logs/
 # submission flag overlay baked into the image (see overlays/submission.yaml); never in the repo
 aaltonomous/baselines/classical/overlay.yaml
 
-# --- from main (team docs) ---
-.remember/
-node_modules/
-.env*
-.DS_Store
-# warren agent credentials and lock
-/.warren.json
-/.warren.json.lock
-/.claude/settings.local.json
-/.serena/
-CLAUDE.md
+# brain variant: llama.cpp source tree, GGUF weights (large, staged by hand before the image build)
+tools/brain/models/
+tools/brain/llama.cpp/
+*.gguf

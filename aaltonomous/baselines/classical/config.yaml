@@ -8,15 +8,82 @@
 # with $AALTO_PROFILE (e.g. AALTO_PROFILE=none = base values only); run.py --backend real uses `none` unless
 # --profile is given. Re-tune the sim values on the real robot before using them there (M8).
 profile: sim
+profile_auto:               # FLAG (auto profile). Used only when no AALTO_PROFILE / profile arg is given (policy_server)
+  auto_detect: false         # true: decide sim | none from the first auto_frames head RGB-D frames (profile_detect.py)
+  auto_frames: 5             # frames inspected before the decision (>= 1); sim needs ALL of them (palette is log-only)
+  require_rgb_cue: false     # FLAG: sim also needs a quiet, non-degenerate RGB (rgb_noise <= RGB_SIM_MAX); disagreement -> none (real)
+  second_cue: false          # FLAG: sim needs BOTH holes<=0.5% AND temporal depth noise ~0 (profile_detect cue B); real if EITHER says real; no pair/depth -> real
+  force: null                # FLAG: null | sim | none. sim/none = skip detection, always that profile (sim = sim profile + sim_overrides exactly as auto would on a sim decision). Baked by Dockerfile ARG PROFILE_MODE
+  sim_overrides: {}          # dotted key -> value, applied as load_config overrides only when auto picks sim
+
+scene:
+  counter_z_prior: null       # FLAG: no-depth fallback table height (m, pelvis frame, 0..0.3); null = nominal scene.yaml z
 
 calib:
+  hand_icp_primary: false      # FLAG: full 6-DOF camera fit from FK forearm/palm surfaces before the first motion
+  counter_after_hand: false    # FLAG: counter height only in the selected camera frame, after N MAD-consistent samples
+  refit_per_look: false        # FLAG: freshness-guarded, bounded plane refit on every look + hand/plane tilt cross-check
+  primary_fit:
+    prior_rot_deg: 3.0         # Gaussian prior about the configured extrinsic
+    prior_trans_m: 0.020
+    multistart_trans_m: 0.012  # scored starts span +/- this translation on every axis
+    multistart_rot_deg: 2.0    # and +/- this camera-frame rotation on every axis
+    counter_clearance_m: 0.058 # depth this close to the fitted counter plane is never arm evidence
+    min_model_points: 150
+    min_inliers: 300
+    min_coverage: 0.55
+    min_valid_frac: 0.35
+    max_residual_m: 0.004
+    min_spread_m: 0.10         # accepted inliers must span this in at least two pelvis axes
+    max_trans_m: 0.050
+    max_rot_deg: 6.0
+    search_px: 56
+    pixel_stride: 3
+    max_data_points: 1800
+    max_iters: 14
+    thr_start_m: 0.055
+    thr_end_m: 0.008
+    depth_noise_m: 0.004
+    decorrelated_samples: 50
+    plane_min_inliers: 500
+    plane_max_rms_m: 0.006
+    plane_tilt_agree_deg: 1.5
+    fallback_counter_dz_m: 0.15
+    stable_pair_s: 0.10
+    stable_joint_rad: 0.02
+    job_timeout_s: 1.5
+  counter_fit:
+    samples: 3                 # never commit from fewer than three estimates
+    max_samples: 7
+    mad_scale: 3.5
+    mad_floor_m: 0.004
+    max_tries: 12
+    max_tilt_deg: 3.0
+    max_update_m: 0.010        # bounded per-look update
+    smooth_alpha: 0.35
+    stale_joint_rad: 0.02
+    stale_pair_s: 0.10
   plane:
     apply_height: false       # FLAG (P0 table): runtime counter_z from the head-depth counter plane (perception.update_counter_height)
     looks: 3                  # median over the first N valid looks
+    max_spread_m: 0.015       # all N accepted heights must fit this peak-to-peak gate before one episode commit
+    max_mad_m: 0.006          # and this median-absolute-deviation gate (reject transient/mixed planes)
+    timeout_s: 3.0            # pre-motion hold phase: nominal fallback after this many seconds
     max_dz_m: 0.20            # clamp |z - nominal|
     max_tilt_deg: 8.0         # plane tilt above this -> nominal (tilt is only reported, never corrected)
     min_inliers: 500          # plane inliers needed
+    counter_z_prior_m: null   # wide_counter_window: absolute pelvis z used while the height is unmeasured (null = none: workspace rule fails open)
+    wide_lo_m: 0.08           # wide_counter_window: counter z window below nominal
+    wide_hi_m: 0.22           # wide_counter_window: counter z window above nominal (estimate outside = rejected)
+    robust_height: false      # FLAG (table z, real): measured dominant-plane table height, +-robust_max_dz_m; never nominal when a measurement exists
+    robust_max_dz_m: 0.30     # robust_height: clamp |z - nominal| (apply_height's max_dz_m stays 0.20 when the flag is off)
+    robust_max_tilt_deg: 25.0 # robust_height: plane normal must be within this of vertical in the current frame (walls/rims rejected)
+    robust_min_ratio: 0.30    # robust_height: inliers / ROI points (the table is the dominant surface)
+    robust_inlier_m: 0.008    # robust_height: RANSAC inlier distance
+    robust_max_rms_m: 0.006   # robust_height: plane RMS gate
+    robust_agree_m: 0.03      # robust_height: legacy fit kept when it agrees with the robust plane within this
     window_m: 0.40            # coarse z window around nominal for the first pass (then 0.03 around that pass's plane)
+  wide_counter_window: false  # FLAG (counter-z): estimation window nominal -wide_lo_m .. +wide_hi_m, runtime height estimated (also without apply_height), mat z follows it; see COUNTERZ.md
   fk_xcheck: false            # FLAG (B2, log-only): RGB head-pose residual vs Dex3 hand FK (fk_xcheck.py)
   fk_xcheck_config:
     period_s: 0.5             # worker-thread cadence; act() never waits for the search
@@ -39,7 +106,10 @@ calib:
     depth_tolerance_m: 0.15   # optional rejection cue only; invalid/missing depth is ignored
 
 perception:
+  look_timeout_s: null     # FLAG (finals done). null = off; e.g. 5.0 bounds one async detector call
+  detect_max_inflight: 2      # bounded retry: at most this many detector calls may remain wedged concurrently
   camera: head
+  assoc_radius_m: 0.06       # FLAG. Same-colour detection-to-retry association across frames; finals uses 0.10
   # OpenCV HSV (H 0-180, S/V 0-255). Each colour = list of [lo, hi] ranges (red wraps around H=0).
   hsv:
     # S min 70: lit TOP faces are washed out (sim: S ~95 red/blue, ~123 yellow vs ~150 on the side faces). With
@@ -62,6 +132,8 @@ perception:
   bin_pixel_margin: 0.004     # pixels whose 3D point is inside a bin footprint (+ margin) are dropped before grouping
   object_size: null           # null = scene.yaml objects.size (grasp width)
   principal_point: file      # FLAG (Oliver lane 3): file | center (sim renders cx,cy at the image centre)
+  sim_center_principal_point: false  # FLAG: use centred intrinsics only when profile=sim; real always keeps the file calibration
+  aim_z_frac: 0.25           # FLAG: no-depth blob ray aims at z_top - aim_z_frac*object_height
   inject_cam_error: null      # FLAG (TEST ONLY). [dpitch_deg, dyaw_deg, dx, dy, dz]: head T_pelvis_optical is rotated about
                               # its own position (pitch about pelvis y, + = nose down; then yaw about z) and translated (m,
                               # pelvis frame) before perception uses it. null = off
@@ -142,6 +214,11 @@ perception:
   triangle_pose: false        # triangles only: Detection.apex_yaw/apex_conf + robust xy centre from the top-face cloud
   near_bin_guard: false       # FLAG (#7, Oliver). With classify_shape: abstain on shape (None) when the top face is
                               # within a bin footprint + margin + object size (face possibly cut by the bin exclusion)
+  prism_orientation: false    # FLAG (prism orient). Standing vs lying triangular prism (prism_orientation.py): Detection.prism_orientation,
+                              # ridge_yaw, prism_xy; a lying prism gets shape "triangle" / path "lying". Unsure = current behaviour
+  prism_orientation_params:
+    fill_min: 0.75            # footprint hull / min-area-rect: triangle 1/2, rectangle 1 -> midpoint
+    length_m: null            # prism extrusion length (standing height); null = scene objects.size * height_ratio. MEASURE on the real part
   shape_diag: false           # FLAG (Oliver). Passive: Detection.shape_diag + one [shape_diag] log line per detection
   no_blob_shape: false        # FLAG (Oliver, f857054). With classify_shape: no metric top face -> abstain (None) instead of
                               # the 2D-blob ratio (blob includes side faces: prism -> 'cylinder'). Off = blob fallback
@@ -176,10 +253,70 @@ perception:
     enabled: false
     min_gap_deg: 6.0
     red_min_s: 110             # layer 2b: red-labelled candidate with top-face S below this -> abstain (0-255)
+    yellow_fix: false          # FLAG: red-labelled cand with own hue in the yellow range -> yellow before layer 2b
+  topface_mode: top35          # FLAG (recall P0). whole_blob falls back from brightest 35% when that subset is too small
+  topface_min_px: 1024         # whole_blob fallback threshold for the brightest-35% subset (far cylinder ~850 px)
+  sat_floor_adaptive: false    # FLAG (recall P0). Per-frame blue/purple S floor relative to counter background
+  sat_floor_adaptive_params: {abs_min: 45, bg_percentile: 90, margin: 10}
+  area_floor_geometric: false  # FLAG (recall P0). Prism-projected floor and cube-projected ceiling at the blob row
+  area_floor_geometric_params: {min_frac: 0.35, max_factor: 2.0}
+  partial_ok_near_hand: false  # FLAG (recall P0). FK-boundary fragments become tentative, never directly pickable
+  partial_ok_near_hand_params: {min_area_px: 30, boundary_px: 2, max_relooks: 2}
+  relook_before_done: false    # FLAG (recall P0). Retract, wait for fresh frames, then one final detection
+  relook_fresh_frames: 2
+  # Bare / glossy table flags (default OFF; see BARETABLE.md). Helpers in bare_table.py, all fail open.
+  glare_reject:              # FLAG: small V >= v_min & S <= s_max components on the counter plane (+ halo S <= halo_s_max) leave the colour masks
+    enabled: false
+    v_min: 245
+    s_max: 40
+    max_px: 900
+    dilate_px: 6
+    halo_s_max: 65
+    plane_h_max: 0.5         # object heights above the counter; a highlight on an object top is above this and is kept
+  reflection_reject:         # FLAG: blob B below a stronger same-colour blob A, mirrored, lower S, at / below the plane -> reflection
+    enabled: false
+    max_gap_px: 40
+    dx_frac: 0.6
+    width_ratio: [0.5, 1.8]
+    s_ratio: 0.9
+    min_iou: 0.45
+    h_max: 0.5
+  local_bg:                  # FLAG: blob median H/S within dh / ds of the ring around it = table colour, not an object
+    enabled: false
+    ring_px: 10
+    dh: 5
+    ds: 25
   colour_kmeans: false       # FLAG (EV gate). Once per episode, bounded k=3 on robust object-blob HSV pixels;
                               # assign clusters by hue order and re-centre hue bounds only; ambiguous -> robust ranges
   split_blobs: false          # FLAG (real colour, Timi). Split a blob of touching same-colour objects (real HF frames:
                               # 94/120 orange pieces merged with a neighbour) at distance-transform peaks
+  split_by_solidity: false    # FLAG: compact blobs stay single; non-solid/elongated blobs in the area window force a split
+  split_by_solidity_params: {solidity: 0.82, max_aspect: 2.0, area_px: [520, 15500], min_part_px: 520}
+  tape_value_cut: false       # FLAG: thin orange candidates need a sufficiently large high-S/high-V core
+  tape_value_cut_params: {min_s: 140, min_v: 140, min_core_frac: 0.20, min_aspect: 3.0, max_thickness_px: 18}
+  gate_below_bins: false      # FLAG: untrusted live bins use the observed bin/tape mass instead of nominal projected geometry
+  gate_below_bins_params: {h_max: 17, s_min: 77, v_min: 50, object_s_min: 140, object_v_min: 150,
+                           open_px: 5, min_component_px: 2000, min_mass_px: 18000, margin_px: 3, trusted_bin_conf: 0.5}
+  bins_from_image: false      # FLAG: find the taped bin rims in the image (rim_detect); image bin masks replace the nominal
+                              # projected hull / in_bin when the runtime bin poses are untrusted, tape is never a target
+  bins_from_image_params: {hint: false, with_depth: true, hint_max_m: 0.25, hint_max_resid_px: 6.0, crosscheck_px: 12.0,
+                           rim_z_m: 0.0}   # hint: expose the rim-line bin distance as bin_rim_hint (planner/geometry hint)
+  prism_speckle_floor: false  # FLAG: orange/red blob with a triangular outline gets a lower color_gate speckle floor
+  prism_speckle_floor_params: {area_frac: 0.08, min_fill: 0.75, min_solidity: 0.85, max_aspect: 2.0, min_short_px: 22, min_px: 60}
+  plan_frame: fitted          # FLAG (table z, real): fitted | nominal; nominal maps detections to the calibration.yaml camera frame for the planner
+  real_border_partial: false  # FLAG (real only): lower color_gate speckle floor for blobs cut by the image border
+  real_border_partial_params: {area_frac: 0.12, margin_px: 3}
+  bin_bottom_first_run: false  # FLAG (real only): observed bin-bottom row = first vertical warm run per column (orange objects on the mat are not bin mass)
+  fk_colour_rescue: false      # FLAG (real only): colour pixels inside the FK arm mask stay candidates; a detection overlapping the mask must sit at object height
+  fk_colour_rescue_params: {min_overlap_frac: 0.02, min_area_px: 1200, z_above_counter_m: [0.034, 0.056]}
+  real_merge_split: false     # FLAG (real only): split merged same-colour neighbours (cube+cylinder) from a lower area factor
+  real_merge_split_params: {area_factor: 0.9, min_part_frac: 0.3}
+  look_summary: false         # FLAG (fsm, passive). per-look colour-blob / rejection summary for the policy's [look0] 0-detection line
+  reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
+  still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
+  still_vote_params: {n_frames: 3, min_hits: 2, match_m: 0.02}
+  rim_z_from_depth: false     # FLAG: per-bin rim z from head depth -> planner rim clearance / drop / carry / wall collision
+  rim_z_params: {looks: 3, max_delta_m: 0.04, percentile: 90, min_points: 40, stride: 2, margin_m: 0.006, counter_tol_m: 0.015}
   # FLAG (Felix gate). perception.color_gate: post-filter at the end of detect(), default OFF. Rejects speckle below
   # area_frac * (fx * 0.045 / Z)^2 px (no Z: min_px_no_z); blobs over a bin or within edge_m of its edge (a rim blob
   # is kept only as a depth top face edge_h above the counter); top_k by n_px when > max_cands survive (degraded);
@@ -187,10 +324,57 @@ perception:
   # 1b: n_px > max_area_frac * expected (no Z: > max_px_no_z) = rim / tape / merged blob. 2b: positive workspace, pelvis
   # x in ws_x, |y| <= ws_abs_y, in front of the bin row near edge - ws_edge_m (OpenCode E1 audit: 426 -> 0 bin-zone FP).
   # Near-edge blobs without depth are kept; with depth kept only at object height edge_h (rim = 0.06 m is not).
-  color_gate: {enabled: false, fk_mask: false, fk_dilate_px: 0, live_bins: false, near_margin_m: 0.0, area_frac: 0.4, min_px_no_z: 1000,
+  color_gate: {enabled: false, fk_mask: false, fk_silhouette: false, fk_dilate_px: 0,
+               live_bins: false, near_margin_m: 0.0, area_frac: 0.4, min_px_no_z: 1000,
                max_area_frac: 3.0, max_px_no_z: 6000, ws_x: [0.12, 0.45], ws_abs_y: 0.40, ws_edge_m: 0.01,
                edge_m: 0.02, edge_h: [0.03, 0.055], max_cands: 6,
-               sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}}   # sat_floor: median S (0-255) over the blob
+               sat_floor: false, sat_floor_params: {blue: 110, yellow: 45}, workspace_fail_open: false, workspace_assumed_counter_z: 0.15}   # sat_floor: median S (0-255) over the blob
+  depth_blob_recover: false   # FLAG (P0 perception): known-colour depth blobs missed by HSV; unknown colours abstain
+  depth_blob_recover_params:
+    stride: 6                 # 480x640 -> 80x107 height map; one bounded pass per perception update
+    min_height_m: 0.012       # tape/counter below 1.2 cm is never foreground
+    max_height_m: 0.15        # hands/bin clutter above the object band are never foreground
+    min_blob_cells: 12        # cells after stride-6 downsample (~432 full-resolution px)
+    max_blob_cells: 600       # reject large occluders / merged workspace structures
+    plane_z_window: 0.08      # existing counter-plane fitter candidate window around known counter z
+    plane_inlier_m: 0.008
+    min_plane_points: 250
+    sat_floor: 20             # relaxed only for this depth-supported path (HSV S, 0..255)
+    min_colour_px: 24
+    min_colour_conf: 0.45     # best known class must clear this score ...
+    min_colour_margin: 0.15   # ... and beat the runner-up; otherwise abstain
+    match_iou: 0.10           # depth blob already explained by a colour detection -> no duplicate
+    match_centroid_px: 20
+    shape_hint: true          # conservative footprint/flatness hint; never needed for colour-only instructions
+    shape_flatness_m: 0.008
+    shape_prism_aspect: 1.35
+  novel_objects: false        # FLAG (R22). Depth blobs 1--25 cm above the counter, outside bins/robot mask.
+  novel:                       # conservative fixed gates; only novel_objects is the feature switch
+    height_m: [0.01, 0.25]
+    min_area_px: 45
+    max_area_px: 30000
+    handle_rim_margin_m: 0.04
+    fp_filter: true
+    pixel_stride: 3             # 640x480 -> 214x160; keeps the optional path below the 8 ms frame budget
+    morph_px: 1               # applied after pixel_stride; depth/height gates already remove counter speckle
+    known_match_px: 45
+    known_size_m: [0.035, 0.070]
+    round_circularity: 0.82
+    round_aspect: 1.45
+    elongated_aspect: 2.2
+    handle_min_aspect: 1.5
+    handle_max_aspect: 2.5
+    handle_extension: 1.45
+  # FLAG (Oliver neutral). perception.neutral_obstacles: default OFF. ON: blobs that are not a target colour (dark: HSV V <=
+  # v_dark, or a target-mask blob with median V < v_dark; grey: S <= s_grey and V <= v_grey_max, bright low-S pixels are
+  # overexposed yellow tops and excluded) are never detections. Sizeable ones (>= min_area_px, <= max_area_px) are listed in
+  # Perception.neutral_obstacles; with depth they get a pelvis-frame xy footprint (needs min_height_m above the counter, <=
+  # max_side_m wide, else dropped / image-only), without depth they stay image-only and are NOT used for collision. The
+  # planner rejects a plan when a hand point below z_top + margin_m is within margin_m of a footprint (all phases); once such a
+  # complete plan exists, the search stops after plan_timeout_s and fails OPEN (stock plan, one log line).
+  neutral_obstacles: false
+  neutral_params: {v_dark: 55, s_grey: 30, v_grey_max: 200, min_area_px: 300, max_area_px: 8000, min_height_m: 0.015,
+                   max_side_m: 0.15, max_obstacles: 6, colour_guard_px: 3, margin_m: 0.02, plan_timeout_s: 1.0}
   split:
     object_size: null         # m, expected object edge for the size gate; null = scene objects.size (perception.object_size)
     area_coef: 1.2            # one object ~ area_coef * (f * size / Z)^2 px (mock: cylinder 1.04, cube/prism 1.36;
@@ -203,10 +387,19 @@ perception:
                               # object <= 1.35, two touching >= 1.48)
     max_parts: 3
 
+
 bin:
+  fallback_centre_x: null     # FLAG (real, binfix): arm-frame x (m) of the bin CENTRE used when the bin vote is not confident (conf < fallback.max_conf); null = nominal
+  reach_x_max: null           # FLAG (real, binfix2): every drop slot / drop point is clamped to this arm-frame x (IK envelope), voted or fallback bins
+  reach_drop_z: null          # FLAG (real, binfix2): release z floor for any bin (reach at the rim needs a high arm)
+  fallback_drop_z: null       # FLAG (real, binfix): arm-frame release z floor (m) for an unvoted bin (reach at the rim rises with the arm)
+  fallback: {max_conf: 0.75}
   geometry_runtime: false     # FLAG (bin geo). perception follows planner.bin_shift for every bin consumer (needs bin.vote.enabled for a shift)
   vote:                       # FLAG (bin vote). Per-bin position from 3 votes (depth rim, orange tape, nominal prior)
     enabled: false
+    signed_rim_fit: false     # FLAG (C3). Fit Q-shift to nominal so the returned shift has the physical sign
+    async_extract: false      # FLAG (H5). Copy frames, extract in the look worker, and let act() only poll/hold
+    frame_transform_snapshot: false  # FLAG (H4). Rim+tape from one frame share one immutable camera transform
     agree_m: 0.04             # two votes closer than this agree -> mean of the closest pair
     search_m: 0.10            # per-bin rim search window and tape window around the prior
     max_shift_m: 0.10         # a result further than this from the prior is discarded (prior kept)
@@ -218,17 +411,40 @@ bin:
     tape_hsv: [[3, 150, 70], [8, 255, 180]]
 
 grasp:
+  hold_s: 3.0         # skill "hold": seconds the hand stays closed with the arm still, right after the lift
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
   # fingers point roughly forward and curl down in front of the object, the thumb swings in from behind.
   # Object centre in the LEFT palm frame; auto = midway finger tips <-> thumb tip (`closed`). The Dex3 index/middle
   # tips are 57 mm apart (URDF): centred between them (auto) a 45 mm object wedges between the two fingers and is
   # never released, so the point is shifted 15 mm sideways (palm z): pinch = thumb vs ONE finger. TUNE
   point_in_palm: [0.099, -0.084, 0.015]
+  # grasp.cage_mode (FLAG, default off): three-contact closure for confidently classified metric cylinders and
+  # standing triangle prisms. URDF FK at hand.closed puts the index/middle pad midpoint at [100.927,-88.917,0] mm.
+  # A nominal 50 mm object centre is half its width behind the pads: [75.927,-88.917,0], rounded here to 1 mm.
+  # cage_finger_posture is finals_r21 closed_tight plus -0.109 rad at each finger_0: FK moves both pads 10.0 mm
+  # inward. cage_thumb_extra_rad is measured from hand.closed thumb_1. FK plus each contact normal gives 10.0 mm
+  # surface penetration at 0.152 rad for a cylinder (normal x=1) and 0.177 rad for a vertex-aligned equilateral
+  # prism side (normal x=cos(30 deg)). Generated commands are clipped to the URDF limits; cube=0 keeps its path.
+  cage_mode: false
+  cage_point_in_palm: [0.076, -0.089, 0.0]
+  cage_thumb_extra_rad: {cube: 0.0, cylinder: 0.152, triangle: 0.177}
+  cage_finger_posture: [0.0, 0.0, 1.2, -1.109, -0.6, -1.109, -0.6]
+  cage_shape_min_conf: 0.5
   held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
+  release_wait_s: null        # FLAG (lag R44): null = today (open_hold_s); s = hold >= this after the open command before the retreat starts
+  release_confirm: false      # FLAG (lag R49): after open + wait the finger state must read empty (held detector); not empty -> re-open once, then home and stop picking
+  release_confirm_s: 1.5      # release_confirm: how long to poll for an empty hand after each open (Dex3 lag 0.3-0.4 s)
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
+  held_calibration:           # M3 FLAG: an empty close at home supplies e0; invalid/unfinished calibration disables abort
+    enabled: false
+    steady_samples: 4         # consecutive policy observations (chunks are <=0.33 s)
+    max_velocity_rad_s: 0.08  # both commanded and measured hand velocity must be below this
+    hold_after_settle_s: 0.4  # finger lag is 300-380 ms; retain at least another 0.4 s before accepting e0
+    timeout_s: 5.0          # accommodates lag + 0.4 s hold + four observations at the 0.33 s chunk cadence
   # Unknown-object fallback. It is deliberately one opt-in flag; the remaining values are conservative geometry
   # gates, not independently switchable features. The classifier is consulted even when classify_shape is off.
   generic_fallback: false
+  generic: false              # FLAG (R22). Novel-object top-down/handle grasp, width checked against URDF open tips.
   generic_shape_min_conf: 0.5    # below this, treat a known label as unreliable and use the generic proposal
   generic_min_confidence: 0.5    # proposal support/width/border gate
   generic_max_width: 0.060       # larger objects are not safe for the Dex3 top-down pinch
@@ -236,6 +452,8 @@ grasp:
   generic_yaw_hint_weight: 3.0   # align fingers with the proposal major axis before trying stock hints
   generic_yaw_tol_deg: 15.0
   generic_yaw_max_dev_deg: 45.0  # skip expensive/awkward yaw IK outside the arm's natural range
+  generic_opening_margin_m: 0.012 # subtract from the thumb-to-finger opening measured from our URDF/open posture
+  generic_obstacle_margin_m: 0.025
   # grasp.close_posture_by_shape (FLAG, default off): triangle posture ("demo", Oliver FK a44dd79) used only when the
   # shape is "triangle" AND shape_id path == "metric" AND shape confidence (shape_id._label conf * point-count
   # factor, 0..1) >= posture_by_shape_min_conf; every other pick uses grasp.close_posture + point_in_palm.
@@ -266,30 +484,65 @@ grasp:
   yaw_phi_deg: 105            # sim grasp_test (left arm, n=6 per phi): 105 4/6, 90 ~3/6, 60 and 0 worst
   yaw_hint_weight: 3.0        # IK weight of that finger direction (stock 0.3 is a weak preference)
   yaw_tol_deg: 12.0
+  # grasp.face_align (FLAG, default off): cubes only, sides in face_align_sides. Finger heading chosen so the pinch line (index
+  # tip -> thumb tip, from FK) is perpendicular to a pair of cube faces (Detection.yaw = top-face minAreaRect mod 90).
+  # The heading nearest the arm's natural one wins; the plan counts if the achieved heading is within face_align_tol_deg, else
+  # the stock heading path runs. Cylinders / triangles unchanged.
+  face_align: false
+  face_align_sides: [left]
+  face_align_tol_deg: 8.0
   yaw_ref_deg: 25.0           # natural finger direction: forward, this far inward
   yaw_max_dev_deg: 75.0       # candidates further from it are not tried
   yaw_max_hints: 2
   yaw_min_conf: 0.5
   yaw_tri_shift: true         # move the grasp point to the midpoint of the object's extent along the finger direction
+  # grasp.tri_vertex_align (FLAG, default off): for a standing triangle, use its vertex estimate (or the blob's
+  # minimum-area rectangle when no pose estimate exists) and rotate palm x by +/-90 deg so the index-middle gap,
+  # palm z, lies on a vertex line. The three equivalent vertex directions are tried nearest the natural arm yaw.
+  tri_vertex_align: false
+  tri_vertex_phi_deg: 90.0
+  lying_prism: false          # FLAG (prism orient, needs perception.prism_orientation). Lying prism: close ACROSS the ridge
+                              # (palm x = the closing axis = ridge +- 90 deg), grasp at the cross-section centroid height
+                              # (object_dims apothem = altitude/3), grasp.close_posture (never the standing-prism demo posture)
+  lying_yaw_tol_deg: 10.0     # lying_prism: achieved palm-x heading vs ridge +- 90 deg; 22.5 mm half length * sin(10 deg) = 3.9 mm < the 5.2 mm squeeze
+  lying_prism_arm_by_reach: false  # FLAG (prism orient, needs lying_prism). Arm + heading by reachability: default arm first, abstain when neither arm reaches a ridge heading
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
+  handle_z_drop_m: 0.0        # handle grasps only: grasp z lowered by this (planner _plan_side); 0 = stock height
+  handle_fingertip_clearance_m: 0.006  # handle grasps only: fingertip counter clearance in the height loop (stock 0.012)
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
   approach_extra_m: 0.0       # added to the pregrasp height (policy.speed_tiers sets 0.015 for the first object only)
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)
   drop_inset: 0.05            # release this far inside the inner walls at the box point nearest the pelvis (null = centre)
+  novel_near_rim_retry: false # FLAG (R22). Novel/generic: a failed drop leg retries once at the bin's near rim (no inset).
   drop_slot_spacing: 0.06     # distinct object centres; 4.5 cm object + 1.5 cm bounce/clearance allowance
   drop_slot_wall_margin: 0.03 # object-centre margin from the inner side walls in the reachable near-wall band
-  drop_slot_count: 3          # one near-wall row; planner checks every selected slot with IK + safety dry-run
+  drop_slot_count: 3          # legacy count / grid slots per row; planner checks each selected slot with IK + safety
   drop_slots: false           # FLAG (23-grasp-failure). Standalone drop slots (no verification): each successive object
                               # in a bin gets the next slot instead of the one fixed drop_xy (STEP 0: 6/30 stacked)
+  drop_slot_grid: false       # FLAG (bin capacity). Two reach-biased rows, separated by object width + 1 mm;
+                              # stock count 3 -> six distinct slots. false preserves the one-row coordinates exactly.
   drop_slot_overflow: counter # FLAG (Felix #6 review). Slots used up: counter = leave the object | stack = reuse slot 0
+  approach_slow_mps: 0.0      # FLAG (real demo). > 0: the last approach_slow_dist_m of the descend is no faster than this (m/s); 0 = off
+  approach_slow_dist_m: 0.05
   drop_height_extra_m: 0.0    # FLAG (finals safe). Raise the bin release by this (capped at the carry height); IK failure -> stock target
   drop_lateral_margin_m: 0.0  # FLAG (finals safe). Move the release this far toward the bin centre (y only); IK failure -> stock target
+  left_hand_fix: {shift_z: 0.0}  # FLAG (left-hand sweep). Left arm + triangle only: grasp z += shift_z (m, |v| <= 0.05) before the fingertip raise; 0 = off
   drop_slot_exclude: [[0.453, -0.308]]   # slots only: right bin slot 2 is outside the head camera FOV (Felix)
   border_posture: false       # FLAG (retry-vary). Label None from abstain_border (blob cut by the image border, near
                               # counter edge) -> demo posture on the first try (needs close_posture_by_shape for shape_path)
   cylinder_no_yaw_vary: false # FLAG (cyl yaw). Retry on a detected cylinder: no finger-yaw variants (it is rotationally
                               # symmetric); only the posture variant remains. Off = stock (+-retry_yaw_deg[cylinder]).
+  soft_hand: false            # FLAG (softgrip). Soft finger servos (real Dex3 kp 1.5 vs sim ~100); see SOFTGRIP.md
+  soft_overshoot: [0.0, 0.10, 0.10, 0.50, 1.00, 0.50, 1.00]   # FLAG value. soft_squeeze over-closure (rad), LEFT DDS order
+  soft_squeeze: false         # FLAG (softgrip). Soft hand: over-closed posture (hand.soft_overshoot), long hold, slow lift_check
+  soft_limit_margin_rad: 0.03 # over-closure stops this far inside the URDF limits (the safety filter's own margin is 0.02)
+  soft_lag_s: 0.38            # measured real Dex3 finger lag (0.30-0.38 s)
+  soft_settle_s: 0.4          # servo settling after the lag before the squeeze is trusted
+  soft_lift_check_m: 0.02     # first part of the lift (lift_check phase) is slow and re-reads the grip
+  soft_lift_check_scale: 0.35 # speed scale of lift_check (x motion.carry_scale)
+  staggered_release: false    # FLAG. Open thumb + DDS slots 3/4 first, then slots 5/6 without blocking act()
+  staggered_release_delay_s: 0.30  # delay before DDS slots 5/6 begin opening (overlapping ramps)
   drop_above_rim: 0.04        # grasp point above bin rim + object half size when releasing
   retreat_up: 0.08            # then a joint-space move home: start it high enough to clear the bin rims
   close_posture: closed       # FLAG (pinch fix): hand posture for the grasp, closed | closed_tight (hand.closed_tight)
@@ -302,6 +555,7 @@ grasp:
     clearance: 0.07           # spot centre this far from other detected objects
   y_split: 0.0
   arm_xy_offset: {left: [0.0, 0.0], right: [0.0, 0.0]}   # per-arm grasp xy correction (pelvis frame). TUNE on the robot
+  online_bias: false          # FLAG (online bias). per-hand grasp xy bias learned from misses, starts at arm_xy_offset; grasp point only
 
 ik:
   limit_margin: 0.08          # rad inside URDF limits (safety filter clips beyond 0.05)
@@ -324,8 +578,16 @@ skills:
 
 instruction:
   resolve: false
+  novel_objects: false        # FLAG (R22). Match visible novel colour + noun synonyms; ambiguity/unknown => abstain.
   normalize: false            # FLAG (Felix). resolve(normalize(text)): fixes typos/synonyms; needs resolve
+  multilingual: false         # FLAG. cached FI/CS/DE/SV/ES/FR/IT/PL/PT/UK/RU/SK -> English; needs resolve
   strict: false               # FLAG (Felix strict). never guess: abstain instead of FIXED / inferred keys; needs resolve
+  structured: false           # FLAG (langzip). deterministic complete list/conditional rules before strict; needs resolve + strict
+  generality: false           # FLAG (gen). closed-vocabulary fallback parser when the strict stack placed nothing
+  venue_veto: false           # FLAG (venue lang). generality veto adds viewer-perspective sides, negated bins, bare ordinal bins, foreign negations (needs generality)
+  venue_veto_ordinal: true     # FLAG (venue lang). with venue_veto: bare "first/second/third box" (no left/right word) abstains; false = first = left
+  hazard_guard: false         # FLAG (bugsweep). fail closed on parser hazards; needs structured
+  venue_colour_aliases: false # FLAG (T10). venue colour words in EN/FI/CS incl. inflections, before normalize; amber = orange; needs resolve
   max_chars: 0                # FLAG (fuzz). >0: cap the text at this many chars, cut at the last sentence/clause boundary
                               # (. ; ! ? newline) else the last space; the resolver is quadratic (50k chars = 19 s). 0 = off
 
@@ -337,11 +599,13 @@ safety:
 # AI brain (brain/): closed-set tool choice over the classical planner. Off = byte-identical to before.
 brain:
   enabled: false              # FLAG. true: at each look the backend picks one of the allowed tool calls (index + conf)
+  planner: false              # FLAG. whole-instruction closed-set plan for abstentions/order/relations; needs enabled
   backend: stub               # stub (= the classical choice) | llamacpp (HTTP /completion + GBNF; errors -> classical)
   url: http://127.0.0.1:8080/completion   # llamacpp server; never contacted synchronously at policy startup
   request_timeout_s: 1.5      # absolute llamacpp HTTP deadline
   max_response_bytes: 65536   # cap before JSON parsing
   n_predict: 32               # {"choice": 12, "confidence": 0.999} is ~25 Qwen tokens
+  plan_n_predict: 512         # bounded JSON list (at most max_steps validated primitives)
   chatml: true                # llamacpp: wrap the prompt in ChatML (Qwen instruct models)
   image: false                # llamacpp: send the head RGB as base64 JPEG (needs cv2 + a multimodal model)
   find: false                 # FLAG. the model may call find(query) (VLM grounding, /data/brain/find/find_tool.py)
@@ -349,10 +613,30 @@ brain:
   find_path: /data/brain/find/find_tool.py
   find_url: null              # null = find_tool's default (127.0.0.1:8080 chat completions)
   find_timeout_s: 1.5
+  find_n_predict: 400         # find(): output token cap (box JSON; the old hard-coded max_tokens)
+  find_layout: image_first    # find(): image_first (original) | static_first (system prefix, image, phrase = cacheable prefix)
+  image_max_side_px: 0        # downscale the head RGB before encoding (find + decide image); 0 = full size. Boxes are scaled back to original pixels
+  find_to_detection: false    # FLAG. find() point without a matching detection -> novel Detection from the depth blob (brain/novel.py)
+  novel_min_height_m: 0.012   # blob must stand this far above the counter plane (flatter = ungraspable -> skip)
+  novel_min_grasp_height_m: 0.02  # a blob lower than this is found but ungraspable -> skip
+  novel_max_width_m: 0.06     # wider than the hand opening = ungraspable -> skip
+  novel_max_objects: 3        # novel detections kept per episode
+  grounded_picks: false       # FLAG (universal). open-vocabulary instruction: pick_place only ids that find() located
+  ev_gate: false              # FLAG (universal). novel object with EV = p_grasp*(3*p_bin-1) < ev_min is left on the counter
+  known_task_hard_off: false  # FLAG (r25). known task (resolver/sort_fixed, no novel noun): NO brain call at all this episode (= brain.enabled false)
+  ev_min: 0.5                 # universal: p_bin >= 0.5 at p_grasp 1 (break-even is 1/3; the margin absorbs mis-calibration)
+  ev_default_conf: 0.7        # universal: p_bin of a brain-chosen bin when the backend reports no confidence
+  closed_loop: false          # FLAG. agent loop (brain/agent.py): async re-plan after every outcome; needs planner
+  closed_loop_max_replans: 6  # re-plans per episode (the initial plan is not counted)
+  call_timeout_s: 1.0         # closed loop: deadline per planner call; later = dropped, last plan / classical resolver goes on
+  agent_n_predict: 160        # closed loop: output cap per call (a short plan of <= 4 primitives)
+  max_grasp_fails: 2          # closed loop: failed grasps of one object before another grasp variant (else skip)
   prefetch: true              # ask for the next decision while the current pick runs; state hash must match
   threshold: 0.8              # a decision needs conf >= this ...
   override_conf: 0.95         # ... and, when it differs from the classical choice, conf >= this
   timeout_s: 2.0              # later than this the decision is dropped, the classical planner decides
+  plan_timeout_s: 2.0         # initial whole-plan deadline (async; no wait in the control loop)
+  step_timeout_s: 0.5         # single allowed re-plan deadline after a failed primitive
   max_steps: 32               # brain decisions per episode
   max_looks: 2                # brain look() choices per episode (a relook costs time)
   world_reach: false          # fill objects[].reachable with a planner/IK dry run (slow: one plan per object)
@@ -362,6 +646,10 @@ motion:
   arm_max_vel: 0.5            # rad/s per joint (safety filter allows 1.0)
   arm_max_acc: 1.5            # rad/s^2
   arm_vel_cap: null           # FLAG (Timi vel). rad/s cap on arm_max_vel (acc scaled by the same ratio); null = profile
+  output_caps: null            # FLAG (M4). {arm_vel, arm_acc, hand_vel, hand_acc}: planner + final stateful per-joint caps
+  output_hold_on_late: false  # FLAG (chaos). true: a late act() never grants the limiter extra elapsed time (runner holds meanwhile)
+  arm_tau_ff: null            # FLAG (sag). null | gravity: reply carries arm_tau_ff = gravity torque at the commanded arm q (real runner only; sim ignores)
+  sag_comp: false             # FLAG (sag). true: real-arm position-offset sag compensation, kappa estimated from still ticks (needs output_caps)
   carry_scale: 1.0            # FLAG (Felix). <= 1: vmax/amax scale for the lift + carry phases only (slower carry)
   hand_max_vel: 1.2           # rad/s (filter allows 3.0)
   cart_step: 0.02             # Cartesian segments are split into IK waypoints this far apart
@@ -377,6 +665,16 @@ motion:
   chunk: 10                   # ticks returned per act() (0.33 s)
   hold_ticks: 6               # ticks per hold while planning / waiting (fewer requests; <= 0.2 s extra latency)
   counter_clearance: 0.03     # hand points above the counter footprint stay this high during transit
+
+planner:
+  bin_wall_extra_m: 0.0      # FLAG (counter-z): extra bin wall height (m) added to the release/carry height and the rim keepout; finals 0.01
+  lift_from_contact: false    # FLAG (real-only). startup from a table-resting hand: vertical lift first, then the home route
+  carry_corridor: false       # FLAG (real-only). carry via a point in front of the bin row when the straight carry clips a foreign bin
+  carry_corridor_margin_m: 0.03  # FLAG (real-only). clearance from a foreign bin's outer footprint (and the front via x)
+  budget_escalate: false      # FLAG (latency). true (needs candidate_budget): all-deferred look -> 3x budget re-plan of the best 2, else re-look
+  candidate_budget: null      # FLAG. null = off; {max_ik_calls, max_wall_s}: per-candidate planning budget, exceeded = candidate deferred
+  per_target_guard: false     # FLAG (finals done). A failed/raising target cannot stop planning for other detections
+  per_target_cooldown_s: 2.0  # after a target fails planning, wait this long before offering it again
 
 # Arms out of the head camera's view of the cube region and above counter height. TUNE on the robot
 # (start = where teleop leaves the arms; the first move goes there at arm_max_vel).
@@ -398,16 +696,80 @@ hand:                          # LEFT order: thumb0, thumb1, thumb2, middle0, mi
   closed_demo: [0.00, 0.92, 0.25, -0.50, -1.41, -0.49, -1.21]  # triangle posture for close_posture_by_shape only (thumb0 = 0)
   release:  [0.0, -0.5, 1.5, -0.05, -0.05, -0.05, -0.05] # let go: thumb back + up, fingers straight (sim: the cube
                                                          # stayed hooked in half-bent fingers with `open`/`preshape`)
+  mirror_index_middle: false   # FLAG (R42a): index pair == middle pair in every posture + every emitted hand target
   right: null                  # optional explicit right-hand postures {open, preshape, closed} in RIGHT DDS order
+
+held:
+  read_through_carry: false   # FLAG. finger_sum: post-lift + carry max-of-N reads; empty post-lift aborts to retry
+  soft_detector: false        # FLAG (softgrip). finger_sum for SOFT fingers: held = stall further open than the empty-close
+                              # baseline by > soft_margin_rad (sum of a finger's two joints), re-read after the 2 cm lift
+  soft_margin_rad: 0.12       # close read: excess over the empty-close expectation that means "an object stops the fingers"
+  soft_lift_margin_rad: 0.08  # lift_check / carry read: the error must still be this far above the empty expectation
+  soft_read_after_s: 0.4      # close read >= this long after lag + settle (after the close ramp ends)
+  soft_prior_ratio: 0.15      # empty-close error / travel when the episode-start baseline did not run (fraction of travel)
+
+insert:                       # policy.insert_shapes parameters (read only when the flag is on)
+  min_shape_conf: 0.7         # shape label confidence; below = abstain (a wrong label = the wrong hole)
+  require_metric: true        # shape_path must be 'metric' (top-face point cloud), never the 2D blob
+  release_gap_m: 0.006        # object bottom above the lid plate at the release
+  max_pos_err_m: 0.004        # IK xy error of the release point vs the hole centre (hole margin is 5 mm per side)
+  max_yaw_err_deg: 8.0        # residual yaw of the held object vs the hole (square/triangle)
+  max_tilt_deg: 8.0           # approach axis vs vertical at the release (the object must enter upright)
+  max_headings: 2             # grasp headings tried per object
+  perception_gated: false     # FLAG (insert). see config.py; params below
+  pg_min_conf: 0.8            # lid confidence
+  pg_hole_min_conf: 0.7       # matching-hole confidence
+  pg_max_sigma_m: 0.003       # max xy 1-sigma of the lid fit
+  pg_max_dz_m: 0.015          # max |lid z_top - nominal|
+  pg_search_m: 0.14           # lid search radius around the nominal pose
+  pg_bias_xy: [0.0, 0.0]      # subtracted from the fitted lid/hole xy (head-camera bias of the fit)
+  pg_ticks: 600               # max ticks spent on the lid fit before abstaining
+  reach_gated: false          # FLAG (insert). see config.py; the reach_* / lower_* / gate_* params below are read only with it
+  reach_margin_m: 0.010       # reach_gated: the release IK must also solve at +-this xy offsets (and +-this/2 higher) around the hole centre
+  reach_max_pos_err_m: 0.002  # reach_gated: IK xy error of the release point vs the hole centre (stock max_pos_err_m 0.004)
+  reach_release_gap_m: -0.008 # reach_gated: object bottom vs the lid plate top at the release; NEGATIVE = already inside the hole (a drop from above jammed 4 of 10 cylinders)
+  hint_weight: 20.0          # reach_gated: wrist-heading hint weight of the release carry (stock yaw_hint_weight 3)
+  open_scale: 1.0             # reach_gated: hand-opening speed scale at the release (<1 = slower)
+  hover_m: 0.03              # reach_gated: hover height of the carry over the hole (above the release point)
+  lower_scale: 0.30           # reach_gated: speed scale of the final descent from the hover height onto the hole
+  pg_frames: 3                # reach_gated: independent lid fits (different head frames) that must agree
+  pg_max_spread_m: 0.002      # reach_gated: max centre spread of those fits (median used); above = abstain
+  plan_budget: {max_ik_calls: 1500, max_wall_s: 15.0}   # reach_gated: candidate budget of an insert plan (replaces planner.candidate_budget; only when that is on)
+  gate_hold_s: 0.6            # reach_gated: hold still this long over the hole (hover + bottom) before the gate reads the arm
+  gate_max_xy_m: 0.0015       # reach_gated: measured grasp point vs the hole centre; above (after the servo tries) = abort (keep holding, home, 0 pts). Releases that passed at 2.4 mm / z +3.9 mm (hand held up by the lid) jammed; 0.7 mm / -0.3 mm ones went in
+  gate_max_corr: 3            # reach_gated: servo corrections (shift the commanded pose by the measured error) per gate stop before it aborts
+  gate_max_z_m: 0.0025        # reach_gated: measured grasp-point height error at the release stop (4x at the hover stop)
+  gate_max_z_hi_m: 0.0008     # reach_gated: at the release stop the measured grasp point may be at most this far ABOVE its target (above = the object is caught on the hole edge)
+  gate_max_tilt_deg: 6.0      # reach_gated: measured approach axis vs vertical at the gate
+  gate_max_track_rad: 0.02    # reach_gated: max |measured - commanded| arm joint over the hole (the arm must have settled)
+  palm_shift_m: 0.0           # EXPERIMENT, keep 0: edge grasp (IK target d ahead of the palm point). Measured r24: even d=0.045 leaves the cube/cylinder holes 4-6 cm out of reach
+  release_gap_max_m: 0.015    # max object-bottom height over the lid accepted at the release (stock 0.015)
+  hole_offsets_mat: null      # {cube: [dx, dy], cylinder: [dx, dy]} hole centre offsets (mat axes, m) from the lid-bin centre for a
+                              # physically different lid; null = scene.yaml layout (authoritative in sim). Printed 200 mm lid, if
+                              # +y_lid points away from the robot: {cube: [-0.048, -0.035], cylinder: [0.048, -0.035]}
+  hole_margin_m: null         # per-side object-to-hole clearance override (null = scene lid.hole_clearance / 2)
 
 policy:
   safety_shell: false         # FLAG (safety). act() never raises, holds the last target on a deadline miss, heavy work in a thread (plan speed: see safety_shell_vel_reserve)
   safety_shell_vel_reserve: 0.0  # with safety_shell: >0 slows every plan to <= (1 - this) x the SafetyFilter velocity limit (e.g. 0.2); 0 = plans untouched
+  generation_workers: false   # H7 FLAG: immutable generation-tagged look results; reset invalidates without waiting
+  chunk_ticks: null          # FLAG. null = motion.chunk; int >= 1 overrides trajectory ticks returned per act()
+  hold_ticks: null           # FLAG. null = motion.hold_ticks; int >= 1 overrides waiting/settled hold reply ticks
+  done_confirm: false         # FLAG (finals done). Empty/error look is not enough to end; confirm below before done
+  done_confirm_looks: 2       # minimum consecutive empty detector results (must be >= 2)
+  done_confirm_span_s: 10.0   # first-to-last empty-look span required before declaring the counter clear
   max_attempts: 2             # same object re-detected after this many tries -> skip it
-  fixed_mapping: null         # FLAG (organisers P0). colour->bin when the instruction is empty/missing; null = sim FIXED_MAPPING
+  fixed_mapping: null         # FLAG (organisers P0). explicit sort_fixed scene metadata passed at server reset;
+                              # null = shared tasks.FIXED_MAPPING. Never used as a sort_language blank/error fallback
+  fixed_instruction_first: false  # FLAG. sort_fixed: instruction beats the venue map only when it maps EVERY colour to a bin
+  frozen_rgb_guard: false     # FLAG (frozen rgb). Same head RGB as the previous look after a pick/reset = frozen stream: no picks from it, [frozen_rgb] log, home, wait, re-look (never stops)
   insert_guard: false         # FLAG (insert). insert_shapes (task id or 'hole ... lid' sentence): abstain on every
                               # object. The lid holes are 3-10 cm past the arm's IK reach (probe 2026-11-14), and a
                               # release over the lid bin scores -1 (forced); doing nothing scores 0.
+  insert_shapes: false        # FLAG (insert). insert_shapes: shape -> hole, release centred over the matching lid hole with the
+                              # left arm (planner.plan_insert, params: insert: below). Abstains per object when the hole is out of
+                              # reach (always today: grasp point stops at x ~ 0.485, holes at 0.52-0.57) or a budget fails.
+                              # Supersedes insert_guard on an insert_shapes episode.
   same_object_radius: 0.03
   verify_placement: false     # FLAG (#6, Timi). Look into the bins after every release: verify the placement, correct
                               # wrong-bin / unscored objects, distinct drop slots (grasp.drop_slot_*), time reserves below
@@ -416,6 +778,7 @@ policy:
   place_gate_colour_min: 0.6  # HSV/blob confidence: purity, support, hue-boundary margin, brightness-aware tape penalty
   place_gate_bin_min: 0.5     # self-calibration's residual-derived confidence; nominal (uncalibrated) bins use 1.0
   object_time_budget_s: null  # FLAG (EV gate). Cumulative planned motion seconds per tracked object; null = off.
+  novel_obstacles: false      # FLAG (R22). Untargeted novel objects are hand-trajectory clearance obstacles.
                               # Suggested real overlay: 35 s (120 s / 3--5 objects leaves room for settling/overhead).
   max_total_attempts: null    # global per-episode cap on started picks, any object (null = off). Guards against
                               # an object knocked > same_object_radius that is re-detected as 'new' forever
@@ -426,13 +789,36 @@ policy:
   verify_yellow_unknown: false   # FLAG (Felix #6 review). A yellow in-bin detection = unknown, never a mismatch
   max_corrections_per_episode: null   # FLAG (Felix #6 review). Cap on corrective picks; set = counter picks first,
                                       # an unplannable correction no longer ends the episode (null = stock #6)
+  verify_landing: false       # FLAG (r22). After every release look 1-2 frames (head depth occupancy of the runtime bin
+                              # interiors, colour fallback): ok | wrong bin (log) | bounced to the counter (re-queue with
+                              # jitter, attempt refunded) | lost. Observe + re-queue only: never stops the episode, no
+                              # slots, no corrections. Also never re-picks an object inside a bin footprint, and regrants
+                              # attempts to counter objects that hit max_attempts while time is left (landing_regrants_max)
+  landing_min_delta: 0.5      # verify_landing: min gain of summed occupied height (m x px, stride 2) = one object ~ 1.4
+  landing_jitter_m: 0.01      # verify_landing: grasp-point jitter of a re-queued bounced object
+  landing_max_refunds: 4      # verify_landing: attempt refunds per episode (a bounce is not a failed grasp)
+  landing_in_bin_margin_m: 0.01   # verify_landing: counter detections within this of a runtime bin footprint are never targets
+  landing_regrants_max: 2     # verify_landing: attempt regrants per episode (once nothing is pickable and time is left)
+  landing_regrant_min_s: 14.0 # verify_landing: regrant only with at least this long left (one pick + place cycle)
+  landing_relooks: 1          # verify_landing: extra settled frames when the outcome is lost/unknown (a bounce may still roll)
   order: nearest_bin          # nearest_bin | largest
+  shape_rule_guard: false     # FLAG (gen). shape rules need a confident metric shape; unknown shape places only if shape-independent
+  shape_rule_min_conf: 0.5    # min shape_id conf for a shape rule (shape_rule_guard)
   bin_lookup: colour          # FLAG (round 8). colour = stock mapping[colour] | resolve_bin = scene.resolve_bin
                               # ((colour, shape) -> colour -> shape -> default; None/abstain -> stays on the counter)
   # Time triage (default off = old behaviour: the first plan that does not fit the time left ends the episode).
   # On: a plan that does not fit is skipped (kept feasible, not `failed`) and the next candidate in `order` is planned
   # lazily; the episode ends only when nothing fits. Plans are NOT computed for every candidate (IK 0.3-6 s each).
   time_triage: false
+  score_order: false          # FLAG (r22). Next target = max EV/s, EV = ps*(2(1-pw)-pw); EV<=0 never; time-budget + endgame stop
+  score_safety_s: 3.0         # score_order: a pick must end this long before the time limit
+  score_endgame_s: 25.0       # score_order: with less time than this left, only the quickest certain object
+  score_certain_pw: 0.1       # score_order: "certain" = p_wrong at most this
+  score_overhead_s: 8.0       # score_order t_cost: fixed grasp/release seconds
+  score_speed_mps: 0.12       # score_order t_cost: effective hand path speed
+  score_arm_y_m: 0.2          # score_order: arm anchor y (+left/-right) for reach distance
+  score_reach_m: 0.55         # score_order: comfortable reach; beyond it p_success falls off
+  score_p_success: {cube: 0.9, cylinder: 0.8, triangle: 0.65, unknown: 0.5}   # score_order prior by shape
   triage_order: duration      # duration = cheap-estimate order only | priority = estimate ties (within triage_tie_m) go by
                               # shape cost (policy.shape_cost, detection.shape) then mapping confidence
   triage_tie_m: 0.02          # estimate buckets (m, nearest_bin order) treated as ties by triage_order: priority
@@ -450,10 +836,41 @@ policy:
                               # error is diagnostic only; it never aborts a carry or opens the hand above the source.
   max_attempts_vary: null     # FLAG (retry-vary). With retry_vary_grasp: tries per object up to this (e.g. 3); the extra
                               # tries come after every other candidate and only if the plan fits the time left (_has_time)
+  retry_repeat_ok: false      # FLAG (lang-r23). retry_vary: no other feasible grasp -> repeat the tried one (tries < max_attempts_vary)
+  late_regrant: false         # FLAG (lang-r23). Nothing pickable but a tried / given-up object is still on the counter and time
+                              # is left: fresh attempts + grasp history for it (not for objects never attempted)
+  late_regrants_max: 2        # late_regrant: regrants per episode
+  late_regrant_min_s: 25.0    # late_regrant: only with at least this long left (one pick + place cycle + margin)
   retry_yaw_deg: {triangle: 60, cube: 90, cylinder: 90, none: 90, default: 90}   # heading change per label
   retry_same_xy_m: 0.01       # two grasps closer than this, same posture and heading within retry_same_yaw_deg = identical
   retry_same_yaw_deg: 20.0
-  retry_assoc_radius: 0.06    # an earlier miss belongs to an object of the same colour within this (pushed objects)
+  retry_xy_offsets: null      # FLAG (retry xy). null | [[dx,dy],...] m pelvis frame; retry k+1 = re-detected xy + offsets[k-1]
+  retry_xy_mirror_right: false  # FLAG (retry xy). mirror dy after a right-hand miss
+  retry_jitter_m: 0.0         # FLAG. Retry offsets: +x, -x, +y, -y; zero keeps the detected grasp point
+  retry_cross_relocate: false # FLAG (grasp-r23, Timi). With retry_vary_grasp: after a LEFT-arm miss on an object at y < retry_cross_relocate_y
+                              # (cross-body, A95 sim: left 15 empty / 11 held there vs right 1 / 16 on its own side) the retry is a
+                              # RELOCATION: the right arm picks it and puts it on the counter where the left arm can finish
+                              # (planner.plan_relocation); the left arm then picks it from there as a fresh object.
+  retry_cross_relocate_y: -0.03         # pelvis y (m): object at or below this counts as cross-body for the left arm
+  retry_cross_relocate_min_left_s: 30.0 # needs plan duration + this many seconds before the time limit
+  retry_cross_relocate_max: 2           # relocations per episode
+  late_sweep: false           # FLAG (grasp-r23, Timi). Nothing left to plan, objects still detected (attempt limit / skipped by a
+                              # failed retry plan) and >= late_sweep_min_s left: they get late_sweep_extra more tries (kept history,
+                              # +jitter if retry_jitter_m; a try identical to an earlier one is allowed in the sweep).
+  zero_det_relook: false      # FLAG (fsm, real-only). A look with 0 detections never ends the episode by itself: re-look every settle
+                              # (~1 s, fresh frames) with a [look0] reason line; nothing held yet = until the end margin
+  zero_det_clear_looks: 3     # zero_det_relook: after a successful pick, this many empty looks ...
+  zero_det_clear_span_s: 3.0  # ... spanning this long = the counter is clear (stock 'nothing left to sort')
+  zero_det_end_margin_s: 3.0  # zero_det_relook: stop re-looking this close to time_limit
+  contact_start_unblock: false  # FLAG (fsm, real-only). start with the hands ON the table and no proved lift: after contact_start_retries, an unproved PURE VERTICAL lift, never a permanent hold
+  contact_start_retries: 3
+  startup_overlap: false      # FLAG (fsm, real-only). held calibration (empty close at home) runs while the bin-vote job computes, not before it
+  descend_contact_guard: false  # FLAG (fsm, real-only). hand stopped on the table during the descend (measured z still, commanded >= gap below) -> abort + lift
+  contact_gap_mm: 25.0
+  contact_still_mm: 3.0
+  late_sweep_min_s: 28.0
+  late_sweep_extra: 1
+  late_sweep_max: 3           # sweeps per episode
   retry_max_variants: 3       # grasp variants planned per retry (each costs one plan() call)
   first_object_speed_scale: null  # FLAG (finals safe). null | (0,1]: arm speed x this for every plan made before the first pick starts
   # Decision layer D1-D4 (decision.py, numbers in `decision:` below). All default off = stock behaviour.

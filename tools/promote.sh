@@ -9,16 +9,18 @@
 #
 # Environment: PYTHON=<interpreter with numpy and pyyaml> (default: python3).
 #
-# A real run writes overlays/submission.yaml, RELEASE.md, RELEASE.flags.json and RELEASE.equivalence.txt.
+# A real run writes overlays/submission.yaml, overlays/EXPECTED_FLAGS.json (the server refuses to start if its
+# loaded flags differ from it), RELEASE.md, RELEASE.flags.json and RELEASE.equivalence.txt.
 # It commits nothing and prints the git add / git commit command for you to run.
-# It stops on the first failure. A real run that fails restores those four files to their pre-run state.
+# It stops on the first failure. A real run that fails restores those files to their pre-run state.
 set -euo pipefail
 
 PYTHON="${PYTHON:-python3}"
 OVL_DIR=aaltonomous/baselines/classical/overlays
 SUB_REL="$OVL_DIR/submission.yaml"
 # The only paths that may be modified in the tree. A previous run leaves them behind, so re-running is allowed.
-WRITE_SET=("$SUB_REL" RELEASE.md RELEASE.flags.json RELEASE.equivalence.txt)
+EXP_REL="$OVL_DIR/EXPECTED_FLAGS.json"
+WRITE_SET=("$SUB_REL" "$EXP_REL" RELEASE.md RELEASE.flags.json RELEASE.equivalence.txt)
 
 die()   { echo "promote: $*" >&2; exit 1; }
 "$PYTHON" -c "import numpy, yaml" 2>/dev/null || die "$PYTHON lacks numpy/pyyaml (release_gate needs them): run inside the policy image or set PYTHON=<venv python>"
@@ -65,7 +67,7 @@ on_exit() {
 }
 trap on_exit EXIT
 
-step "1/7 checking the git tree"
+step "1/8 checking the git tree"
 [ -f "$REPO/$SRC_REL" ] || die "no overlay '$OVERLAY': $SRC_REL does not exist"
 bad=()
 while IFS= read -r line; do
@@ -97,7 +99,7 @@ else
   SNAP=1
 fi
 
-step "2/7 writing $SUB_REL from $OVERLAY"
+step "2/8 writing $SUB_REL from $OVERLAY"
 SRC="$ROOT/$SRC_REL"
 if grep -q '^placeholder:' "$SRC"; then
   die "$SRC_REL is a placeholder: fill in its values and drop 'placeholder: true' first"
@@ -119,14 +121,26 @@ fi
 mv "$ROOT/$SUB_REL.tmp" "$ROOT/$SUB_REL"
 echo "  wrote $SUB_REL"
 
-step "3/7 release gate: submission must carry exactly the flags of $OVERLAY"
-if ! GATE=$(cd "$ROOT" && "$PYTHON" tools/release_gate.py "$OVERLAY" 2>&1); then
+step "3/8 release gate: submission must carry exactly the flags of $OVERLAY"
+if ! GATE=$(cd "$ROOT" && "$PYTHON" tools/release_gate.py "$OVERLAY" --write-expected "$EXP_REL" 2>&1); then
   echo "$GATE"
   die "release gate FAILED: $SUB_REL does not match $OVERLAY, or $OVERLAY has a flag conflict (see above)"
 fi
 echo "$GATE"
+echo "  wrote $EXP_REL"
 
-step "4/7 flags.py --overlay submission --json"
+step "4/8 reviewed finals allow-list"
+if [[ "$OVERLAY" == finals* ]]; then
+  if ! CHECK=$(cd "$ROOT" && "$PYTHON" tools/check_release_flags.py --overlay submission 2>&1); then
+    echo "$CHECK"
+    die "reviewed finals allow-list FAILED"
+  fi
+  echo "$CHECK"
+else
+  echo "  skipped (candidate '$OVERLAY' is not a finals overlay)"
+fi
+
+step "5/8 flags.py --overlay submission --json"
 if ! (cd "$ROOT" && "$PYTHON" tools/flags.py --overlay submission --json) > "$SCRATCH/flags.json" 2> "$SCRATCH/flags.err"; then
   cat "$SCRATCH/flags.err" >&2
   die "tools/flags.py failed"
@@ -134,7 +148,7 @@ fi
 sed "s#$ROOT#.#g" "$SCRATCH/flags.json" > "$OUT/RELEASE.flags.json"
 echo "  saved $OUT/RELEASE.flags.json"
 
-step "5/7 equivalence_check.py"
+step "6/8 equivalence_check.py"
 if [ "$NO_EQUIV" = 1 ]; then
   rm -f "$OUT/RELEASE.equivalence.txt"
   echo "  skipped (--no-equiv)"
@@ -148,7 +162,7 @@ else
   cat "$OUT/RELEASE.equivalence.txt"
 fi
 
-step "6/7 writing RELEASE.md"
+step "7/8 writing RELEASE.md"
 if [ "$NO_EQUIV" = 1 ]; then EQUIV_SRC=SKIPPED; else EQUIV_SRC="$OUT/RELEASE.equivalence.txt"; fi
 R_ROOT="$ROOT" R_OUT="$OUT" R_OVERLAY="$OVERLAY" R_SHA="$SHA" R_SHA_FULL="$SHA_FULL" R_DATE="$DATE" \
 R_GATE="$GATE" R_EQUIV="$EQUIV_SRC" "$PYTHON" - > "$OUT/RELEASE.md" <<'PY'
@@ -190,6 +204,14 @@ w("## Hashes (sha256)")
 w("")
 w(f"- `{sub_rel}`: `{sha256(root / sub_rel)}`")
 w(f"- `{cfg_rel}`: `{sha256(root / cfg_rel)}`")
+exp_rel = "aaltonomous/baselines/classical/overlays/EXPECTED_FLAGS.json"
+w(f"- `{exp_rel}` (effective flags of `{overlay}`; server refuses to start on mismatch): `{sha256(root / exp_rel)}`")
+w("")
+w("## Expected flags (EXPECTED_FLAGS.json)")
+w("")
+w("```json")
+w((root / exp_rel).read_text().rstrip())
+w("```")
 w("")
 w("## Release gate")
 w("")
@@ -224,14 +246,14 @@ print("\n".join(lines))
 PY
 echo "  wrote $OUT/RELEASE.md"
 
-step "7/7 done"
+step "8/8 done"
 if [ "$DRY" = 1 ]; then
   echo "dry-run output dir: $OUT"
   echo "RELEASE.md: $OUT/RELEASE.md"
   echo "nothing in $REPO was changed"
 else
   echo "promoted $OVERLAY -> $SUB_REL (HEAD $SHA). NOT committed. Commit it yourself:"
-  files=("$SUB_REL" RELEASE.md RELEASE.flags.json)
+  files=("$SUB_REL" "$EXP_REL" RELEASE.md RELEASE.flags.json)
   [ "$NO_EQUIV" = 1 ] || files+=(RELEASE.equivalence.txt)
   echo "  git add ${files[*]}"
   echo "  git commit -m 'chore(release): promote $OVERLAY to submission'"

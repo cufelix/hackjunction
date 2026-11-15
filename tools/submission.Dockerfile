@@ -1,9 +1,11 @@
 # Team submission: the classical baseline + the integration branch's opt-in features (timi/integration).
-# Based on aaltonomous/docker/baseline.Dockerfile (36daf5b) with two changes:
+# Based on aaltonomous/docker/baseline.Dockerfile (36daf5b), with release-specific additions:
 #   1. interface/tasks.py is copied (the 36daf5b baseline.Dockerfile misses it: policy.py imports FIXED_MAPPING).
 #   2. The feature flags come from a BAKED-IN overlay file: overlays/submission.yaml -> classical/overlay.yaml.
 #      The organisers run `docker run -d --gpus all -p <port>:8000 <image>` with no env, args or volumes, so the
-#      overlay file is the only switch. As committed every flag is OFF = stock baseline behaviour.
+#      overlay file is the behavior switch and is checked against the reviewed finals allow-list at build time.
+#   3. No AALTO_PROFILE in the image: the server default is the real profile 'none'. An overlay with
+#      profile_auto.auto_detect picks sim | none from the first frames (an env var would skip that path).
 #
 #   docker build -f tools/submission.Dockerfile -t hackjunction/policy:<tag> .        # from the repo root
 #   docker run --rm -p 8001:8000 hackjunction/policy:<tag>                            # (+ --gpus all on the GPU box)
@@ -12,7 +14,14 @@
 #
 # CPU only (HSV + depth perception, Pinocchio IK); runs the same with or without --gpus. Context: needs
 # third_party/xr_teleoperate/assets/g1/g1_body29_hand14.urdf (a real file, not a symlink out of the context).
+# Build args: OVERLAY = which overlays/<name>.yaml is baked (default submission); PROFILE_MODE = auto (auto-detect sim|real
+# from the first frames, default) | sim (always the sim profile + sim_overrides) | real (always real profile 'none').
+#   docker build -f tools/submission.Dockerfile --build-arg OVERLAY=finals_r24 --build-arg PROFILE_MODE=real -t ... .
+ARG OVERLAY=submission
+ARG PROFILE_MODE=auto
 FROM nvidia/cuda:12.8.0-base-ubuntu22.04
+ARG OVERLAY
+ARG PROFILE_MODE
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip libgomp1 && rm -rf /var/lib/apt/lists/*
@@ -32,12 +41,16 @@ COPY aaltonomous/baselines/__init__.py aaltonomous/baselines/
 COPY aaltonomous/baselines/classical/*.py aaltonomous/baselines/classical/config.yaml aaltonomous/baselines/classical/
 COPY aaltonomous/baselines/classical/brain/ aaltonomous/baselines/classical/brain/
 COPY aaltonomous/baselines/classical/overlays/ aaltonomous/baselines/classical/overlays/
+COPY aaltonomous/baselines/classical/assets/ aaltonomous/baselines/classical/assets/
 # THE flag switch: the submission overlay, baked in where load_config() looks for it.
-COPY aaltonomous/baselines/classical/overlays/submission.yaml aaltonomous/baselines/classical/overlay.yaml
-COPY tools/flags.py tools/
+COPY aaltonomous/baselines/classical/overlays/${OVERLAY}.yaml aaltonomous/baselines/classical/overlay.yaml
+COPY tools/flags.py tools/check_release_flags.py tools/set_profile_mode.py tools/
+RUN python3 tools/set_profile_mode.py aaltonomous/baselines/classical/overlay.yaml "${PROFILE_MODE}"
+ENV PROFILE_MODE=${PROFILE_MODE} OVERLAY=${OVERLAY}
 # Build-time checks (fail the build, not the run): config + overlay + URDF + calibration load; print the flag set.
 RUN python3 -c "from aaltonomous.baselines.classical.policy_server import ClassicalServerPolicy; ClassicalServerPolicy()" \
  && python3 tools/flags.py \
+ && python3 tools/check_release_flags.py \
  && python3 -c "from pathlib import Path; from aaltonomous.baselines.classical.config import OVERLAY_DIR, load_config, \
 hand_postures, home_arm; [(hand_postures(load_config(overlay=str(f))), home_arm(load_config(overlay=str(f))), \
 print('overlay ok (postures in URDF limits):', f.name)) for f in sorted(OVERLAY_DIR.glob('*.yaml'))]" \

@@ -1,0 +1,34 @@
+# BuildKit per-Dockerfile ignore for tools/brain/Dockerfile.policy_brain (used automatically with -f of that file).
+# = tools/submission.Dockerfile.dockerignore, plus the brain additions at the bottom. llama.cpp source and models stay IN.
+.git
+**/.git
+third_party
+!third_party/xr_teleoperate/assets/g1/g1_body29_hand14.urdf
+runs
+data
+docs
+logs
+JUNCTION
+tests
+scripts
+src
+work
+.pytest_cache
+aaltonomous/scene/assets
+aaltonomous/baselines/classical/overlay.yaml
+**/__pycache__
+**/*.pyc
+**/*.pem
+**/*.key
+**/.env*
+# brain additions: wendy manifests, audio/voice, sidecar compose never enter the brain build context
+tools/wendy
+**/wendy*
+aaltonomous/voice
+aaltonomous/audio
+**/audio
+**/voice
+**/compose*.y*ml
+**/docker-compose*.y*ml
+**/sidecar*
+**/*.gguf.partial

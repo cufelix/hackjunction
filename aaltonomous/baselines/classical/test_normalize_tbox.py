@@ -57,6 +57,12 @@ class TestColourBinClauses(unittest.TestCase):
         for s in ("Put the first cube in the left bin.", "Yellow goes in the third bin."):
             self.assertEqual(normalize(s), s)   # no side word: untouched
 
+    def test_count_from_right_preamble_mirrors_third_to_left(self):
+        s = ("Count the bins from the right. Red objects go in the third bin, yellow objects in the second bin, "
+             "blue objects in the first bin.")
+        self.assertEqual(resolve(normalize(s), fallback={}),
+                         {"red": "left", "yellow": "center", "blue": "right"})
+
     def test_finals_colour_names_and_typos(self):
         # real objects: purple / yellow / orange (resolver keys blue / yellow / red)
         cases = {"Sorting: pruple -> right; yellow -> leeft; oange -> centre.": {"blue": "right", "yellow": "left", "red": "center"},
@@ -141,6 +147,29 @@ class TestNormalizerRules(unittest.TestCase):
             self.assertEqual(name_foreign(s), s, s)
         self.assertEqual(normalize("Put the prisms in the left bin."), "Put the prisms in the left bin.")
 
+
+class TestParaStressFixes(unittest.TestCase):
+    """R48 (para): a typo'd compound bin word stays a bin clause; "and <colour> can" after a conjunction is the noun."""
+
+    def test_typo_leftmost_is_a_bin_word(self):
+        self.assertEqual(normalize("Cylinders go to the centre bin; scratch that, cylinders go to the lfetmost bin."),
+                         "Cylinders go to the centre bin; scratch that, cylinders go to the leftmost bin.")
+        m = strict("Cylinders go to the centre bin; scratch that, cylinders go to the lfetmost bin.")
+        self.assertIsNone(m.get("cylinder"))           # two different bins for one key: abstain, not the first
+
+    def test_conjunction_colour_can_is_the_cylinder_noun(self):
+        self.assertEqual(normalize("Put the red can in the left bin and blue can into the right bin."),
+                         "Put the red cylinder in the left bin and blue cylinder into the right bin.")
+        self.assertEqual(normalize("Red goes left and blue can go right."), "Red goes left and blue can go right.")
+        self.assertEqual(resolve(normalize("Orange triangle goes left, yellow cuboid into the middle bin, "
+                                           "and blue can into the rightmost bin."), fallback={}),
+                         {("red", "triangle"): "left", ("yellow", "cube"): "center", ("blue", "cylinder"): "right"})
+
+
+def strict(text):
+    from .normalize import strict_mapping
+    n = normalize(text)
+    return strict_mapping(n, resolve(n, fallback={}))
 
 if __name__ == "__main__":
     unittest.main()
