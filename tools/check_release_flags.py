@@ -92,8 +92,7 @@ GEN_FINAL_FLAGS = frozenset({"grasp.arm_xy_offset", "motion.output_hold_on_late"
                              "perception.fk_colour_rescue"})
 R25_FLAGS = frozenset({"brain.known_task_hard_off", "planner.candidate_budget", "profile_auto.second_cue"})
 # fsm layer (real-only dead-time / failure-mode fixes; false in profile_auto.sim_overrides), finals_r25_gen only
-FSM_FLAGS = frozenset({"policy.late_sweep", "policy.zero_det_relook", "policy.startup_overlap",
-                       "policy.descend_contact_guard", "perception.look_summary", "policy.contact_start_unblock"})
+FSM_FLAGS = frozenset({"policy.zero_det_relook", "policy.startup_overlap", "policy.contact_start_unblock", "perception.look_summary"})
 
 
 def expected_flags(overlay_name):

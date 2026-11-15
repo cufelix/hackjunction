@@ -1853,6 +1853,9 @@ class ClassicalPolicy:
 
     def _look(self, obs, deadline_job=None, detector=None):
         detector = self.perception if detector is None else detector
+        rgb, depth = obs.get("head_rgb"), obs.get("head_depth")
+        if rgb is None or depth is None or getattr(rgb, "dtype", None) == object or getattr(depth, "dtype", None) == object:
+            return ("error", "no head frame")   # missing/invalid head image: never crash the look (no-op on valid frames)
         verify = self._verify_on()
         if not verify:  # flag off: the stock look (no bin review, no corrective picks, no relooks)
             dets = detector.detect(obs["head_rgb"], obs["head_depth"], **self._detect_kw(), **self._fk_kw(obs),
