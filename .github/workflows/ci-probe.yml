@@ -15,5 +15,5 @@ jobs:
         run: |
           for f in $(find aaltonomous tools -name 'test_*.py' | sort); do
             m=$(echo "${f%.py}" | tr / .)
-            timeout 300 python -m unittest "$m" >/dev/null 2>&1; echo "MODRESULT $m $?"
+            rc=0; timeout 300 python -m unittest "$m" >/dev/null 2>&1 || rc=$?; echo "MODRESULT $m $rc"
           done
