@@ -171,15 +171,12 @@ FLAGS = {
     "policy.retry_repeat_ok": ("lang-r23", False, "retry_vary: when every other grasp variant is infeasible or identical, repeat the tried grasp (while tries < max_attempts_vary) instead of giving the object up for good"),
     "policy.late_regrant": ("lang-r23", False, "nothing pickable but a tried / given-up object is still on the counter with >= late_regrant_min_s left: clear its attempts, failed entry and grasp history for a fresh run of tries (late_regrants_max per episode)"),
     "policy.retry_jitter_m": ("finals grasp", 0.0, "retry grasp-point jitter magnitude; 0 disables the deterministic +/-xy pattern"),
-<<<<<<< HEAD
     "policy.retry_cross_relocate": ("grasp-r23", False, "retry after a left-arm miss at y<retry_cross_relocate_y: right arm relocates the object "
                                                          "to the left arm's side (needs retry_vary_grasp)"),
     "policy.late_sweep": ("grasp-r23", False, "nothing left but excluded objects remain and >= late_sweep_min_s is left: extra tries"),
-=======
     "policy.retry_xy_offsets": ("retry xy", None, "null | list of [dx, dy] (m, pelvis frame): retry k+1 grasps at the re-detected "
                                                   "object xy + offsets[k-1] (on top of retry_jitter_m); needs retry_vary_grasp"),
     "policy.retry_xy_mirror_right": ("retry xy", False, "retry_xy_offsets: mirror dy for a retry after a right-hand miss"),
->>>>>>> ef4823b (feat(retry): policy.retry_xy_offsets per-attempt grasp xy shift on the re-detected object (default off) + ab_lh_retryxy/2 overlays)
     "policy.first_object_speed_scale": ("finals safe", None,
                                           "null | (0,1]: arm speed x this for every plan made before the first pick starts"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
@@ -212,6 +209,8 @@ FLAGS = {
     "grasp.approach_slow_dist_m": ("real demo", 0.05, "length (m) of the descend tail slowed by approach_slow_mps"),
     "grasp.arm_xy_offset": ("arm offset", {"left": [0.0, 0.0], "right": [0.0, 0.0]}, "per-arm grasp xy correction (pelvis frame, m, each |v| <= 0.05) added to the detected top xy in the planner; zeros = off"),
     "grasp.left_hand_fix.shift_z": ("left hand", 0.0, "left arm + triangle only: add this (m) to the grasp z before the fingertip-clearance raise; 0 = off"),
+    "grasp.online_bias": ("online bias", False, "robot learns its own per-hand grasp xy bias from misses (online_bias.py); starts at grasp.arm_xy_offset, grasp point only; needs policy.grasp_diag_log"),
+    "grasp.arm_xy_offset": ("online bias", {"left": [0.0, 0.0], "right": [0.0, 0.0]}, "per-arm grasp xy correction (m, pelvis frame); the start value of grasp.online_bias"),
     "motion.carry_scale": ("Felix grasp", 1.0, "<= 1: slower lift + carry only"),
     "motion.arm_vel_cap": ("Timi vel", None, "rad/s cap on motion.arm_max_vel (arm_max_acc scaled by the same ratio); null = profile"),
     "motion.output_caps": ("M4", None, "null = legacy output; dict = final per-joint arm/hand velocity and acceleration caps, with stateful limiting on every emitted route"),
@@ -402,6 +401,14 @@ def check_flag_values(cfg):
     lhz = _get(cfg, "grasp.left_hand_fix.shift_z")
     if isinstance(lhz, bool) or not isinstance(lhz, (int, float)) or not np.isfinite(lhz) or abs(lhz) > 0.05:
         raise ValueError(f"grasp.left_hand_fix.shift_z = {lhz!r}: want a finite number with |v| <= 0.05 m")
+    if not isinstance(_get(cfg, "grasp.online_bias"), bool):
+        raise ValueError("grasp.online_bias: want true or false")
+    axo = _get(cfg, "grasp.arm_xy_offset")
+    if not (isinstance(axo, dict) and set(axo) == {"left", "right"} and all(
+            isinstance(v, (list, tuple)) and len(v) == 2 and all(
+                isinstance(x, (int, float)) and not isinstance(x, bool) and np.isfinite(x) and abs(x) <= 0.1 for x in v)
+            for v in axo.values())):
+        raise ValueError(f"grasp.arm_xy_offset = {axo!r}: want {{left: [dx, dy], right: [dx, dy]}}, |v| <= 0.1 m")
     for k, (lo, hi) in LIMITS.items():
         v = float(_get(cfg, k))
         if not lo < v <= hi:

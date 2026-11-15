@@ -41,6 +41,7 @@ from .kinematics import PlanBudget, PlanBudgetExceeded
 from .bin_vote import vote_bins
 from .config import equalize_index_middle, hand_postures, home_arm, load_config, soft_detector_active, soft_hand_active, soft_overclose
 from .held import HeldDetector
+from .online_bias import OnlineBias
 from .fk_xcheck import FkHandXCheck, FkXCheckResult
 from .kinematics import ArmKinematics
 from .perception import Perception
@@ -119,6 +120,9 @@ class ClassicalPolicy:
         margin = np.minimum(safety.hand_pos_margin, 0.25 * (spec.hand_upper - spec.hand_lower))
         return spec.hand_lower + margin, spec.hand_upper - margin
 
+    _obias = None   # grasp.online_bias state (instance attribute once enabled)
+    _ob_pending = ()
+
     def __init__(self, config=None, scene=None, calibration=None, safety: SafetyConfig | None = None,
                  require_confirm=False, threaded=False, time_limit=120.0, log=print, overrides=None,
                  profile=None, overlay=None):
@@ -185,6 +189,11 @@ class ClassicalPolicy:
                 (log or print)(f"primary calibration disabled: {type(exc).__name__}: {exc}")
         self.planner = Planner(self.cfg, self.scene, self.post, self.home, self.kin, self.safety, self.spec)
         self.perception.hand_opening_m = self.planner.generic_hand_opening   # novel: no-handle width gate
+        self._obias = None          # grasp.online_bias: per-hand learned grasp bias; lives as long as this instance
+        self._ob_pending = []
+        if self.cfg["grasp"].get("online_bias", False):
+            self._obias = OnlineBias(self.cfg["grasp"].get("arm_xy_offset") or {}, log=lambda m: self.log(m))
+            self.planner.online_bias = self._obias
         mo = self.cfg["motion"]
         self.output_limiter = (MotionOutputLimiter(
             mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"], mo["hand_max_acc"], 1.0 / HZ,
@@ -544,6 +553,9 @@ class ClassicalPolicy:
         self._sweep_xy = []         # policy.late_sweep: object positions a repeat grasp is allowed for
         self._choose_t = 0.0        # episode time of the look being planned
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
+        self._ob_pending = []       # grasp.online_bias: this episode's started picks awaiting evidence (state b persists)
+        if self._obias is not None:
+            self._obias.begin_episode()
         self._summary_logged = False
         self._emitted = None        # safety.nan_guard: (arm, hand) last row of the last action returned this episode
         self._encoder_hold = None    # M2: last complete finite encoder sample; never synthesize an unobserved joint
@@ -3162,7 +3174,10 @@ class ClassicalPolicy:
     def _same_grasp(self, key, h):
         pol = self.cfg["policy"]
         xy, yaw, posture = key
-        if posture != h["posture"] or np.linalg.norm(np.asarray(xy) - h["xy"]) >= float(pol.get("retry_same_xy_m", 0.01)):
+        same_xy = float(pol.get("retry_same_xy_m", 0.01))
+        if self._obias is not None:
+            same_xy = min(same_xy, 0.008)   # a 1 cm bias step must count as a different grasp
+        if posture != h["posture"] or np.linalg.norm(np.asarray(xy) - h["xy"]) >= same_xy:
             return False
         if yaw is None or h["yaw"] is None:
             return True
@@ -3273,6 +3288,46 @@ class ClassicalPolicy:
             kin.budget = None
 
     def _plan_pick_inner(self, d, kw, plan_fn=None):
+        if self._obias is None:
+            return self._plan_pick_core(d, kw, plan_fn)
+        self._ob_resolve(d)
+        p = self._plan_pick_core(d, kw, plan_fn)
+        if p is not None and getattr(p, "ok", False):
+            p.ob_obj_xy = np.asarray(d.top[:2], float).copy()   # the object as detected before any bias / retry shift
+        return p
+
+    def _ob_resolve(self, d):
+        """grasp.online_bias: a re-detection of an object whose earlier grasp missed is the evidence: the displacement
+        since that grasp (0 = closed on air) feeds the per-hand update BEFORE the retry is planned."""
+        xy = np.asarray(d.top[:2], float)
+        rad = self._assoc_radius()
+        hits = [r for r in self._ob_pending if r["held"] is False and not r["done"] and r["color"] == d.color
+                and np.linalg.norm(xy - r["obj_xy"]) < rad]
+        if not hits:
+            return
+        for r in self._ob_pending:
+            if r in hits:
+                r["done"] = True
+        self._obias.miss(hits[-1]["side"], xy - hits[-1]["obj_xy"])
+        self._ob_pending[:] = [r for r in self._ob_pending if not r["done"]]
+
+    def _ob_started(self, plan):
+        if self._obias is not None and plan.side in ("left", "right") and not plan.corrective \
+                and getattr(plan, "source_bin", None) is None and getattr(plan, "ob_obj_xy", None) is not None:
+            plan.ob_rec = {"color": plan.color, "side": plan.side, "obj_xy": plan.ob_obj_xy, "held": None, "done": False}
+            self._ob_pending.append(plan.ob_rec)
+
+    def _ob_held(self, plan, held):
+        rec = getattr(plan, "ob_rec", None)
+        if self._obias is None or rec is None or held is None or rec["held"] is not None:
+            return
+        rec["held"] = bool(held)
+        if held:
+            rec["done"] = True
+            self._obias.success(plan.side)
+            self._ob_pending[:] = [r for r in self._ob_pending if not r["done"]]
+
+    def _plan_pick_core(self, d, kw, plan_fn=None):
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
         differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""
@@ -4284,6 +4339,7 @@ class ClassicalPolicy:
                  "side": plan.side, "held": None}
             self.vary_hist.append(h)
             hist = h
+        self._ob_started(plan)
         if skill_side:
             self._skill_pending = {"key": getattr(plan, "skill_key", ("unknown", plan.color, plan.side)),
                                    "arm": getattr(plan, "skill_arm", "stock"), "color": plan.color,
@@ -4380,6 +4436,7 @@ class ClassicalPolicy:
         self._stall = self._exec = None      # per-plan watchers: their indices no longer match the queue
         if self._vary_on() and self.vary_hist:   # the entry _start appended for this plan
             self.vary_hist[-1]["held"] = False
+        self._ob_held(plan, False)
         self.log(f"[held_abort] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
                  f"{sample} sample empty: carry cancelled, proving vertical escape")
         self.queue_a = np.empty((0, 14)); self.queue_h = np.empty((0, 14))
@@ -4550,6 +4607,7 @@ class ClassicalPolicy:
         self._gdiag = None
         plan = g["plan"]
         held, parts = self._diag_body(g)
+        self._ob_held(plan, held)
         pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
         if pend is not None and pend["color"] == plan.color:
             pend["held"] = None if held is None else bool(held)

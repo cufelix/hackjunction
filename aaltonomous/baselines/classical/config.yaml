@@ -527,6 +527,7 @@ grasp:
     clearance: 0.07           # spot centre this far from other detected objects
   y_split: 0.0
   arm_xy_offset: {left: [0.0, 0.0], right: [0.0, 0.0]}   # per-arm grasp xy correction (pelvis frame). TUNE on the robot
+  online_bias: false          # FLAG (online bias). per-hand grasp xy bias learned from misses, starts at arm_xy_offset; grasp point only
 
 ik:
   limit_margin: 0.08          # rad inside URDF limits (safety filter clips beyond 0.05)

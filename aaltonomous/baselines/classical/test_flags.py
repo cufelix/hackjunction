@@ -371,7 +371,7 @@ class TestFlags(unittest.TestCase):
                                       "ab_inj_p7_yl", "ab_inj_p7_yr", "ab_isolated_first",
                                       "ab_lh_retryxy", "ab_lh_retryxy2", "ab_lh_z_m10", "ab_lh_z_m20", "ab_lh_z_p10", "ab_lh_z_p20",
                                       "ab_log_joint_offset", "ab_neutral_obstacles",
-                                      "ab_object_time_budget_s", "ab_place_gate",
+                                      "ab_obias", "ab_obias_retry", "ab_obias_wrong", "ab_object_time_budget_s", "ab_place_gate",
                                       "ab_plane_b1_inj_p7", "ab_plane_cgate", "ab_plane_cgate_live",
                                       "ab_plane_cgate_live_fk", "ab_plane_cgate_live_vote",
                                       "ab_plane_inj_p7", "ab_planner", "ab_retry_vary",

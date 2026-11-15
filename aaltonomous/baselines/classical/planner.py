@@ -1306,7 +1306,9 @@ class Planner:
         hand_rel = hand_q.copy(); hand_rel[sl] = post[g.get("release_posture", "preshape")][sl]
 
         # grasp height: object mid-height, raised until the preshaped fingers clear the counter
-        xy = det.top[:2] + np.asarray((g.get("arm_xy_offset") or {}).get(side, [0.0, 0.0]), float)  # per-arm, TUNE
+        ob = getattr(self, "online_bias", None)   # grasp.online_bias: the learned per-hand bias replaces the static offset
+        off = ob.get(side) if (ob is not None and source_bin is None) else (g.get("arm_xy_offset") or {}).get(side, [0.0, 0.0])
+        xy = det.top[:2] + np.asarray(off, float)  # per-arm, TUNE
         z = (det.top[2] - H / 2) if source_bin is not None else (zc + hfrac * H)
         lhf = g.get("left_hand_fix") or {}   # grasp.left_hand_fix.shift_z: left-arm triangle grasp height sweep
         if side == "left" and getattr(det, "shape", None) == "triangle" and float(lhf.get("shift_z", 0.0) or 0.0):

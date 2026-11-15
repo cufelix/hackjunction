@@ -141,6 +141,8 @@ flags:
   grasp.drop_slot_overflow: counter             # Felix #6r  counter | stack, when the slots are used up
   grasp.drop_height_extra_m: 0.0                # finals safe extra release height; IK fallback to stock
   grasp.drop_lateral_margin_m: 0.0              # finals safe release toward bin centre; IK fallback to stock
+  grasp.online_bias: false                      # online bias  per-hand grasp xy bias learned from misses (starts at arm_xy_offset)
+  grasp.arm_xy_offset: {left: [0.0, 0.0], right: [0.0, 0.0]}   # online bias  per-arm grasp xy correction (m, pelvis)
   grasp.left_hand_fix.shift_z: 0.0              # left hand  left arm + triangle grasp z shift (m); 0 = off
   policy.grasp_diag_log: true                  # passive    [grasp_diag] per pick (held yes/no)
   grasp.held_detector: stall                   # real held  legacy diagnostic; ab_held_detector selects finger_sum
