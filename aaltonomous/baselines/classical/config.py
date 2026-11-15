@@ -253,6 +253,8 @@ FLAGS = {
     "perception.height_range": ("real fix", [0.4, 2.0], "accepted object top height above the counter in object sizes; real overlay lowers the floor to 0.25"),
     "bin.fallback_centre_x": ("real fix", None, "real only: planner bin centre x (arm frame, m) for any bin whose vote conf < 0.75; venue boxes stand ~0.52 near edge (centre 0.62), nominal 0.505 + frame map left slots in front of the rim"),
     "bin.fallback_drop_z": ("real fix", None, "real only: release z floor (arm frame, m) for a bin whose vote conf < 0.75; IK reaches x 0.52 over the rim only with the arm high (z 0.25)"),
+    "bin.reach_x_max": ("real fix", None, "real only: clamp every drop slot/drop point to this arm-frame x (IK envelope ~0.52 at z 0.25); slots collapsing onto one spot are dropped"),
+    "bin.reach_drop_z": ("real fix", None, "real only: release z floor (arm frame) for every bin; pairs with bin.reach_x_max"),
     "bin.vote.max_shift_m": ("bin vote", 0.10, "a bin vote result further than this from the prior is discarded (prior kept); real venue bins measure +8..+15 cm vs nominal"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "bin.vote.signed_rim_fit": ("C3", False, "fit physical rim displacement with its signed +x/+y direction"),

@@ -137,7 +137,7 @@ class TestFlags(unittest.TestCase):
                                                   "brain.known_task_hard_off", "planner.candidate_budget",
                                                   "perception.table_pitch_calibration.max_abs_pitch_deg",
                                                   "policy.zero_det_relook", "policy.startup_overlap",
-                                                  "policy.descend_contact_guard", "perception.look_summary", "policy.contact_start_unblock", "calib.plane.robust_height", "perception.plan_frame", "calib.plane.robust_agree_m", "perception.height_range", "bin.fallback_centre_x", "bin.fallback_drop_z"})
+                                                  "policy.descend_contact_guard", "perception.look_summary", "policy.contact_start_unblock", "calib.plane.robust_height", "perception.plan_frame", "calib.plane.robust_agree_m", "perception.height_range", "bin.fallback_centre_x", "bin.fallback_drop_z", "bin.reach_x_max", "bin.reach_drop_z"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):

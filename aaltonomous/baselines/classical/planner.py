@@ -357,7 +357,7 @@ class Planner:
     def drop_xy(self, name, inset="cfg"):
         c = self._drop_xy0(name, inset)
         sh = self.bin_geometry(name)["shift"]
-        return c + sh if sh is not None else c
+        return self._reach_xy(c + sh if sh is not None else c)
 
     def _drop_xy0(self, name, inset="cfg"):
         """Release point (pelvis xy) in bin `name`: the point of the inner footprint nearest the pelvis, `grasp.drop_inset`
@@ -377,7 +377,29 @@ class Planner:
     def drop_slots(self, name):
         out = self._drop_slots0(name)
         sh = self.bin_geometry(name)["shift"]
-        return [p + sh for p in out] if sh is not None else out
+        out = [p + sh for p in out] if sh is not None else out
+        return self._reach_slots(out)
+
+    def _reach_x(self):
+        v = (self.cfg.get("bin") or {}).get("reach_x_max")
+        return None if v is None else float(v)
+
+    def _reach_slots(self, slots):
+        """bin.reach_x_max (real): clamp every slot to the IK envelope (release x beyond it fails every plan), whatever the bin
+        source (vote or fallback). Slots that collapse onto an earlier one (same y, clamped x) are dropped: no two objects on one spot."""
+        hx = self._reach_x()
+        if hx is None:
+            return slots
+        out = []
+        for p in slots:
+            q = np.array([min(float(p[0]), hx), float(p[1])])
+            if all(np.linalg.norm(q - o) > 0.01 for o in out):
+                out.append(q)
+        return out
+
+    def _reach_xy(self, xy):
+        hx = self._reach_x()
+        return xy if hx is None else np.array([min(float(xy[0]), hx), float(xy[1])])
 
     def _drop_slots0(self, name):
         """Reach-biased release points in the near-inner-wall band of a bin.
@@ -1469,6 +1491,9 @@ class Planner:
         fz = (self.cfg.get("bin") or {}).get("fallback_drop_z")
         if fz is not None and bin_name is not None and self._bin_unvoted(bin_name):   # reach at the rim needs a higher arm
             z_drop = max(z_drop, float(fz))
+        rz = (self.cfg.get("bin") or {}).get("reach_drop_z")
+        if rz is not None and bin_name is not None:   # bin.reach_drop_z (real): any bin source; IK reaches x 0.52 only at z >= 0.25
+            z_drop = max(z_drop, float(rz))
         if place_xy is not None:  # relocation / place_at: put it down on the counter (release just above the grasp height)
             bxy, z_drop = np.asarray(place_xy, float), z + 0.005   # bin_name may be None here
         elif drop_slot is None:  # stock: one release point per bin (#6 off)

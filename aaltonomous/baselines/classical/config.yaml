@@ -390,6 +390,8 @@ perception:
 
 bin:
   fallback_centre_x: null     # FLAG (real, binfix): arm-frame x (m) of the bin CENTRE used when the bin vote is not confident (conf < fallback.max_conf); null = nominal
+  reach_x_max: null           # FLAG (real, binfix2): every drop slot / drop point is clamped to this arm-frame x (IK envelope), voted or fallback bins
+  reach_drop_z: null          # FLAG (real, binfix2): release z floor for any bin (reach at the rim needs a high arm)
   fallback_drop_z: null       # FLAG (real, binfix): arm-frame release z floor (m) for an unvoted bin (reach at the rim rises with the arm)
   fallback: {max_conf: 0.75}
   geometry_runtime: false     # FLAG (bin geo). perception follows planner.bin_shift for every bin consumer (needs bin.vote.enabled for a shift)
