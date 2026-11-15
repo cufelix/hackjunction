@@ -303,7 +303,8 @@ class Perception:
         self.generic_max_width = float(grasp.get("generic_max_width", 0.060))
         self.classify_shape = bool(self.cfg.get("classify_shape", False)) or self.generic_fallback
         self.want_path = (bool(grasp.get("close_posture_by_shape", False))
-                          or bool(grasp.get("cage_mode", False)) or self.generic_fallback)
+                          or bool(grasp.get("cage_mode", False)) or self.generic_fallback
+                          or bool((cfg.get("policy") or {}).get("shape_rule_guard", False)))   # policy.shape_rule_guard needs conf + path
         self._last_path = None
         # grasp.posture_apex_gate (default off): prism-top check features for "triangle" detections (apex_gate.py)
         self.want_apex = self.want_path and bool(cfg.get("grasp", {}).get("posture_apex_gate", False))

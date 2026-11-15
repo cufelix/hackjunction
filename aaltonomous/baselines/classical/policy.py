@@ -99,6 +99,35 @@ def _lower_thread_priority(nice=10):
         pass
 
 
+def _generality_apply(cfg, log, text, mapping):
+    """instruction.generality. (1) veto: unsafe verb/target, a count, a spatial relation / retraction, or a blanket rule
+    beside keyed rules -> abstain on every object. (2) closed-vocabulary parser: used when the stack placed nothing, or
+    when it agrees with every placement the stack made (a superset); a disagreement keeps the stack's mapping. NEVER raises."""
+    try:
+        if not (cfg.get("instruction") or {}).get("generality", False):
+            return mapping
+        from .generality import general_mapping, veto
+        why = veto(text)
+        if why:
+            log(f"[instruction] generality veto ({why}): abstain on every object")
+            return {"default": None}
+        got = general_mapping(text)
+        if not got:
+            return mapping
+        from aaltonomous.scene.scene import resolve_bin
+        from aaltonomous.interface.tasks import SHAPES
+        for c in COLORS:
+            for sh in SHAPES:
+                old = resolve_bin(mapping or {}, c, sh)
+                if old in ("left", "center", "right") and resolve_bin(got, c, sh) != old:
+                    log(f"[instruction] generality parser disagrees with the stack on {c}/{sh}; keeping the stack")
+                    return mapping
+        log(f"[instruction] generality parser: {got}")
+        return got
+    except Exception:
+        return mapping
+
+
 class ClassicalPolicy:
     _LOOK_COMMIT_FIELDS = (
         "last_detections", "last_bin_detections", "scheduled_corrections", "plans", "retry_pass_used",
@@ -323,6 +352,7 @@ class ClassicalPolicy:
                 self.log(f"instruction resolve skipped ({len(str(text))} chars): no fixed fallback")
                 return None
             from .instruction import resolve
+            orig_text = text
             if (self.cfg.get("instruction") or {}).get("venue_colour_aliases", False):   # T10: venue colour words
                 from .normalize import venue_colour_aliases
                 text = venue_colour_aliases(text)
@@ -340,8 +370,9 @@ class ClassicalPolicy:
                 from .normalize import strict_mapping
                 if (self.cfg.get("instruction") or {}).get("structured", False):
                     from .normalize import structured_final
-                    return structured_final(text, hazard_guard=hazard_guard)  # structured grammars then strict hazards
-                return strict_mapping(text, resolve(text, fallback={}))
+                    return _generality_apply(
+                        self.cfg, getattr(self, "log", lambda *_: None), orig_text, structured_final(text, hazard_guard=hazard_guard))  # structured grammars then strict hazards
+                return _generality_apply(self.cfg, getattr(self, "log", lambda *_: None), orig_text, strict_mapping(text, resolve(text, fallback={})))
             return resolve(text, fallback={}) or {"default": None}
         except Exception as e:                      # a parse bug must not cost the whole episode
             self.log(f"instruction resolve failed ({e}), abstaining")

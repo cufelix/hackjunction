@@ -32,12 +32,35 @@ from .kinematics import ArmKinematics
 from .config import soft_hand_active, soft_overclose
 
 
-def lookup_bin(cfg, mapping, color, shape=None):
+_SHAPES = ("cube", "cylinder", "triangle")
+
+
+def _shape_dependent(mapping):
+    return any(isinstance(k, tuple) or k in _SHAPES for k in mapping)
+
+
+def _shape_safe_bin(mapping, color):
+    """Shape unknown: a bin only when EVERY shape of this colour resolves to the same bin, else abstain (a colour or
+    "default" fallback must not override a shape / (colour, shape) rule for the shape we could not see)."""
+    bins = {resolve_bin(mapping, color, s) for s in _SHAPES}
+    if len(bins) != 1:
+        return None
+    b = bins.pop()
+    return None if b in (None, "abstain") else b
+
+
+def lookup_bin(cfg, mapping, color, shape=None, shape_conf=None, shape_path=None):
     """Target bin of a detection. policy.bin_lookup: colour (stock: mapping[colour]) | resolve_bin (scene.resolve_bin:
     (colour, shape) -> colour -> shape -> "default"; shape None = abstain -> only colour / default apply).
     None or "abstain" = do not pick (the object stays on the counter: 0 points, never -1)."""
     if (cfg.get("policy") or {}).get("bin_lookup", "colour") != "resolve_bin":
         return mapping.get(color)
+    pol = cfg.get("policy") or {}
+    if pol.get("shape_rule_guard", False) and _shape_dependent(mapping):   # shape rules need a confident metric shape
+        if shape is not None and (shape_path != "metric" or float(shape_conf or 0.0) < float(pol.get("shape_rule_min_conf", 0.5))):
+            shape = None
+        if shape is None:
+            return _shape_safe_bin(mapping, color)
     b = resolve_bin(mapping, color, shape)
     return None if b in (None, "abstain") else b
 
@@ -51,7 +74,8 @@ def lookup_detection_bin(cfg, mapping, det):
             return None
         b = resolve_bin(mapping, det.color, None)
         return None if b in (None, "abstain") else b
-    return lookup_bin(cfg, mapping, det.color, getattr(det, "shape", None))
+    return lookup_bin(cfg, mapping, det.color, getattr(det, "shape", None),
+                      getattr(det, "shape_conf", None), getattr(det, "shape_path", None))
 
 
 @dataclass
