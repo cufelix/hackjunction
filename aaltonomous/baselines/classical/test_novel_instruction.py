@@ -109,6 +109,37 @@ class BrainFindLongObjectTest(unittest.TestCase):
         self.assertNotIn(ids[0], found)
 
 
+class SettledLookSkillTest(unittest.TestCase):
+    """A skill step is confirmed within 5 cm of its target whatever the yaw; a place_at step keeps its radius."""
+
+    def run_observe(self, tool, dist_m):
+        import numpy as np
+        from unittest import mock
+        pol = ClassicalPolicy.__new__(ClassicalPolicy)
+        pol.cfg, pol.brain = {"brain": {}, "policy": {"same_object_radius": 0.01}}, None   # _ftd_on() False
+        pol.plan_brain, pol.log = mock.Mock(), (lambda *a, **k: None)
+        pol._agent_dirty, pol._planner_execution = False, {
+            "call": {"tool": tool, "args": {}}, "source_xy": np.array([0.0, 0.0]), "color": "grey",
+            "table_xy": np.array([0.2, 0.0])}
+        pol._cl_on, pol._planner_track_move, pol._planner_failed = (lambda: False), mock.Mock(), mock.Mock()
+        pol.scene = SimpleNamespace(cfg={})
+        d = SimpleNamespace(color="grey", top=np.array([0.2 + dist_m, 0.0, 0.02]))
+        pol._planner_observe([d], {})
+        return pol
+
+    def test_skill_confirms_4cm_off_at_any_yaw(self):
+        pol = self.run_observe("skill", 0.04)
+        pol.plan_brain.mark.assert_called_once_with("ok", "settled look confirmed")
+
+    def test_skill_6cm_off_is_not_confirmed(self):
+        pol = self.run_observe("skill", 0.06)
+        pol._planner_failed.assert_called_once()
+
+    def test_place_at_4cm_off_is_not_confirmed_by_the_skill_tolerance(self):
+        pol = self.run_observe("place_at", 0.04)
+        pol._planner_failed.assert_called_once()
+
+
 def make_pol(instruction, task=None):
     env = make_mock_env(seed=0, n_objects=3)
     info = {"instruction": instruction, "time_limit": 120.0}

@@ -3504,7 +3504,9 @@ class ClassicalPolicy:
         if target is None:
             ok = not at_source                    # bin placement: object left the counter source
         else:
-            ok = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - target) < rad for d in dets)
+            # a skill (flip, rotate) may end at any yaw: its xy is confirmed within 5 cm whatever the orientation
+            tol = 0.05 if (ex.get("call") or {}).get("tool") == "skill" else rad
+            ok = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - target) < tol for d in dets)
         if ok:
             if target is not None:
                 self._planner_track_move(ex["color"], source, target)
