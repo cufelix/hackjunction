@@ -323,7 +323,9 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
                 if float((rel @ u).max()) < s_min + 0.01:
                     ungraspable_reason = "handle too short/occluded"
                 else:
-                    s = max(float(np.median(rel @ u)), s_min)
+                    # midpoint of [rim+margin, tip] keeps the grasp on the handle even when the mask is denser near the root (theta 45 grasped at the rim before)
+                    tip = float(np.percentile(rel @ u, 95))
+                    s = max(float(np.median(rel @ u)), s_min, 0.5 * (s_min + tip))
                     centre_xy = body_c + s * u + float(np.median(rel @ w)) * w
                     # width from handle pixels beyond the rim only (s > rim + 0.01), robust 10-90 spread
                     beyond = cross[(rel @ u) > rim + 0.01]
