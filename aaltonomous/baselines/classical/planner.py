@@ -175,10 +175,11 @@ class MotionOutputLimiter:
     policy request; samples within an action chunk remain spaced by the runner's fixed control period.
     """
 
-    def __init__(self, arm_vmax, arm_amax, hand_vmax, hand_amax, dt, arm_lim=None, hand_lim=None):
+    def __init__(self, arm_vmax, arm_amax, hand_vmax, hand_amax, dt, arm_lim=None, hand_lim=None, hold_on_late=False):
         self.arm_vmax, self.arm_amax = float(arm_vmax), float(arm_amax)
         self.hand_vmax, self.hand_amax = float(hand_vmax), float(hand_amax)
         self.dt = float(dt)
+        self.hold_on_late = bool(hold_on_late)   # motion.output_hold_on_late
         # (lower, upper) URDF joint limits: the acceleration-shaped step can overshoot a target at the limit.
         self.arm_lim, self.hand_lim = arm_lim, hand_lim
         self.reset()
@@ -208,7 +209,8 @@ class MotionOutputLimiter:
             self.last_time = now
         # The previous chunk's last command is due at last_time.  A late request grants the first new target the
         # actual extra elapsed time; normal 30 Hz chunks use exactly dt.
-        first_time = max(float(self.last_time) + self.dt, now + self.dt)
+        first_time = (float(self.last_time) + self.dt if self.hold_on_late
+                      else max(float(self.last_time) + self.dt, now + self.dt))
         first_dt = first_time - float(self.last_time)
         out_a, out_h = np.empty_like(arm), np.empty_like(hand)
         sample_time = float(self.last_time)

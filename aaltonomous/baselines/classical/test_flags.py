@@ -576,7 +576,7 @@ class TestFlags(unittest.TestCase):
         self.assertFalse([k for k in FLAGS if k.startswith("motion.") and k not in
                           ("motion.carry_scale", "motion.close_hold_s", "motion.lift_on_stall.enabled",
                            "motion.lift_on_stall.timeout_s", "motion.arm_vel_cap",
-                           "motion.output_caps")])   # cap flags only reduce motion
+                           "motion.output_caps", "motion.output_hold_on_late")])   # cap flags only reduce motion
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "fast.yaml"
             for bad in ("motion.carry_scale: 1.5", "motion.carry_scale: 0.0", "grasp.drop_slot_overflow: pile",

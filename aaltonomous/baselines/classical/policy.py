@@ -226,7 +226,8 @@ class ClassicalPolicy:
         mo = self.cfg["motion"]
         self.output_limiter = (MotionOutputLimiter(
             mo["arm_max_vel"], mo["arm_max_acc"], mo["hand_max_vel"], mo["hand_max_acc"], 1.0 / HZ,
-            arm_lim=(self.spec.arm_lower, self.spec.arm_upper), hand_lim=(self.spec.hand_lower, self.spec.hand_upper))
+            arm_lim=(self.spec.arm_lower, self.spec.arm_upper), hand_lim=(self.spec.hand_lower, self.spec.hand_upper),
+            hold_on_late=bool(mo.get("output_hold_on_late", False)))
             if mo.get("output_caps") is not None else None)
         # calib.fk_xcheck (FLAG, default OFF, log-only): RGB head-pose cross-check vs the Dex3 hand FK. Its own
         # ArmKinematics: the worker thread must never touch the planner's pinocchio data.
