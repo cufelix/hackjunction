@@ -28,3 +28,7 @@ dump_frames.py format (rgb, depth, arm_q, hand_q, t) on 017cbb2. The 18 cm body 
 For checking felix/pan-edge locally.
 
 Demo mass 80 g; at 150 g the one-hand pinch slips during carry (F_egg15_4c2b055 is the honest 150 g run).
+
+## G_egg15_80g_4c2b055 — same as F at 80 g (2026-11-15 01:12)
+egg_left: handle pinch, lift 11.6 cm, carried to the centre bin with the pancake still inside; the pan ends upright
+resting on the bin rim (z 0.10), not inside. egg_right: lift 6.2 cm, then the pan slips. `grid_egg_left.jpg` 1 frame/s.
