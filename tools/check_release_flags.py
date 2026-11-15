@@ -89,7 +89,8 @@ REAL_DEMO_FLAGS = frozenset({"grasp.drop_height_extra_m", "grasp.approach_slow_m
 # final gen layer (reviewed 2026-11-15): realgp offsets, chaos hold-on-late, generality parser, arm tau ff, real perception rescues
 GEN_FINAL_FLAGS = frozenset({"grasp.arm_xy_offset", "motion.output_hold_on_late", "instruction.generality",
                              "policy.shape_rule_guard", "motion.arm_tau_ff", "perception.bin_bottom_first_run",
-                             "perception.fk_colour_rescue", "calib.plane.robust_height", "perception.plan_frame"})
+                             "perception.fk_colour_rescue", "calib.plane.robust_height", "perception.plan_frame",
+                             "calib.plane.robust_agree_m", "perception.height_range"})
 R25_FLAGS = frozenset({"brain.known_task_hard_off", "planner.candidate_budget", "profile_auto.second_cue"})
 # fsm layer (real-only dead-time / failure-mode fixes; false in profile_auto.sim_overrides), finals_r25_gen only
 FSM_FLAGS = frozenset({"policy.zero_det_relook", "policy.startup_overlap", "policy.contact_start_unblock", "perception.look_summary"})
