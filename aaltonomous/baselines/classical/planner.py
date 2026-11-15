@@ -1309,6 +1309,10 @@ class Planner:
         def drop_leg(points):
             if self._carry_hint is not None:   # retry heading variant: the wrist may turn back while carrying
                 self.kin.hint, self.kin.w_hint = self._carry_hint
+            if getattr(det, "grasp_kind", None) == "handle":
+                # the grasp's finger-heading pull (w_hint) makes the top-down reach at the bin unsolvable (tilt > 50 deg);
+                # the carry only needs the position, so drop the heading pull for handle grasps
+                self.kin.w_hint = 0.0
             try:
                 carry_ = up and (self._cartesian(side, points["lift"], points["above_bin"], up[-1], "carry", plan)
                                  or self._joint_carry(side, up[-1], points["lift"], points["above_bin"],
