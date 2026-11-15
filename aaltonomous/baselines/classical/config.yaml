@@ -724,6 +724,24 @@ insert:                       # policy.insert_shapes parameters (read only when 
   pg_search_m: 0.14           # lid search radius around the nominal pose
   pg_bias_xy: [0.0, 0.0]      # subtracted from the fitted lid/hole xy (head-camera bias of the fit)
   pg_ticks: 600               # max ticks spent on the lid fit before abstaining
+  reach_gated: false          # FLAG (insert). see config.py; the reach_* / lower_* / gate_* params below are read only with it
+  reach_margin_m: 0.010       # reach_gated: the release IK must also solve at +-this xy offsets (and +-this/2 higher) around the hole centre
+  reach_max_pos_err_m: 0.002  # reach_gated: IK xy error of the release point vs the hole centre (stock max_pos_err_m 0.004)
+  reach_release_gap_m: -0.008 # reach_gated: object bottom vs the lid plate top at the release; NEGATIVE = already inside the hole (a drop from above jammed 4 of 10 cylinders)
+  hint_weight: 20.0          # reach_gated: wrist-heading hint weight of the release carry (stock yaw_hint_weight 3)
+  open_scale: 1.0             # reach_gated: hand-opening speed scale at the release (<1 = slower)
+  hover_m: 0.03              # reach_gated: hover height of the carry over the hole (above the release point)
+  lower_scale: 0.30           # reach_gated: speed scale of the final descent from the hover height onto the hole
+  pg_frames: 3                # reach_gated: independent lid fits (different head frames) that must agree
+  pg_max_spread_m: 0.002      # reach_gated: max centre spread of those fits (median used); above = abstain
+  plan_budget: {max_ik_calls: 1500, max_wall_s: 15.0}   # reach_gated: candidate budget of an insert plan (replaces planner.candidate_budget; only when that is on)
+  gate_hold_s: 0.6            # reach_gated: hold still this long over the hole (hover + bottom) before the gate reads the arm
+  gate_max_xy_m: 0.0015       # reach_gated: measured grasp point vs the hole centre; above (after the servo tries) = abort (keep holding, home, 0 pts). Releases that passed at 2.4 mm / z +3.9 mm (hand held up by the lid) jammed; 0.7 mm / -0.3 mm ones went in
+  gate_max_corr: 3            # reach_gated: servo corrections (shift the commanded pose by the measured error) per gate stop before it aborts
+  gate_max_z_m: 0.0025        # reach_gated: measured grasp-point height error at the release stop (4x at the hover stop)
+  gate_max_z_hi_m: 0.0008     # reach_gated: at the release stop the measured grasp point may be at most this far ABOVE its target (above = the object is caught on the hole edge)
+  gate_max_tilt_deg: 6.0      # reach_gated: measured approach axis vs vertical at the gate
+  gate_max_track_rad: 0.02    # reach_gated: max |measured - commanded| arm joint over the hole (the arm must have settled)
   palm_shift_m: 0.0           # EXPERIMENT, keep 0: edge grasp (IK target d ahead of the palm point). Measured r24: even d=0.045 leaves the cube/cylinder holes 4-6 cm out of reach
   release_gap_max_m: 0.015    # max object-bottom height over the lid accepted at the release (stock 0.015)
   hole_offsets_mat: null      # {cube: [dx, dy], cylinder: [dx, dy]} hole centre offsets (mat axes, m) from the lid-bin centre for a

@@ -28,7 +28,7 @@ from aaltonomous.interface.tasks import FIXED_MAPPING
 from aaltonomous.scene.scene import resolve_bin
 
 from .bin_vote import bin_geometry
-from .kinematics import ArmKinematics
+from .kinematics import ArmKinematics, PlanBudgetExceeded
 from .config import soft_hand_active, soft_overclose
 
 # Handle grasps only: release this far inside the bin's near inner wall when the stock release cannot be carried to.
@@ -99,6 +99,7 @@ class Plan:
     posture: tuple | None = None                       # (posture, shape label, conf, path) with grasp.close_posture_by_shape
     close_hold: tuple | None = None                    # (first, end) tick of the closed-hand hold (lift_on_stall)
     release_stages: tuple | None = None                # (first start, DDS 5/6 start, ramp end) ticks
+    insert: dict | None = None                         # insert.reach_gated: hole target the policy gate checks (xy, z_top, gap, shape)
     abort: tuple | None = None                         # legacy field; early servo-error abort is intentionally disabled
     safety_clips: int | None = None
     deferred: bool = False                             # planner.candidate_budget: planning budget exceeded (not infeasible)
@@ -261,6 +262,9 @@ def staggered_release_ramp(a, b, side, vmax, dt, delay_s):
     out = a + (b - a) * frac
     out[-1] = b
     return out, second_tick
+
+
+SHAPE_HOLE_NAME = {"cube": "square", "cylinder": "circle", "triangle": "triangle"}
 
 
 class Planner:
@@ -838,7 +842,14 @@ class Planner:
         plan passes the obstacle check in that time, fail OPEN: return the first complete plan that only violated the
         obstacle check (the stock plan) and log one line. No footprint obstacle (or flag off): exactly _plan_core."""
         if self.insert_active:   # policy.insert_shapes (rung 3), only ever set for an insert_shapes episode
-            return self.plan_insert(det, arm_q, hand_q, obstacles)
+            if not (self.cfg.get("insert") or {}).get("reach_gated", False):
+                return self.plan_insert(det, arm_q, hand_q, obstacles)
+            try:   # reach_gated: any planner error is an abstention (0 pts), never a crash on the lid episode
+                return self.plan_insert(det, arm_q, hand_q, obstacles)
+            except PlanBudgetExceeded:
+                raise
+            except Exception as e:
+                return Plan(False, side="left", color=det.color, reason=f"insert: planner error {e!r}")
         if not self.neutral_boxes():
             return self._plan_core(det, arm_q, hand_q, bin_name, obstacles, relocate, drop_slot, source_bin,
                                    clearance_obstacles)
@@ -924,7 +935,8 @@ class Planner:
         zc = self.scene.counter_z
         z_top = zc + self._wall(self.scene.rim_wall(lid)) + float(self.scene.cfg["lid"]["thickness"])
         saved_shift, new_shift = None, None
-        if ic.get("perception_gated", False):   # insert.perception_gated: perceived lid + holes only, never scene.yaml
+        rg = bool(ic.get("reach_gated", False))   # insert.reach_gated: perceived lid + margin-checked reach + slow lower + gate
+        if ic.get("perception_gated", False) or rg:   # insert.perception_gated: perceived lid + holes only, never scene.yaml
             from . import insert_perception as ip
             le = getattr(self, "insert_lid", None)
             if le is None or le.conf < float(ic.get("pg_min_conf", 0.8)):
@@ -944,6 +956,10 @@ class Planner:
         else:
             tgt = ins.hole_targets(self.scene, z_lid_top=z_top, offsets_mat=ic.get("hole_offsets_mat"),
                                    margin=ic.get("hole_margin_m"))[shape]
+        if rg:   # cheap first: is the perceived hole itself reachable with margin? (stock layout: no -> abstain without grasp planning)
+            bad = self._insert_hole_reach(shape, tgt, z_top, np.asarray(arm_q, float), ic, g)
+            if bad:
+                return fail(bad)
         oy = ins.object_yaw(det, shape)
         if shape != "cylinder" and oy is None:
             return fail(f"{shape} yaw unknown")
@@ -963,18 +979,26 @@ class Planner:
             self.bin_shift[lid_name] = new_shift
         try:
             for a_g in heads:
-                a_d = ins.drop_heading(shape, oy, tgt["yaw"], a_g, side, float(g.get("yaw_ref_deg", 25.0)),
-                                       float(g.get("yaw_max_dev_deg", 75.0)))
+                if rg and a_g is not None:   # reach_gated: the release heading must be one the arm really attains at THIS hole
+                    cands = ins.drop_candidates(shape, oy, tgt["yaw"], a_g)
+                    feas = [a for a in cands if self._hole_heading_ok(shape, tgt, z_top, a, np.asarray(arm_q, float), ic, g)]
+                    ref = -np.radians(float(g.get("yaw_ref_deg", 25.0)))
+                    a_d = min(feas, key=lambda a: abs((a - ref + np.pi) % (2 * np.pi) - np.pi)) if feas else None
+                else:
+                    a_d = ins.drop_heading(shape, oy, tgt["yaw"], a_g, side, float(g.get("yaw_ref_deg", 25.0)),
+                                           float(g.get("yaw_max_dev_deg", 75.0)))
                 if a_g is not None and a_d is None:
                     reasons.append(f"heading {np.degrees(a_g):.0f}: hole yaw out of the wrist range")
                     continue
-                self.insert_target = {"xy": tgt["xy"], "z_top": z_top, "gap": float(ic.get("release_gap_m", 0.006))}
+                gap = float(ic.get("reach_release_gap_m", 0.004)) if rg else float(ic.get("release_gap_m", 0.006))
+                self.insert_target = {"xy": tgt["xy"], "z_top": z_top, "gap": gap, "slow": rg}
                 try:
                     if a_g is None:     # cylinder: any heading holds a round object, stock finger hints
                         p = self._plan_side_legacy(det, side, lid, np.asarray(arm_q, float), np.asarray(hand_q, float))
                     else:
                         self.kin.hint, self.kin.w_hint = np.array([np.cos(a_g), np.sin(a_g), 0.0]), w
-                        self._carry_hint = (np.array([np.cos(a_d), np.sin(a_d), 0.0]), w)
+                        self._carry_hint = (np.array([np.cos(a_d), np.sin(a_d), 0.0]),
+                                            float(ic.get("hint_weight", 20.0)) if rg else w)   # reach_gated: hold the release heading firmly
                         p = self._plan_side(det, side, lid, np.asarray(arm_q, float), np.asarray(hand_q, float))
                 finally:
                     self.insert_target, self._carry_hint = None, None
@@ -987,6 +1011,14 @@ class Planner:
                     reasons.append(bad)
                     continue
                 p.reason = f"insert {ins.SHAPE_HOLE[shape]} hole ({tgt['xy'][0]:.3f}, {tgt['xy'][1]:.3f})"
+                if rg:   # the policy gate reads these (measured arm vs the hole) before the release
+                    p.insert = {"xy": np.asarray(tgt["xy"], float).copy(), "z_top": float(z_top), "gap": gap, "shape": shape}
+                    kin_pts = []
+                    for nm in ("carry", "lower"):   # commanded grasp points at the hover / release stops (the gate's targets)
+                        e_ = next((e for n, s_, e in p.phases if n == nm), None)
+                        kin_pts.append(None if e_ is None else np.asarray(self.kin.grasp_pose(side, p.arm[e_ - 1])[0], float).copy())
+                    p.insert["pts"] = kin_pts
+                    p.insert["hint"] = None if a_g is None else (np.array([np.cos(a_d), np.sin(a_d), 0.0]), float(ic.get("hint_weight", 20.0)))
                 return p
         finally:
             self.insert_target, self._carry_hint = None, None
@@ -1002,21 +1034,29 @@ class Planner:
     def _insert_check(self, p, side, tgt, shape, oy, a_g, a_d, z_top, ic, g):
         """Post-plan precision gates of an insert plan -> reason string, or None when it passes."""
         from . import insert_shapes as ins
-        carry = next((e for n, s, e in p.phases if n == "carry"), None)
+        carry = next((e for n, s, e in p.phases if n == "lower"), None) or next((e for n, s, e in p.phases if n == "carry"), None)
         if carry is None:
             return "no carry phase"
         q_end = p.arm[carry - 1]
         pt, axis = self.kin.grasp_pose(side, q_end)
         err = float(np.linalg.norm(pt[:2] - tgt["xy"]))
-        if err > float(ic.get("max_pos_err_m", 0.004)):
+        lim = float(ic.get("max_pos_err_m", 0.004))
+        if ic.get("reach_gated", False):
+            lim = min(lim, float(ic.get("reach_max_pos_err_m", 0.002)))
+        if err > lim:
             return f"release {1000 * err:.0f} mm off the hole centre"
         tilt = float(np.degrees(np.arccos(np.clip(axis @ np.array([0.0, 0.0, -1.0]), -1.0, 1.0))))
         if tilt > float(ic.get("max_tilt_deg", 8.0)):
             return f"tilt {tilt:.0f} deg at the release"
         H = self.height
         bottom = float(pt[2]) - float(g["height_frac"]) * H
-        if not ins.release_gap_ok(bottom, z_top, gap_max=float(ic.get("release_gap_max_m", 0.015))):
+        gap_min = float(ic.get("reach_release_gap_m", 0.004)) - 0.004 if ic.get("reach_gated", False) else 0.002   # reach_gated: below the plate is intended
+        if not ins.release_gap_ok(bottom, z_top, gap_min=gap_min, gap_max=float(ic.get("release_gap_max_m", 0.015))):
             return f"release gap {1000 * (bottom - z_top):.0f} mm over the lid"
+        if ic.get("reach_gated", False):
+            bad = self._insert_reach_margin(side, q_end, tgt, ic)
+            if bad:
+                return bad
         if a_g is not None:
             ag, ad = self.finger_heading(p), self._heading_at(side, q_end)
             if ag is None:
@@ -1024,6 +1064,65 @@ class Planner:
             yerr = ins.yaw_error_deg(shape, oy, ag, ad, tgt["yaw"])
             if yerr > float(ic.get("max_yaw_err_deg", 8.0)):
                 return f"yaw error {yerr:.0f} deg at the release"
+        return None
+
+    def _insert_hole_reach(self, shape, tgt, z_top, arm_q, ic, g):
+        """insert.reach_gated pre-check (cached per hole position): top-down IK of the left grasp point at the release height
+        over the hole centre, and at +-reach_margin_m around it. -> reason string, or None when reachable with margin."""
+        key = (shape, round(float(tgt["xy"][0]), 4), round(float(tgt["xy"][1]), 4), round(float(z_top), 4))
+        cache = self.__dict__.setdefault("_hole_reach_cache", {})
+        if key in cache:
+            return cache[key]
+        z = float(z_top) + float(ic.get("reach_release_gap_m", 0.004)) + float(g["height_frac"]) * self.height
+        m = float(ic.get("reach_margin_m", 0.010))
+        tilt_max = np.radians(float(ic.get("max_tilt_deg", 8.0)))
+        why = None
+        seeds = [self.home[:7]] if hasattr(self, "home") else []
+        for dx, dy, dz in ((0.0, 0.0, 0.0), (m, 0.0, 0.0), (-m, 0.0, 0.0), (0.0, m, 0.0), (0.0, -m, 0.0), (0.0, 0.0, m / 2.0)):
+            q, ok, perr, tilt = self.kin.solve("left", np.array([tgt["xy"][0] + dx, tgt["xy"][1] + dy, z + dz]), arm_q,
+                                               top_down=True, extra_seeds=seeds)
+            if not ok or tilt > tilt_max:
+                why = (f"hole reach: {SHAPE_HOLE_NAME.get(shape, shape)} hole {1000 * dx:+.0f}/{1000 * dy:+.0f}/{1000 * dz:+.0f} mm "
+                       f"out of reach (err {1000 * perr:.1f} mm, tilt {np.degrees(tilt):.0f} deg)")
+                break
+            arm_q = q if (dx, dy, dz) == (0.0, 0.0, 0.0) else arm_q
+        cache[key] = why
+        return why
+
+    def _hole_heading_ok(self, shape, tgt, z_top, a_d, arm_q, ic, g):
+        """insert.reach_gated (cached): does the left arm reach the hole centre at the release height with the palm-x heading
+        a_d (soft hint, as the plan applies it) to <= reach_max_pos_err_m and the tilt budget?"""
+        key = (shape, round(float(tgt["xy"][0]), 4), round(float(tgt["xy"][1]), 4), round(float(z_top), 4), int(round(np.degrees(a_d))))
+        cache = self.__dict__.setdefault("_hole_head_cache", {})
+        if key in cache:
+            return cache[key]
+        z = float(z_top) + float(ic.get("reach_release_gap_m", 0.004)) + float(g["height_frac"]) * self.height
+        saved = (self.kin.hint, self.kin.w_hint)
+        try:
+            self.kin.hint, self.kin.w_hint = np.array([np.cos(a_d), np.sin(a_d), 0.0]), float(ic.get("hint_weight", 20.0))
+            seeds = [self.home[:7]]
+            q, ok, perr, tilt = self.kin.solve("left", np.array([tgt["xy"][0], tgt["xy"][1], z]), arm_q, top_down=True, extra_seeds=seeds)
+            herr = abs((self._heading_at("left", q) - a_d + np.pi) % (2 * np.pi) - np.pi)
+        finally:
+            self.kin.hint, self.kin.w_hint = saved
+        res = bool(ok and perr <= float(ic.get("reach_max_pos_err_m", 0.002)) and herr <= np.radians(float(ic.get("max_yaw_err_deg", 8.0)))
+                   and tilt <= np.radians(float(ic.get("max_tilt_deg", 8.0))))
+        cache[key] = res
+        return res
+
+    def _insert_reach_margin(self, side, q_end, tgt, ic):
+        """insert.reach_gated: the release pose must not sit on the edge of the reachable set. Re-solve the IK (seeded at the
+        planned release) at +-reach_margin_m xy around the hole centre and at +reach_margin_m/2 higher; every one must converge
+        within the position tolerance and the tilt budget. -> reason string, or None."""
+        m = float(ic.get("reach_margin_m", 0.010))
+        pt, _ = self.kin.grasp_pose(side, q_end)
+        tilt_max = np.radians(float(ic.get("max_tilt_deg", 8.0)))
+        offs = [(m, 0.0, 0.0), (-m, 0.0, 0.0), (0.0, m, 0.0), (0.0, -m, 0.0), (0.0, 0.0, m / 2.0)]
+        for dx, dy, dz in offs:
+            tgt_pt = np.array([tgt["xy"][0] + dx, tgt["xy"][1] + dy, pt[2] + dz])
+            q, ok, perr, tilt = self.kin.solve(side, tgt_pt, q_end, top_down=True, restarts=False)
+            if not ok or tilt > tilt_max:
+                return f"reach margin: no IK at hole {1000 * dx:+.0f}/{1000 * dy:+.0f}/{1000 * dz:+.0f} mm (err {1000 * perr:.1f} mm, tilt {np.degrees(tilt):.0f} deg)"
         return None
 
     def plan_place_at(self, det, arm_q, hand_q, table_xy, obstacles=()):
@@ -1663,6 +1762,10 @@ class Planner:
         P = {"pregrasp": np.r_[xy, max(z + g["approach_height"], z_carry) + float(g.get("approach_extra_m", 0.0))], "grasp": np.r_[xy, z], "lift": np.r_[xy, z_carry],
              "above_bin": np.r_[bxy, z_carry], "drop": np.r_[bxy, z_drop], "retreat": np.r_[bxy, z_drop + g["retreat_up"]]}
 
+        if self.insert_target is not None and place_xy is None and self.insert_target.get("slow"):
+            # insert.reach_gated: hover just over the hole (hover_m above the release point) instead of the full carry height, which
+            # is out of the arm's reach at the lid; the slow lower then covers only hover_m
+            P["above_bin"] = np.r_[bxy, min(z_carry, z_drop + float((cfg.get("insert") or {}).get("hover_m", 0.03)))]
         q_pre, ok = self._ik(side, P["pregrasp"], qg, "pregrasp", plan)  # same IK branch as the grasp
         if not ok:
             plan.reason = f"IK pregrasp {side}"
@@ -1776,6 +1879,11 @@ class Planner:
             if name == "open" and g.get("staggered_release", False):
                 h, second_tick = staggered_release_ramp(
                     cur_h, to, side, hv, self.dt, float(g.get("staggered_release_delay_s", 0.30)))
+            elif name == "open" and self.insert_target is not None and self.insert_target.get("slow") \
+                    and float((cfg.get("insert") or {}).get("open_scale", 1.0)) < 1.0:
+                # insert.reach_gated: let go slowly (a fast open tilts the object against the hole edge and jams it)
+                h = ramp(cur_h, to, hv * float((cfg.get("insert") or {}).get("open_scale", 1.0)), self.dt)
+                second_tick = None
             else:
                 h = self.hand_ramp(cur_h, to)
                 second_tick = None
@@ -1841,7 +1949,12 @@ class Planner:
                 return plan
             for name, qs in seq:
                 move(name, qs, scale=cs)
-        move("carry", carry + lower, scale=cs)
+        if self.insert_target is not None and place_xy is None and self.insert_target.get("slow"):
+            # insert.reach_gated: carry over the hole, then lower slowly onto it (the policy gate reads the arm at both ends)
+            move("carry", carry, scale=cs)
+            move("lower", lower, scale=cs * float((cfg.get("insert") or {}).get("lower_scale", 0.3)))
+        else:
+            move("carry", carry + lower, scale=cs)
         rw = g.get("release_wait_s")  # grasp.release_wait_s: the retreat starts >= this long after the open command
         hand("open", hand_rel, mo["open_hold_s"] if rw is None else max(mo["open_hold_s"], float(rw)))  # widest posture: `open` alone left the cube wedged in the sim
         move("retreat", retreat)

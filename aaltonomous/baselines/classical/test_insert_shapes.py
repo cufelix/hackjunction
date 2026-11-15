@@ -321,5 +321,120 @@ class TestPlanner(unittest.TestCase):
             self.assertTrue(p.reason.startswith("insert:"))
 
 
+class TestReachGated(unittest.TestCase):
+    """insert.reach_gated: margin-checked reach, slow lower, measured-arm gate (abort = keep holding, 0 pts)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cfg = load_config(overlay="finals_r23")
+        cls.cfg["insert"]["reach_gated"] = True
+
+    def test_flag_registered_off_everywhere_but_finals(self):
+        self.assertIn("insert.reach_gated", FLAGS)
+        self.assertFalse(load_config(overlay="none")["insert"]["reach_gated"])
+        self.assertFalse(load_config(overlay="submission")["insert"]["reach_gated"])
+
+    def test_flag_alone_turns_the_insert_episode_on(self):
+        st = Stub(insert_shapes=False, insert_guard=True)
+        st.cfg["insert"] = {"reach_gated": True}
+        m, guarded = ClassicalPolicy._episode_mapping(st, {"task": "insert_shapes", "instruction": INSERT_INSTRUCTION})
+        self.assertTrue(st._insert_episode)
+        self.assertEqual(set(m.values()), {SC.lid_bin})
+        self.assertIsNone(guarded)
+
+    def test_stock_layout_still_abstains_every_shape(self):
+        pl = Planner(self.cfg, SC, hand_postures(self.cfg), home_arm(self.cfg))
+        pl.insert_active = True            # no perceived lid -> abstain before any IK
+        for d in (_det("cube", yaw=0.2), _det("cylinder"), _det("triangle", apex_yaw=1.0, apex_conf=0.9)):
+            p = pl.plan_insert(d, home_arm(self.cfg), np.zeros(14))
+            self.assertFalse(p.ok)
+            self.assertIn("pg: no confident lid estimate", p.reason)
+
+    def test_reach_margin_rejects_an_edge_pose(self):
+        pl = Planner(self.cfg, SC, hand_postures(self.cfg), home_arm(self.cfg))
+        arm0 = home_arm(self.cfg)
+        far = ins.hole_targets(SC)["cube"]           # stock hole: out of reach, the margin solve cannot converge
+        why = pl._insert_reach_margin("left", arm0, far, self.cfg["insert"])
+        self.assertIsNotNone(why)
+        self.assertIn("reach margin", why)
+
+    def test_drop_candidates_cover_every_symmetry_step_and_match_drop_heading(self):
+        for shape, n in (("cube", 4), ("triangle", 3)):
+            c = ins.drop_candidates(shape, 0.3, 1.0, 0.2)
+            self.assertEqual(len(c), n)
+            for a in c:   # every candidate turns the held object onto the hole yaw (mod the symmetry)
+                self.assertAlmostEqual(ins.yaw_error_deg(shape, 0.3, 0.2, a, 1.0), 0.0, places=6)
+        self.assertEqual(ins.drop_candidates("cylinder", 0.0, 0.0, None), [])
+
+    def test_reach_gated_plan_abstains_when_the_hole_heading_is_unreachable(self):
+        """At the stock lid the hole is out of reach: the pre-check abstains before any grasp planning (no IK of the pick)."""
+        from . import insert_perception as ip
+        pl = Planner(self.cfg, SC, hand_postures(self.cfg), home_arm(self.cfg))
+        pl.insert_active = True
+        pl.insert_lid = ip.nominal_lid(SC, conf=1.0)
+        pl.insert_lid.sigma = (0.0003, 0.0003, 0.001)
+        with mock.patch.object(pl, "_plan_side") as side, mock.patch.object(pl, "_plan_side_legacy") as leg:
+            for d in (_det("cube", yaw=0.2), _det("cylinder"), _det("triangle", apex_yaw=1.0, apex_conf=0.9)):
+                p = pl.plan_insert(d, home_arm(self.cfg), np.zeros(14))
+                self.assertFalse(p.ok)
+                self.assertIn("hole reach", p.reason)
+        side.assert_not_called()
+        leg.assert_not_called()
+
+    def _gate_stub(self, aq, arm_cmd):
+        pol = ClassicalPolicy.__new__(ClassicalPolicy)
+        pol.cfg = self.cfg
+        pol.planner = Planner(self.cfg, SC, hand_postures(self.cfg), home_arm(self.cfg))
+        pol.arm_cmd = np.asarray(arm_cmd, float)
+        pt, _ = pol.planner.kin.grasp_pose("left", aq)
+        bottom = pt[2] - self.cfg["grasp"]["height_frac"] * pol.planner.height
+        plan = Plan(True, side="left")
+        plan.insert = {"xy": pt[:2].copy(), "z_top": float(bottom - 0.004), "gap": 0.004, "shape": "cube", "pts": [pt.copy(), pt.copy()], "hint": None}
+        return pol, {"plan": plan, "i": 1}
+
+    def test_gate_passes_a_settled_arm_and_aborts_on_every_violation(self):
+        arm0 = home_arm(self.cfg).astype(float)
+        aq, solved, _, _ = Planner(self.cfg, SC, hand_postures(self.cfg), arm0).kin.solve(
+            "left", np.array([0.35, 0.20, 0.20]), arm0, top_down=True, extra_seeds=[arm0[:7]])
+        self.assertTrue(solved)
+        pol, g = self._gate_stub(aq, aq)
+        m = pol._insert_measure({"arm_q": aq}, g)
+        self.assertTrue(m["ok"], m["txt"])
+        xy0 = g["plan"].insert["xy"].copy()
+        g["plan"].insert["xy"] = xy0 + np.array([0.006, 0.0])      # 6 mm off the hole: not ok but correctable by the servo
+        m = pol._insert_measure({"arm_q": aq}, g)
+        self.assertFalse(m["ok"])
+        self.assertTrue(m["fixable"])
+        g["plan"].insert["xy"] = xy0 + np.array([0.06, 0.0])       # 6 cm off: never fixable, abort
+        m = pol._insert_measure({"arm_q": aq}, g)
+        self.assertFalse(m["ok"] or m["fixable"])
+        g["plan"].insert["xy"] = xy0
+        self.assertFalse(pol._insert_measure({"arm_q": None}, g)["ok"])     # no measurement = abort
+        g["plan"].insert["z_top"] -= 0.05                                  # 5 cm above the lid at the release
+        self.assertFalse(pol._insert_measure({"arm_q": aq}, g)["ok"])
+
+    def test_servo_correction_moves_the_command_by_the_measured_error(self):
+        arm0 = home_arm(self.cfg).astype(float)
+        aq, solved, _, _ = Planner(self.cfg, SC, hand_postures(self.cfg), arm0).kin.solve(
+            "left", np.array([0.35, 0.20, 0.20]), arm0, top_down=True, extra_seeds=[arm0[:7]])
+        self.assertTrue(solved)
+        pol, g = self._gate_stub(aq, aq)
+        n = 12
+        g.update(n=n, delta=np.zeros(14))
+        g["plan"].phases = [("lower", 0, 4), ("open", 4, 6), ("retreat", 6, 9), ("home", 9, 12)]
+        pol.queue_a = np.tile(aq, (n - 4, 1))
+        g["plan"].insert["xy"] = g["plan"].insert["xy"] + np.array([0.004, 0.0])       # the arm sits 4 mm short of the hole
+        m = pol._insert_measure({"arm_q": aq}, g)
+        self.assertFalse(m["ok"])
+        before = pol.planner.kin.grasp_pose("left", pol.arm_cmd)[0].copy()
+        self.assertTrue(pol._insert_correct(g, m))
+        rp = g["ramp"]                                                                  # a smooth glide, not a step
+        after = pol.planner.kin.grasp_pose("left", rp["from"] + rp["dq"])[0]
+        self.assertGreater(after[0] - before[0], 0.002)                                 # moved towards the hole
+        self.assertLess(float(np.max(np.abs(rp["dq"]))) / rp["K"], 0.15 / 30.0 * 1.01)  # <= 0.15 rad/s
+        self.assertTrue((np.abs(pol.queue_a[0] - aq)[:7] > 1e-6).any())                # remaining rows shifted
+        np.testing.assert_allclose(pol.queue_a[-1], aq, atol=1e-9)                      # delta faded out at the end of the home move
+
+
 if __name__ == "__main__":
     unittest.main()

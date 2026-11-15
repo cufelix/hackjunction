@@ -138,6 +138,17 @@ def drop_heading(shape, obj_yaw, hole_yaw, a_grasp, side, natural_deg=25.0, max_
     return min(cands)[1] if cands else None
 
 
+def drop_candidates(shape, obj_yaw, hole_yaw, a_grasp):
+    """EVERY palm-x release heading (pelvis rad, wrapped) that turns the held object onto the hole yaw: a_grasp + (hole_yaw -
+    obj_yaw) + k * symmetry. The reach-gated planner keeps the ones the arm really attains at the hole."""
+    sym = SYMMETRY_DEG[shape]
+    if sym is None or a_grasp is None:
+        return []
+    step = np.radians(sym)
+    base = a_grasp + (hole_yaw - obj_yaw)
+    return [_wrap(base + k * step) for k in range(int(round(360.0 / sym)))]
+
+
 def yaw_error_deg(shape, obj_yaw, a_grasp, a_drop, hole_yaw):
     """Residual yaw error (deg, folded by the symmetry) of the held object at the release; 0 for a circle."""
     sym = SYMMETRY_DEG[shape]

@@ -299,6 +299,14 @@ class ClassicalPolicy:
             state["counter_z_runtime"] = scene.counter_z_runtime
         return state
 
+    def _insert_perception_flag(self):
+        """insert.reach_gated: the triangle hole needs the apex yaw + robust centre (perception.triangle_pose), in an insert
+        episode only (every other episode keeps the configured value, so sort behaviour is untouched)."""
+        base = bool(self.cfg["perception"].get("triangle_pose", False))
+        ins = bool(getattr(getattr(self, "planner", None), "insert_active", False)
+                   and (self.cfg.get("insert") or {}).get("reach_gated", False))
+        self.perception.triangle_pose = base or ins
+
     def _replace_stale_perception(self, state=None):
         """Give an unfinished detector sole ownership of its mutable perception state."""
         scene = copy.copy(self.scene)
@@ -306,6 +314,7 @@ class ClassicalPolicy:
         self.planner.scene = scene
         self.perception = Perception(self.cfg, scene, self.cal, log=self.log)
         self.perception.hand_opening_m = getattr(getattr(self, "planner", None), "generic_hand_opening", None)
+        self._insert_perception_flag()
         state = state or {}
         for name, value in state.items():
             if name != "counter_z_runtime" and hasattr(self.perception, name):
@@ -405,11 +414,16 @@ class ClassicalPolicy:
             self.log(f"insert_guard failed ({e})")
             return None
 
+    def _insert_on(self):
+        """policy.insert_shapes or insert.reach_gated (the reach-gated insert implies the insert_shapes planner)."""
+        return bool((self.cfg.get("policy") or {}).get("insert_shapes", False)
+                    or (self.cfg.get("insert") or {}).get("reach_gated", False))
+
     def _insert_shapes_mapping(self, info):
         """policy.insert_shapes: an insert_shapes episode (same detection as insert_guard) -> every colour goes to the lid
         bin (planner.plan_insert picks the hole per SHAPE and abstains per object); else None. NEVER raises."""
         try:
-            if not (self.cfg.get("policy") or {}).get("insert_shapes", False):
+            if not ClassicalPolicy._insert_on(self):
                 return None
             task = (info or {}).get("task")
             text = str((info or {}).get("instruction") or "").lower()
@@ -461,7 +475,7 @@ class ClassicalPolicy:
                 given = first
             else:
                 self._log_fixed_conflict(info, given)
-        inserting = None if given or not (self.cfg.get("policy") or {}).get("insert_shapes", False) \
+        inserting = None if given or not ClassicalPolicy._insert_on(self) \
             else ClassicalPolicy._insert_shapes_mapping(self, info)   # flag off: not even a call
         guarded = None if given or inserting else self._insert_guard_mapping(info)
         resolved = None if given or guarded or inserting else self._instruction_mapping(info)
@@ -490,8 +504,12 @@ class ClassicalPolicy:
         self.mapping, guarded = self._episode_mapping(info)
         self.planner.mapping = self.mapping
         self.planner.insert_active = bool(getattr(self, "_insert_episode", False))
-        if self.planner.insert_active and (self.cfg.get("insert") or {}).get("perception_gated", False):
+        self._insert_perception_flag()
+        self._ig = None
+        if self.planner.insert_active and ((self.cfg.get("insert") or {}).get("perception_gated", False)
+                                           or (self.cfg.get("insert") or {}).get("reach_gated", False)):
             self.planner.insert_lid, self._lid_pending, self._lid_ticks = None, True, 0   # insert.perception_gated
+            self._lid_fits = []
         else:
             self._lid_pending = False
         self._task, self._instruction = info.get("task"), info.get("instruction")
@@ -711,6 +729,7 @@ class ClassicalPolicy:
         self._exec = None           # D2 T-8 s: the plan being executed {"plan", "n", "cut", "t8"}
         self._rel = None            # grasp.release_confirm: the plan's release watcher
         self._rel_fail = False      # release_confirm: the hand never read empty -> stop picking
+        self._ig = None             # insert.reach_gated: the plan's pre-release gate {"plan", "n", "stops", "i", "t0"}
         self._cap_logged = set()
         self._dec_warned = set()    # F7: decision helpers that already fell back to stock this episode
         self._prior_side = set()    # F1: side bins already attempted in PRIOR-ONLY
@@ -1243,6 +1262,13 @@ class ClassicalPolicy:
         res = self._bg("insert_lid", self._fit_lid, None if rgb is None else np.array(rgb, copy=True), np.array(depth, copy=True))
         if res is None:
             return True
+        nfr = int(ic.get("pg_frames", 1)) if ic.get("reach_gated", False) else 1
+        if nfr > 1 and res[0] == "ok" and res[1] is not None:   # insert.reach_gated: several independent frames must agree
+            self._lid_fits = list(getattr(self, "_lid_fits", [])) + [res[1]]
+            if len(self._lid_fits) < nfr:
+                return True              # next tick starts the next frame's fit
+            res = ("ok", self._merge_lid_fits(self._lid_fits, float(ic.get("pg_max_spread_m", 0.002)), t))
+        self._lid_fits = []
         self._lid_pending, self._lid_job_started = False, None
         if res[0] == "ok" and res[1] is not None:
             self.planner.insert_lid = res[1]
@@ -1252,6 +1278,21 @@ class ClassicalPolicy:
         else:
             self._note(t, f"insert pg: lid fit failed ({res[1] if res[0] == 'err' else 'not confident'}), abstain")
         return False
+
+    def _merge_lid_fits(self, fits, max_spread, t):
+        """Median of independent lid fits; None (= abstain) when their centres or yaws spread more than the budget."""
+        from . import insert_perception as ip
+        cs = np.array([f.centre_xy for f in fits], float)
+        yw = np.array([f.yaw for f in fits], float)
+        spread = float(np.max(np.linalg.norm(cs - np.median(cs, axis=0), axis=1)))
+        yspread = float(np.degrees(np.max(np.abs(yw - np.median(yw)))))
+        self._note(t, f"insert pg: {len(fits)} fits, centre spread {1000 * spread:.1f} mm, yaw spread {yspread:.1f} deg")
+        if spread > max_spread or yspread > 1.0:
+            return None
+        sig = tuple(float(max(max(f.sigma[i] for f in fits), spread)) for i in range(3))
+        return ip._make(ip.LidModel.from_scene(self.scene), np.median(cs, axis=0), float(np.median(yw)),
+                        float(np.median([f.z_top for f in fits])), float(min(f.conf for f in fits)), sig,
+                        {"frames": len(fits), "spread": spread})
 
     def _fit_lid(self, rgb, depth):
         from . import insert_perception as ip
@@ -1447,6 +1488,13 @@ class ClassicalPolicy:
         held_cal_action = self._held_calibration_tick(obs, t)
         if held_cal_action is not None:
             return held_cal_action
+        if getattr(self, "_ig", None) is not None:
+            try:
+                r = self._insert_gate(obs, t)
+            except Exception as e:   # fail safe: never release, carry the object home (a hold over the lid would score -1)
+                r = self._insert_gate_failsafe(t, e)
+            if r is not None:
+                return r
         if self._rel is not None:
             r = self._release_confirm(obs, t)
             if r is not None:
@@ -3416,7 +3464,7 @@ class ClassicalPolicy:
             a, h = np.vstack([a1, a2]), np.vstack([h1, h2])
         else:
             a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, home, self.post["open"])
-        self._stall = self._gdiag = self._rel = None
+        self._stall = self._gdiag = self._rel = self._ig = None
         self._enqueue(a, h)
         return self._pop()
 
@@ -3532,6 +3580,9 @@ class ClassicalPolicy:
 
     def _candidate_budget(self):
         cb = (self.cfg.get("planner") or {}).get("candidate_budget")
+        ic = self.cfg.get("insert") or {}
+        if cb and ic.get("reach_gated", False) and getattr(getattr(self, "planner", None), "insert_active", False) and ic.get("plan_budget"):
+            cb = ic["plan_budget"]   # insert.reach_gated: an insert plan (margin IK + 2 headings) needs more than a sort pick's budget
         return dict(cb) if cb else None
 
     def _was_deferred(self, d):
@@ -4700,6 +4751,12 @@ class ClassicalPolicy:
             ph = {name: e for name, _, e in (plan.phases or [])}
             if "open" in ph:
                 self._rel = {"plan": plan, "n": len(plan.arm), "open_end": ph["open"], "phase": "wait", "reopened": False}
+        self._ig = None
+        if getattr(plan, "insert", None) is not None and plan.side in ("left", "right"):   # insert.reach_gated
+            ph = {name: (s_, e) for name, s_, e in (plan.phases or [])}
+            if "carry" in ph and "lower" in ph and "open" in ph:
+                self._ig = {"plan": plan, "n": len(plan.arm), "stops": [ph["carry"][1], ph["open"][0]], "i": 0, "t0": None, "corr": 0, "delta": np.zeros(14),
+                            "retreat": ph.get("retreat")}
         self._stall = None
         if ls.get("enabled", False) and plan.close_hold is not None and plan.side in ("left", "right"):
             self._stall = {"n": len(plan.arm), "hold": plan.close_hold, "sl": ArmKinematics.sl(plan.side),
@@ -4823,7 +4880,7 @@ class ClassicalPolicy:
         """Cancel carry and request a proved open -> vertical lift -> home recovery in a worker."""
         plan = g["plan"]
         self._gdiag = None
-        self._rel = None
+        self._rel = self._ig = None
         self._stall = self._exec = None      # per-plan watchers: their indices no longer match the queue
         if self._vary_on() and self.vary_hist:   # the entry _start appended for this plan
             self.vary_hist[-1]["held"] = False
@@ -4928,6 +4985,166 @@ class ClassicalPolicy:
         self._enqueue(a, h)
         self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: still not empty after the re-open -> home, stop")
         return self._pop()
+
+    def _insert_gate(self, obs, t):
+        """insert.reach_gated: stop over the hole (end of the carry = hover, end of the slow lower = release height), hold
+        gate_hold_s, read the MEASURED arm (FK of the encoders) and servo it onto the hole: a position error above the budget is
+        corrected by shifting the commanded pose (<= gate_max_corr times, remaining plan rows shifted too), then re-read. Still
+        off, tilted, unsettled or no reading -> never open: keep holding, retreat, home (state done): 0 points, never the -1 of a
+        bad release. Returns an action while it owns the tick."""
+        g = self._ig
+        if self.queue_a is None or not len(self.queue_a) or g["i"] >= len(g["stops"]):
+            self._ig = None
+            return None
+        if g["n"] - len(self.queue_a) < g["stops"][g["i"]]:
+            return None
+        rp = g.get("ramp")
+        if rp is not None:      # a servo correction in flight: glide onto the corrected pose (no joint-velocity step), then re-read
+            k0 = rp["k"]
+            k1 = min(rp["K"], k0 + max(1, int(self.cfg["motion"]["chunk"])))
+            u = np.arange(k0 + 1, k1 + 1) / float(rp["K"])
+            u = u * u * (3.0 - 2.0 * u)           # smoothstep: zero velocity at both ends
+            a = rp["from"][None, :] + u[:, None] * rp["dq"][None, :]
+            h = np.repeat(self.hand_cmd[None], len(a), 0)
+            rp["k"] = k1
+            if k1 >= rp["K"]:
+                g["ramp"], g["t0"] = None, t
+            self.arm_cmd, self.hand_cmd = a[-1].copy(), h[-1].copy()
+            self._popped = (a, h) if self._shell else None
+            return self._remember_policy_action(a, h, False)
+        if g["t0"] is None:
+            g["t0"] = t
+        ic = self.cfg.get("insert") or {}
+        if t - g["t0"] < float(ic.get("gate_hold_s", 0.6)):
+            return self._hold()
+        m = self._insert_measure(obs, g)
+        name = ("hover", "release")[g["i"]]
+        self.log(f"[insert_gate] t={t:.1f} {g['plan'].color} {name} corr={g['corr']}: {'pass' if m['ok'] else 'FAIL'} {m['txt']}")
+        if m["ok"]:
+            g["i"] += 1
+            g["t0"], g["corr"], g["last_err"] = None, 0, None
+            if g["i"] >= len(g["stops"]):
+                self._ig = None
+            return None
+        err3 = float(np.linalg.norm(m["e"])) if "e" in m else None
+        # a servo that does not shrink the error (< 30 % per step) means the hand is held by contact (lid plate): stop pushing, abort
+        progress = g.get("last_err") is None or (err3 is not None and err3 < 0.7 * g["last_err"])
+        if m.get("fixable") and progress and g["corr"] < int(ic.get("gate_max_corr", 3)) and self._insert_correct(g, m):
+            g["corr"] += 1
+            g["last_err"] = err3
+            g["t0"] = t
+            self._note(t, f"insert gate {name}: servo correction {g['corr']} ({m['txt']})")
+            return self._insert_gate(obs, t)
+        why = m["txt"]
+        plan = g["plan"]
+        side = plan.side
+        sl = ArmKinematics.sl(side)
+        closed = self.hand_cmd.copy()
+        home = np.asarray(self.arm_cmd, float).copy()
+        home[sl] = self.home[sl]
+        if g["i"] >= 1 and g["retreat"] is not None:   # at the release height: the planned vertical retreat, then home, hand stays closed
+            r0, r1 = g["retreat"]
+            rows = plan.arm[r0:r1] + g["delta"]
+            a = np.vstack([rows, self.planner.go_to(rows[-1], closed, home, closed)[0]])
+        else:
+            a = self.planner.go_to(self.arm_cmd, closed, home, closed)[0]
+        h = np.repeat(closed[None], len(a), 0)
+        self._ig = self._rel = self._stall = self._exec = self._gdiag = None
+        self._rel_fail = True      # state -> done once the queue drains (no further pick, no release)
+        self._enqueue(a, h)
+        self._note(t, f"insert gate abort ({name}): {why}")
+        return self._pop()
+
+    def _insert_gate_failsafe(self, t, exc):
+        """insert.reach_gated: the gate itself raised -> abort for good: hand stays closed, arm goes home, no more picks."""
+        self.log(f"[insert_gate] t={t:.1f} gate error {exc!r}: abort, home")
+        g, self._ig = self._ig, None
+        self._rel = self._stall = self._exec = self._gdiag = None
+        self._rel_fail = True
+        try:
+            side = g["plan"].side
+            closed = self.hand_cmd.copy()
+            home = np.asarray(self.arm_cmd, float).copy()
+            home[ArmKinematics.sl(side)] = self.home[ArmKinematics.sl(side)]
+            a = self.planner.go_to(self.arm_cmd, closed, home, closed)[0]
+            self._enqueue(a, np.repeat(closed[None], len(a), 0))
+            return self._pop()
+        except Exception:
+            self.queue_a = self.queue_h = None
+            return self._hold()
+
+    def _insert_measure(self, obs, g):
+        """Gate reading: dict(ok, fixable, txt, e (measured - target grasp point, 3), pt_cmd). NEVER raises (exception = not ok)."""
+        try:
+            ic = self.cfg.get("insert") or {}
+            plan, ins = g["plan"], g["plan"].insert
+            aq = np.asarray(obs.get("arm_q"), float)
+            if aq.shape != (14,) or not np.all(np.isfinite(aq)):
+                return {"ok": False, "fixable": False, "txt": "no measured arm"}
+            kin = self.planner.kin
+            pt, axis = kin.grasp_pose(plan.side, aq)
+            tgt = np.asarray(ins["pts"][g["i"]], float).copy() if ins.get("pts") and ins["pts"][g["i"]] is not None else np.r_[ins["xy"], pt[2]]
+            tgt[:2] = ins["xy"]
+            e = np.asarray(pt, float) - tgt
+            xy_err = float(np.linalg.norm(e[:2]))
+            tilt = float(np.degrees(np.arccos(np.clip(axis @ np.array([0.0, 0.0, -1.0]), -1.0, 1.0))))
+            sl = ArmKinematics.sl(plan.side)
+            track = float(np.max(np.abs(aq[sl] - (np.asarray(self.arm_cmd, float)[sl] ))))
+            bottom = float(pt[2]) - float(self.cfg["grasp"]["height_frac"]) * self.planner.height
+            gap = bottom - float(ins["z_top"])
+            txt = f"xy {1000 * xy_err:.1f} mm z {1000 * e[2]:+.1f} mm tilt {tilt:.1f} deg track {track:.3f} rad gap {1000 * gap:.1f} mm"
+            out = {"ok": False, "fixable": False, "txt": txt, "e": e, "pt_cmd": np.asarray(kin.grasp_pose(plan.side, np.asarray(self.arm_cmd, float))[0], float)}
+            zmax = float(ic.get("gate_max_z_m", 0.004)) if g["i"] >= 1 else 4 * float(ic.get("gate_max_z_m", 0.004))
+            if tilt > float(ic.get("gate_max_tilt_deg", 6.0)):
+                out["txt"] = txt + " > tilt budget"; return out
+            zhi = float(ic.get("gate_max_z_hi_m", 0.0008)) if g["i"] >= 1 else zmax   # at the release a hand HIGHER than the target = held up by the lid edge
+            if not (xy_err <= float(ic.get("gate_max_xy_m", 0.0035)) and -zmax <= e[2] <= zhi):
+                out["txt"] = txt + " > position budget"
+                out["fixable"] = bool(xy_err < 0.03 and abs(e[2]) < 0.04)
+                return out
+            if g["i"] >= 1 and not (float(ins["gap"]) - 0.004 <= gap <= float(ic.get("release_gap_max_m", 0.015))):
+                out["txt"] = txt + " gap out of range"; return out
+            out["ok"] = True
+            return out
+        except Exception as ex:
+            return {"ok": False, "fixable": False, "txt": f"gate error {ex!r}"}
+
+    def _insert_correct(self, g, m):
+        """Servo step: shift the commanded grasp point by -e (measured error), re-solve the arm IK (same release heading hint),
+        add the joint delta to every remaining plan row through the retreat (faded out over the home move) and to the command.
+        True when applied; False (-> abort) if the IK does not converge or the shift is implausible."""
+        try:
+            plan, ins = g["plan"], g["plan"].insert
+            side, sl = plan.side, ArmKinematics.sl(plan.side)
+            kin = self.planner.kin
+            tgt = np.asarray(m["pt_cmd"], float) - np.asarray(m["e"], float)
+            saved = (kin.hint, kin.w_hint)
+            try:
+                if ins.get("hint") is not None:
+                    kin.hint, kin.w_hint = ins["hint"]
+                q, ok, perr, tilt = kin.solve(side, tgt, np.asarray(self.arm_cmd, float), top_down=True, restarts=False)
+            finally:
+                kin.hint, kin.w_hint = saved
+            ic = self.cfg.get("insert") or {}
+            if not ok or perr > float(ic.get("reach_max_pos_err_m", 0.002)) or tilt > np.radians(float(ic.get("max_tilt_deg", 8.0))):
+                return False
+            dq = np.zeros(14)
+            dq[sl] = q[sl] - np.asarray(self.arm_cmd, float)[sl]
+            if float(np.max(np.abs(dq))) > 0.15:
+                return False
+            n, done = g["n"], g["n"] - len(self.queue_a)
+            ph = {name: (s_, e_) for name, s_, e_ in plan.phases}
+            h0, h1 = ph.get("home", (n, n))
+            idx = np.arange(done, n)
+            w = np.where(idx < h0, 1.0, np.clip(1.0 - (idx - h0) / max(h1 - h0 - 1, 1), 0.0, 1.0))
+            self.queue_a = np.asarray(self.queue_a, float) + w[:, None] * dq[None, :]
+            g["delta"] = g["delta"] + dq
+            dt = 1.0 / HZ
+            K = int(np.ceil(float(np.max(np.abs(dq))) / (0.15 * dt))) + 2     # <= ~0.15 rad/s peak joint speed
+            g["ramp"] = {"from": np.asarray(self.arm_cmd, float).copy(), "dq": dq, "k": 0, "K": max(K, 4)}
+            return True
+        except Exception:
+            return False
 
     def _joint_offset_diag(self, obs, t):
         """debug.log_joint_offset (passive): cmd-minus-measured over the first second of steady holds, from the policy's
@@ -5164,6 +5381,11 @@ class ClassicalPolicy:
         k = int(self.cfg["motion"]["chunk"])
         if self._rel is not None and self._rel["phase"] == "wait":   # stop exactly at the end of the open hold
             k = max(1, min(k, self._rel["open_end"] - (self._rel["n"] - len(self.queue_a))))
+        ig = getattr(self, "_ig", None)
+        if ig is not None and ig["i"] < len(ig["stops"]):   # insert.reach_gated: stop exactly at the gate tick
+            done = ig["n"] - len(self.queue_a)
+            if done < ig["stops"][ig["i"]] < done + k:
+                k = ig["stops"][ig["i"]] - done
         if self._stall is not None and self._in_hold():
             k = 1  # lift_on_stall: one tick per request inside the close hold, so every tick's hand_q is seen
         if self._gdiag is not None and "carry" in self._gdiag:
