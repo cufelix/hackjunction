@@ -35,7 +35,7 @@ COPY tools/brain/llama.cpp /src/llama.cpp
 # libcuda.so.1 (symlink to the stub + -rpath-link). The stub is NOT copied into the image. LLAMA_BUILD_UI=OFF: no web UI, so
 # the build does not download it from huggingface.co (llama-server API only).
 RUN ln -s libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
- && cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
+ && cmake -S /src/llama.cpp -B /src/build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="89;120" -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
         -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA_NCCL=OFF -DLLAMA_BUILD_UI=OFF \
         -DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,/usr/local/cuda/lib64/stubs \
  && cmake --build /src/build --target llama-server -j"$(nproc)" \
