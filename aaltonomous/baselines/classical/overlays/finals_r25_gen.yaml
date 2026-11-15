@@ -93,6 +93,7 @@ flags:
   # --- r24 add-ons, all OFF (decision = change false/0 here) ---
   profile_auto.force: null                      # null | sim | none ; the Dockerfile ARG PROFILE_MODE=sim|real bakes sim|none
   profile_auto.require_rgb_cue: false           # profile-harden: sim also needs a quiet RGB
+  profile_auto.second_cue: true                 # autodet: real if holes > 0.5 % OR temporal depth flicker > 20 %; sim needs both quiet
   grasp.left_hand_fix.shift_z: 0.0               # lh-r23: SIM-tuned (A102 49/52 vs 46/52): +0.01 in sim via sim_overrides; real stays 0
   grasp.arm_xy_offset: {left: [0.0, 0.003], right: [0.0, 0.022]}   # REAL realgp (with point_in_palm z); sim keeps r25_xy left -0.01 / right 0 via sim_overrides
   policy.retry_cross_relocate: false            # grasp-r23
