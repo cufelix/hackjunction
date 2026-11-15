@@ -59,7 +59,8 @@ flowchart TD
   and nonsense. It resolved 37 as intended and abstained on 19. Three of the other four map orange and purple to red
   and blue, which is by design: orange and purple are the real objects that stand in for the sim colours. The fourth
   drops the unknown noun in "the stapler and the red ones" and keeps "red goes left". Of 10 negations, 8 abstain
-  ("don't put red on the left") and 2 "except" forms resolve; one of those is wrong (see the limits below). With the
+  ("don't put red on the left") and 2 "except" forms resolve: "everything except purple goes right" leaves the purple
+  objects where they are and moves the rest. With the
   brain on, an abstained open sentence goes to the brain planner, whose plan is checked step by step.
 - **Abstain rather than guess.** Strict mapping, the red/yellow hue guard, the lid guard and the novel-object
   checks all end in "no pick" when unsure.
@@ -97,8 +98,6 @@ All three fixes are real-only. The sim/real detector switches them on, and the s
   the lid bin scores -1. `policy.insert_guard` therefore picks nothing: 0 points by design.
 - **The sim/real thresholds were set without real depth data.** They come from sim renders and the sensor's known
   behaviour, because we had no recorded real depth to tune them on.
-- **"Except" can lose the exception.** "Everything except purple goes right" resolves to "everything goes right", so
-  purple goes right as well. Our 60-sentence test wrongly counted this as correct.
 - **The brain has not been tested on the robot.** End-to-end runs with the real llama.cpp server take place on a GPU
   simulator box. The unit tests cover only a server that is down or late.
 
