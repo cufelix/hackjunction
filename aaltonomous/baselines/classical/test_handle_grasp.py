@@ -121,24 +121,54 @@ class TestPanHandleGrasp(unittest.TestCase):
                 print(f"\n[theta={theta}] grasp xy={d.top[:2].round(3)} s={s:.3f} t={t:.3f} "
                       f"tip_dist={RAD + HL - s:.3f} yaw_vs_handle={yaw_vs_handle:.1f}deg")
 
-    @unittest.skip("no probed pan placement plans a handle grasp: 0.25-0.40 m x 0/45/90/180 deg give "
-                   "'carry: no joint-space path', 'width 114 mm > 104 mm' or 'too short/occluded'")
-    def test_planner_closes_across_handle(self):
+    def _plan_pan_handle(self, kind="handle"):
         novel, dc, dir_p, perp_p = self.novels(90, centre=(.35, .0))
         d = novel[0]
         d.generic_confidence, d.graspable = 1.0, True  # disc touches the image border here (flagged ungraspable): checks geometry only
-        handle_ang = float(np.arctan2(dir_p[1], dir_p[0]))
+        if kind != "handle":
+            d.grasp_kind = kind
         plan = self.planner.plan(d, home_arm(self.cfg), hand_postures(self.cfg)["open"], bin_name="left")
-        self.assertTrue(plan.ok, plan.reason)
+        return d, plan
+
+    def _finger_heading(self, plan):
         e = next(e for name, _, e in plan.phases if name == "descend")
         self.planner.kin._fk(plan.arm[e - 1])
         x = self.planner.kin.data.oMf[self.planner.kin.palm[plan.side]].rotation[:, 0]
-        finger_ang = float(np.arctan2(x[1], x[0]))
-        closing_vs_handle = np.degrees(fold_pi(finger_ang + np.pi / 2 - handle_ang))
-        finger_vs_handle = np.degrees(fold_pi(finger_ang - handle_ang))
-        print(f"side={plan.side} finger_vs_handle={finger_vs_handle:.1f}deg "
-              f"closing_vs_handle={closing_vs_handle:.1f}deg")
-        self.assertGreaterEqual(closing_vs_handle, 70.0, "fingers do not close across the handle (within 20 deg of perpendicular)")
+        return float(np.arctan2(x[1], x[0]))
+
+    def test_planner_closes_across_handle(self):
+        d, plan = self._plan_pan_handle()
+        self.assertTrue(plan.ok, plan.reason)
+        finger_ang = self._finger_heading(plan)
+        handle_ang = float(np.arctan2(d.handle_axis[1], d.handle_axis[0]))
+        perp_err = float(np.degrees(np.pi / 2 - fold_pi(finger_ang - handle_ang)))   # 0 = perpendicular, 90 = along the bar
+        print(f"\n[handle plan] side={plan.side} finger_vs_perp={perp_err:.1f}deg")
+        self.assertLessEqual(perp_err, 20.0, "fingers do not close across the handle (within 20 deg of perpendicular)")
+
+    def test_handle_grasp_height_not_above_stock(self):
+        d, plan = self._plan_pan_handle()
+        self.assertTrue(plan.ok, plan.reason)
+        g = self.planner.cfg["grasp"]
+        saved = g.get("handle_fingertip_clearance_m")
+        try:
+            g["handle_fingertip_clearance_m"] = g["fingertip_clearance"]   # stock clearance, handle-only key disabled
+            _, stock = self._plan_pan_handle()
+        finally:
+            if saved is None:
+                g.pop("handle_fingertip_clearance_m", None)
+            else:
+                g["handle_fingertip_clearance_m"] = saved
+        self.assertTrue(stock.ok, stock.reason)
+        z, z_stock = plan.waypoints["grasp"][2], stock.waypoints["grasp"][2]
+        print(f"\n[handle plan] grasp z={1000 * z:.1f} mm stock z={1000 * z_stock:.1f} mm")
+        self.assertLessEqual(z, z_stock + 1e-6, "handle grasp point higher than the stock-height grasp")
+
+    def test_non_handle_grasp_keeps_stock_heading(self):
+        # same geometry, not a handle: the yaw candidates stay [yaw, yaw + pi] (fingers along the major axis)
+        d, plan = self._plan_pan_handle(kind="disc")
+        self.assertTrue(plan.ok, plan.reason)
+        finger_ang = self._finger_heading(plan)
+        self.assertLessEqual(float(np.degrees(fold_pi(finger_ang - float(d.yaw)))), 15.0)
 
 
 class TestUnknownNameHandle(unittest.TestCase):

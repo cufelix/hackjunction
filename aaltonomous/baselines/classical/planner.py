@@ -1069,6 +1069,8 @@ class Planner:
         # major axis, the thumb-to-finger closure spans the reported minor-axis
         # width. Try both directions of the undirected major axis.
         angles = [float(yaw), float(yaw) + np.pi]
+        if getattr(det, "grasp_kind", None) == "handle":   # fingers ACROSS the bar: pinch line crosses it (Isaac ground truth)
+            angles = [float(yaw) + np.pi / 2, float(yaw) - np.pi / 2]
         angle = min(angles, key=lambda a: abs((a - natural + np.pi) % (2 * np.pi) - np.pi))
         deviation = abs((angle - natural + np.pi) % (2 * np.pi) - np.pi)
         max_dev = 90.0 if getattr(det, "novel", False) else float(g.get("generic_yaw_max_dev_deg", 45.0))
@@ -1264,15 +1266,19 @@ class Planner:
         # grasp height: object mid-height, raised until the preshaped fingers clear the counter
         xy = det.top[:2] + np.asarray((g.get("arm_xy_offset") or {}).get(side, [0.0, 0.0]), float)  # per-arm, TUNE
         z = (det.top[2] - H / 2) if source_bin is not None else (zc + hfrac * H)
+        is_handle = getattr(det, "grasp_kind", None) == "handle"   # handle-only: defaults are no-ops (see config keys)
+        if is_handle:
+            z -= float(g.get("handle_z_drop_m", 0.0))
+        clr = float(g.get("handle_fingertip_clearance_m", 0.006)) if is_handle else g["fingertip_clearance"]
         for _ in range(4):
             qg, ok = self._ik(side, np.r_[xy, z], arm_q, "grasp", plan)
             if not ok:
                 plan.reason = f"IK grasp {side}"
                 return plan
             c = self.clearance(side, qg, hand_pre, fingers_only=True)
-            if c >= g["fingertip_clearance"] - 1e-3:
+            if c >= clr - 1e-3:
                 break
-            z += g["fingertip_clearance"] - c
+            z += clr - c
         else:
             plan.reason = "fingers hit the counter"
             return plan
