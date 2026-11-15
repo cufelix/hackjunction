@@ -4549,7 +4549,7 @@ class ClassicalPolicy:
         """Open / novel instruction whose brain call failed and the brain is down: go home and wait instead of ending
         the episode. True = episode held in state brain_wait. Known tasks (no brain, or inert) never reach this.
         Once per episode; brain.down_retry_s (3 s) re-probe interval, brain.down_wait_s (60 s) limit."""
-        if self.brain is None or self._universal_inert or self._brain_wait is not None or self._brain_wait_spent:
+        if getattr(self, "brain", None) is None or self._universal_inert or self._brain_wait is not None or self._brain_wait_spent:
             return False
         if not any(getattr(getattr(b, "req", None), "status", None) in ("error", "timeout", "busy")
                    for b in (self.brain, self.plan_brain) if b is not None):

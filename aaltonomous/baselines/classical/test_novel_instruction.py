@@ -166,7 +166,17 @@ KNOWN_PARAPHRASES = [
 ]
 NOVEL_NOUN_SENTENCES = [
     "put the pan in the middle bin", "The frying pan goes in the left bin.", "Put the mug into the right bin.",
-    "The ball belongs in the center bin.", "Drop the cups in the left bin.",
+    "Put the red mug in the left bin.", "Put the red pan in the right bin.",
+]
+# Not a trigger word by itself, but the resolver abstains (no colour), so the universal layer stays ON.
+UNCOLOURED_SHAPE_WORD_SENTENCES = ["The ball belongs in the center bin.", "Drop the cups in the left bin."]
+# Known-task wordings that used to trip the trigger through an adjective / verb sense: must be hard_off.
+KNOWN_SHAPE_WORD_WORDINGS = [
+    "Put the round ones on the left.", "Put the red round objects in the left bin.", "Round objects go right.",
+    "Handle the red ones with care and put them on the left.", "The red balls go left.",
+    "Put the blue rods on the right.", "The yellow bars go in the middle.", "Stick the red ones in the left bin.",
+    "Put the cylinders, the round ones, on the right.", "Red cups... I mean red cubes go left.",
+    "Put every red piece in the left bin; you can handle it.",
 ]
 
 
@@ -182,6 +192,18 @@ class KnownParaphraseGuardTest(unittest.TestCase):
             with self.subTest(sentence=s):
                 self.assertTrue(novel_noun_named(s))
                 self.assertFalse(make_pol(s)._universal_inert)
+
+    def test_uncoloured_shape_word_sentences_stay_on_through_the_resolver(self):
+        for s in UNCOLOURED_SHAPE_WORD_SENTENCES:
+            with self.subTest(sentence=s):
+                self.assertFalse(novel_noun_named(s))
+                self.assertFalse(make_pol(s)._universal_inert)
+
+    def test_adjective_and_verb_senses_stay_hard_off(self):
+        for s in KNOWN_SHAPE_WORD_WORDINGS:
+            with self.subTest(sentence=s):
+                self.assertFalse(novel_noun_named(s))
+                self.assertTrue(make_pol(s)._universal_inert)
 
 
 class KnownTaskGuardTest(unittest.TestCase):

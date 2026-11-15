@@ -47,11 +47,18 @@ _FILLER = frozenset(set(PALETTE) | _GENERIC_NOUNS | {
 _RESERVED = _FILLER | frozenset(w for ws in SHAPE_WORDS.values() for w in ws)
 
 
+# Adjective / verb senses and words that also fit the known objects ("the round ones" = cylinders, "stick the red ones in",
+# "handle it", "blue rods"): they never mark a novel object by themselves, so a sentence the resolver maps stays a
+# known task (hard_off). SHAPE_WORDS keeps them for matching once a novel object is in play.
+_NOT_A_TRIGGER = frozenset({"round", "handle", "handled", "stick", "bar", "ball", "rod", "cup"})
+
+
 def novel_noun_named(text):
-    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) from SHAPE_WORDS only."""
+    """True when the instruction names a novel object: a shape-synonym noun (plural allowed) from SHAPE_WORDS only,
+    minus _NOT_A_TRIGGER."""
     low = str(text or "").lower().replace("gray", "grey")
     words = set(_WORDS.findall(low))
-    return any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws)
+    return any(w in words or f"{w}s" in words for ws in SHAPE_WORDS.values() for w in ws if w not in _NOT_A_TRIGGER)
 
 
 def _unknown(words):
