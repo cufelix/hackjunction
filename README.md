@@ -32,3 +32,8 @@ Demo mass 80 g; at 150 g the one-hand pinch slips during carry (F_egg15_4c2b055 
 ## G_egg15_80g_4c2b055 — same as F at 80 g (2026-11-15 01:12)
 egg_left: handle pinch, lift 11.6 cm, carried to the centre bin with the pancake still inside; the pan ends upright
 resting on the bin rim (z 0.10), not inside. egg_right: lift 6.2 cm, then the pan slips. `grid_egg_left.jpg` 1 frame/s.
+
+## H_meat_hold_327e947 — 'take the pan and hold it steady' (felix/pancake-demo 327e947, AALTO_FORCE_SKILL=hold)
+80 g egg pan + 60 g meat slab (9x6x2 cm, RGB 0.24/0.20/0.18, no known HSV class) + 4 clutter objects.
+meat_right: left-arm handle pinch, lift 10.7 cm, held 13.8 s, put back; meat in pan at end of hold + end: yes/yes.
+meat_left: right arm, lift 12.7 cm, held 15.3 s; yes/yes. Meat inside the rim the whole time lifted on both.
