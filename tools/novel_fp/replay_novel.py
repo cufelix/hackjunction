@@ -56,6 +56,9 @@ def main(argv=None):
             if a.static_rad > 0 and (i == 0 or float(np.max(np.abs(d["arm_q"][i] - d["arm_q"][i - 1]))) > a.static_rad):
                 continue
             rgb, depth = d["rgb"][i], d["depth"][i]
+            # arm speed for the fp_filter still-arm gate (live: max |obs arm_dq|): finite difference of the dumped frames
+            dt = float(d["t"][i] - d["t"][i - 1]) if i > 0 else 0.0
+            per.novel_arm_speed = (float(np.max(np.abs(d["arm_q"][i] - d["arm_q"][i - 1]))) / dt) if dt > 0 else None
             dets = per.detect(rgb, depth, robot_q=(d["arm_q"][i].astype(float), d["hand_q"][i].astype(float))) or []
             nov = [x for x in dets if getattr(x, "novel", False)]
             n += 1

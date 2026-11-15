@@ -251,6 +251,9 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
     good[vv[ok], uu[ok]] = True
     mask = good.astype(np.uint8)
     arm_ring = arm_pts = None
+    # max |arm_dq| (rad/s) the policy saw with this frame; unknown counts as moving (no 3-D exemption)
+    speed = getattr(perception, "novel_arm_speed", None)
+    still = speed is not None and float(speed) <= float(cfg.get("still_arm_rad_s", 0.1))
     if robot_q is not None:
         if fp:
             # FP filter (a): the robot silhouette is ALWAYS filled + dilated here, independent of the colour gate's
@@ -309,7 +312,8 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
             border = bool(blob[0].any() or blob[-1].any() or blob[:, 0].any() or blob[:, -1].any())
             height98 = float(np.percentile(P[:, 2], 98.0) - perception.scene.counter_z)
             if border and cfg.get("drop_border", True) and not (
-                    cfg.get("border_keep_bottom", True) and _bottom_only(blob) and arm_pts is not None
+                    cfg.get("border_keep_bottom", True) and still and _bottom_only(blob)
+                    and arm_pts is not None
                     and _near_frac(P, arm_pts, float(cfg.get("near_arm_m", 0.04))) < float(cfg.get("near_arm_frac", 0.3))):
                 continue   # (c) partial view at the image edge: robot body, table edge, objects half out of view
             if height98 < float(cfg.get("min_height_m", 0.015)) or dims[1] < float(cfg.get("min_width_m", 0.015)):
@@ -322,7 +326,10 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
                     # fringe that picked up the bin/object colour behind it -- unless it is clearly away from the
                     # robot in 3-D (an object on the table right below a hovering hand, e.g. the pan's disc).
                     near_m = float(cfg.get("near_arm_m", 0.04))
-                    if arm_pts is None or near_m <= 0 or _near_frac(P, arm_pts, near_m) >= frac:
+                    # the 3-D exemption needs a still arm: while the arm moves the image lags the joints, so the
+                    # hand's own pixels sit several cm from the FK surface.
+                    if (arm_pts is None or near_m <= 0 or not still
+                            or _near_frac(P, arm_pts, near_m) >= frac):
                         continue
             # (d) a blob at a known detection of the SAME known-family colour stays known unless it is clearly longer
             # than any known object (a 10 cm marker or a pan next to a cube). Merges with arms/bin walls, which made

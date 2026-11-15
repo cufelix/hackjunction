@@ -145,10 +145,11 @@ class TestNovelFpRobotAndMerge(unittest.TestCase):
         c = SC.mat_to_pelvis([.50, .13, .045 + dz])
         return [(np.c_[xy + c[:2], np.full(len(xy), c[2])], None)]
 
-    def _novel(self, robot_q, mask, dz=0.0):
+    def _novel(self, robot_q, mask, dz=0.0, speed=0.0):
         class Surf:
             posed_links = staticmethod(lambda *a, **k: self._surface(dz))
-        with patch.object(self.per, "_fk_arm_mask", return_value=mask), patch.object(self.per, "_arm_surface", Surf()):
+        with patch.object(self.per, "_fk_arm_mask", return_value=mask), patch.object(self.per, "_arm_surface", Surf()), \
+                patch.object(self.per, "novel_arm_speed", speed, create=True):
             dets = self.per.detect(self.rgb, self.depth, robot_q=robot_q)
         return {d.color: d for d in dets if getattr(d, "novel", False)}
 
@@ -156,6 +157,12 @@ class TestNovelFpRobotAndMerge(unittest.TestCase):
         # in the image the box hugs the hand silhouette, but in 3-D the hand is 10 cm above it (the pan case)
         q = (np.zeros(14), np.zeros(14))
         self.assertIn("black", self._novel(q, self._arm_mask_beside_black_box(), dz=0.10))
+
+    def test_moving_arm_gets_no_3d_exemption(self):
+        # same scene with the arm moving: the image may lag the joints, so the hand-hugging blob is dropped
+        q = (np.zeros(14), np.zeros(14))
+        self.assertNotIn("black", self._novel(q, self._arm_mask_beside_black_box(), dz=0.10, speed=0.5))
+        self.assertNotIn("black", self._novel(q, self._arm_mask_beside_black_box(), dz=0.10, speed=None))
 
     def test_black_blob_hugging_arm_is_dropped_others_kept(self):
         q = (np.zeros(14), np.zeros(14))
