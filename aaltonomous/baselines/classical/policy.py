@@ -582,6 +582,11 @@ class ClassicalPolicy:
         self.retry_pass_used = False
         self._xrel_n = 0            # policy.retry_cross_relocate: relocations started this episode
         self._sweeps_used = 0       # policy.late_sweep: sweeps this episode
+        self._contact_start_tries = 0   # policy.contact_start_unblock: failed startup lift proofs
+        self._n_held_yes = 0        # picks whose close sample read HELD this episode (zero_det_relook: has anything worked yet)
+        self._zero_looks = 0        # policy.zero_det_relook: consecutive 0-detection looks
+        self._zero_since = None     # ... episode time of the first of them
+        self._contact_aborts = 0    # policy.descend_contact_guard: aborted descents this episode
         self._sweep_xy = []         # policy.late_sweep: object positions a repeat grasp is allowed for
         self._choose_t = 0.0        # episode time of the look being planned
         self.vary_hist = []         # policy.retry_vary_grasp: {color, xy, yaw, posture, side, held} per started pick
@@ -1236,6 +1241,9 @@ class ClassicalPolicy:
             # target has actually been returned to the runner.
             if self.queue_a is not None and len(self.queue_a):
                 return None
+            if (self.cfg.get("policy") or {}).get("startup_overlap", False) and not self._bv_done and self._bv_job is None \
+                    and ((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled") and self._async_bin_vote:
+                return None   # capture the bin-vote frames first (hands open, still); the empty close runs while that job computes
             self.state = "held_calibration"
             self._held_cal_phase = "sample"
             self.held_detector.require_empty_close_calibration(
@@ -1380,9 +1388,29 @@ class ClassicalPolicy:
                     c_now = min(self.planner.clearance(sd, self.arm_cmd, self.hand_cmd) for sd in ("left", "right")) \
                         if self.planner._lift_from_contact_on() else 1.0
                     if c_now <= 0.003:   # in contact: never the joint-space go_to through the table; retry the lift
-                        self._note(t, f"[stage] lift_from_contact: hold (clearance {c_now * 1000:.1f} mm)")
-                        self._stg = None
-                        return self._hold()
+                        self._contact_start_tries += 1
+                        if self._contact_start_tries <= int(self.cfg["policy"].get("contact_start_retries", 3)) \
+                                or not self.cfg["policy"].get("contact_start_unblock", False):
+                            self._note(t, f"[stage] lift_from_contact: hold (clearance {c_now * 1000:.1f} mm)")
+                            self._stg = None
+                            return self._hold()
+                        # policy.contact_start_unblock: a 'hand below the table clearance' check never blocks forever.
+                        # Unproved but still PURE VERTICAL half-speed lift (no lateral motion over the objects), then
+                        # the stage proof runs again from the lifted pose.
+                        lift = None
+                        for sides in (("left", "right"), ("left",), ("right",)):
+                            lift = self.planner._contact_lift(sides, self.arm_cmd, self.hand_cmd, rise=0.08)
+                            if lift is not None:
+                                break
+                        if lift is not None:
+                            self._note(t, f"[stage] lift_from_contact: proof failed {self._contact_start_tries}x "
+                                          f"(clearance {c_now * 1000:.1f} mm); unproved vertical lift {len(lift[0]) / HZ:.1f} s")
+                            self._stg = None
+                            self._contact_start_tries = 0
+                            self._enqueue(*lift)
+                            return self._pop()
+                        self._note(t, f"[stage] lift_from_contact: no vertical lift possible ({c_now * 1000:.1f} mm); "
+                                      f"rc6 home route as the last resort")
                     self._note(t, f"[staging] fallback rc6 home route: {reason}")
                     a, h = self.planner.go_to(self.arm_cmd, self.hand_cmd, self.home, self.post["open"])
                 else:
@@ -1809,6 +1837,20 @@ class ClassicalPolicy:
             deadline_job["phase"] = "plan"
             return bool(deadline_job.get("cancelled"))
 
+    def _log_zero_look(self, detector):
+        """perception.look_summary: why did this look end with 0 detections? (passive; never raises)"""
+        try:
+            s = getattr(detector, "last_look_summary", None)
+            if not s:
+                return
+            rej = s.get("rejected") or {}
+            self.log(f"[look0] 0 detections: {sum(s.get('blobs', {}).values())} colour blobs "
+                     f"(min_area-rejected {s.get('min_area', 0)}), {sum(rej.values())} rejected, reasons "
+                     f"{dict(sorted(rej.items()))}; colour px raw {s.get('raw_px')} after depth/bin/arm keep {s.get('mask_px')}; "
+                     f"blob HSV (OpenCV H 0-179) {s.get('blob_hsv') or 'none'}")
+        except Exception as e:   # diagnostics only
+            self.log(f"[look0] summary failed ({type(e).__name__})")
+
     def _look(self, obs, deadline_job=None, detector=None):
         detector = self.perception if detector is None else detector
         verify = self._verify_on()
@@ -1819,6 +1861,8 @@ class ClassicalPolicy:
                 return ("error", "late detector result discarded")
             if dets is None:
                 return ("still_vote_pending",)
+            if not dets:
+                self._log_zero_look(detector)
             if (self.cfg.get("instruction") or {}).get("novel_objects", False):
                 self._match_novel(dets, obs)
             self.last_detections = dets
@@ -1835,6 +1879,8 @@ class ClassicalPolicy:
             return ("error", "late detector result discarded")
         if dets is None:
             return ("still_vote_pending",)
+        if not dets:
+            self._log_zero_look(detector)
         if (self.cfg.get("instruction") or {}).get("novel_objects", False):
             self._match_novel(dets, obs)
         bin_dets = [(d, why.split(":", 1)[1]) for d, why in rejected if why.startswith("in_bin:")]
@@ -4252,6 +4298,12 @@ class ClassicalPolicy:
             self._note(t, "known wrong-bin object has no safe corrective or cleanup plan; stopping")
             self.state = "done"
             return self._hold(done=True)
+        if kind == "none" and int(res[2]) == 0 and self.cfg["policy"].get("zero_det_relook", False):
+            r = self._zero_det_relook(t)
+            if r is not None:
+                return r
+        elif kind != "none" or int(res[2]) != 0:
+            self._zero_looks, self._zero_since = 0, None
         if kind == "none":
             if self.cfg["perception"].get("relook_before_done", False) and not self._final_relook_used:
                 self._final_relook_used = True
@@ -4292,6 +4344,31 @@ class ClassicalPolicy:
             self._note(t, f"waiting for confirm: {plan.summary()}")
             return self._hold()
         return self._start(plan, t)
+
+    def _zero_det_relook(self, t):
+        """policy.zero_det_relook (real only): a look with 0 detections never ends the episode by itself. Re-look every
+        settle (~1 s) with fresh frames while time remains. Nothing has worked yet (no pick read HELD): keep looking until
+        the end margin. Something was sorted: end after zero_det_clear_looks empty looks spanning zero_det_clear_span_s
+        (a genuinely cleared counter must not idle to the time limit). Returns an action, or None = stock 'nothing left'."""
+        pol = self.cfg["policy"]
+        self._zero_looks += 1
+        if self._zero_since is None:
+            self._zero_since = float(t)
+        span = float(t) - self._zero_since
+        left = self.time_limit - float(t)
+        margin = float(pol.get("zero_det_end_margin_s", 3.0))
+        if left <= margin:
+            self._note(t, f"[look0] {self._zero_looks} empty looks over {span:.1f} s, {left:.0f} s left: stopping")
+            return None
+        if self._n_held_yes > 0 and self._zero_looks >= int(pol.get("zero_det_clear_looks", 3)) \
+                and span >= float(pol.get("zero_det_clear_span_s", 3.0)):
+            self._note(t, f"[look0] counter looks clear after {self._n_held_yes} successful pick(s): "
+                          f"{self._zero_looks} empty looks over {span:.1f} s")
+            return None
+        self._note(t, f"[look0] look {self._zero_looks}: 0 detections ({span:.1f} s, picks held so far "
+                      f"{self._n_held_yes}); re-looking with fresh frames, {left:.0f} s left")
+        self.state = "settle"
+        return self._hold()
 
     def _begin_retracted_relook(self, t, reason, note):
         """Queue a normal home/open trajectory, then let `_act` settle and count fresh frames without sleeping."""
@@ -4378,7 +4455,8 @@ class ClassicalPolicy:
                     *ph["close"], HZ, hold_start=plan.close_hold[0] if plan.close_hold else None)
                 # skill_only: watched for skills.memory alone -> no empty-grasp abort, no [grasp_diag] line
                 self._gdiag = {"plan": plan, "n": len(plan.arm), "close_end": check,
-                               "lift_end": ph[lift_key][1], "t": t, "samples": {}, "skill_only": not diag_on}
+                               "lift_end": ph[lift_key][1], "t": t, "samples": {}, "skill_only": not diag_on,
+                               "descend": ph.get("descend"), "contact_hist": []}
                 if lift_key == "lift_check" and self.held_detector.soft is not None:
                     self._gdiag["lift_check"] = True
                 if bool((self.cfg.get("held") or {}).get("read_through_carry", False)) \
@@ -4628,6 +4706,10 @@ class ClassicalPolicy:
         q = obs.get("hand_q")
         left = 0 if self.queue_a is None else len(self.queue_a)
         done = g["n"] - left
+        if (self.cfg.get("policy") or {}).get("descend_contact_guard", False) and self._contact_due(g, obs, done):
+            self._abort_empty_grasp(g, "descend-contact")
+            self._log_aborted_diag(g)
+            return
         read_through = "carry" in g and self.held_detector.mode == "finger_sum"
         if q is not None:
             cmd = self._held_command()
@@ -4660,6 +4742,8 @@ class ClassicalPolicy:
         plan = g["plan"]
         held, parts = self._diag_body(g)
         self._ob_held(plan, held)
+        if held:
+            self._n_held_yes += 1
         pend = self._skill_pending if self._skills_on() else None   # flag off: the attribute is never read
         if pend is not None and pend["color"] == plan.color:
             pend["held"] = None if held is None else bool(held)
@@ -4668,6 +4752,37 @@ class ClassicalPolicy:
         if not g.get("skill_only"):
             self.log(f"[grasp_diag] t={g['t']:.1f} {plan.color} {plan.side} target={plan.target_bin} "
                      f"held={'n/a' if held is None else ('yes' if held else 'no')} " + " ".join(parts))
+
+    def _contact_due(self, g, obs, done):
+        """policy.descend_contact_guard (real only): during the DESCEND phase the measured grasp point stopped
+        (< contact_still_mm over two consecutive requests) while the commanded one is still contact_gap_mm or more
+        below it: the hand is resting on the table (wrong table height / object under the palm). Abort at once (open,
+        vertical lift, home) instead of pressing on for the rest of the descend + close + hold (video: ~8 s).
+        Never raises; unsure = False."""
+        try:
+            d = g.get("descend")
+            aq = obs.get("arm_q")
+            if g.get("skill_only") or d is None or aq is None or not (d[0] < done <= d[1]):
+                return False
+            pol = self.cfg["policy"]
+            side = g["plan"].side
+            zm = float(self.kin.grasp_pose(side, np.asarray(aq, float))[0][2])
+            zc = float(self.kin.grasp_pose(side, self.arm_cmd)[0][2])
+            hist = g["contact_hist"]
+            hist.append((float(obs.get("t", 0.0)), zm, zc))
+            if len(hist) < 3:
+                return False
+            (_, z0, _), (_, z1, zc1), (_, z2, zc2) = hist[-3], hist[-2], hist[-1]
+            still = float(pol.get("contact_still_mm", 3.0)) / 1000.0
+            gap = float(pol.get("contact_gap_mm", 25.0)) / 1000.0
+            if abs(z1 - z0) < still and abs(z2 - z1) < still and (z2 - zc2) >= gap and (z1 - zc1) >= gap:
+                self._contact_aborts += 1
+                self.log(f"[contact] t={float(obs.get('t', 0.0)):.1f} {g['plan'].color} {side}: hand stopped at z={z2:+.3f} m "
+                         f"({(z2 - zc2) * 1000:.0f} mm above the commanded {zc2:+.3f} m) during the descend: table contact, abort")
+                return True
+        except Exception as e:
+            self.log(f"[contact] guard error {type(e).__name__}: {e}; ignored")
+        return False
 
     def _diag_body(self, g):
         """Formats the [grasp_diag] fields for a watched pick: (headline held, field parts). Shared by the normal

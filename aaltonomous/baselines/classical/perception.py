@@ -340,6 +340,8 @@ class Perception:
         self._below_bin_row = None
         self._image_bin_gate_active = False
         self.reject_log = bool(self.cfg.get("reject_log", False))
+        self.look_summary = bool(self.cfg.get("look_summary", False))   # passive: last_look_summary for the 0-detection log
+        self.last_look_summary = None
         self.bins_from_image = bool(self.cfg.get("bins_from_image", False))
         self.bins_img_cfg = dict(self.cfg.get("bins_from_image_params") or {})
         self.bin_rims = None          # last RimResult (bins_from_image); diagnostics / tests
@@ -1586,7 +1588,13 @@ class Perception:
             items = ((color, mask) for color, mask in masks.items() if color not in ("red", "yellow"))
         else:
             items = masks.items()
+        _ls = {"raw_px": {}, "mask_px": {}, "blobs": {}, "min_area": 0, "blob_hsv": []} if self.look_summary else None
+        _ls_hsv = None
+        if _ls is not None:
+            _ls_hsv = hsv if hsv is not None else cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
         for color, m in items:
+            if _ls is not None:
+                _ls["raw_px"][color] = int(np.count_nonzero(m))
             if blocked_by_image_gate is not None and (debug or self.reject_log):
                 self._append_fully_masked_rejections(
                     color, m & keep_before_image_gate, ~blocked_by_image_gate, "gate_below_bins", rejected)
@@ -1595,6 +1603,9 @@ class Perception:
             if k > 0:
                 m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
             n, lab, stats, cent = cv2.connectedComponentsWithStats(m, connectivity=8)
+            if _ls is not None:
+                _ls["mask_px"][color] = int(np.count_nonzero(m))
+                _ls["blobs"][color] = int(n - 1)
             skip = (self._reflection_skip(lab, stats, c["min_area_px"], hsv, depth)
                     if self.reflection_reject and n > 2 else ())
             for i in range(1, n):
@@ -1606,7 +1617,12 @@ class Perception:
                                   np.any(arm_boundary[win] & (lab[win] == i)))
                 floor = (int(self.partial_near_hand_cfg.get("min_area_px", 30))
                          if tentative else int(c["min_area_px"]))
+                if _ls is not None and len(_ls["blob_hsv"]) < 10 and area >= int(c["min_area_px"]):
+                    hv = np.median(_ls_hsv[lab == i], axis=0)   # white-balance check: mask colour vs the blob's real H/S/V
+                    _ls["blob_hsv"].append(f"{color}:{area}px@({int(x0 + ww / 2)},{int(y0 + hh / 2)}) HSV=({hv[0]:.0f},{hv[1]:.0f},{hv[2]:.0f})")
                 if area < floor:
+                    if _ls is not None:
+                        _ls["min_area"] += 1
                     if self.reject_log:
                         rejected.append((self._blob_placeholder(color, area, cent[i]), "min_area"))
                     continue
@@ -1672,6 +1688,13 @@ class Perception:
             dets = self._color_gate(dets, rejected)
         if self.reject_log:
             self._record_rejections(rejected)
+        if _ls is not None:
+            stages = Counter(self._reject_stage(str(why)) for _, why in rejected)
+            if _ls["min_area"]:
+                stages["min_area"] += _ls["min_area"]
+            _ls["rejected"] = dict(stages)
+            _ls["n_dets"] = len(dets)
+            self.last_look_summary = _ls
         if self.still_vote and still_frame:
             dets = self._still_vote_frame(dets)
             if dets is None:

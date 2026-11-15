@@ -135,7 +135,9 @@ class TestFlags(unittest.TestCase):
                                                   "perception.real_merge_split", "perception.bin_bottom_first_run", "perception.fk_colour_rescue", "grasp.approach_slow_mps", "grasp.approach_slow_dist_m",
                                                   "policy.retry_repeat_ok", "policy.late_regrant", "profile_auto.force", "profile_auto.second_cue",
                                                   "brain.known_task_hard_off", "planner.candidate_budget",
-                                                  "perception.table_pitch_calibration.max_abs_pitch_deg"})
+                                                  "perception.table_pitch_calibration.max_abs_pitch_deg",
+                                                  "policy.zero_det_relook", "policy.startup_overlap",
+                                                  "policy.descend_contact_guard", "perception.look_summary", "policy.contact_start_unblock"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):

@@ -303,6 +303,7 @@ perception:
   fk_colour_rescue_params: {min_overlap_frac: 0.02, min_area_px: 1200, z_above_counter_m: [0.034, 0.056]}
   real_merge_split: false     # FLAG (real only): split merged same-colour neighbours (cube+cylinder) from a lower area factor
   real_merge_split_params: {area_factor: 0.9, min_part_frac: 0.3}
+  look_summary: false         # FLAG (fsm, passive). per-look colour-blob / rejection summary for the policy's [look0] 0-detection line
   reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
   still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
   still_vote_params: {n_frames: 3, min_hits: 2, match_m: 0.02}
@@ -791,6 +792,17 @@ policy:
   late_sweep: false           # FLAG (grasp-r23, Timi). Nothing left to plan, objects still detected (attempt limit / skipped by a
                               # failed retry plan) and >= late_sweep_min_s left: they get late_sweep_extra more tries (kept history,
                               # +jitter if retry_jitter_m; a try identical to an earlier one is allowed in the sweep).
+  zero_det_relook: false      # FLAG (fsm, real-only). A look with 0 detections never ends the episode by itself: re-look every settle
+                              # (~1 s, fresh frames) with a [look0] reason line; nothing held yet = until the end margin
+  zero_det_clear_looks: 3     # zero_det_relook: after a successful pick, this many empty looks ...
+  zero_det_clear_span_s: 3.0  # ... spanning this long = the counter is clear (stock 'nothing left to sort')
+  zero_det_end_margin_s: 3.0  # zero_det_relook: stop re-looking this close to time_limit
+  contact_start_unblock: false  # FLAG (fsm, real-only). start with the hands ON the table and no proved lift: after contact_start_retries, an unproved PURE VERTICAL lift, never a permanent hold
+  contact_start_retries: 3
+  startup_overlap: false      # FLAG (fsm, real-only). held calibration (empty close at home) runs while the bin-vote job computes, not before it
+  descend_contact_guard: false  # FLAG (fsm, real-only). hand stopped on the table during the descend (measured z still, commanded >= gap below) -> abort + lift
+  contact_gap_mm: 25.0
+  contact_still_mm: 3.0
   late_sweep_min_s: 28.0
   late_sweep_extra: 1
   late_sweep_max: 3           # sweeps per episode

@@ -87,13 +87,17 @@ REAL_DEMO_FLAGS = frozenset({"grasp.drop_height_extra_m", "grasp.approach_slow_m
 
 
 R25_FLAGS = frozenset({"brain.known_task_hard_off", "planner.candidate_budget", "profile_auto.second_cue"})
+# fsm layer (real-only dead-time / failure-mode fixes; false in profile_auto.sim_overrides), finals_r25_gen only
+FSM_FLAGS = frozenset({"policy.late_sweep", "policy.zero_det_relook", "policy.startup_overlap",
+                       "policy.descend_contact_guard", "perception.look_summary", "policy.contact_start_unblock"})
 
 
 def expected_flags(overlay_name):
     """Reviewed ON-set for the baked overlay; any other overlay keeps the r22 allow-list."""
     if overlay_name.startswith("finals_r25"):   # r25* = finals_r24 set + the r25 layer (reviewed 2026-11-15)
         return expected_flags("finals_r24") | R25_FLAGS | (
-            {"grasp.arm_xy_offset"} if overlay_name == "finals_r25_xy" else set())
+            {"grasp.arm_xy_offset"} if overlay_name == "finals_r25_xy" else set()) | (
+            FSM_FLAGS if overlay_name == "finals_r25_gen" else set())
     if overlay_name in ("finals_r24", "finals_r24_classic", "finals_r23_universal"):
         exp = EXPECTED_FINALS_FLAGS | R23_FLAGS | BRAIN_PARAMS
         if overlay_name != "finals_r24_classic":

@@ -182,6 +182,11 @@ FLAGS = {
     "policy.retry_jitter_m": ("finals grasp", 0.0, "retry grasp-point jitter magnitude; 0 disables the deterministic +/-xy pattern"),
     "policy.retry_cross_relocate": ("grasp-r23", False, "retry after a left-arm miss at y<retry_cross_relocate_y: right arm relocates the object "
                                                          "to the left arm's side (needs retry_vary_grasp)"),
+    "policy.zero_det_relook": ("fsm", False, "real-only: a 0-detection look never ends the episode; re-look every settle (fresh frames, [look0] reason line); after a successful pick the counter is clear after zero_det_clear_looks empty looks over zero_det_clear_span_s"),
+    "policy.startup_overlap": ("fsm", False, "real-only: the held-calibration empty close runs while the bin-vote job computes (needs bin.vote.async_extract), not before it"),
+    "policy.descend_contact_guard": ("fsm", False, "real-only: hand stopped (measured grasp z still) >= contact_gap_mm above the commanded z during the descend = table contact -> abort (open, vertical lift, home)"),
+    "policy.contact_start_unblock": ("fsm", False, "real-only: start with the hands on the table and no proved lift: after contact_start_retries an unproved pure-vertical half-speed lift (never a lateral sweep, never a permanent hold)"),
+    "perception.look_summary": ("fsm", False, "passive per-look colour-blob/rejection summary used by the policy's [look0] 0-detection log line"),
     "policy.late_sweep": ("grasp-r23", False, "nothing left but excluded objects remain and >= late_sweep_min_s is left: extra tries"),
     "policy.retry_xy_offsets": ("retry xy", None, "null | list of [dx, dy] (m, pelvis frame): retry k+1 grasps at the re-detected "
                                                   "object xy + offsets[k-1] (on top of retry_jitter_m); needs retry_vary_grasp"),
