@@ -1,0 +1,172 @@
+[
+ {
+  "variant": "small_right",
+  "instruction": "put the pan in the middle bin",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.38,
+    "y": 0.18,
+    "yaw": -3.14159,
+    "z": 0.0125
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.7,
+    "y": 0.13,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 112.8,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 1178,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.0145,
+  "touched": false,
+  "min_palm_dist_m": 0.0598,
+  "verdict": "no_lift",
+  "in_center_bin": false,
+  "final_pos": [
+   0.3301,
+   -0.099,
+   0.0225
+  ]
+ },
+ {
+  "variant": "small_left",
+  "instruction": "put the pan in the middle bin",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.52,
+    "y": 0.18,
+    "yaw": 0.0,
+    "z": 0.0125
+   },
+   {
+    "color": "yellow",
+    "shape": "cube",
+    "x": 0.2,
+    "y": 0.13,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 103.5,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 1061,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.0308,
+  "touched": false,
+  "min_palm_dist_m": 0.0571,
+  "verdict": "lifted_no_palm",
+  "palm": "right_hand_palm_link",
+  "palm_in_pan_frame": [
+   0.204,
+   -0.0086,
+   0.1219
+  ],
+  "in_center_bin": false,
+  "final_pos": [
+   0.2968,
+   0.1004,
+   0.0225
+  ]
+ },
+ {
+  "variant": "small_rdiag",
+  "instruction": "put the pan in the middle bin",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.37,
+    "y": 0.17,
+    "yaw": -3.92699,
+    "z": 0.0125
+   },
+   {
+    "color": "blue",
+    "shape": "cube",
+    "x": 0.7,
+    "y": 0.13,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 3.8,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 33,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.001,
+  "touched": false,
+  "min_palm_dist_m": 0.1727,
+  "verdict": "no_lift",
+  "in_center_bin": false,
+  "final_pos": [
+   0.31,
+   -0.08,
+   0.0225
+  ]
+ },
+ {
+  "variant": "small_ldiag",
+  "instruction": "put the pan in the middle bin",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.53,
+    "y": 0.17,
+    "yaw": 0.7854,
+    "z": 0.0125
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.2,
+    "y": 0.13,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 4.5,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 39,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.001,
+  "touched": false,
+  "min_palm_dist_m": 0.1727,
+  "verdict": "no_lift",
+  "in_center_bin": false,
+  "final_pos": [
+   0.31,
+   0.08,
+   0.0225
+  ]
+ }
+]

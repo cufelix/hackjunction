@@ -12,3 +12,4 @@ Per episode: `*.mp4` (head camera recording from the runner), `*.npz` / `*.jsonl
   "handle too short/occluded" (the bin band cuts the disc's far half); far_right "white elongated", no handle.
 - `frames/pan_<variant>.npz`: head RGB-D every 3rd tick (rgb uint8 [N,480,640,3], depth [N,H,W], arm_q, hand_q, t)
   for the first 8-15 s; `.json` = layout. Replay: `tools/novel_fp/replay_novel.py frames --fp-filter on`.
+- `D_toypan_sha3_4af094c/` felix/brain-r23 4af094c, toy pan (r 6 cm, handle 8 cm beyond the rim): small_right/left plan + execute on the handle 3x each, hand closes on nothing (held=no); small_left lifted 3 cm; rdiag graspability 0.35 (border), ldiag no handle.
