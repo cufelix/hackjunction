@@ -12,6 +12,7 @@ flags:
   scene.counter_z_prior: 0.03   # real FK (drop_3; depth 0.09 was a nominal-pitch artefact); sim null via sim_overrides. was 0.15 # prior  NO-DEPTH fallback table height (pelvis frame, m); measured plane height (apply_height) overrides
   perception.table_pitch_calibration.max_abs_pitch_deg: 18.0   # real fix: drop_3 table pitch fits -12.5..-15.2 deg; 15 rejected 3/12 (sim 15 via sim_overrides)
   planner.candidate_budget: {max_ik_calls: 400, max_wall_s: 4.0}   # r25c: normal plans use 37-69 IK calls (0.3-0.5 s idle), unreachable 110-143; the wall clock is the real limit (58-68 s stalls on a loaded box). 30 calls deferred EVERY candidate (A203: 1/105)
+  planner.budget_escalate: true   # budgetfix: all-deferred look -> 3x budget re-plan of the best 2 (cap 12 s), else re-look; ON in sim too (no effect unless every candidate is budget-deferred)
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
   perception.self_calibration.enabled: false    # Timi calib head-camera xy self-calibration

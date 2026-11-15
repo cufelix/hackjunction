@@ -553,6 +553,8 @@ class ClassicalPolicy:
         self._frozen_looks = 0          # frozen_rgb_guard: consecutive frozen looks (per episode; the hash ref is NOT reset)
         self._scene_epoch = getattr(self, "_scene_epoch", 0) + 1   # new episode = scene re-placed
         self._target_cooldowns = []     # [{color, xy, until}], planner.per_target_guard only
+        self._budget_scale = 1.0        # planner.budget_escalate: >1 only inside the escalation re-plan
+        self._budget_relooks = 0
         self._deferred_cands = []       # [(color, xy)] candidates deferred once by planner.candidate_budget (episode-wide)
         self._latest_t = 0.0            # newest episode clock seen by act(); planning workers use it for cooldown start
         # A stale generation owns its detached snapshot and may finish in the
@@ -2745,6 +2747,7 @@ class ClassicalPolicy:
         n_long, shortest = 0, None
         cap_s, over_cap = None, []
         guarded_failure = False
+        budget_failed = []
         if self._dflag("object_time_cap"):   # D2: per-object cap (remaining - 15 s) / objects left, 15..35 s
             cap_s = dec.object_cap(self.time_limit - t, len(cands) - len(extra) or len(cands), self._dcfg())
 
@@ -2878,6 +2881,10 @@ class ClassicalPolicy:
                                                "color": d.color,
                                                "table_xy": None if table_xy is None else np.asarray(table_xy, float).copy()}
                 return ("plan", p, len(dets))
+            if getattr(p, "deferred", False) and self._escalate_on():
+                budget_failed.append(d)    # planner.budget_escalate: over budget, not infeasible -> never blacklisted
+                self.log(f"[classical] skip {d}: {p.reason}")
+                continue
             if self._target_guard_on():
                 self._cool_target(d, t, p.reason or "infeasible")
                 guarded_failure = True
@@ -2889,6 +2896,25 @@ class ClassicalPolicy:
                     self.log(f"[classical] skip {d}: {p.reason}")
             if fp:
                 return planner_fail(p.reason)
+        if budget_failed and self._escalate_on():
+            # planner.budget_escalate: EVERY candidate of this look was only budget-deferred (slow / loaded machine): re-plan the
+            # best 2 with 3x the budget (wall capped at 12 s); still nothing -> re-look and retry, never "nothing left to sort".
+            self._budget_scale = 3.0
+            try:
+                for d in budget_failed[:2]:
+                    others = [o.top[:2] for o in dets if o is not d]
+                    p = self._plan_pick(d, {"obstacles": others}, None)
+                    self.plans.append(p)
+                    self.log(f"[budget_escalate] {d.color} re-planned with 3x budget: ok={p.ok} ({p.reason})")
+                    if p.ok:
+                        self._budget_relooks = 0
+                        return ("plan", p, len(dets))
+            finally:
+                self._budget_scale = 1.0
+            self._deferred_cands = []
+            self._budget_relooks += 1
+            self.log(f"[budget_escalate] all {len(budget_failed)} candidates deferred for budget: re-look #{self._budget_relooks}")
+            return ("relook", None, len(dets))
         if over_cap:   # nothing within the cap: the quickest over-cap plan beats leaving points on the counter
             best = min(over_cap, key=lambda q: q.duration)
             if not triage or best.duration <= left:
@@ -3366,6 +3392,9 @@ class ClassicalPolicy:
         pl.object_speed_scale = float(scale)
         return pl
 
+    def _escalate_on(self):
+        return bool((self.cfg.get("planner") or {}).get("budget_escalate", False)) and self._candidate_budget() is not None
+
     def _candidate_budget(self):
         cb = (self.cfg.get("planner") or {}).get("candidate_budget")
         return dict(cb) if cb else None
@@ -3382,7 +3411,8 @@ class ClassicalPolicy:
         if cb is None:
             return self._plan_pick_inner(d, kw, plan_fn)
         kin = self.kin
-        kin.budget = PlanBudget(cb["max_ik_calls"], cb["max_wall_s"])
+        sc = float(self._budget_scale)
+        kin.budget = PlanBudget(int(cb["max_ik_calls"] * sc), min(float(cb["max_wall_s"]) * sc, 12.0) if sc != 1.0 else cb["max_wall_s"])
         t0 = time.monotonic()
         try:
             res = self._plan_pick_inner(d, kw, plan_fn)
