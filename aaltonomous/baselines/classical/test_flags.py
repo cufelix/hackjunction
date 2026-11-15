@@ -134,7 +134,8 @@ class TestFlags(unittest.TestCase):
                                                   "perception.prism_speckle_floor", "perception.real_border_partial",
                                                   "perception.real_merge_split", "grasp.approach_slow_mps", "grasp.approach_slow_dist_m",
                                                   "policy.retry_repeat_ok", "policy.late_regrant", "profile_auto.force",
-                                                  "brain.known_task_hard_off"})
+                                                  "brain.known_task_hard_off",
+                                                  "perception.table_pitch_calibration.max_abs_pitch_deg"})
 
     def test_ab_safety_is_cand_r17_plus_the_safety_shell(self):
         def on(name):

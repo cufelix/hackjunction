@@ -82,7 +82,8 @@ REALPERC_FLAGS = frozenset({"perception.color_gate.fk_silhouette", "perception.p
 
 
 # real-demo (drop_3) real-only values: release height + slow final approach (point_in_palm / closed_tight values were already ON)
-REAL_DEMO_FLAGS = frozenset({"grasp.drop_height_extra_m", "grasp.approach_slow_mps"})
+REAL_DEMO_FLAGS = frozenset({"grasp.drop_height_extra_m", "grasp.approach_slow_mps",
+                             "perception.table_pitch_calibration.max_abs_pitch_deg"})   # real fix: table pitch guard 15 -> 18
 
 
 def expected_flags(overlay_name):

@@ -96,6 +96,7 @@ FLAGS = {
                                             "per-episode head-camera xy offset from the bin walls (depth)"),
     "perception.online_pitch_cal": ("Timi pitch", False,
                                     "hold-only pre-motion camera calibration: true=orange bin rims | table=counter plane; one immutable transform/version per frame"),
+    "perception.table_pitch_calibration.max_abs_pitch_deg": ("real fix", 15.0, "table pitch-cal acceptance guard (deg): real drop_3 fits reach -15.2 deg; real overlay raises it (sim never runs the table cal)"),
     "perception.hand_calibration.enabled": ("Oliver hand-calib", False,
                                             "per-episode head-camera 6-DOF pose from the arms in depth (ICP vs FK)"),
     "perception.classify_shape": ("Oliver #5/#7", False, "Detection.shape from the top face (shape_id)"),

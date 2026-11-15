@@ -164,6 +164,8 @@ class TestRealDemoValues(unittest.TestCase):
             self.assertEqual(self._g(real, "scene.counter_z_prior"), 0.03)
             self.assertIsNone(self._g(sim, "scene.counter_z_prior"))
             self.assertIs(self._g(sim, "perception.online_pitch_cal"), False)
+            self.assertEqual(self._g(real, "perception.table_pitch_calibration.max_abs_pitch_deg"), 18.0)
+            self.assertEqual(self._g(sim, "perception.table_pitch_calibration.max_abs_pitch_deg"), 15.0)
             for k, v in self.OLD.items():
                 self.assertEqual(self._g(sim, k), v, k)
 
