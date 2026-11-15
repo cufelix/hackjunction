@@ -761,6 +761,8 @@ policy:
   retry_yaw_deg: {triangle: 60, cube: 90, cylinder: 90, none: 90, default: 90}   # heading change per label
   retry_same_xy_m: 0.01       # two grasps closer than this, same posture and heading within retry_same_yaw_deg = identical
   retry_same_yaw_deg: 20.0
+  retry_xy_offsets: null      # FLAG (retry xy). null | [[dx,dy],...] m pelvis frame; retry k+1 = re-detected xy + offsets[k-1]
+  retry_xy_mirror_right: false  # FLAG (retry xy). mirror dy after a right-hand miss
   retry_jitter_m: 0.0         # FLAG. Retry offsets: +x, -x, +y, -y; zero keeps the detected grasp point
   retry_cross_relocate: false # FLAG (grasp-r23, Timi). With retry_vary_grasp: after a LEFT-arm miss on an object at y < retry_cross_relocate_y
                               # (cross-body, A95 sim: left 15 empty / 11 held there vs right 1 / 16 on its own side) the retry is a

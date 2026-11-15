@@ -3175,17 +3175,31 @@ class ClassicalPolicy:
         return (np.asarray(plan.waypoints["grasp"][:2], float).copy(), yaw, self._posture_of(plan))
 
     def _jittered_retry_detection(self, d):
-        """Shallow-copy a retry detection with deterministic +x, -x, +y, -y grasp-point jitter."""
-        magnitude = float(self.cfg["policy"].get("retry_jitter_m", 0.0))
-        if magnitude <= 0.0:
+        """Shallow-copy a retry detection with deterministic +x, -x, +y, -y grasp-point jitter (policy.retry_jitter_m)
+        and/or the per-attempt xy offset (policy.retry_xy_offsets) on top of the detection passed in (the CURRENT,
+        re-detected object position). Both off: d itself."""
+        pol = self.cfg["policy"]
+        magnitude = float(pol.get("retry_jitter_m", 0.0))
+        offsets = pol.get("retry_xy_offsets")
+        if magnitude <= 0.0 and not offsets:
             return d
         attempt = self._attempt_count(np.asarray(d.top[:2], float), getattr(d, "color", None))
         if attempt <= 0:
             return d
-        pattern = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0))
+        shift = np.zeros(2)
+        if magnitude > 0.0:
+            pattern = ((1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0))
+            shift += magnitude * np.asarray(pattern[(attempt - 1) % len(pattern)], float)
+        if offsets and attempt <= len(offsets):   # try k+1 uses offsets[k-1]; beyond the list: no extra shift
+            off = np.asarray(offsets[attempt - 1], float)
+            if pol.get("retry_xy_mirror_right", False):   # side-aware: y mirrored for a right-hand miss
+                hist = self._hist_for(d)
+                if hist and hist[-1].get("side") == "right":
+                    off = off * np.array([1.0, -1.0])
+            shift += off
         shifted = copy.copy(d)
         shifted.top = np.asarray(d.top, float).copy()
-        shifted.top[:2] += magnitude * np.asarray(pattern[(attempt - 1) % len(pattern)], float)
+        shifted.top[:2] += shift
         return shifted
 
     def _variants(self, d, hist):

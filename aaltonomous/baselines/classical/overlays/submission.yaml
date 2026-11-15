@@ -118,6 +118,8 @@ flags:
   policy.episode_summary_log: false             # Oliver #3  one log line per episode end
   policy.retry_vary_grasp: false                # retry-vary another grasp when the object remains in the next frame
   policy.max_attempts_vary: null                # retry-vary e.g. 3 (needs retry_vary_grasp), only with time left
+  policy.retry_xy_offsets: null                 # retry xy  null | [[dx,dy],..] m pelvis; retry k+1 = re-detected xy + offsets[k-1]
+  policy.retry_xy_mirror_right: false           # retry xy  mirror dy after a right-hand miss
   policy.retry_jitter_m: 0.0                    # finals grasp deterministic +/-xy retry offset; 0 = off
   policy.first_object_speed_scale: null         # finals safe null | (0,1], arm speed of the first started pick only
   grasp.border_posture: false                   # retry-vary label None at the image border -> demo posture

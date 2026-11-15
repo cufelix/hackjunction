@@ -304,5 +304,62 @@ class TestRealPlanner(unittest.TestCase):
             self.assertEqual(info["safety_summary"]["clipped_steps"], 0, ov)
 
 
+class TestRetryXyOffsets(unittest.TestCase):
+    OFFS = [[0, 0.01], [0, -0.01], [0.01, 0]]
+
+    def _targets(self, overrides, side="left", n=4):
+        d = det("red", 0.30, shape="cube")
+        pol = make([d], overrides={"policy.max_attempts": 6, "policy.retry_same_xy_m": 0.001, **overrides})
+        got = []
+        for _ in range(n):
+            p = pol._plan_pick(d, {})
+            self.assertTrue(p.ok, p.reason)
+            p.side = side
+            got.append(p.waypoints["grasp"][:2] - d.top[:2])
+            miss(pol, p)
+        return got
+
+    def test_try2_onwards_shifted_as_specified(self):
+        got = self._targets({"policy.retry_xy_offsets": self.OFFS})
+        np.testing.assert_allclose(got, [[0, 0], [0, 0.01], [0, -0.01], [0.01, 0]], atol=1e-12)
+
+    def test_offsets_apply_on_the_redetected_position(self):
+        d = det("red", 0.30, shape="cube")
+        pol = make([d], overrides={"policy.retry_xy_offsets": self.OFFS, "policy.retry_same_xy_m": 0.001})
+        miss(pol, pol._plan_pick(d, {}))
+        pushed = det("red", 0.32, y=0.13, shape="cube")   # pushed 3.6 cm by the closing fingers, re-detected
+        p = pol._plan_pick(pushed, {})
+        np.testing.assert_allclose(p.waypoints["grasp"][:2], [0.32, 0.14], atol=1e-12)
+
+    def test_right_hand_mirror(self):
+        got = self._targets({"policy.retry_xy_offsets": self.OFFS, "policy.retry_xy_mirror_right": True}, side="right")
+        np.testing.assert_allclose(got, [[0, 0], [0, -0.01], [0, 0.01], [0.01, 0]], atol=1e-12)
+        left = self._targets({"policy.retry_xy_offsets": self.OFFS, "policy.retry_xy_mirror_right": True}, side="left")
+        np.testing.assert_allclose(left, [[0, 0], [0, 0.01], [0, -0.01], [0.01, 0]], atol=1e-12)
+
+    def test_flag_off_is_identical(self):
+        off = self._targets({})
+        np.testing.assert_allclose(off, [[0, 0]] * 4, atol=1e-12)
+        d = det("red", 0.30)
+        pol = make([d], overrides={"policy.retry_xy_mirror_right": True})
+        self.assertIs(pol._jittered_retry_detection(d), d)
+
+    def test_flags_off_episode_digest_identical(self):
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+        from equivalence_check import episode_digest
+        base_ov = {"policy.retry_vary_grasp": True, "policy.max_attempts_vary": 3}
+        for seed in (0, 1):
+            self.assertEqual(episode_digest(seed, 120.0, base_ov),
+                             episode_digest(seed, 120.0, {**base_ov, "policy.retry_xy_offsets": None,
+                                                         "policy.retry_xy_mirror_right": True}))
+
+    def test_rejects_bad_values(self):
+        for bad in ([[0.01]], [[0.5, 0]], "x", [[0, float("nan")]]):
+            with self.assertRaises(ValueError):
+                ClassicalPolicy(log=None, overrides={"policy.retry_xy_offsets": bad})
+
+
 if __name__ == "__main__":
     unittest.main()

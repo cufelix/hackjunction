@@ -171,9 +171,15 @@ FLAGS = {
     "policy.retry_repeat_ok": ("lang-r23", False, "retry_vary: when every other grasp variant is infeasible or identical, repeat the tried grasp (while tries < max_attempts_vary) instead of giving the object up for good"),
     "policy.late_regrant": ("lang-r23", False, "nothing pickable but a tried / given-up object is still on the counter with >= late_regrant_min_s left: clear its attempts, failed entry and grasp history for a fresh run of tries (late_regrants_max per episode)"),
     "policy.retry_jitter_m": ("finals grasp", 0.0, "retry grasp-point jitter magnitude; 0 disables the deterministic +/-xy pattern"),
+<<<<<<< HEAD
     "policy.retry_cross_relocate": ("grasp-r23", False, "retry after a left-arm miss at y<retry_cross_relocate_y: right arm relocates the object "
                                                          "to the left arm's side (needs retry_vary_grasp)"),
     "policy.late_sweep": ("grasp-r23", False, "nothing left but excluded objects remain and >= late_sweep_min_s is left: extra tries"),
+=======
+    "policy.retry_xy_offsets": ("retry xy", None, "null | list of [dx, dy] (m, pelvis frame): retry k+1 grasps at the re-detected "
+                                                  "object xy + offsets[k-1] (on top of retry_jitter_m); needs retry_vary_grasp"),
+    "policy.retry_xy_mirror_right": ("retry xy", False, "retry_xy_offsets: mirror dy for a retry after a right-hand miss"),
+>>>>>>> ef4823b (feat(retry): policy.retry_xy_offsets per-attempt grasp xy shift on the re-detected object (default off) + ab_lh_retryxy/2 overlays)
     "policy.first_object_speed_scale": ("finals safe", None,
                                           "null | (0,1]: arm speed x this for every plan made before the first pick starts"),
     "policy.verify_placement": ("Timi #6", False, "verify each release in the bins, correct wrong-bin, drop slots"),
@@ -534,6 +540,14 @@ def check_flag_values(cfg):
     if ice is not None and not (isinstance(ice, (list, tuple)) and len(ice) == 5
                                 and all(isinstance(x, (int, float)) for x in ice)):
         raise ValueError(f"perception.inject_cam_error = {ice!r}: want null or [dpitch_deg, dyaw_deg, dx, dy, dz]")
+    rxo = _get(cfg, "policy.retry_xy_offsets")
+    if rxo is not None and not (isinstance(rxo, (list, tuple)) and len(rxo) <= 8 and all(
+            isinstance(o, (list, tuple)) and len(o) == 2 and all(
+                isinstance(x, (int, float)) and not isinstance(x, bool) and np.isfinite(x) and abs(x) <= 0.05 for x in o)
+            for o in rxo)):
+        raise ValueError(f"policy.retry_xy_offsets = {rxo!r}: want null or a list of up to 8 [dx, dy], |v| <= 0.05 m")
+    if not isinstance(_get(cfg, "policy.retry_xy_mirror_right"), bool):
+        raise ValueError("policy.retry_xy_mirror_right: want true or false")
     first_scale = _get(cfg, "policy.first_object_speed_scale")
     if first_scale is not None and not 0.0 < float(first_scale) <= 1.0:
         raise ValueError("policy.first_object_speed_scale must be null or in (0, 1]")
