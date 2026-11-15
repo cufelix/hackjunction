@@ -155,7 +155,7 @@ def _touches_border(blob):
     return bool(blob[0].any() or blob[-1].any() or blob[:, 0].any() or blob[:, -1].any())
 
 
-def _handle_pixels(blob, max_aspect, extension, truncated=None):
+def _handle_pixels(blob, max_aspect, extension, truncated=None, body_m=None, min_width_m=0.015):
     """Return (mask, image-axis) for a thick body plus one thin protrusion."""
     yy, xx = np.nonzero(blob)
     if len(xx) < 20:
@@ -189,6 +189,12 @@ def _handle_pixels(blob, max_aspect, extension, truncated=None):
     take = (along > 1.00 * radius) & (np.abs(across) < 0.75 * radius)
     if take.sum() < max(12, int(0.02 * len(pts))) or np.percentile(along[take], 90) < 1.30 * radius:
         return None, None
+    # A handle is a bar, not a shaft: reject a protrusion narrower than min_width_m (metres), scaling its pixel width
+    # by the body's metric diameter (body_m = blob minor extent) over the body's pixel diameter (2 * radius).
+    if body_m is not None:
+        across_take = across[take]
+        if (np.percentile(across_take, 98) - np.percentile(across_take, 2)) * float(body_m) / (2.0 * radius) < float(min_width_m):
+            return None, None
     out = np.zeros_like(blob, bool)
     hp = pts[take].astype(int)
     out[hp[:, 1] + y0, hp[:, 0] + x0] = True
@@ -208,7 +214,8 @@ def _shape(blob, dims, cfg, truncated=None):
         truncated = _touches_border(blob)
     if aspect >= float(cfg.get("handle_min_aspect", 1.5)) and (truncated or aspect < float(cfg.get("elongated_aspect", 2.2))):
         handle, image_axis = _handle_pixels(blob, cfg.get("handle_max_aspect", 2.5),
-                                            cfg.get("handle_extension", 1.45), truncated)
+                                            cfg.get("handle_extension", 1.45), truncated,
+                                            body_m=float(dims[1]), min_width_m=cfg.get("handle_min_width_m", 0.015))
     if handle is not None:
         return "with-handle", handle, image_axis, circularity
     if aspect >= float(cfg.get("elongated_aspect", 2.2)):
