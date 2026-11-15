@@ -64,6 +64,13 @@ class TestPanHandleGrasp(unittest.TestCase):
         self.assertTrue(novel[0].ungraspable)
         self.assertEqual(novel[0].ungraspable_reason, "wider than the hand, no handle")
 
+    def test_disc_cut_by_image_edge_keeps_visible_handle_graspable(self):
+        # default centre: the disc touches the bottom image edge, the handle is fully in view -> no border penalty
+        novel, _, _, _ = self.novels(0)
+        self.assertEqual(len(novel), 1)
+        self.assertTrue(novel[0].graspable)
+        self.assertEqual(novel[0].grasp_kind, "handle")
+
     def test_handle_grasp_clears_the_rim_or_is_ungraspable(self):
         # 0 deg: full handle visible -> grasp on the handle >= rim + 3 cm.
         novel, dc, dir_p, perp_p = self.novels(0)
@@ -132,6 +139,46 @@ class TestPanHandleGrasp(unittest.TestCase):
         print(f"side={plan.side} finger_vs_handle={finger_vs_handle:.1f}deg "
               f"closing_vs_handle={closing_vs_handle:.1f}deg")
         self.assertGreaterEqual(closing_vs_handle, 70.0, "fingers do not close across the handle (within 20 deg of perpendicular)")
+
+
+class TestUnknownNameHandle(unittest.TestCase):
+    """The same pan, called 'wok': the name is unknown, so only the VLM set is offered; the handle grasp must come from shape alone."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cfg = novel_config()
+        cls.cfg["perception"]["novel"]["fp_filter"] = False
+        cls.cfg["perception"]["novel"]["max_area_px"] = 60000
+        cls.planner = Planner(cls.cfg, SC, hand_postures(cls.cfg), home_arm(cls.cfg))
+
+    def novels(self, theta, centre=(.45, .17)):
+        rgb, depth, dc, dir_p, perp_p = pan_frame(theta, centre)
+        perception = Perception(self.cfg, SC, CAL, log=lambda *_: None)
+        perception.hand_opening_m = self.planner.generic_hand_opening
+        dets = perception.detect(rgb, depth)
+        return [d for d in dets if getattr(d, "novel", False)], dc, dir_p, perp_p
+
+    def test_wok_is_grounded_and_grasped_by_its_handle(self):
+        from .novel_objects import match_instruction, novel_noun_named
+
+        novel, dc, _, _ = self.novels(0)
+        self.assertEqual(len(novel), 1)
+        d = novel[0]
+        # the name is not a known noun, so the deterministic path abstains and offers the visible novel set to the brain
+        self.assertFalse(novel_noun_named("put the wok in the left bin"))
+        m = match_instruction("put the wok in the left bin", novel)
+        self.assertIsNone(m.matched)
+        self.assertEqual(m.unresolved_noun, "wok")
+        self.assertEqual(m.target_bin, "left")
+        self.assertIn(d, m.brain_candidates)
+        # geometry the robot uses for that candidate; the handle decision comes from shape only, the name is not an input
+        self.assertEqual(d.grasp_kind, "handle")
+        self.assertLess(d.generic_width, 0.05)
+        self.assertTrue(d.graspable)
+        gap = float(np.linalg.norm(d.top[:2] - dc[:2]))
+        print(f"\n[wok] grasp xy={d.top[:2].round(3)} dist_from_disc_centre={gap:.3f} "
+              f"generic_width={d.generic_width:.3f}")
+        self.assertGreaterEqual(gap, RAD + 0.02, "grasp point not outside the disc rim")
 
 
 if __name__ == "__main__":
