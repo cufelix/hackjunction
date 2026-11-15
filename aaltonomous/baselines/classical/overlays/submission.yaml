@@ -195,5 +195,7 @@ flags:
   grasp.face_align_sides: [left]                # yawface  arms face_align applies to
   grasp.face_align_tol_deg: 8.0                 # yawface  achieved heading tolerance, else the stock heading path
   instruction.generality: false                 # gen  closed-vocabulary last-resort instruction parser (OFF)
+  instruction.venue_veto: false                 # venue lang  generality veto adds viewer sides / negated bins / ordinals / foreign negations (OFF)
+  instruction.venue_veto_ordinal: true          # venue lang  stock (only read when venue_veto is on)
   policy.shape_rule_guard: false                # gen  shape rules need a confident metric shape (OFF)
   policy.shape_rule_min_conf: 0.5               # gen  min shape_id confidence for shape_rule_guard

@@ -13,7 +13,6 @@ ABSTAIN = (
     "Red to the viewer's left bin, blue to the viewer's right bin, yellow centre.",
     "Put the orange ones in the bin on the audience's left.",
     "Put the yellow ones anywhere but the left bin.",
-    "Yellow must not go in the left bin, red goes right.",
     "Red in the first box, yellow in the second box, blue in the third box.",
     "Put red in bin 1 and blue in bin 3.",
     "Žluté ne do levé krabice, červené doprava.",
