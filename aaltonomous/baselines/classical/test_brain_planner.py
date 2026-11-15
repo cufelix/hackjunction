@@ -119,6 +119,12 @@ class TestSkill(unittest.TestCase):
         self.assertFalse(steps[0]["valid"])
         self.assertTrue(any("not in scene" in e for e in errors), errors)
 
+    def test_hold_skill_validates_for_a_known_object(self):
+        raw = [{"tool": "skill", "args": {"obj_id": "o0", "skill": "hold"}}, {"tool": "done", "args": {}}]
+        steps, errors = validate_plan(raw, self.WORLD_SKILL, classical_has_work=False)
+        self.assertFalse(errors, errors)
+        self.assertTrue(steps[0]["valid"])
+
     def test_grammar_can_emit_skill(self):
         grammar = plan_gbnf()
         self.assertIn("skill", grammar)

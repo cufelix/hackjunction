@@ -55,5 +55,31 @@ class TestFlipSkill(unittest.TestCase):
         self.assertNotIn("flip", [n for n, _, _ in plan.phases])
 
 
+class TestHoldSkill(unittest.TestCase):
+    """planner.skill == 'hold': lift, then the hand stays closed with the arm still for grasp.hold_s."""
+
+    @classmethod
+    def setUpClass(cls):
+        TestFlipSkill.setUpClass.__func__(cls)
+
+    def _plan(self, skill):
+        planner = Planner(self.cfg, SC, self.post, self.home)
+        planner.skill = skill
+        det = Detection("yellow", self.top.copy(), 0, 0, "depth")
+        return planner.plan(det, self.home, self.post["open"])
+
+    def test_hold_phase_after_lift_is_still_and_hold_s_long(self):
+        plan = self._plan("hold")
+        self.assertTrue(plan.ok, plan.reason)
+        names = [n for n, _, _ in plan.phases]
+        self.assertEqual(names.index("lift") + 1, names.index("hold"))
+        self.assertEqual(names.index("hold") + 1, names.index("carry"))
+        s, e = next((s, e) for n, s, e in plan.phases if n == "hold")
+        hold_s = float(self.cfg["grasp"].get("hold_s", 3.0))
+        self.assertGreaterEqual(e - s, int(round(hold_s / (1.0 / 30.0))))
+        self.assertEqual(float(np.ptp(plan.arm[s:e], axis=0).max()), 0.0)
+        self.assertFalse(plan.safety_clips)
+
+
 if __name__ == "__main__":
     unittest.main()

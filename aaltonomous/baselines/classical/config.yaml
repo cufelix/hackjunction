@@ -385,6 +385,7 @@ bin:
     tape_hsv: [[3, 150, 70], [8, 255, 180]]
 
 grasp:
+  hold_s: 3.0         # skill "hold": seconds the hand stays closed with the arm still, right after the lift
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
   # fingers point roughly forward and curl down in front of the object, the thumb swings in from behind.
   # Object centre in the LEFT palm frame; auto = midway finger tips <-> thumb tip (`closed`). The Dex3 index/middle

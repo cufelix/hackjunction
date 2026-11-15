@@ -251,7 +251,7 @@ class Planner:
         self._lying = False    # grasp.lying_prism: the pick being planned is a lying prism (grasp height / posture)
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
         self.object_speed_scale = None  # policy.first_object_speed_scale: arm phase speed x this (a copy, per plan)
-        self.skill = None  # "flip": insert the pan-toss phase after the lift (see _flip_waypoints); None = stock pick
+        self.skill = None  # "flip": pan-toss phase after the lift (_flip_waypoints); "hold": still hand-closed hold; None = stock pick
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
@@ -1463,6 +1463,8 @@ class Planner:
             move("lift", up, scale=cs)
         if self.skill == "flip":
             move("flip", self._flip_waypoints(side, cur_a), scale=cs)
+        elif self.skill == "hold":   # arm constant, hand closed on the pan for grasp.hold_s
+            hand("hold", hand_cls, float(g.get("hold_s", 3.0)))
         move("carry", carry + lower, scale=cs)
         rw = g.get("release_wait_s")  # grasp.release_wait_s: the retreat starts >= this long after the open command
         hand("open", hand_rel, mo["open_hold_s"] if rw is None else max(mo["open_hold_s"], float(rw)))  # widest posture: `open` alone left the cube wedged in the sim
