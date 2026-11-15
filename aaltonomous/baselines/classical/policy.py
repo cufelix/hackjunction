@@ -37,6 +37,7 @@ from aaltonomous.scene.scene import Scene
 
 from . import decision as dec
 from . import landing
+from .kinematics import PlanBudget, PlanBudgetExceeded
 from .bin_vote import vote_bins
 from .config import equalize_index_middle, hand_postures, home_arm, load_config, soft_detector_active, soft_hand_active, soft_overclose
 from .held import HeldDetector
@@ -509,6 +510,7 @@ class ClassicalPolicy:
         self._frozen_looks = 0          # frozen_rgb_guard: consecutive frozen looks (per episode; the hash ref is NOT reset)
         self._scene_epoch = getattr(self, "_scene_epoch", 0) + 1   # new episode = scene re-placed
         self._target_cooldowns = []     # [{color, xy, until}], planner.per_target_guard only
+        self._deferred_cands = []       # [(color, xy)] candidates deferred once by planner.candidate_budget (episode-wide)
         self._latest_t = 0.0            # newest episode clock seen by act(); planning workers use it for cooldown start
         # A stale generation owns its detached snapshot and may finish in the
         # background.  The new episode gets a fresh worker slot immediately.
@@ -1578,6 +1580,7 @@ class ClassicalPolicy:
         # finish concurrently after a reset.
         worker.kin = copy.copy(self.kin)
         worker.kin.data = worker.kin.model.createData()
+        worker.kin.budget = None
         worker.kin.offset = {side: np.asarray(value, float).copy() for side, value in self.kin.offset.items()}
         worker.kin.hint = np.asarray(self.kin.hint, float).copy()
         worker.planner.kin = worker.kin
@@ -2633,6 +2636,10 @@ class ClassicalPolicy:
             return ("planner_pending", dets, verify) if self.plan_brain.req.status == "pending" \
                 else ("none", None, len(dets))
 
+        if self._candidate_budget() is not None and self._deferred_cands:   # deferred earlier: only after the others
+            cands = [d for d in cands if not self._was_deferred(d)] + [d for d in cands if self._was_deferred(d)]
+        else:
+            cands = list(cands)
         for d in cands:
             mine = forced is not None and d is forced[0]
             fp = mine and planner_forced
@@ -2711,6 +2718,11 @@ class ClassicalPolicy:
                 guarded_failure = True
                 continue
             self.plans.append(p)
+            if getattr(p, "deferred", False) and not fp and not self._was_deferred(d):
+                # planner.candidate_budget: over budget -> try the next candidate now, this one once more after the others
+                self._deferred_cands.append((d.color, np.asarray(d.top[:2], float).copy()))
+                cands.append(d)
+                continue
             if p.ok and not self._object_time_allows(d, p.duration):
                 if fp:
                     return planner_fail("object time budget")
@@ -3217,7 +3229,36 @@ class ClassicalPolicy:
         pl.object_speed_scale = float(scale)
         return pl
 
+    def _candidate_budget(self):
+        cb = (self.cfg.get("planner") or {}).get("candidate_budget")
+        return dict(cb) if cb else None
+
+    def _was_deferred(self, d):
+        rad = float(self.cfg["policy"]["same_object_radius"])
+        xy = np.asarray(d.top[:2], float)
+        return any(c == d.color and np.linalg.norm(xy - p) < rad for c, p in self._deferred_cands)
+
     def _plan_pick(self, d, kw, plan_fn=None):
+        """planner.candidate_budget (default off = exactly _plan_pick_inner): one candidate's planning may use at most
+        max_ik_calls kin.solve calls and max_wall_s monotonic seconds; over budget -> Plan(ok=False, deferred=True)."""
+        cb = self._candidate_budget()
+        if cb is None:
+            return self._plan_pick_inner(d, kw, plan_fn)
+        kin = self.kin
+        kin.budget = PlanBudget(cb["max_ik_calls"], cb["max_wall_s"])
+        t0 = time.monotonic()
+        try:
+            res = self._plan_pick_inner(d, kw, plan_fn)
+            self.log(f"[plan_budget] {d.color} planned: {kin.budget.calls} IK calls, {time.monotonic() - t0:.2f} s ok={res.ok}")
+            return res
+        except PlanBudgetExceeded as e:
+            self.log(f"[plan_budget] {d.color} at ({d.top[0]:+.3f},{d.top[1]:+.3f}): planning budget exceeded ({e}); "
+                     f"{time.monotonic() - t0:.2f} s, candidate deferred")
+            return Plan(False, color=d.color, reason=f"planning budget exceeded ({e})", deferred=True)
+        finally:
+            kin.budget = None
+
+    def _plan_pick_inner(self, d, kw, plan_fn=None):
         """planner.plan, or with policy.retry_vary_grasp and an earlier miss on this object: the first feasible grasp
         variant whose (point, finger heading, posture) differs from every earlier try; the stock plan only if it
         differs too. Flag off: exactly planner.plan(d, arm, hand, **kw)."""

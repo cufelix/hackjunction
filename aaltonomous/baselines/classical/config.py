@@ -86,6 +86,7 @@ FLAGS = {
     "policy.hold_ticks": ("finals rate", None, "override motion.hold_ticks; null keeps the profile value"),
     "policy.done_confirm": ("finals done", False, "finish only after configured consecutive empty looks spanning the confirmation window; failed looks retry until the episode limit"),
     "perception.look_timeout_s": ("finals done", None, "wall-clock deadline for one asynchronous detector call; timeout is a failed look, never evidence that the scene is clear"),
+    "planner.candidate_budget": ("latency", None, "null = off; dict {max_ik_calls, max_wall_s} = per-candidate planning budget (IK calls / monotonic wall s); a candidate over budget is deferred (retried once, after the others), never blocks"),
     "planner.per_target_guard": ("finals done", False, "contain a planning exception or infeasible result to that target, cool it down, and continue with other detections"),
     "policy.frozen_rgb_guard": ("frozen rgb", False, "head RGB bit-identical to the previous look's although a pick started (or the episode reset) since then: the look is frozen (log [frozen_rgb]), yields no picks, homes, waits and re-looks (never stops the episode); byte-identical only; last hash persists across episodes"),
     "policy.insert_guard": ("insert", False, "rung 3 (insert_shapes task id or the hole/lid sentence): pick nothing (0 pts, never -1 on the lid)"),
@@ -425,6 +426,15 @@ def check_flag_values(cfg):
                 "grasp.drop_slot_grid"):
         if not isinstance(_get(cfg, key), bool):
             raise ValueError(f"{key}: want true or false")
+    cb = _get(cfg, "planner.candidate_budget")
+    if cb is not None:
+        if not isinstance(cb, dict) or set(cb) != {"max_ik_calls", "max_wall_s"}:
+            raise ValueError(f"planner.candidate_budget = {cb!r}: want null or exactly max_ik_calls, max_wall_s")
+        if not (isinstance(cb["max_ik_calls"], int) and not isinstance(cb["max_ik_calls"], bool) and cb["max_ik_calls"] > 0):
+            raise ValueError(f"planner.candidate_budget.max_ik_calls = {cb['max_ik_calls']!r}: want an int > 0")
+        w = cb["max_wall_s"]
+        if isinstance(w, bool) or not isinstance(w, (int, float)) or not (0 < w < float("inf")):
+            raise ValueError(f"planner.candidate_budget.max_wall_s = {w!r}: want finite seconds > 0")
     caps = _get(cfg, "motion.output_caps")
     if caps is not None:
         keys = {"arm_vel", "arm_acc", "hand_vel", "hand_acc"}

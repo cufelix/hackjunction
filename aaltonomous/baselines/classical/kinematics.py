@@ -24,6 +24,30 @@ FINGER_LINKS = ("hand_index_1_link", "hand_middle_1_link", "hand_thumb_2_link")
 TIP = {"left": ([0.052, 0, 0], [0.052, 0, 0], [0, -0.052, 0]), "right": ([0.052, 0, 0], [0.052, 0, 0], [0, 0.052, 0])}
 
 
+class PlanBudgetExceeded(Exception):
+    """planner.candidate_budget: one candidate's planning used up its IK-call / wall-clock budget."""
+
+
+class PlanBudget:
+    """Per-candidate planning budget (policy._plan_pick installs it on kin.budget for one candidate's plan)."""
+
+    def __init__(self, max_ik_calls=None, max_wall_s=None, clock=None):
+        import time
+        self.max_ik_calls = None if max_ik_calls is None else int(max_ik_calls)
+        self.max_wall_s = None if max_wall_s is None else float(max_wall_s)
+        self.clock = clock or time.monotonic
+        self.t0 = self.clock()
+        self.calls = 0
+
+    def check(self, count=False):
+        if count:
+            self.calls += 1
+        if self.max_ik_calls is not None and self.calls > self.max_ik_calls:
+            raise PlanBudgetExceeded(f"{self.calls - 1} IK calls > {self.max_ik_calls}")
+        if self.max_wall_s is not None and self.clock() - self.t0 > self.max_wall_s:
+            raise PlanBudgetExceeded(f"{self.clock() - self.t0:.2f} s > {self.max_wall_s:g} s after {self.calls} IK calls")
+
+
 class ArmKinematics:
     def __init__(self, cfg, spec: JointSpec | None = None, urdf=DEFAULT_URDF, lower_body_q=None):
         import pinocchio as pin
@@ -104,6 +128,9 @@ class ArmKinematics:
         """IK for one arm. target: grasp-point position (pelvis). arm_q_seed: (14,) full arm vector; the other
         arm's values are kept. Returns (arm_q (14,), ok, pos_err m, tilt rad)."""
         ik = self.cfg["ik"]
+        budget = getattr(self, "budget", None)
+        if budget is not None:   # planner.candidate_budget (default off: budget is None)
+            budget.check(count=True)
         seeds = [np.asarray(arm_q_seed, float)[self.sl(side)]] + [np.asarray(s, float) for s in extra_seeds]
         rng = np.random.default_rng(0)
         if restarts:
@@ -112,6 +139,8 @@ class ArmKinematics:
         best = None
         for w in (weights if top_down else [0.0]):
             for k, s in enumerate(seeds):
+                if budget is not None:
+                    budget.check()
                 q7, perr, tilt = self._lsq(side, np.asarray(target, float), s, arm_q_seed, w)
                 ok = perr <= ik["pos_tol"] and (not top_down or tilt <= np.radians(ik["max_tilt_deg"]))
                 cost = perr + 0.01 * tilt + (0.0 if ok else 10.0)

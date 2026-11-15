@@ -636,6 +636,7 @@ planner:
   lift_from_contact: false    # FLAG (real-only). startup from a table-resting hand: vertical lift first, then the home route
   carry_corridor: false       # FLAG (real-only). carry via a point in front of the bin row when the straight carry clips a foreign bin
   carry_corridor_margin_m: 0.03  # FLAG (real-only). clearance from a foreign bin's outer footprint (and the front via x)
+  candidate_budget: null      # FLAG. null = off; {max_ik_calls, max_wall_s}: per-candidate planning budget, exceeded = candidate deferred
   per_target_guard: false     # FLAG (finals done). A failed/raising target cannot stop planning for other detections
   per_target_cooldown_s: 2.0  # after a target fails planning, wait this long before offering it again
 

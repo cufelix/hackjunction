@@ -74,6 +74,7 @@ class Plan:
     release_stages: tuple | None = None                # (first start, DDS 5/6 start, ramp end) ticks
     abort: tuple | None = None                         # legacy field; early servo-error abort is intentionally disabled
     safety_clips: int | None = None
+    deferred: bool = False                             # planner.candidate_budget: planning budget exceeded (not infeasible)
     grasp_key: tuple | None = None                     # policy.retry_vary_grasp: (grasp xy, finger heading, posture)
 
     @property
