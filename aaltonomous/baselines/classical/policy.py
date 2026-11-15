@@ -399,6 +399,7 @@ class ClassicalPolicy:
         return (dict(given) if given else guarded or resolved or legacy), guarded
 
     def reset(self, info=None):
+        self._forced_skill_ids, self._plan_skill = set(), None   # AALTO_FORCE_SKILL: object ids repeat across episodes
         generation_workers = bool((self.cfg.get("policy") or {}).get("generation_workers", False))
         if generation_workers:
             # Invalidate first.  No lock/join: reset is constant-time with respect
