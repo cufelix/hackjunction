@@ -10,8 +10,13 @@ disc top, 1 cm clear under it so fingers can wrap). Two closed shells; the sim u
 import math
 import sys
 
-R, H = 100.0, 30.0
-HX0, HX1, HW, HZ0, HZ1 = 95.0, 215.0, 25.0, 10.0, 30.0
+import os
+if os.environ.get("PAN_SMALL"):   # toy pan: disc r 6 cm x 2.5 cm, handle 8 cm beyond the rim, 2 cm wide
+    R, H = 60.0, 25.0
+    HX0, HX1, HW, HZ0, HZ1 = 55.0, 140.0, 20.0, 8.0, 25.0
+else:
+    R, H = 100.0, 30.0
+    HX0, HX1, HW, HZ0, HZ1 = 95.0, 215.0, 25.0, 10.0, 30.0
 SEG = 48
 
 

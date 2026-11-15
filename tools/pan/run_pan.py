@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import threading
 import time
 import traceback
@@ -27,9 +28,10 @@ from pathlib import Path
 import numpy as np
 
 PAN = "obj_grey_pan_0"
-DISC_R, HANDLE_X0, HANDLE_X1 = 0.10, 0.095, 0.215
+DISC_R, HANDLE_X0, HANDLE_X1 = (0.06, 0.055, 0.140) if os.environ.get("PAN_SMALL") else (0.10, 0.095, 0.215)
+HANDLE_C = ((HANDLE_X0 + HANDLE_X1) / 2, 0.0, 0.004 if os.environ.get("PAN_SMALL") else 0.005)   # pan frame (bbox-centred z)
 LIFT_M, TOUCH_M, ON_HANDLE_X = 0.03, 0.04, 0.09
-PAN_Z_MAT = 0.015          # pan bbox centre above the mat (mesh z 0..30 mm, centred by the loader)
+PAN_Z_MAT = float(os.environ.get("PAN_Z_MAT", "0.015"))          # pan bbox centre above the mat (mesh z 0..30 mm, centred by the loader)
 
 # name: (pan centre pelvis xy, handle direction theta in pelvis frame (deg), [(colour index, shape, pelvis xy)])
 VARIANTS = {
@@ -37,6 +39,14 @@ VARIANTS = {
     "left_in":    ((0.27, 0.12), -90.0, [(0, "cube", (0.27, -0.22)), (1, "cube", (0.30, 0.33))]),
     "right_diag": ((0.28, -0.10), 135.0, [(1, "cube", (0.27, 0.22))]),
     "left_diag":  ((0.28, 0.10), -135.0, [(2, "cube", (0.27, -0.22))]),
+    # whole pan in the head view (disc not cut by the image edges): handle across the table toward the centre
+    "far_right":  ((0.37, -0.08), 90.0, [(0, "cube", (0.27, 0.25))]),
+    "far_left":   ((0.37, 0.08), -90.0, [(1, "cube", (0.27, -0.25))]),
+    # toy pan (PAN_SMALL): whole pan in view, handle sideways
+    "small_right": ((0.32, -0.07), 90.0, [(0, "cube", (0.27, 0.25))]),
+    "small_left":  ((0.32, 0.07), -90.0, [(1, "cube", (0.27, -0.25))]),
+    "small_rdiag": ((0.31, -0.08), 135.0, [(2, "cube", (0.27, 0.25))]),
+    "small_ldiag": ((0.31, 0.08), -135.0, [(0, "cube", (0.27, -0.25))]),
 }
 
 
@@ -68,7 +78,7 @@ def layout_for(sc_scene, name):
 
 
 class Poller(threading.Thread):
-    """5 Hz pan pose + palm positions from the scene service (own client: REQ sockets are not thread-safe)."""
+    """20 Hz pan pose + palm positions from the scene service (own client: REQ sockets are not thread-safe)."""
 
     def __init__(self, host):
         super().__init__(daemon=True)
@@ -87,7 +97,30 @@ class Poller(threading.Thread):
                                       "bodies": bodies})
             except Exception as e:  # keep polling; report the last error
                 self.err = repr(e)
-            time.sleep(0.2)
+            time.sleep(0.05)
+
+
+def closest_approach(rows):
+    """Per hand: the row where the thumb_2/index_1 midpoint is closest to the handle centre; link offsets (mm) in the
+    handle frame (along, across, up). Link ORIGINS: fingertips sit lower than these."""
+    rows = [r for r in rows if r["pos"][0] > 0.0]
+    out = {}
+    for side in ("left", "right"):
+        best = None
+        for r in rows:
+            R = quat_xyzw_to_R(r["quat"])
+            loc = lambda p: R.T @ (np.asarray(p) - np.asarray(r["pos"])) - np.asarray(HANDLE_C)
+            b = r["bodies"]
+            k = f"{side}_hand_index_1_link"
+            if k not in b:
+                continue
+            d = float(np.linalg.norm((loc(b[k]) + loc(b[f"{side}_hand_thumb_2_link"])) / 2))
+            if best is None or d < best[0]:
+                best = (d, r["t"], {n: [int(round(1000 * v)) for v in loc(b[f"{side}_hand_{n}"])]
+                                    for n in ("palm_link", "thumb_2_link", "index_1_link", "middle_1_link")})
+        if best:
+            out[side] = {"pinch_mid_to_handle_mm": int(round(1000 * best[0])), "t": best[1], "links_mm": best[2]}
+    return out
 
 
 def verdict(rows, sc_scene):
@@ -181,6 +214,12 @@ def main(argv=None):
             env.rng = np.random.default_rng(a.seed + i)
             poll = Poller(a.host)
             poll.start()
+            if os.environ.get("AALTO_SHOWCAM"):
+                ev = lambda k, d: [float(x) for x in os.environ.get(k, d).split(",")]
+                sc.call(cmd="showcam_pose", eye=ev("AALTO_SHOWCAM_EYE", "0.75,-0.45,0.50"),
+                        tgt=ev("AALTO_SHOWCAM_TGT", "0.25,0.02,0.08"))
+                time.sleep(0.5)
+                print("rec_start", sc.call(cmd="rec_start", path=str((out / f"episode_{i:03d}_{vname}_show.mp4").resolve())), flush=True)
             rec = Recorder(out / f"episode_{i:03d}_{vname}", video=True)
             t0 = time.monotonic()
             try:
@@ -191,9 +230,12 @@ def main(argv=None):
             rtf = summary.get("rtf") or 1.0
             settle(sc, a.settle / max(min(rtf, 1.0), 0.2), float(env.scene.cfg["success"]["at_rest_speed"]))
             time.sleep(0.5)
+            if os.environ.get("AALTO_SHOWCAM"):
+                print("rec_stop", sc.call(cmd="rec_stop"), flush=True)
             poll.stop.set()
             poll.join(timeout=3)
             v = verdict(poll.rows, env.scene)
+            v["closest"] = closest_approach(poll.rows)
             res = {"variant": vname, "instruction": a.instruction, "layout": lay, "end_reason": summary.get("end_reason"),
                    "wall_s": round(time.monotonic() - t0, 1), "home_err": round(float(home_err), 3),
                    "safety": summary.get("safety"), "poll_error": poll.err, **v}
