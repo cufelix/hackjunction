@@ -41,3 +41,9 @@ meat_left: right arm, lift 12.7 cm, held 15.3 s; yes/yes. Meat inside the rim th
 ## I_meat_hold_150g_327e947 — same hold scene, honest 150 g pan
 meat_right: lift 11.5 cm, held 13.8 s, meat in pan at end of hold + end yes/yes (slid ~30 mm toward the wall, still inside).
 meat_left: lift 10.7 cm, held 15.9 s, yes/yes. 2/2 at 150 g: the hold skill keeps the pinch where the carry slipped.
+
+## J_vlm_hold_327e947 — real VLM, NO override (Qwen3-VL-8B Q4_K_M, llama.cpp on the sim box)
+'take the pan and hold it steady', 150 g pan + meat + clutter. The brain planned it itself:
+`[planner] plan=[{"tool":"skill","args":{"obj_id":"o1","skill":"hold"}},{"tool":"done"}]` (425 ms), then a handle pinch,
+lift 10.2 cm, held 14.5 s, meat in the pan at the end of hold + the end, `outcome=ok reason=settled look confirmed`.
+Log lines: policy_log_excerpt.txt.

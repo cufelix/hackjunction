@@ -1,0 +1,7 @@
+2026-11-15 01:41:43,608 INFO [planner] plan=[{"tool":"skill","args":{"obj_id":"o1","skill":"hold"},"valid":true},{"tool":"done","args":{},"valid":true}]
+2026-11-15 01:41:43,608 INFO [agent] call=plan status=ready lat_ms=425
+2026-11-15 01:41:43,608 INFO [skill] hold grey -> back to (0.303,0.063)
+2026-11-15 01:41:44,362 INFO [classical t=  1.80] execute grey   left  arm -> counter bin  grasp=(+0.30,+0.06,+0.04) drop=(+0.30,+0.06,+0.05)  IK ok max_err=4.7mm max_tilt=11deg  14.3s  safety_clips=0
+2026-11-15 01:42:37,432 INFO [planner] step=0 tool=skill outcome=ok reason=settled look confirmed
+2026-11-15 01:42:37,433 INFO [planner] step=1 tool=done outcome=ok
+2026-11-15 01:42:38,032 INFO [classical t= 16.60] nothing left to sort (2 detections)
