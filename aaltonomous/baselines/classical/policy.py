@@ -1659,6 +1659,9 @@ class ClassicalPolicy:
                    self.cfg["perception"].get("novel_objects", False))
         if not need_fk or obs.get("arm_q") is None:
             return {}
+        # novel fp_filter: the 3-D near-robot exemption is only trusted with a still arm (image lags joints)
+        dq = obs.get("arm_dq")
+        self.perception.novel_arm_speed = None if dq is None else float(np.max(np.abs(np.asarray(dq, float))))
         return {"robot_q": (np.asarray(obs["arm_q"], float),
                             None if obs.get("hand_q") is None else np.asarray(obs["hand_q"], float))}
 
