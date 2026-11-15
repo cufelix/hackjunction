@@ -33,6 +33,15 @@ REAL_HUE = ((117, 130),)                      # purple / violet. Orange (9-21) i
 RGB_SIM_MAX = 0.4            # require_rgb_cue: sim rgb_noise measured 0.273-0.297 over 16 official episodes (80 frames); real sensors are expected well above
 RGB_MIN_STD = 5.0            # grey std (levels) below which a frame is black/flat/frozen-blank: no evidence either way -> not sim
 INF = float("inf")
+# Cue B (profile_auto.second_cue): temporal depth noise of a STATIC scene. A sim render is deterministic: consecutive
+# frames of a held robot are bit-identical (changed fraction 0). A D435i re-measures every px every frame (stereo
+# matching noise, ~0.5-1 mm RMS at 0.5-0.7 m plus 1/32-disparity steps) so a large share of px change between frames.
+# Real needs only ONE cue (holes OR cue B); sim needs BOTH. Thresholds deliberately sit just above the sim floor
+# (0) and far below any plausible D435i value; no real depth is available locally (drop_2/drop_3 are RGB-only), see log.
+TEMP_STATIC_MAX_MM = 30.0     # |dz| above this = motion (arm, object), not noise: excluded from the statistic
+TEMP_CHANGED_MM = 0.25        # a px "changed" if |dz| > this (mm)
+TEMP_CHANGED_FRAC_SIM_MAX = 0.20   # sim iff <= 20 % of static valid px changed. Measured in sim (A203, held robot): 7.7 %; D435i model: tens of % (not measured on real data)
+TEMP_MIN_PX = 2000            # static valid px needed for a pair to count
 
 
 def _plane(depth):
@@ -101,6 +110,29 @@ def rgb_noise(rgb):
     return float(np.median(np.abs(g - cv2.GaussianBlur(g, (5, 5), 0))))
 
 
+def temporal_noise(depths):
+    """Cue B over consecutive depth frames (mm). Returns (changed_frac, mean_abs_mm, pairs) as the MEDIAN over usable
+    pairs, or (None, None, 0) if no pair is usable (fewer than 2 frames, shape mismatch, no depth, too few static px)."""
+    fr, ma = [], []
+    prev = None
+    for d in depths:
+        if d is None or np.ndim(d) != 2:
+            prev = None
+            continue
+        d = np.asarray(d, float)
+        if prev is not None and prev.shape == d.shape:
+            ok = np.isfinite(d) & np.isfinite(prev) & (d > 0) & (prev > 0)
+            diff = np.abs(d - prev)[ok]
+            diff = diff[diff <= TEMP_STATIC_MAX_MM]
+            if diff.size >= TEMP_MIN_PX:
+                fr.append(float(np.mean(diff > TEMP_CHANGED_MM)))
+                ma.append(float(np.mean(diff)))
+        prev = d
+    if not fr:
+        return None, None, 0
+    return float(np.median(fr)), float(np.median(ma)), len(fr)
+
+
 def _frame(obs):
     rgb = obs.get("head_rgb")
     depth = obs.get("head_depth")
@@ -140,12 +172,14 @@ def _rgb_sim(rgb):
         return False
 
 
-def detect_profile(frames, require_rgb_cue=False):
-    """frames: list of obs dicts (head_rgb, head_depth). Returns (profile in {"sim", "none"}, info dict)."""
+def detect_profile(frames, require_rgb_cue=False, second_cue=False):
+    """frames: list of obs dicts (head_rgb, head_depth). Returns (profile in {"sim", "none"}, info dict).
+    second_cue: sim additionally needs cue B (temporal depth noise ~0). Unmeasurable cue B (one frame, bad depth) = real."""
     per = [_frame(o) for o in frames]
     if not per:
         return "none", {"frames": 0, "votes": 0, "depth_holes": 1.0, "plane_std_mm": INF, "palette": "inconclusive",
-                        "rgb_noise": [], "per_frame": [], "rgb_cue": bool(require_rgb_cue), "disagree": 0}
+                        "rgb_noise": [], "per_frame": [], "rgb_cue": bool(require_rgb_cue), "disagree": 0, "cue_b_changed_frac": None,
+                        "cue_b_mean_abs_mm": None, "cue_b_pairs": 0, "cue_b_sim": False, "second_cue": bool(second_cue)}
     labels = [p["palette"] for p in per]
     palette = "real" if "real" in labels else ("sim" if all(x == "sim" for x in labels) else "inconclusive")
     if require_rgb_cue:   # depth says sim only counts when rgb agrees; disagreement defaults to real (see log)
@@ -153,8 +187,16 @@ def detect_profile(frames, require_rgb_cue=False):
             p["depth_rgb_disagree"] = bool(p["sim"] and not p["rgb_sim"])
             p["sim"] = bool(p["sim"] and p["rgb_sim"])
     votes = sum(p["sim"] for p in per)
-    info = {"frames": len(per), "votes": votes, "depth_holes": max(p["holes"] for p in per),
+    tb_frac, tb_mean, tb_pairs = temporal_noise([o.get("head_depth") for o in frames])
+    cue_b_sim = tb_frac is not None and tb_frac <= TEMP_CHANGED_FRAC_SIM_MAX
+    info = {"cue_b_changed_frac": tb_frac, "cue_b_mean_abs_mm": tb_mean, "cue_b_pairs": tb_pairs, "cue_b_sim": cue_b_sim,
+            "second_cue": bool(second_cue), **{}}
+    info.update({"frames": len(per), "votes": votes, "depth_holes": max(p["holes"] for p in per),
             "plane_std_mm": max(p["plane_std_mm"] for p in per), "palette": palette,
             "rgb_noise": [p["rgb_noise"] for p in per], "per_frame": per,
-            "rgb_cue": bool(require_rgb_cue), "disagree": sum(p.get("depth_rgb_disagree", False) for p in per)}   # rgb_noise: log-only, no vote
-    return ("sim" if votes * 2 > len(per) else "none"), info   # majority (> N/2); empty list -> none
+            "rgb_cue": bool(require_rgb_cue), "disagree": sum(p.get("depth_rgb_disagree", False) for p in per)})   # rgb_noise: log-only, no vote
+    sim = votes * 2 > len(per)   # majority (> N/2); empty list -> none
+    if second_cue:
+        info["cue_a_sim"] = sim
+        sim = sim and cue_b_sim   # real needs ONE cue (holes OR temporal noise); sim needs BOTH
+    return ("sim" if sim else "none"), info

@@ -133,7 +133,7 @@ class TestFlags(unittest.TestCase):
                                                   "policy.frozen_rgb_guard",
                                                   "perception.prism_speckle_floor", "perception.real_border_partial",
                                                   "perception.real_merge_split", "grasp.approach_slow_mps", "grasp.approach_slow_dist_m",
-                                                  "policy.retry_repeat_ok", "policy.late_regrant", "profile_auto.force",
+                                                  "policy.retry_repeat_ok", "policy.late_regrant", "profile_auto.force", "profile_auto.second_cue",
                                                   "brain.known_task_hard_off", "planner.candidate_budget",
                                                   "perception.table_pitch_calibration.max_abs_pitch_deg"})
 

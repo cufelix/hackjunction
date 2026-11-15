@@ -124,11 +124,27 @@ class ClassicalServerPolicy(Policy):
                 "hand_q_target": np.asarray(a["hand_q_target"], np.float64), "done": bool(a.get("done", False))}
 
     def _decide_profile(self, frames):
-        cue = bool(self.probe_cfg["profile_auto"].get("require_rgb_cue", False))
-        profile, info = detect_profile(frames, require_rgb_cue=cue) if cue else detect_profile(frames)
+        pa = self.probe_cfg["profile_auto"]
+        cue = bool(pa.get("require_rgb_cue", False))
+        second = bool(pa.get("second_cue", False))
+        try:
+            kw = {}
+            if cue:
+                kw["require_rgb_cue"] = True
+            if second:
+                kw["second_cue"] = True
+            profile, info = detect_profile(frames, **kw)
+        except Exception:   # fail-safe: an undecidable detection is the REAL robot (keeps every real-only fix on)
+            log.exception("[profile] detection raised: defaulting to none (real)")
+            profile, info = "none", {"votes": 0, "frames": len(frames), "depth_holes": 1.0, "plane_std_mm": float("inf"),
+                                     "palette": "error", "rgb_noise": [], "rgb_cue": cue}
         log.info("[profile] auto=%s votes=%d/%d (depth_holes=%.4f, plane_std_mm=%.2f, palette=%s, frames=%d, "
                  "rgb_noise=%s, rgb_cue=%s)", profile, info["votes"], info["frames"], info["depth_holes"], info["plane_std_mm"],
                  info["palette"], info["frames"], info.get("rgb_noise"), info.get("rgb_cue", False))
+        if second:
+            log.info("[profile] second_cue: cue_a(holes)_sim=%s cue_b(temporal) changed_frac=%s mean_abs_mm=%s pairs=%s "
+                     "cue_b_sim=%s -> %s", info.get("cue_a_sim"), info.get("cue_b_changed_frac"),
+                     info.get("cue_b_mean_abs_mm"), info.get("cue_b_pairs"), info.get("cue_b_sim"), profile)
         if info.get("disagree"):
             log.warning("[profile] depth says sim but rgb disagrees in %d/%d frames (require_rgb_cue): deciding %s",
                         info["disagree"], info["frames"], profile)
