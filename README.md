@@ -1,5 +1,9 @@
 # Aaltonomous Humanoid — Junction 2026
 
+[![Release](https://img.shields.io/github/v/release/cufelix/hackjunction?label=release)](https://github.com/cufelix/hackjunction/releases/tag/v1.0-submission)
+[![Image](https://img.shields.io/badge/image-ghcr.io%2Fcufelix%2Fhackjunction%3Afinal-2496ED?logo=docker&logoColor=white)](https://github.com/cufelix/hackjunction/pkgs/container/hackjunction)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Starter code for the **Aaltonomous Humanoid** challenge: make Väiski, a Unitree G1 with two Dex3 hands, sort
 coloured objects into bins fully autonomously. Develop in sim, hand in a Docker policy server, the best teams run on
 the real robot in the finals.
@@ -110,6 +114,13 @@ All three fixes are real-only. The sim/real detector switches them on, and the s
   simulator box. The unit tests cover only a server that is down or late.
 
 ## Build the submitted image
+
+To run it without building, pull the submitted image. It is a byte-identical, digest-pinned copy published by
+`.github/workflows/publish-image.yml`:
+
+```bash
+docker pull ghcr.io/cufelix/hackjunction:final
+```
 
 The final image (`ghcr.io/dymyt-ry/pp9gi2f:final`) is built from this repo in two steps on an x86_64 host with
 Docker and BuildKit. The brain stage compiles llama.cpp with CUDA, so it needs a few minutes and about 30 GB of disk.
