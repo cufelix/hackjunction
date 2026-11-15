@@ -145,7 +145,7 @@ def _score_fn(px, py, sign, tpl):
 
 
 def estimate_lid(rgb, depth, perception, scene, prior=None, model=None, min_conf=0.6, search_m=0.035, search_deg=12.0,
-                 level_to_counter=True):
+                 level_to_counter=True, coarse_step=0.005, coarse_yaw_deg=3.0):
     """Fit the lid to head depth (uint16 mm, 0 = invalid). Returns LidEstimate (pelvis frame) or None if not confident."""
     if depth is None:
         return None
@@ -201,8 +201,8 @@ def estimate_lid(rgb, depth, perception, scene, prior=None, model=None, min_conf
     sc_sub = _score_fn(px[sub], py[sub], sign[sub], tpl)
     sc = _score_fn(px, py, sign, tpl)
     best = (-1e18, 0, 0, 0)
-    ds = np.arange(-search_m, search_m + 1e-9, 0.005)
-    for ya in np.radians(np.arange(-search_deg, search_deg + 1e-9, 3.0)):
+    ds = np.arange(-search_m, search_m + 1e-9, coarse_step)
+    for ya in np.radians(np.arange(-search_deg, search_deg + 1e-9, coarse_yaw_deg)):
         for dx in ds:
             for dy in ds:
                 s = sc_sub(dx, dy, yaw0 + ya, c0[0], c0[1])

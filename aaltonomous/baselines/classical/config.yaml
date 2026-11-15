@@ -716,6 +716,13 @@ insert:                       # policy.insert_shapes parameters (read only when 
   max_yaw_err_deg: 8.0        # residual yaw of the held object vs the hole (square/triangle)
   max_tilt_deg: 8.0           # approach axis vs vertical at the release (the object must enter upright)
   max_headings: 2             # grasp headings tried per object
+  perception_gated: false     # FLAG (insert). see config.py; params below
+  pg_min_conf: 0.8            # lid confidence
+  pg_hole_min_conf: 0.7       # matching-hole confidence
+  pg_max_sigma_m: 0.003       # max xy 1-sigma of the lid fit
+  pg_max_dz_m: 0.015          # max |lid z_top - nominal|
+  pg_search_m: 0.14           # lid search radius around the nominal pose
+  pg_ticks: 600               # max ticks spent on the lid fit before abstaining
   palm_shift_m: 0.0           # EXPERIMENT, keep 0: edge grasp (IK target d ahead of the palm point). Measured r24: even d=0.045 leaves the cube/cylinder holes 4-6 cm out of reach
   release_gap_max_m: 0.015    # max object-bottom height over the lid accepted at the release (stock 0.015)
   hole_offsets_mat: null      # {cube: [dx, dy], cylinder: [dx, dy]} hole centre offsets (mat axes, m) from the lid-bin centre for a

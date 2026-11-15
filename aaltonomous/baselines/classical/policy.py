@@ -490,6 +490,10 @@ class ClassicalPolicy:
         self.mapping, guarded = self._episode_mapping(info)
         self.planner.mapping = self.mapping
         self.planner.insert_active = bool(getattr(self, "_insert_episode", False))
+        if self.planner.insert_active and (self.cfg.get("insert") or {}).get("perception_gated", False):
+            self.planner.insert_lid, self._lid_pending, self._lid_ticks = None, True, 0   # insert.perception_gated
+        else:
+            self._lid_pending = False
         self._task, self._instruction = info.get("task"), info.get("instruction")
         self._universal_inert, inert_reason = self._known_task_inert(info)
         self.perception.novel_objects = bool(self.cfg["perception"].get("novel_objects", False)) and not self._universal_inert
@@ -1223,6 +1227,38 @@ class ClassicalPolicy:
         go = pl.go_to
         pl.go_to = lambda af, hf, at, ht: reserve_pair(*go(af, hf, at, ht), af, hf, *lim)
 
+    def _insert_lid_step(self, obs, t):
+        """insert.perception_gated: once per insert episode fit the lid to the head depth on a worker (holding at home);
+        True = keep holding. No / weak fit = planner.insert_lid stays None = every object abstains."""
+        ic = self.cfg.get("insert") or {}
+        self._lid_ticks += 1
+        if self._lid_ticks < 15 and getattr(self, "_lid_job_started", None) is None:
+            return True          # let the pitch / counter calibration settle first
+        rgb, depth = obs.get("head_rgb"), obs.get("head_depth")
+        if depth is None or self._lid_ticks > int(ic.get("pg_ticks", 600)):
+            self._lid_pending = False
+            self._note(t, "insert pg: no depth / timeout, abstain")
+            return False
+        self._lid_job_started = True
+        res = self._bg("insert_lid", self._fit_lid, None if rgb is None else np.array(rgb, copy=True), np.array(depth, copy=True))
+        if res is None:
+            return True
+        self._lid_pending, self._lid_job_started = False, None
+        if res[0] == "ok" and res[1] is not None:
+            self.planner.insert_lid = res[1]
+            e = res[1]
+            self._note(t, f"insert pg: lid conf {e.conf:.2f} sigma {1000 * e.sigma[0]:.1f}/{1000 * e.sigma[1]:.1f} mm "
+                          f"centre ({e.centre_xy[0]:.3f}, {e.centre_xy[1]:.3f}) yaw {np.degrees(e.yaw):.1f} z {e.z_top:.3f}")
+        else:
+            self._note(t, f"insert pg: lid fit failed ({res[1] if res[0] == 'err' else 'not confident'}), abstain")
+        return False
+
+    def _fit_lid(self, rgb, depth):
+        from . import insert_perception as ip
+        ic = self.cfg.get("insert") or {}
+        return ip.estimate_lid(rgb, depth, self.perception, self.scene, search_m=float(ic.get("pg_search_m", 0.14)),
+                               search_deg=9.0, min_conf=float(ic.get("pg_min_conf", 0.8)), coarse_step=0.01, coarse_yaw_deg=3.0)
+
     def _bg(self, key, fn, *args):
         """Run fn(*args) once in a low-priority thread; None while running, then ("ok", value) / ("err", exc)."""
         job = self._jobs.get(key)
@@ -1521,6 +1557,8 @@ class ClassicalPolicy:
         if self.state == "look" and self._await_pitch_cal(t):
             # H3/H4: no bin-vote frame (or any look) is captured while the first pitch commit is pending.
             return self._hold()
+        if self.state == "look" and getattr(self, "_lid_pending", False) and self._insert_lid_step(obs, t):
+            return self._hold()      # insert.perception_gated: lid fit in flight (flag off: attribute never set)
         vote_cfg = (self.cfg.get("bin") or {}).get("vote", {})
         if self.state == "look" and not self._bv_done and vote_cfg.get("enabled"):
             # bin.vote: first n_frames looks at home, before any pick; then freeze the median, never again

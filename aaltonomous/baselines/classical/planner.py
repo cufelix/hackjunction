@@ -290,6 +290,7 @@ class Planner:
         self.neutral_src = None  # perception.neutral_obstacles: object with .neutral_obstacles (set by the policy); None = off
         self.bin_conf = {}     # bin.vote: bin name -> confidence in bin_shift (1.0 agree, 0.5 prior only, 0.3 disagree)
         self.insert_active = False   # policy.insert_shapes: the policy turns it on for an insert_shapes episode only
+        self.insert_lid = None       # insert.perception_gated: LidEstimate fitted by the policy (None = abstain)
         self.insert_target = None    # plan_insert: {xy, z_top, gap} of the hole being planned for (None = stock release)
         self.generic_hand_opening = None
         if cfg["grasp"].get("generic", False) or (cfg.get("brain") or {}).get("find_to_detection", False):
@@ -910,6 +911,7 @@ class Planner:
         ic = self.cfg.get("insert") or {}
         g = self.cfg["grasp"]
         lid, side = self.scene.lid_bin, "left"
+        lid_name = lid
         last = Plan(False, side=side, color=det.color, target_bin=lid, reason="insert: no feasible grasp")
 
         def fail(why):
@@ -921,8 +923,25 @@ class Planner:
         shape = det.shape
         zc = self.scene.counter_z
         z_top = zc + self._wall(self.scene.rim_wall(lid)) + float(self.scene.cfg["lid"]["thickness"])
-        tgt = ins.hole_targets(self.scene, z_lid_top=z_top, offsets_mat=ic.get("hole_offsets_mat"),
-                               margin=ic.get("hole_margin_m"))[shape]
+        saved_shift, new_shift = None, None
+        if ic.get("perception_gated", False):   # insert.perception_gated: perceived lid + holes only, never scene.yaml
+            from . import insert_perception as ip
+            le = getattr(self, "insert_lid", None)
+            if le is None or le.conf < float(ic.get("pg_min_conf", 0.8)):
+                return fail("pg: no confident lid estimate")
+            if max(le.sigma[:2]) > float(ic.get("pg_max_sigma_m", 0.003)):
+                return fail(f"pg: lid xy sigma {1000 * max(le.sigma[:2]):.1f} mm")
+            if abs(le.z_top - z_top) > float(ic.get("pg_max_dz_m", 0.015)):
+                return fail(f"pg: lid height {1000 * (le.z_top - z_top):.0f} mm off the nominal")
+            tg = ip.to_targets(le, self.scene, min_conf=float(ic.get("pg_hole_min_conf", 0.7)))
+            if shape not in tg:
+                return fail(f"pg: no confident {ins.SHAPE_HOLE[shape]} hole")
+            tgt, z_top = tg[shape], float(le.z_top)
+            c0 = np.asarray(self.scene.mat_to_pelvis(np.r_[np.asarray(self.scene.cfg["bins"]["centers"][lid_name], float), 0.0])[:2], float)
+            new_shift = np.asarray(le.centre_xy, float) - c0
+        else:
+            tgt = ins.hole_targets(self.scene, z_lid_top=z_top, offsets_mat=ic.get("hole_offsets_mat"),
+                                   margin=ic.get("hole_margin_m"))[shape]
         oy = ins.object_yaw(det, shape)
         if shape != "cylinder" and oy is None:
             return fail(f"{shape} yaw unknown")
@@ -937,6 +956,9 @@ class Planner:
         saved_off = self.kin.offset[side].copy()
         if shift:
             self.kin.offset[side] = saved_off + np.array([shift, 0.0, 0.0])
+        if new_shift is not None:   # bin geometry follows the perceived lid while planning (restored below)
+            saved_shift = self.bin_shift.get(lid_name)
+            self.bin_shift[lid_name] = new_shift
         try:
             for a_g in heads:
                 a_d = ins.drop_heading(shape, oy, tgt["yaw"], a_g, side, float(g.get("yaw_ref_deg", 25.0)),
@@ -968,6 +990,11 @@ class Planner:
             self.insert_target, self._carry_hint = None, None
             self.kin.hint, self.kin.w_hint = saved
             self.kin.offset[side] = saved_off
+            if new_shift is not None:
+                if saved_shift is None:
+                    self.bin_shift.pop(lid_name, None)
+                else:
+                    self.bin_shift[lid_name] = saved_shift
         return fail("; ".join(dict.fromkeys(reasons)) or "no grasp heading")
 
     def _insert_check(self, p, side, tgt, shape, oy, a_g, a_d, z_top, ic, g):
