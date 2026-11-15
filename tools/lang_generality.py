@@ -14,6 +14,8 @@ from aaltonomous.baselines.classical.config import load_config  # noqa: E402
 from aaltonomous.baselines.classical.policy import ClassicalPolicy  # noqa: E402
 from aaltonomous.baselines.classical.instruction_bank import BANK as BANK1, BANK2  # noqa: E402
 from aaltonomous.interface.tasks import COLORS, SHAPES  # noqa: E402
+sys.path.insert(0, str(ROOT / "tools"))
+from lang_bank3 import BANK3  # noqa: E402
 from aaltonomous.scene.scene import resolve_bin  # noqa: E402
 
 OBJECTS = tuple(itertools.product(COLORS, SHAPES))
@@ -69,9 +71,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--overlay", default="finals_r25")
     ap.add_argument("--fails", action="store_true")
-    ap.add_argument("--bank", default="1", choices=["1", "2", "all"])
+    ap.add_argument("--bank", default="1", choices=["1", "2", "3", "all"])
     a = ap.parse_args()
-    BANK = {'1': BANK1, '2': BANK2, 'all': BANK1 + BANK2}[a.bank]
+    BANK = {'1': BANK1, '2': BANK2, '3': BANK3, 'all': BANK1 + BANK2 + BANK3}[a.bank]
     st = Stub(a.overlay)
     cats = defaultdict(lambda: [0, 0, 0, 0])   # n, pass, wrong, complete
     fails = []

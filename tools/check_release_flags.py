@@ -87,7 +87,7 @@ REAL_DEMO_FLAGS = frozenset({"grasp.drop_height_extra_m", "grasp.approach_slow_m
 
 
 # final gen layer (reviewed 2026-11-15): realgp offsets, chaos hold-on-late, generality parser, arm tau ff, real perception rescues
-GEN_FINAL_FLAGS = frozenset({"grasp.arm_xy_offset", "motion.output_hold_on_late", "instruction.generality",
+GEN_FINAL_FLAGS = frozenset({"grasp.arm_xy_offset", "motion.output_hold_on_late", "instruction.generality", "instruction.venue_veto",
                              "policy.shape_rule_guard", "motion.arm_tau_ff", "perception.bin_bottom_first_run",
                              "perception.fk_colour_rescue", "calib.plane.robust_height", "perception.plan_frame",
                              "calib.plane.robust_agree_m", "perception.height_range", "bin.fallback_centre_x", "bin.fallback_drop_z", "bin.reach_x_max", "bin.reach_drop_z", "planner.budget_escalate"})

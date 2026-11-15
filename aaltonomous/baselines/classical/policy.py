@@ -107,7 +107,8 @@ def _generality_apply(cfg, log, text, mapping):
         if not (cfg.get("instruction") or {}).get("generality", False):
             return mapping
         from .generality import general_mapping, veto
-        why = veto(text)
+        icfg = cfg.get("instruction") or {}
+        why = veto(text, venue=bool(icfg.get("venue_veto", False)), ordinal=bool(icfg.get("venue_veto_ordinal", True)))
         if why:
             log(f"[instruction] generality veto ({why}): abstain on every object")
             return {"default": None}

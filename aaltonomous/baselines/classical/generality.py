@@ -236,10 +236,65 @@ _COUNT_OK = re.compile(r"\b(?:other|remaining|rest|left|right|centre|center|midd
                        r"(?:two|three)\b", re.I)
 
 
-def veto(text) -> str | None:
+# instruction.venue_veto (real finals): a judge types wording whose bin is NOT plainly the robot's left/centre/right. Each class
+# abstains on every object (a wrong bin is -1, an abstain 0).
+_SIDE = r"(?:left|right|centre|center|middle)(?:most|hand)?"
+_VIEWER = re.compile(                    # the viewer's / speaker's / camera's side, not the robot's
+    r"\b(?:my|our)\s+(?:own\s+)?(?:left|right)\b"
+    r"|\b(?:left|right)\s+(?:hand\s+)?(?:side\s+)?(?:from|to|of|for)\s+(?:me|us)\b"
+    r"|\b(?:the\s+)?(?:viewers?|audience|spectators?|judges?|observers?|operators?|humans?|persons?|people|crowd|camera|"
+    r"cameras|photographers?)(?:'s|s'|s)?\s+(?:own\s+)?(?:view|point\s+of\s+view|perspective|side|left|right|angle)\b"
+    r"|\bfrom\s+(?:where\s+(?:i|we)\s*(?:'m|am|'re|are)?\s*(?:am\s+|are\s+)?(?:standing|sitting|looking|watching)|"
+    r"(?:my|our)\s+(?:own\s+)?(?:side|perspective|point\s+of\s+view|view|angle|position|seat)|"
+    r"(?:the\s+)?(?:viewers?|audience|camera|front\s+row|outside|spectators?)\b)"
+    r"|\bas\s+(?:i|we)\s+(?:see|look|view)\b|\bfrom\s+(?:the\s+)?(?:front|opposite\s+side)\b"
+    r"|\bmoj[eií]\s+(?:lev|prav)|\bvlev[oe]\s+od\s+m[ěe]\b|\bmein(?:e|er|en|em)?\s+(?:link|recht)"
+    r"|\bminun\s+(?:vasen|vasemm|oike)", re.I)
+_BIN_NEG = re.compile(                   # "not in the left bin", "anywhere but the left bin", "other than the right one"
+    r"\b(?:(?:not|never|avoid|nowhere\s+near|away\s+from)\s+(?:in\s+|into\s+|to\s+|on\s+|at\s+)?(?:the\s+)?" + _SIDE + r"\b"
+    r"|\w*n't\s+(?:\w+\s+){0,3}?(?:in\s+|into\s+|to\s+)?(?:the\s+)?" + _SIDE + r"\s+(?:bin|box|container|one)\b"
+    r"|(?:anywhere|any\s*where|somewhere|any\s+place|any\s+(?:other\s+)?(?:bin|box|container)s?)\s+(?:but|except|other\s+than|"
+    r"besides|apart\s+from|excluding|not)\b"
+    r"|(?:but|except(?:\s+for)?|other\s+than|apart\s+from|besides|excluding)\s+(?:the\s+)?"
+    + _SIDE + r"\s+(?:bin|box|container|one|side)\b)", re.I)
+_ORD_BIN = re.compile(r"\b(?:(?:first|second|third|last|1st|2nd|3rd|1|2|3|one|two|three)\s+(?:bin|box|container|slot|crate)s?\b|"
+                      r"(?:bin|box|container|slot|number|no\.?|#)\s*(?:1|2|3|one|two|three)\b)", re.I)
+_SIDE_ANY = re.compile(r"\b(?:left|right)(?:most|hand)?\b|\b(?:levá?|levý|levé|vlevo|prav[áýé]|vpravo|links|rechts|"
+                       r"vasen|vasemm\w*|oikea\w*|izquierd\w*|derech\w*|vänster|höger)\b", re.I)
+_FOREIGN_NEG = frozenset(("ne", "nikoli", "nikdy", "nedavej", "nedavejte", "nedelej", "nepokladej", "nekladej", "ala", "ei",
+                          "eivat", "ettei", "nicht", "nie", "niemals", "kein", "keine", "keinen", "keinem", "keiner",
+                          "nichts", "ohne", "inte", "ej", "aldrig", "inget", "ingen", "nunca", "ningun", "ninguna", "jamas",
+                          "pongas", "ponga", "evita", "nooit"))
+_FOREIGN_NEG_RE = re.compile(r"\bno\s+(?:pon|ponga|coloques|metas|mandes|dejes|muevas|toques|lleves)\w*\b")
+
+
+def venue_veto(text, ordinal=True) -> str | None:
+    """instruction.venue_veto: wording whose bin is not plainly the robot's left/centre/right (viewer-perspective sides,
+    bin negations, bare ordinals with no side word, foreign negation words). Reason string or None. Never raises."""
+    try:
+        t = str(text or "")
+        if _VIEWER.search(t):
+            return "viewer-perspective-side"
+        f = _fold(t)
+        if _BIN_NEG.search(f):
+            return "negated-or-excluded-bin"
+        if ordinal and _ORD_BIN.search(f) and not _SIDE_ANY.search(f):
+            return "ordinal-bin-without-side"
+        if _FOREIGN_NEG_RE.search(f) or any(w in _FOREIGN_NEG for w in re.findall(r"[^\W\d_]+", f)):
+            return "foreign-negation"
+        return None
+    except Exception:
+        return None
+
+
+def veto(text, venue=False, ordinal=True) -> str | None:
     """Reason to abstain on EVERY object, whatever the other layers decided; None = no hazard. Never raises."""
     try:
         t = str(text or "")
+        if venue:
+            why = venue_veto(t, ordinal=ordinal)
+            if why:
+                return why
         if _UNSAFE.search(t):
             return "unsafe-verb-or-target"
         if _AMBIGUOUS.search(t):

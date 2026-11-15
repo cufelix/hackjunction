@@ -581,6 +581,8 @@ instruction:
   strict: false               # FLAG (Felix strict). never guess: abstain instead of FIXED / inferred keys; needs resolve
   structured: false           # FLAG (langzip). deterministic complete list/conditional rules before strict; needs resolve + strict
   generality: false           # FLAG (gen). closed-vocabulary fallback parser when the strict stack placed nothing
+  venue_veto: false           # FLAG (venue lang). generality veto adds viewer-perspective sides, negated bins, bare ordinal bins, foreign negations (needs generality)
+  venue_veto_ordinal: true     # FLAG (venue lang). with venue_veto: bare "first/second/third box" (no left/right word) abstains; false = first = left
   hazard_guard: false         # FLAG (bugsweep). fail closed on parser hazards; needs structured
   venue_colour_aliases: false # FLAG (T10). venue colour words in EN/FI/CS incl. inflections, before normalize; amber = orange; needs resolve
   max_chars: 0                # FLAG (fuzz). >0: cap the text at this many chars, cut at the last sentence/clause boundary
