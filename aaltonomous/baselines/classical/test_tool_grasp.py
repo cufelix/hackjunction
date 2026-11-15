@@ -33,6 +33,10 @@ SPECS = {
     "pliers": [("bar", .06, .0104, .006, .06, .006, .006, 10, GREY),
                ("bar", .06, -.0104, .006, .06, .006, .006, -10, GREY),
                ("jaw", .13, 0, .006, .008, .025, .006, 0, GREY)],
+    "drill": [("body", 0, 0, .025, .09, .025, .025, 0, [60, 60, 60]),
+              ("chuck", .11, 0, .015, .02, .012, .012, 0, GREY),
+              ("grip", -.03, -.07, .015, .018, .045, .015, 0, GREEN),
+              ("battery", -.03, -.14, .025, .04, .03, .025, 0, [60, 60, 60])],
 }
 
 
@@ -104,6 +108,33 @@ class TestToolGrasp(unittest.TestCase):
         dets, plan, part, _ = self.case("screwdriver", 0)
         self.assertEqual(len(dets), 1)
         self.assertEqual(part, "handle")
+
+    # --- pistol-grip drill (flat on its side: body along s, grip and battery along t)
+    # Never grasp the chuck (a 4 cm stub on a big body). Abstaining (not graspable, or plan refused) is the expected outcome
+    # where no grip/body grasp exists; a grasp that is planned must land on grip or body.
+    def _drill(self, yaw, side):
+        dets, plan, part, gz = self.case("drill", yaw, side)
+        self.assertEqual(len(dets), 1)
+        if dets[0].graspable and plan.ok:
+            self.assertIn(part, {"grip", "body"})
+        return gz
+
+    def test_drill_yaw0_left(self):
+        self._drill(0, "left")
+
+    @unittest.expectedFailure
+    # FAIL: with-handle shape (4 cm chuck stub), plan ok, grasp lands on the chuck. Needs a stub-vs-body rule (see abstain notes).
+    def test_drill_yaw90_left(self):
+        self._drill(90, "left")
+
+    def test_drill_yaw180_left(self):
+        self._drill(180, "left")
+
+    def test_drill_yaw270_left(self):
+        self._drill(270, "left")
+
+    def test_drill_yaw90_right(self):
+        self._drill(90, "right")
 
     # --- adjustable wrench
     @unittest.expectedFailure
