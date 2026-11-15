@@ -1,0 +1,12 @@
+felix/brain-ready gate, tested commit 5a2da90 (base felix/final-brain 073cacb), laptop CPU, PYTHONPATH=. python -m unittest -v <file>
+equivalence_check vs felix/final-brain: EMPTY (diff rc=0)
+release_flags_r25_gen: RELEASE FLAGS PASS 
+test_brain_agent: Ran 23 tests in 43.672s OK (skipped=1) 
+test_brain_planner: Ran 17 tests in 0.026s OK 
+test_brain_ready: Ran 2 tests in 6.513s OK 
+test_flags: Ran 38 tests in 90.631s OK 
+test_novel_instruction: Ran 21 tests in 15.756s OK 
+test_universal: Ran 20 tests in 102.658s OK 
+TestKnownTaskHardOff (in test_universal): test_hard_off_action_stream_identical_to_brain_disabled ... ok;test_known_task_makes_no_brain_calls ... ok;test_novel_noun_keeps_vlm_find_active ... ok;test_unresolved_instruction_keeps_brain ... ok;
+test_brain_ready asserts act() p95 < 30 ms during the down-brain wait (test_brain_ready.py:93); skipped=1 is test_timeout_falls_back_to_the_classical_resolver (stale, retired)
+release flags command: python tools/check_release_flags.py --overlay finals_r25_gen
