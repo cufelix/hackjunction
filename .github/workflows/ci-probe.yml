@@ -1,5 +1,7 @@
 name: ci-probe
-on: workflow_dispatch
+on:
+  push:
+    branches: [felix/ci]
 jobs:
   probe:
     runs-on: ubuntu-latest
