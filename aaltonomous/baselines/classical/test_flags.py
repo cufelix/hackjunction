@@ -128,7 +128,7 @@ class TestFlags(unittest.TestCase):
         self.assertEqual(sub, stock)
         # The frozen submission is unchanged; only the newly registered, default-off overrides may be absent.
         sub_keys = set(load_overlay(OVERLAY_DIR / "submission.yaml")["flags"])
-        self.assertEqual(set(FLAGS) - sub_keys, {"policy.chunk_ticks", "policy.hold_ticks",
+        self.assertEqual(set(FLAGS) - sub_keys, {"motion.output_hold_on_late", "policy.chunk_ticks", "policy.hold_ticks",
                                                   "policy.retry_cross_relocate", "policy.late_sweep",
                                                   "policy.frozen_rgb_guard",
                                                   "perception.prism_speckle_floor", "perception.real_border_partial",
