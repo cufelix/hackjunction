@@ -160,3 +160,136 @@ class TestToolGrasp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- kitchen objects: pelvis centre y +0.12 (left arm, left bin) / -0.12 (right arm, right bin). Sphere and
+# horizontal-cylinder parts are approximated: round parts are vertical cylinders (same silhouette from above),
+# the spatula handle is a box (15 x 2 x 2 cm), the mug handle is a solid box (no loop hole).
+WHITE, BROWN = [230, 230, 230], [120, 80, 40]
+CENTRES = {"left": (0.30, 0.12), "right": (0.30, -0.12)}
+OBJ_SPECS = {
+    "mug_plus": [("body", 0, 0, .045, .04, .04, .045, 0, WHITE),
+                 ("handle", 0, .055, .045, .01, .015, .025, 0, WHITE)],
+    "mug_minus": [("body", 0, 0, .045, .04, .04, .045, 0, WHITE),
+                  ("handle", 0, -.055, .045, .01, .015, .025, 0, WHITE)],
+    "lime": [("body", 0, 0, .025, .025, .025, .025, 0, GREEN)],
+    "apple": [("body", 0, 0, .0375, .0375, .0375, .0375, 0, GREEN)],
+    "knife": [("handle", -.05, 0, .01, .05, .0125, .01, 0, BROWN),
+              ("blade", .06, 0, .001, .06, .0125, .001, 0, GREY)],
+    "spatula": [("handle", -.075, 0, .01, .075, .01, .01, 0, GREY),
+                ("head", .04, 0, .0015, .04, .03, .0015, 0, WHITE)],
+    "cup": [("body", 0, 0, .05, .035, .035, .05, 0, WHITE)],
+}
+ROUND = {("mug_plus", "body"), ("mug_minus", "body"), ("lime", "body"), ("apple", "body"), ("cup", "body")}
+SPECS.update(OBJ_SPECS)
+
+
+def obj_frame(name, centre):
+    renderer = Renderer(SC, CAL)
+    rgb, zbuf = renderer._bg[0].copy(), renderer._bg[1].copy()
+    c0 = np.array([centre[0], centre[1], SC.counter_z])
+    for label, s, t, h, hs, ht, hh, _, col in OBJ_SPECS[name]:
+        ctr = c0 + np.array([s, t, h])
+        if (name, label) in ROUND:
+            renderer._cylinder(rgb, zbuf, ctr, hs, hh, col)
+        else:
+            renderer._box(rgb, zbuf, ctr, np.eye(3), np.array([hs, ht, hh]), col)
+    depth = np.where(np.isfinite(zbuf), zbuf * 1000.0, 0.0).astype(np.uint16)
+    return np.clip(rgb, 0, 255).astype(np.uint8), depth
+
+
+class TestKitchenGrasp(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.cfg = novel_config()
+        cls.cfg["perception"]["novel"]["fp_filter"] = False
+        cls.cfg["perception"]["novel"]["max_area_px"] = 60000
+        cls.planner = Planner(cls.cfg, SC, hand_postures(cls.cfg), home_arm(cls.cfg))
+
+    def case(self, name, side):
+        """Detect the object at its arm's centre, plan with the near arm into the same-side bin."""
+        centre = CENTRES[side]
+        rgb, depth = obj_frame(name, centre)
+        perception = Perception(self.cfg, SC, CAL, log=lambda *_: None)
+        perception.hand_opening_m = self.planner.generic_hand_opening
+        dets = [d for d in perception.detect(rgb, depth) if getattr(d, "novel", False)]
+        if len(dets) != 1:
+            print(f"\n[{name} {side}] detections={len(dets)}")
+            return dets, None, None, None
+        d = dets[0]
+        plan = self.planner._plan_side(d, side, side, home_arm(self.cfg), hand_postures(self.cfg)["open"])
+        g = plan.waypoints.get("grasp")
+        part = part_at(name, 0, g, centre=centre)[0] if g is not None else None
+        gz = float(g[2] - SC.counter_z) if g is not None else None
+        print(f"\n[{name} {side}] label={d.shape} kind={d.grasp_kind} graspable={d.graspable} "
+              f"reason={d.ungraspable_reason} | plan.ok={plan.ok} reason={plan.reason!r} part={part} grasp_z={gz}")
+        return dets, plan, part, gz
+
+    def expect(self, name, side, want_part):
+        dets, plan, part, gz = self.case(name, side)
+        self.assertEqual(len(dets), 1)
+        self.assertTrue(dets[0].graspable, dets[0].ungraspable_reason)
+        self.assertTrue(plan.ok, plan.reason)
+        self.assertEqual(part, want_part)
+
+    # mug: detector says box-like, planner rejects 91 mm object height (safe range)
+    @unittest.expectedFailure
+    def test_mug_handle_plus_left(self):
+        self.expect("mug_plus", "left", "body")
+
+    # mug: detector says box-like, planner rejects 91 mm object height (safe range)
+    @unittest.expectedFailure
+    def test_mug_handle_plus_right(self):
+        self.expect("mug_plus", "right", "body")
+
+    # mug: detector says box-like, planner rejects 91 mm object height (safe range)
+    @unittest.expectedFailure
+    def test_mug_handle_minus_left(self):
+        self.expect("mug_minus", "left", "body")
+
+    # mug: detector says box-like, planner rejects 91 mm object height (safe range)
+    @unittest.expectedFailure
+    def test_mug_handle_minus_right(self):
+        self.expect("mug_minus", "right", "body")
+
+    def test_lime_left(self):
+        self.expect("lime", "left", "body")
+
+    def test_lime_right(self):
+        self.expect("lime", "right", "body")
+
+    def test_apple_left(self):
+        self.expect("apple", "left", "body")
+
+    def test_apple_right(self):
+        self.expect("apple", "right", "body")
+
+    # knife: detector graspable=False, 'handle too short/occluded' (2.5 cm handle, flat blade)
+    @unittest.expectedFailure
+    def test_knife_left(self):
+        self.expect("knife", "left", "handle")
+
+    # knife: detector graspable=False, 'handle too short/occluded' (2.5 cm handle, flat blade)
+    @unittest.expectedFailure
+    def test_knife_right(self):
+        self.expect("knife", "right", "handle")
+
+    # spatula: detector graspable=False, 'handle too short/occluded' (box-approximated 2 cm handle)
+    @unittest.expectedFailure
+    def test_spatula_left(self):
+        self.expect("spatula", "left", "handle")
+
+    # spatula: detector graspable=False, 'handle too short/occluded' (box-approximated 2 cm handle)
+    @unittest.expectedFailure
+    def test_spatula_right(self):
+        self.expect("spatula", "right", "handle")
+
+    # cup: planner rejects 101 mm object height (safe range)
+    @unittest.expectedFailure
+    def test_cup_left(self):
+        self.expect("cup", "left", "body")
+
+    # cup: planner rejects 101 mm object height (safe range)
+    @unittest.expectedFailure
+    def test_cup_right(self):
+        self.expect("cup", "right", "body")
