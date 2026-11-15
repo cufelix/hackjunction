@@ -47,3 +47,9 @@ meat_left: lift 10.7 cm, held 15.9 s, yes/yes. 2/2 at 150 g: the hold skill keep
 `[planner] plan=[{"tool":"skill","args":{"obj_id":"o1","skill":"hold"}},{"tool":"done"}]` (425 ms), then a handle pinch,
 lift 10.2 cm, held 14.5 s, meat in the pan at the end of hold + the end, `outcome=ok reason=settled look confirmed`.
 Log lines: policy_log_excerpt.txt.
+
+## K_vlm_flip_327e947 — 'take the pan and pretend you are making pancakes', real VLM, NO override
+The brain planned `skill(o1, flip)` itself (276 ms). Handle pinch, lift 16.1 cm, toss/tilt cycles with the pancake,
+the pan set back down. The pancake stays in the pan (final pancake 8 mm from the pan centre). The pan lands 4 cm off and rotated
+~37 deg, so the planner's settled-look check reports 'did not confirm primitive' (cosmetic for the demo).
+grid_flip.jpg = 1.5 frames/s.

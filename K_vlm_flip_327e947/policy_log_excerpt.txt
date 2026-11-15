@@ -1,0 +1,7 @@
+2026-11-15 01:51:57,323 INFO [planner] plan=[{"tool":"skill","args":{"obj_id":"o1","skill":"flip"},"valid":true},{"tool":"done","args":{},"valid":true}]
+2026-11-15 01:51:57,323 INFO [agent] call=plan status=ready lat_ms=276
+2026-11-15 01:51:57,324 INFO [skill] flip grey -> back to (0.304,0.062)
+2026-11-15 01:51:58,977 INFO [classical t=  1.97] execute grey   left  arm -> counter bin  grasp=(+0.30,+0.06,+0.04) drop=(+0.30,+0.06,+0.05)  IK ok max_err=5.6mm max_tilt=13deg  13.3s  safety_clips=0
+2026-11-15 01:52:52,940 INFO [planner] step=0 tool=skill outcome=failed reason=settled look did not confirm primitive
+2026-11-15 01:52:52,941 INFO [planner] step=1 tool=done outcome=ok
+2026-11-15 01:52:53,586 INFO [classical t= 15.80] nothing left to sort (3 detections)
