@@ -426,16 +426,17 @@ class ClassicalPolicy:
         # FLAG brain.known_task_hard_off: a KNOWN task (resolver / sort_fixed, no novel noun named) runs with NO brain at all
         # this episode (no find / planner / closed-loop after_* / ev_gate).  Novel perception is already off when inert, so no
         # novel_matched object can exist; the brain stays armed for any episode that is not inert (novel noun / unresolved).
-        full = self.__dict__.get("_brain_full")
-        if full is None:
-            full = self._brain_full = (self.brain, self.plan_brain)
+        stash = self.__dict__.get("_brain_stash")   # (brain, plan_brain) parked by an earlier hard-off episode, else None
         self._brain_hard_off = bool((self.cfg.get("brain") or {}).get("known_task_hard_off", False)) and self._universal_inert
         if self._brain_hard_off:
-            if full[0] is not None:
-                self.log(f"[brain] hard_off: known task ({inert_reason}); no brain calls this episode")
+            if stash is None:
+                self._brain_stash = (self.brain, self.plan_brain)
+                if self.brain is not None:
+                    self.log(f"[brain] hard_off: known task ({inert_reason}); no brain calls this episode")
             self.brain, self.plan_brain = None, None
-        else:
-            self.brain, self.plan_brain = full
+        elif stash is not None:
+            self.brain, self.plan_brain = stash
+            self._brain_stash = None
         self._brain_looks = 0
         self._brain_finds = 0
         self._brain_find_fn = getattr(self, "_brain_find_fn", None)
