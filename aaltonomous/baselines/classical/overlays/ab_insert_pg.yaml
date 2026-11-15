@@ -7,6 +7,7 @@ flags:
   policy.fixed_mapping: {yellow: left, blue: center, red: right}   # organisers P0: real robot sort_fixed (yellow left, purple=blue center, orange=red right)
   scene.counter_z_prior: 0.15                   # prior  NO-DEPTH fallback table height (pelvis frame, m); measured plane height (apply_height) overrides
   policy.insert_guard: true                     # insert     rung 3: abstain on all objects (0 instead of -1 on the lid)
+  insert.pg_bias_xy: [0.007, 0.003]            # r24 sim-measured head-camera bias of the lid fit
   insert.perception_gated: true                 # r24      perceived lid only, abstain otherwise
   policy.insert_shapes: true                    # insert     rung 3: plan_insert (hole pose from scene.yaml, yaw-aligned grasp; abstains when the hole is out of reach)
   policy.bin_lookup: resolve_bin                # round 8  ON 2026-11-14: colour-only mapping gives the same bins (tested); shape sentences need it
