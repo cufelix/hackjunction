@@ -2500,12 +2500,16 @@ class ClassicalPolicy:
                     skill_now = mine and forced_skill
                     if skill_now:
                         self.planner.skill = self._plan_skill
+                        near = [o for o in dets if o is not d and float(np.linalg.norm(o.top[:2] - d.top[:2])) <= 0.25]
+                        self.planner.skill_target_xy = (min(near, key=lambda o: float(np.linalg.norm(o.top[:2] - d.top[:2]))).top[:2]
+                                                       if near else None)   # "use": the nearest other object
                         self.log(f"[skill] {self._plan_skill} {d.color} -> back to ({float(table_xy[0]):.3f},{float(table_xy[1]):.3f})")
                     try:
                         ok_place, why_place, _ = self._planner_place_at(dmap_now, dets, oid_now, table_xy)
                     finally:
                         if skill_now:
                             self.planner.skill = None
+                            self.planner.skill_target_xy = None
                     p = self._planner_place_cache.pop(
                         (id(d), round(float(table_xy[0]), 4), round(float(table_xy[1]), 4)), None)
                     if not ok_place or p is None:
