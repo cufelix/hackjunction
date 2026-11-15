@@ -75,6 +75,71 @@ class BrainPickGroundingTest(unittest.TestCase):
         self.assertFalse(self.policy(False, [(100.0, 100.0)])._novel_grounded(d))
 
 
+class BrainFindLongObjectTest(unittest.TestCase):
+    """A find point on a long object (uv at its centre, the point 60 px off) resolves to the existing detection by 3D blob."""
+
+    def policy(self, blob_top_xy):
+        import numpy as np
+        from unittest import mock
+        pol = ClassicalPolicy.__new__(ClassicalPolicy)
+        pol.cfg = {"brain": {"find": True, "find_to_detection": True, "novel_max_objects": 3}}
+        pol.brain, pol._universal_inert, pol.perception = object(), False, None
+        pol.log = lambda *a, **k: None
+        pol._novel_store, pol._brain_reg, pol._brain_n = [], [], 0
+        elong = SimpleNamespace(novel=True, color="black", shape="elongated", uv=(100.0, 100.0),
+                                top=np.array([0.5, 0.0, 0.02]), label="screwdriver")
+        blob = SimpleNamespace(uv=(160.0, 100.0), color="black", footprint=0.1, height_m=0.02, ungraspable=False,
+                               top=np.array([blob_top_xy[0], blob_top_xy[1], 0.02]))
+        pol._brain_find_fn = lambda rgb, q: [{"point": (160.0, 100.0), "bbox": None}]
+        self.blob_patch = mock.patch("aaltonomous.baselines.classical.brain.novel.novel_detection", return_value=blob)
+        self.blob_patch.start()
+        self.addCleanup(self.blob_patch.stop)
+        obs = {"head_rgb": np.zeros((4, 4, 3), np.uint8), "head_depth": np.zeros((4, 4))}
+        return pol, [elong], obs
+
+    def test_blob_two_cm_from_det_matches_it(self):
+        pol, dets, obs = self.policy((0.52, 0.0))
+        found, all_dets, ids = pol._brain_find_ids("screwdriver", obs, dets)
+        self.assertEqual(found, [ids[0]])
+        self.assertEqual(len(all_dets), 1)          # no duplicate novel entry for the same object
+
+    def test_blob_ten_cm_away_is_not_the_det(self):
+        pol, dets, obs = self.policy((0.6, 0.0))
+        found, all_dets, ids = pol._brain_find_ids("screwdriver", obs, dets)
+        self.assertNotIn(ids[0], found)
+
+
+class SettledLookSkillTest(unittest.TestCase):
+    """A skill step is confirmed within 5 cm of its target whatever the yaw; a place_at step keeps its radius."""
+
+    def run_observe(self, tool, dist_m):
+        import numpy as np
+        from unittest import mock
+        pol = ClassicalPolicy.__new__(ClassicalPolicy)
+        pol.cfg, pol.brain = {"brain": {}, "policy": {"same_object_radius": 0.01}}, None   # _ftd_on() False
+        pol.plan_brain, pol.log = mock.Mock(), (lambda *a, **k: None)
+        pol._agent_dirty, pol._planner_execution = False, {
+            "call": {"tool": tool, "args": {}}, "source_xy": np.array([0.0, 0.0]), "color": "grey",
+            "table_xy": np.array([0.2, 0.0])}
+        pol._cl_on, pol._planner_track_move, pol._planner_failed = (lambda: False), mock.Mock(), mock.Mock()
+        pol.scene = SimpleNamespace(cfg={})
+        d = SimpleNamespace(color="grey", top=np.array([0.2 + dist_m, 0.0, 0.02]))
+        pol._planner_observe([d], {})
+        return pol
+
+    def test_skill_confirms_4cm_off_at_any_yaw(self):
+        pol = self.run_observe("skill", 0.04)
+        pol.plan_brain.mark.assert_called_once_with("ok", "settled look confirmed")
+
+    def test_skill_6cm_off_is_not_confirmed(self):
+        pol = self.run_observe("skill", 0.06)
+        pol._planner_failed.assert_called_once()
+
+    def test_place_at_4cm_off_is_not_confirmed_by_the_skill_tolerance(self):
+        pol = self.run_observe("place_at", 0.04)
+        pol._planner_failed.assert_called_once()
+
+
 def make_pol(instruction, task=None):
     env = make_mock_env(seed=0, n_objects=3)
     info = {"instruction": instruction, "time_limit": 120.0}

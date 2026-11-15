@@ -286,7 +286,7 @@ class TestFlags(unittest.TestCase):
         expect["finals_r22_bins"] = expect["finals_r22"] | {"perception.bins_from_image"}   # rim-mask A/B
         expect["finals_r23_candidate"] = expect["finals_r22"] | {"perception.gate_below_bins", "instruction.structured", "instruction.hazard_guard"}   # r23 candidate: r22 + gate_below_bins + structured + hazard_guard
         expect["finals_r23_universal"] = {k for k, _, is_on, _, _ in effective_flags(load_config(overlay="finals_r23")) if is_on} | {
-            "perception.novel.max_area_px", "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles",
+            "perception.novel.max_area_px", "grasp.novel_near_rim_retry", "perception.novel_objects", "grasp.generic", "instruction.novel_objects", "policy.novel_obstacles",
             "brain.enabled", "brain.backend", "brain.planner", "brain.find", "brain.find_to_detection",
             "brain.closed_loop", "brain.image_max_side_px", "brain.find_n_predict", "brain.ev_gate",
             "brain.grounded_picks", "brain.call_timeout_s", "brain.plan_timeout_s",

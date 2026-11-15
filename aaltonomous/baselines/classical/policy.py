@@ -48,6 +48,7 @@ from .perception import Perception
 from .planner import MotionOutputLimiter, Plan, Planner, lookup_bin, lookup_detection_bin, ramp, staggered_release_ramp
 from .safety_shell import reserve_pair, reserve_plan
 from .brain import AgentLoop, BrainLayer, PlanLayer, build_world, instruction_needs_plan
+from .brain.planner import forced_skill_plan, validate_plan
 from .brain.find import FindClient, extract_queries, match_found
 
 HZ = 30.0
@@ -245,6 +246,8 @@ class ClassicalPolicy:
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
         self.require_confirm = require_confirm
         self._jobs = {}   # bounded background work; reset swaps the dict so stale jobs cannot publish into a new episode
+        self._forced_skill_ids = set()   # AALTO_FORCE_SKILL: objects already sent through the forced skill
+        self._plan_skill = None          # skill name of the plan being executed (planner.skill during place_at)
         self._universal_inert = False   # known-task guard: set per episode in reset(); read by _cl_on/_ftd_on/_match_novel before then
         self._shell = bool(self.cfg["policy"].get("safety_shell", False))
         bv = (self.cfg.get("bin") or {}).get("vote") or {}
@@ -445,6 +448,7 @@ class ClassicalPolicy:
         return (dict(given) if given else guarded or resolved or legacy), guarded
 
     def reset(self, info=None):
+        self._forced_skill_ids, self._plan_skill = set(), None   # AALTO_FORCE_SKILL: object ids repeat across episodes
         generation_workers = bool((self.cfg.get("policy") or {}).get("generation_workers", False))
         if generation_workers:
             # Invalidate first.  No lock/join: reset is constant-time with respect
@@ -2720,6 +2724,7 @@ class ClassicalPolicy:
         triage = bool(pol.get("time_triage", False))
         forced = None   # (det, bin, variant, table_xy) from the brain or the whole-plan planner
         planner_forced = False
+        forced_skill = False   # brain.skill: the forced place_at-style plan runs with planner.skill = the plan's skill
         # universal: the deterministic parser/synonym match (instruction.novel_objects) is consulted FIRST; when it names a
         # visible novel object and its bin, the classical loop acts on it and the brain is not asked at all.
         parser_first = bool((self.cfg.get("instruction") or {}).get("novel_objects", False)) and \
@@ -2738,9 +2743,10 @@ class ClassicalPolicy:
                     return ("relook", None, len(dets))
                 if kind in ("done", "stop"):
                     return ("none", None, len(dets))
-                if kind in ("pick", "place"):
+                if kind in ("pick", "place", "skill"):
                     cands = [d0] + [d for d in cands if d is not d0]
                     forced, planner_forced = (d0, b0, var, table_xy), True
+                    forced_skill = kind == "skill"
         elif self.brain is not None:
             brain_only_novel = bool(self._novel_brain_candidates)
             offered = [d for d in self._novel_brain_candidates if any(d is x for x in dets)]
@@ -2835,7 +2841,19 @@ class ClassicalPolicy:
                     ids_now = self._brain_ids(dets)
                     dmap_now = {ids_now[i]: obj for i, obj in enumerate(dets)}
                     oid_now = next((oid for oid, obj in dmap_now.items() if obj is d), None)
-                    ok_place, why_place, _ = self._planner_place_at(dmap_now, dets, oid_now, table_xy)
+                    skill_now = mine and forced_skill
+                    if skill_now:
+                        self.planner.skill = self._plan_skill
+                        near = [o for o in dets if o is not d and float(np.linalg.norm(o.top[:2] - d.top[:2])) <= 0.25]
+                        self.planner.skill_target_xy = (min(near, key=lambda o: float(np.linalg.norm(o.top[:2] - d.top[:2]))).top[:2]
+                                                       if near else None)   # "use": the nearest other object
+                        self.log(f"[skill] {self._plan_skill} {d.color} -> back to ({float(table_xy[0]):.3f},{float(table_xy[1]):.3f})")
+                    try:
+                        ok_place, why_place, _ = self._planner_place_at(dmap_now, dets, oid_now, table_xy)
+                    finally:
+                        if skill_now:
+                            self.planner.skill = None
+                            self.planner.skill_target_xy = None
                     p = self._planner_place_cache.pop(
                         (id(d), round(float(table_xy[0]), 4), round(float(table_xy[1]), 4)), None)
                     if not ok_place or p is None:
@@ -3680,6 +3698,30 @@ class ClassicalPolicy:
             cl = self._cl_on()
             wkey = (float(obs.get("t", 0.0)), tuple(ids)) if cl else None   # one world JSON per look
 
+            def reach(oid, bin_name):
+                p = self.planner.plan(dmap[oid], self.arm_cmd, self.hand_cmd, bin_name=bin_name, relocate=False,
+                                      obstacles=[d.top[:2] for d in dets if d is not dmap[oid]])
+                return p.ok, p.reason
+
+            def place(oid, xy, virtual_xy=None):
+                return self._planner_place_at(dmap, dets, oid, xy, virtual_xy)
+
+            forced = forced_skill_plan(
+                os.environ.get("AALTO_FORCE_SKILL"), world,
+                handle_ids={oid for oid, d in dmap.items() if getattr(d, "grasp_kind", None) == "handle"},
+                exclude=self._forced_skill_ids)
+            if forced is not None:   # demo override: same validator and skill path as a model plan, no VLM call
+                steps, errors = validate_plan(forced, world, reach_fn=reach, place_fn=place, find_enabled=False,
+                                              classical_has_work=classical_has_work)
+                for e in errors:
+                    self.log(f"[planner] rejected {e}")
+                if steps and steps[0].get("valid"):
+                    oid = steps[0]["args"]["obj_id"]
+                    self._forced_skill_ids.add(oid)
+                    self._plan_skill = steps[0]["args"]["skill"]
+                    self.log(f"[skill] forced by AALTO_FORCE_SKILL={os.environ.get('AALTO_FORCE_SKILL')}")
+                    return ("skill", dmap[oid], None, None, np.asarray(dmap[oid].top[:2], float))
+                return None
             if not self.plan_brain.requested:
                 if cl:
                     self.plan_brain.request(world, key=wkey)
@@ -3689,14 +3731,6 @@ class ClassicalPolicy:
                 self.plan_brain.request(world, key=wkey)   # the first answer was late / failed: ask again (capped)
             if self.cfg["brain"].get("debug_wait", False):
                 self.plan_brain.wait(float(self.cfg["brain"].get("plan_timeout_s", 2.0)))
-
-            def reach(oid, bin_name):
-                p = self.planner.plan(dmap[oid], self.arm_cmd, self.hand_cmd, bin_name=bin_name, relocate=False,
-                                      obstacles=[d.top[:2] for d in dets if d is not dmap[oid]])
-                return p.ok, p.reason
-
-            def place(oid, xy, virtual_xy=None):
-                return self._planner_place_at(dmap, dets, oid, xy, virtual_xy)
 
             steps = self.plan_brain.take(
                 world, reach_fn=reach, place_fn=place,
@@ -3768,6 +3802,9 @@ class ClassicalPolicy:
                 if d is None:                       # scene changed after validation: skip, never improvise
                     self.plan_brain.mark("invalid", "object no longer in scene")
                     continue
+                if tool == "skill":   # brain.planner skill: pick, run the skill, put it back at its current xy
+                    self._plan_skill = a["skill"]
+                    return ("skill", d, None, None, np.asarray(d.top[:2], float))
                 if tool == "pick_place":
                     authority = self._lookup(d)     # a known target bin binds the planner (never overridden)
                     if authority is not None and a["bin"] != authority:
@@ -3963,7 +4000,9 @@ class ClassicalPolicy:
         if target is None:
             ok = not at_source                    # bin placement: object left the counter source
         else:
-            ok = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - target) < rad for d in dets)
+            # a skill (flip, rotate) may end at any yaw: its xy is confirmed within 5 cm whatever the orientation
+            tol = 0.05 if (ex.get("call") or {}).get("tool") == "skill" else rad
+            ok = any(d.color == ex["color"] and np.linalg.norm(np.asarray(d.top[:2]) - target) < tol for d in dets)
         if ok:
             if target is not None:
                 self._planner_track_move(ex["color"], source, target)
@@ -4048,8 +4087,28 @@ class ClassicalPolicy:
         return bool(bc.get("find", False)) and bool(self._brain_queries) \
             and self._brain_finds < int(bc.get("max_finds", 2))
 
-    def _brain_find(self, query, obs, dets):
-        """Run the find tool for one phrase: image points -> ids of OUR detections (nearest uv)."""
+    def _find_hit(self, it, query, obs, dets, grown):
+        """Which detection a find point is: (index into dets or None, grown depth blob or None).
+        (a) uv within match_found's radius; else (b) the depth blob grown at the point (once per point, cached in
+        `grown`) has its top within 0.04 m of a detection's top: a long object's blob centre can sit >40 px from its uv."""
+        from .brain.novel import novel_detection
+        pt = tuple(map(float, it["point"]))
+        hit = match_found([pt], dets)
+        if hit:
+            return hit[0], None
+        if pt not in grown:
+            grown[pt] = novel_detection(self.perception, obs["head_rgb"], obs["head_depth"], pt, query,
+                                        it.get("bbox") or None, self.cfg["brain"])
+        d = grown[pt]
+        if d is None:
+            return None, None
+        for i, k in enumerate(dets):
+            if np.linalg.norm(k.top[:2] - d.top[:2]) < 0.04:
+                return i, d
+        return None, d
+
+    def _brain_find(self, query, obs, dets, grown=None):
+        """Run the find tool for one phrase: image points -> ids of OUR detections (nearest uv, or the 3D blob match)."""
         if self._brain_find_fn is None:
             bc = self.cfg["brain"]
             self._brain_find_fn = FindClient(bc.get("find_path", "/data/brain/find/find_tool.py"), bc.get("find_url"),
@@ -4063,18 +4122,20 @@ class ClassicalPolicy:
         raw = fn.detect(obs["head_rgb"], query) if hasattr(fn, "detect") else fn(obs["head_rgb"], query)
         items = [it if isinstance(it, dict) else {"point": tuple(it), "bbox": None, "label": query} for it in raw]
         self._last_find_items = items
-        idx = match_found([it["point"] for it in items], dets)
-        matched = {tuple(map(float, it["point"])) for it in items
-                   if match_found([it["point"]], dets)}
-        from .brain.novel import novel_detection
+        grown = {} if grown is None else grown
+        hits = [self._find_hit(it, query, obs, dets, grown) for it in items]
+        idx = []
+        for i, _ in hits:
+            if i is not None and i not in idx:
+                idx.append(i)
         bc = self.cfg["brain"]
-        for it in items:
+        for it, (i, _) in zip(items, hits):
             pt = tuple(map(float, it["point"]))
-            if pt in matched or len(self._novel_store) >= int(bc.get("novel_max_objects", 3)):
+            if i is not None or len(self._novel_store) >= int(bc.get("novel_max_objects", 3)):
                 continue
             if any(((e["uv"][0] - pt[0]) ** 2 + (e["uv"][1] - pt[1]) ** 2) ** 0.5 < 30 for e in self._novel_store):
                 continue
-            d = novel_detection(self.perception, obs["head_rgb"], obs["head_depth"], pt, query, it.get("bbox") or None, bc)
+            d = grown[pt]
             if d is None:
                 self.log(f"[novel] find({query!r}) point {pt}: no depth blob above the counter plane")
                 continue
@@ -4088,10 +4149,15 @@ class ClassicalPolicy:
         if not self._ftd_on():
             ids = self._brain_ids(dets)
             return [ids[i] for i in self._brain_find(query, obs, dets)], dets, ids
-        self._brain_find(query, obs, dets)
+        grown = {}
+        self._brain_find(query, obs, dets, grown)
         all_dets = self._with_novel(dets, obs)
         ids_all = self._brain_ids(all_dets)
-        idx = match_found([it["point"] for it in self._last_find_items], all_dets)
+        idx = []
+        for it in self._last_find_items:
+            i = self._find_hit(it, query, obs, all_dets, grown)[0]
+            if i is not None and i not in idx:
+                idx.append(i)
         return [ids_all[i] for i in idx], all_dets, ids_all
 
     def _brain_points(self, lp, dets, cands, ids):

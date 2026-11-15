@@ -151,7 +151,11 @@ def _axes_and_footprint(xy):
     return footprint, major, minor, dims
 
 
-def _handle_pixels(blob, max_aspect, extension):
+def _touches_border(blob):
+    return bool(blob[0].any() or blob[-1].any() or blob[:, 0].any() or blob[:, -1].any())
+
+
+def _handle_pixels(blob, max_aspect, extension, truncated=None, body_m=None, min_width_m=0.015):
     """Return (mask, image-axis) for a thick body plus one thin protrusion."""
     yy, xx = np.nonzero(blob)
     if len(xx) < 20:
@@ -167,7 +171,10 @@ def _handle_pixels(blob, max_aspect, extension):
     delta = pts - [cx, cy]
     radial = np.linalg.norm(delta, axis=1)
     aspect = max(crop.shape) / max(1.0, min(crop.shape))
-    if aspect > float(max_aspect) or radial.max() < float(extension) * radius:
+    # The image edge truncates the disc, so the bounding box of a border-touching blob is inflated by the
+    # handle and the cut; judge those on the visible geometry (one-sidedness, take, p90) instead.
+    if (aspect > float(max_aspect) and not (_touches_border(blob) if truncated is None else truncated)) \
+            or radial.max() < float(extension) * radius:
         return None, None
     axis = delta[int(np.argmax(radial))]
     axis /= max(np.linalg.norm(axis), 1e-9)
@@ -179,29 +186,40 @@ def _handle_pixels(blob, max_aspect, extension):
         return None, None
     # Past the thick body's tangent.  A box corner never reaches this gate;
     # the rectangular pan handle contributes a coherent patch.
-    take = (along > 0.90 * radius) & (np.abs(across) < 0.75 * radius)
+    take = (along > 1.00 * radius) & (np.abs(across) < 0.75 * radius)
     if take.sum() < max(12, int(0.02 * len(pts))) or np.percentile(along[take], 90) < 1.30 * radius:
         return None, None
+    # A handle is a bar, not a shaft: reject a protrusion narrower than min_width_m (metres), scaling its pixel width
+    # by the body's metric diameter (body_m = blob minor extent) over the body's pixel diameter (2 * radius).
+    if body_m is not None:
+        across_take = across[take]
+        if (np.percentile(across_take, 98) - np.percentile(across_take, 2)) * float(body_m) / (2.0 * radius) < float(min_width_m):
+            return None, None
     out = np.zeros_like(blob, bool)
     hp = pts[take].astype(int)
     out[hp[:, 1] + y0, hp[:, 0] + x0] = True
     return out, axis
 
 
-def _shape(blob, dims, cfg):
+def _shape(blob, dims, cfg, truncated=None):
     contours, _ = cv2.findContours(blob.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     contour = max(contours, key=cv2.contourArea)
     area, perimeter = float(cv2.contourArea(contour)), float(cv2.arcLength(contour, True))
     circularity = 0.0 if perimeter <= 0 else 4.0 * np.pi * area / (perimeter * perimeter)
     aspect = float(dims[0] / max(dims[1], 1e-6))
-    if aspect >= float(cfg.get("elongated_aspect", 2.2)):
-        return "elongated", None, None, circularity
     handle, image_axis = (None, None)
-    if aspect >= float(cfg.get("handle_min_aspect", 1.5)):
+    # a truncated blob (image edge, bin band or FK arm cut its disc) may read as elongated only because of the cut:
+    # look for the handle first
+    if truncated is None:
+        truncated = _touches_border(blob)
+    if aspect >= float(cfg.get("handle_min_aspect", 1.5)) and (truncated or aspect < float(cfg.get("elongated_aspect", 2.2))):
         handle, image_axis = _handle_pixels(blob, cfg.get("handle_max_aspect", 2.5),
-                                            cfg.get("handle_extension", 1.45))
+                                            cfg.get("handle_extension", 1.45), truncated,
+                                            body_m=float(dims[1]), min_width_m=cfg.get("handle_min_width_m", 0.015))
     if handle is not None:
         return "with-handle", handle, image_axis, circularity
+    if aspect >= float(cfg.get("elongated_aspect", 2.2)):
+        return "elongated", None, None, circularity
     if circularity >= float(cfg.get("round_circularity", 0.70)) and aspect <= float(cfg.get("round_aspect", 1.45)):
         return "round", None, None, circularity
     return "box-like", None, None, circularity
@@ -241,12 +259,15 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
     for ctr in perception._bin_centres_mat().values():
         ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= bin_half, axis=-1)
     fp = bool(cfg.get("fp_filter", True))
+    binned = np.zeros(raw.shape, bool)   # pixels cut by the bin-band exclusion: a blob next to them is truncated
     if fp:
         # FP filter (b): bin walls/rims project a few mm outside the nominal footprint (depth edges, perspective,
         # runtime shift error), so the novel path excludes a wider band than the known detector's bin_pixel_margin.
         wide = np.asarray(perception.scene.cfg["bins"]["outer_size"], float) / 2.0 + float(cfg.get("bin_margin_m", 0.03))
         for ctr in perception._bin_centres_mat().values():
-            ok &= ~np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= wide, axis=-1)
+            inband = np.all(np.abs(pm[:, :2] - np.asarray(ctr, float)) <= wide, axis=-1)
+            ok &= ~inband
+            binned[vv[inband], uu[inband]] = True
     good = np.zeros(raw.shape, bool)
     good[vv[ok], uu[ok]] = True
     mask = good.astype(np.uint8)
@@ -284,6 +305,7 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
     n, labels, stats, cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    cut_zone = binned | (arm_ring if arm_ring is not None else False)
     scale_area = stride * stride
     min_area = max(8, int(np.ceil(float(cfg.get("min_area_px", 45)) / scale_area)))
     max_area = int(np.ceil(float(cfg.get("max_area_px", 30000)) / scale_area))
@@ -358,7 +380,8 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         if nearby and dims[0] <= known_hi * float(cfg.get("supersede_min_ratio", 1.15)):
             continue
 
-        label, handle_mask, image_axis, circularity = _shape(blob, dims, cfg)
+        near_cut = bool((cv2.dilate(blob.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)[cut_zone].any())
+        label, handle_mask, image_axis, circularity = _shape(blob, dims, cfg, truncated=_touches_border(blob) or near_cut)
         object_centre_xy = np.median(P[:, :2], axis=0)
         centre_xy = object_centre_xy.copy()
         yaw = _fold_yaw(np.arctan2(major[1], major[0]))
@@ -378,16 +401,24 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
                 w = np.array([-u[1], u[0]])
                 rel = HP[:, :2] - body_c
                 DP = BP[:, :2] - body_c
+                # robust handle half-width (10th-90th percentile across the axis): the handle mask can carry a sliver of
+                # disc where the handle meets the rim, which inflates the full extent (hdims[1]) to 2-3x the true width
+                cross = rel @ w
+                hw = 0.5 * (float(np.percentile(cross, 90)) - float(np.percentile(cross, 10)))
                 # disc pixels only: handle pixels the handle mask missed sit in the handle band and would push the rim out to the tip
-                DP = DP[np.abs(DP @ w - float(np.median(rel @ w))) > float(hdims[1]) / 2 + 0.01]
+                DP = DP[np.abs(DP @ w - float(np.median(rel @ w))) > hw + 0.01]
                 rim = max(float(np.percentile(DP @ u, 100.0)), float(_axes_and_footprint(DP)[3][0]) / 2) if len(DP) >= 10 else float(dims[0]) / 2
                 s_min = rim + float(cfg.get("handle_rim_margin_m", 0.04))
                 if float((rel @ u).max()) < s_min + 0.01:
                     ungraspable_reason = "handle too short/occluded"
                 else:
-                    s = max(float(np.median(rel @ u)), s_min)
+                    # midpoint of [rim+margin, tip] keeps the grasp on the handle even when the mask is denser near the root (theta 45 grasped at the rim before)
+                    tip = float(np.percentile(rel @ u, 95))
+                    s = max(float(np.median(rel @ u)), s_min, 0.5 * (s_min + tip))
                     centre_xy = body_c + s * u + float(np.median(rel @ w)) * w
-                    width = float(hdims[1])
+                    # width from handle pixels beyond the rim only (s > rim + 0.01), robust 10-90 spread
+                    beyond = cross[(rel @ u) > rim + 0.01]
+                    width = (float(np.percentile(beyond, 90)) - float(np.percentile(beyond, 10))) if len(beyond) >= 10 else float(hdims[1])
                 handle_axis = hmajor
                 yaw = _fold_yaw(np.arctan2(hmajor[1], hmajor[0]))
                 grasp_kind = "handle"
@@ -397,7 +428,9 @@ def augment_detections(perception, rgb, depth, known, robot_q=None):
         top_z = float(np.percentile(P[:, 2], 95.0))
         height = float(np.percentile(P[:, 2], 98.0) - perception.scene.counter_z)
         support = min(1.0, len(P) / 200.0)
-        border = bool(blob[0].any() or blob[-1].any() or blob[:, 0].any() or blob[:, -1].any())
+        # handle grasp: only the handle must be fully in view; a disc cut by the image edge does not matter
+        touch = handle_mask if (grasp_kind == "handle" and handle_mask is not None) else blob
+        border = bool(touch[0].any() or touch[-1].any() or touch[:, 0].any() or touch[:, -1].any())
         confidence = float(np.clip(support * (0.35 if border else 1.0), 0.0, 1.0))
         det = Detection(colour, np.r_[centre_xy, top_z], area * scale_area, len(P) * scale_area, "novel_depth",
                         yaw, (cu, cv), shape=label,

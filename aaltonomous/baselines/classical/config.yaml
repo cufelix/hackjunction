@@ -411,6 +411,7 @@ bin:
     tape_hsv: [[3, 150, 70], [8, 255, 180]]
 
 grasp:
+  hold_s: 3.0         # skill "hold": seconds the hand stays closed with the arm still, right after the lift
   # Grasp = "claw from above": palm faces the counter (approach axis = palm -y on the LEFT hand, mirrored right),
   # fingers point roughly forward and curl down in front of the object, the thumb swings in from behind.
   # Object centre in the LEFT palm frame; auto = midway finger tips <-> thumb tip (`closed`). The Dex3 index/middle
@@ -507,6 +508,8 @@ grasp:
   lying_prism_arm_by_reach: false  # FLAG (prism orient, needs lying_prism). Arm + heading by reachability: default arm first, abstain when neither arm reaches a ridge heading
   height_frac: 0.5            # grasp point z = counter + height_frac * object size (before fingertip check)
   fingertip_clearance: 0.012  # fingertips (preshape posture, URDF) stay this far above the counter at grasp
+  handle_z_drop_m: 0.0        # handle grasps only: grasp z lowered by this (planner _plan_side); 0 = stock height
+  handle_fingertip_clearance_m: 0.006  # handle grasps only: fingertip counter clearance in the height loop (stock 0.012)
   approach_height: 0.08       # pregrasp = grasp point this far above the grasp height
   approach_extra_m: 0.0       # added to the pregrasp height (policy.speed_tiers sets 0.015 for the first object only)
   carry_height: 0.16          # grasp point z above the counter while carrying (clears bin walls + object)

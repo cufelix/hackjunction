@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from .brain import PlanLayer, PlannerBackend, instruction_needs_plan, validate_plan
+from .brain.planner import forced_skill_plan, plan_gbnf
 
 
 WORLD = {
@@ -95,6 +96,41 @@ class TestValidation(unittest.TestCase):
         self.assertFalse(instruction_needs_plan("red goes left"))
 
 
+class TestSkill(unittest.TestCase):
+    """The closed-set 'skill' tool (flip): validator, grammar and prompt example."""
+    WORLD_SKILL = dict(WORLD, instruction="take the pan and pretend you are making pancakes")
+
+    def test_validator_accepts_skill_for_a_known_object(self):
+        raw = [{"tool": "skill", "args": {"obj_id": "o0", "skill": "flip"}}, {"tool": "done", "args": {}}]
+        steps, errors = validate_plan(raw, self.WORLD_SKILL, classical_has_work=False)
+        self.assertFalse(errors, errors)
+        self.assertEqual([s["tool"] for s in steps], ["skill", "done"])
+        self.assertTrue(steps[0]["valid"])
+
+    def test_validator_rejects_unknown_skill_name(self):
+        raw = [{"tool": "skill", "args": {"obj_id": "o0", "skill": "spin"}}]
+        steps, errors = validate_plan(raw, self.WORLD_SKILL, classical_has_work=False)
+        self.assertFalse(steps[0]["valid"])
+        self.assertTrue(any("skill 'spin'" in e for e in errors), errors)
+
+    def test_validator_rejects_unknown_object(self):
+        raw = [{"tool": "skill", "args": {"obj_id": "o9", "skill": "flip"}}]
+        steps, errors = validate_plan(raw, self.WORLD_SKILL, classical_has_work=False)
+        self.assertFalse(steps[0]["valid"])
+        self.assertTrue(any("not in scene" in e for e in errors), errors)
+
+    def test_hold_skill_validates_for_a_known_object(self):
+        raw = [{"tool": "skill", "args": {"obj_id": "o0", "skill": "hold"}}, {"tool": "done", "args": {}}]
+        steps, errors = validate_plan(raw, self.WORLD_SKILL, classical_has_work=False)
+        self.assertFalse(errors, errors)
+        self.assertTrue(steps[0]["valid"])
+
+    def test_grammar_can_emit_skill(self):
+        grammar = plan_gbnf()
+        self.assertIn("skill", grammar)
+        self.assertIn('"\\"flip\\""', grammar)
+
+
 class TestAsyncFallback(unittest.TestCase):
     def test_timeout_returns_no_plan_so_classical_can_continue(self):
         layer = PlanLayer({"plan_timeout_s": 0.01}, backend=Scripted([], delay=0.08))
@@ -127,6 +163,36 @@ class TestAsyncFallback(unittest.TestCase):
         self.assertTrue(layer.replan(WORLD, layer.next_call(), "failed"))
         self.assertTrue(layer.adopted)
         self.assertFalse(layer.replan(WORLD, layer.next_call(), "again"))
+
+
+class TestForcedSkill(unittest.TestCase):
+    """AALTO_FORCE_SKILL demo override: the forced plan goes through the same validator."""
+
+    def _world(self):
+        world = dict(WORLD, instruction="take the yellow novel object and flip it")
+        world["objects"] = [dict(o) for o in WORLD["objects"]]
+        world["objects"][1].update(novel=True, graspable=True)   # o1 is the handle novel object
+        return world
+
+    def test_env_forces_flip_on_the_handle_object(self):
+        world = self._world()
+        raw = forced_skill_plan("flip", world, handle_ids={"o1"})
+        steps, errors = validate_plan(raw, world, classical_has_work=False)
+        self.assertFalse(errors, errors)
+        self.assertEqual([s["tool"] for s in steps], ["skill", "done"])
+        self.assertEqual(steps[0]["args"], {"obj_id": "o1", "skill": "flip"})
+        self.assertTrue(steps[0]["valid"])
+
+    def test_unset_or_unknown_value_changes_nothing(self):
+        world = self._world()
+        self.assertIsNone(forced_skill_plan(None, world, handle_ids={"o1"}))
+        self.assertIsNone(forced_skill_plan("", world, handle_ids={"o1"}))
+        self.assertIsNone(forced_skill_plan("spin", world, handle_ids={"o1"}))
+
+    def test_no_graspable_novel_object_keeps_the_normal_path(self):
+        world = self._world()
+        world["objects"][1]["graspable"] = False
+        self.assertIsNone(forced_skill_plan("flip", world, handle_ids={"o1"}))
 
 
 if __name__ == "__main__":

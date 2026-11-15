@@ -31,6 +31,9 @@ from .bin_vote import bin_geometry
 from .kinematics import ArmKinematics
 from .config import soft_hand_active, soft_overclose
 
+# Handle grasps only: release this far inside the bin's near inner wall when the stock release cannot be carried to.
+HANDLE_NEAR_RIM_INSET_M = 0.03
+
 
 _SHAPES = ("cube", "cylinder", "triangle")
 
@@ -275,6 +278,8 @@ class Planner:
         self._lying = False    # grasp.lying_prism: the pick being planned is a lying prism (grasp height / posture)
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
         self.object_speed_scale = None  # policy.first_object_speed_scale: arm phase speed x this (a copy, per plan)
+        self.skill = None  # "flip": pan-toss phase after the lift (_flip_waypoints); "hold": still hand-closed hold; "use": push a target with the tool (_use_waypoints); None = stock pick
+        self.skill_target_xy = None  # "use": pelvis xy of the target the tool is pushed towards (None: no target)
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
@@ -1245,8 +1250,11 @@ class Planner:
         if getattr(det, "novel", False):
             score = float(getattr(det, "generic_confidence", 0.0) or 0.0)
             if not getattr(det, "graspable", not getattr(det, "ungraspable", False)) or score < float(g.get("generic_min_confidence", 0.5)):
+                cause = getattr(det, "ungraspable_reason", None)
+                reason = (f"novel ungraspable: {cause} (score {score:.2f})" if cause
+                          else f"novel graspability {score:.2f} below threshold")
                 return Plan(False, side=side, color=det.color, target_bin=bin_name,
-                            reason=f"novel graspability {score:.2f} below threshold")
+                            reason=reason)
             if float(det.generic_width) > self.generic_hand_opening:
                 return Plan(False, side=side, color=det.color, target_bin=bin_name,
                             reason=f"novel width {1000 * det.generic_width:.0f} mm exceeds URDF opening "
@@ -1262,6 +1270,8 @@ class Planner:
         # major axis, the thumb-to-finger closure spans the reported minor-axis
         # width. Try both directions of the undirected major axis.
         angles = [float(yaw), float(yaw) + np.pi]
+        if getattr(det, "grasp_kind", None) == "handle":   # fingers ACROSS the bar: pinch line crosses it (Isaac ground truth)
+            angles = [float(yaw) + np.pi / 2, float(yaw) - np.pi / 2]
         angle = min(angles, key=lambda a: abs((a - natural + np.pi) % (2 * np.pi) - np.pi))
         deviation = abs((angle - natural + np.pi) % (2 * np.pi) - np.pi)
         max_dev = 90.0 if getattr(det, "novel", False) else float(g.get("generic_yaw_max_dev_deg", 45.0))
@@ -1462,15 +1472,19 @@ class Planner:
         lhf = g.get("left_hand_fix") or {}   # grasp.left_hand_fix.shift_z: left-arm triangle grasp height sweep
         if side == "left" and getattr(det, "shape", None) == "triangle" and float(lhf.get("shift_z", 0.0) or 0.0):
             z += float(lhf["shift_z"])
+        is_handle = getattr(det, "grasp_kind", None) == "handle"   # handle-only: defaults are no-ops (see config keys)
+        if is_handle:
+            z -= float(g.get("handle_z_drop_m", 0.0))
+        clr = float(g.get("handle_fingertip_clearance_m", 0.006)) if is_handle else g["fingertip_clearance"]
         for _ in range(4):
             qg, ok = self._ik(side, np.r_[xy, z], arm_q, "grasp", plan)
             if not ok:
                 plan.reason = f"IK grasp {side}"
                 return plan
             c = self.clearance(side, qg, hand_pre, fingers_only=True)
-            if c >= g["fingertip_clearance"] - 1e-3:
+            if c >= clr - 1e-3:
                 break
-            z += g["fingertip_clearance"] - c
+            z += clr - c
         else:
             plan.reason = "fingers hit the counter"
             return plan
@@ -1521,6 +1535,10 @@ class Planner:
         def drop_leg(points):
             if self._carry_hint is not None:   # retry heading variant: the wrist may turn back while carrying
                 self.kin.hint, self.kin.w_hint = self._carry_hint
+            if getattr(det, "grasp_kind", None) == "handle":
+                # the grasp's finger-heading pull (w_hint) makes the top-down reach at the bin unsolvable (tilt > 50 deg);
+                # the carry only needs the position, so drop the heading pull for handle grasps
+                self.kin.w_hint = 0.0
             try:
                 carry_ = (self._carry_via(side, bin_name, points, up, plan)
                           if place_xy is None and self._carry_corridor_on() else None)
@@ -1567,6 +1585,26 @@ class Planner:
                 plan.reason = f"{first} | near-rim retry: {second}"
         if drop_adjustment_on:
             plan.waypoints["drop_adjusted" if adjusted else "drop_fallback"] = P["drop"].copy()
+        if not retreat and place_xy is None and drop_slot is None and getattr(det, "grasp_kind", None) == "handle":
+            # Handle grasp: the carry may be unable to clear the bin rim at the stock release (5 cm inside the near
+            # wall). Retry the same drop leg with the release at the NEAR rim, HANDLE_NEAR_RIM_INSET_M inside the
+            # inner walls, at the stock release height. Bin keep-out checks below still apply to the new waypoints.
+            first_reason = plan.reason
+            near = self._drop_xy0(bin_name, inset=HANDLE_NEAR_RIM_INSET_M)
+            sh = self.bin_geometry(bin_name)["shift"]
+            near = near + sh if sh is not None else near
+            for key in ("carry", "carry_mid", "lower", "retreat"):
+                plan.ik.pop(key, None)
+                plan.waypoints.pop(key, None)
+            plan.reason = ""
+            P["above_bin"] = np.r_[near, z_carry]
+            P["drop"] = np.r_[near, stock_z_drop]
+            P["retreat"] = np.r_[near, stock_z_drop + g["retreat_up"]]
+            carry, lower, retreat = drop_leg(P)
+            if retreat:
+                plan.waypoints["drop_near_rim"] = P["drop"].copy()
+            else:
+                plan.reason = first_reason
         if not retreat:
             plan.reason = plan.reason or f"IK failed on {[k for k, v in plan.ik.items() if not v[0]]} ({side})"
             return plan
@@ -1653,6 +1691,16 @@ class Planner:
             move("lift", up[k:], scale=cs)
         else:
             move("lift", up, scale=cs)
+        if self.skill == "flip":
+            move("flip", self._flip_waypoints(side, cur_a), scale=cs)
+        elif self.skill == "hold":   # arm constant, hand closed on the pan for grasp.hold_s
+            hand("hold", hand_cls, float(g.get("hold_s", 3.0)))
+        elif self.skill == "use":   # grasp.use: approach the target along the tool axis, push, twist, back to the lift pose
+            seq = self._use_waypoints(side, det, xy, z, P, up[-1], plan)
+            if seq is None:
+                return plan
+            for name, qs in seq:
+                move(name, qs, scale=cs)
         move("carry", carry + lower, scale=cs)
         rw = g.get("release_wait_s")  # grasp.release_wait_s: the retreat starts >= this long after the open command
         hand("open", hand_rel, mo["open_hold_s"] if rw is None else max(mo["open_hold_s"], float(rw)))  # widest posture: `open` alone left the cube wedged in the sim
@@ -1671,7 +1719,8 @@ class Planner:
             closing[s:e] |= name == "close" or (place_xy is not None and name == "open")
         for k in range(0, len(plan.arm), 3):
             # closing: the thumb swings through its lowest point; touching the mat lightly is acceptable
-            need = 0.003 if closing[k] else g["fingertip_clearance"] if grasp_ticks[k] else mo["counter_clearance"]
+            gclr = clr if is_handle else g["fingertip_clearance"]   # handle: the bar sits ~8 mm above the counter
+            need = 0.003 if closing[k] else gclr if grasp_ticks[k] else mo["counter_clearance"]
             c = self.clearance(side, plan.arm[k], plan.hand[k])
             if c < need - 2e-3:
                 name = next(n for n, s, e in phases if s <= k < e)
@@ -1729,6 +1778,96 @@ class Planner:
             return plan
         plan.ok = True
         return plan
+
+    def _use_axis(self, det, xy):
+        """skill 'use': (u, L) = unit tool axis (pelvis xy) and distance from the grasp xy to the tool's front end along u.
+        u points at skill_target_xy; with no target, away from the grasp offset (far end from the grasp). (None, None)
+        when the detection has no orientation."""
+        ang = getattr(det, "ridge_yaw", None)
+        if ang is None:
+            ang = getattr(det, "yaw", None)
+        if ang is None:
+            return None, None
+        u = np.array([np.cos(ang), np.sin(ang)])
+        half = 0.5 * float(det.footprint[0]) if getattr(det, "footprint", None) else 0.10
+        off = np.asarray(xy, float) - np.asarray(det.top[:2], float)
+        if self.skill_target_xy is not None:
+            if np.dot(np.asarray(self.skill_target_xy, float) - xy, u) < 0:
+                u = -u
+        elif np.dot(off, u) > 0:
+            u = -u
+        return u, float(np.clip(half - np.dot(off, u), 0.03, 0.20))
+
+    def _use_waypoints(self, side, det, xy, z, P, q_lift, plan):
+        """skill 'use' (grasp.use): from the lift pose, slide along the tool axis by d (approach), lower to the grasp
+        height + 1 cm, push 1.5 cm further, twist the wrist roll (+r, -r, +r, -r, 0), then back up and to the lift pose.
+        d puts the tool's front end on the target (+1 cm), clipped to 0..10 cm; 3 cm with no target.
+        Returns [(phase, arm_q waypoints)] or None (plan.reason set)."""
+        u, L = self._use_axis(det, xy)
+        if u is None:
+            plan.reason = "use: no tool axis"
+            return None
+        if self.skill_target_xy is None:
+            d = 0.03
+        else:
+            contact = np.asarray(self.skill_target_xy, float) - u * 0.03
+            d = float(np.clip(np.dot(contact - (xy + u * L), u) + 0.01, 0.0, 0.10))
+        g = self.cfg["grasp"].get("use") or {}
+        r = float(g.get("twist_rad", 0.35))  # ponytail: 0.5 rad leaves the hand 1.5 cm above the counter (clearance fails); 0.35 passes here
+        lift = np.asarray(P["lift"], float)
+        out, q = [], q_lift
+
+        def run(name, p0, p1):
+            nonlocal q
+            qs = self._cartesian(side, p0, p1, q, name, plan)
+            if qs is None:
+                plan.reason = "use: no IK path"
+                return False
+            out.append((name, qs))
+            q = qs[-1]
+            return True
+
+        appr = np.r_[xy + u * d, lift[2]]
+        low = np.r_[xy + u * d, z + 0.01]
+        push = np.r_[xy + u * (d + 0.015), z + 0.01]
+        if not (run("use_approach", lift, appr) and run("use_lower", appr, low) and run("use_push", low, push)):
+            return None
+        ir = self.spec.arm_names.index(f"{side}_wrist_roll_joint")
+        tw = []
+        for s in (r, -r, r, -r, 0.0):
+            w = q.copy()
+            w[ir] += s
+            tw.append(np.clip(w, self.kin.lo, self.kin.hi))
+        out.append(("use_twist", tw))
+        q = tw[-1]
+        up_p = np.r_[push[:2], lift[2]]   # back up at the push xy, then to the lift pose (one phase)
+        back = self._cartesian(side, push, up_p, q, "use_back", plan)
+        back = back and self._cartesian(side, up_p, lift, back[-1], "use_back", plan)
+        if not back:
+            plan.reason = "use: no IK path"
+            return None
+        out.append(("use_back", back))
+        return out
+
+    def _flip_waypoints(self, side, q):
+        """grasp.flip: pan-toss choreography from the lift pose q (14,). Per cycle: toss (elbow -elbow_rad, wrist
+        pitch +toss_wrist_rad) then catch (elbow back, wrist pitch -catch_wrist_rad). Each cycle's pitch offset
+        accumulates (toss - catch), so the sweep grows and the pitch range stays >= 0.4 rad. Ends exactly at q.
+        Clipped to the planner's joint limits (kin.lo / kin.hi)."""
+        f = self.cfg["grasp"].get("flip") or {}
+        cycles = int(f.get("cycles", 3))
+        toss, catch = float(f.get("toss_wrist_rad", 0.30)), float(f.get("catch_wrist_rad", 0.20))
+        elbow = float(f.get("elbow_rad", 0.15))
+        ip = self.spec.arm_names.index(f"{side}_wrist_pitch_joint")
+        ie = self.spec.arm_names.index(f"{side}_elbow_joint")
+        out, acc = [], 0.0
+        for _ in range(cycles):
+            up = q.copy(); up[ie] -= elbow; up[ip] += acc + toss
+            down = q.copy(); down[ip] += acc + toss - catch
+            acc += toss - catch
+            out += [up, down]
+        out.append(q.copy())
+        return [np.clip(w, self.kin.lo, self.kin.hi) for w in out]
 
     def dry_run_safety(self, arm_q, hand_q, arm, hand):
         f = SafetyFilter(self.spec, self.safety)
