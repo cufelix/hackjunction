@@ -2,6 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/cufelix/hackjunction?label=release)](https://github.com/cufelix/hackjunction/releases/tag/v1.0-submission)
 [![Image](https://img.shields.io/badge/image-ghcr.io%2Fcufelix%2Fhackjunction%3Afinal-2496ED?logo=docker&logoColor=white)](https://github.com/cufelix/hackjunction/pkgs/container/hackjunction)
+[![CI](https://github.com/cufelix/hackjunction/actions/workflows/ci.yml/badge.svg)](https://github.com/cufelix/hackjunction/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Starter code for the **Aaltonomous Humanoid** challenge: make Väiski, a Unitree G1 with two Dex3 hands, sort
