@@ -91,8 +91,6 @@ def expected_flags(overlay_name):
         exp = EXPECTED_FINALS_FLAGS | R23_FLAGS | BRAIN_PARAMS
         if overlay_name != "finals_r24_classic":
             exp |= BRAIN_SWITCHES
-            if overlay_name == "finals_r24":
-                exp -= {"perception.novel.fp_filter"}   # fp_filter TRUE = stock: not reported as ON (classic/universal ship it false)
         if overlay_name != "finals_r23_universal":
             exp |= REALPERC_FLAGS | REAL_DEMO_FLAGS
             exp -= {"grasp.close_posture_by_shape"}   # real: one pinch_demo-family posture for all shapes
