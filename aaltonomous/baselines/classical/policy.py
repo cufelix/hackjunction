@@ -2381,6 +2381,7 @@ class ClassicalPolicy:
         triage = bool(pol.get("time_triage", False))
         forced = None   # (det, bin, variant, table_xy) from the brain or the whole-plan planner
         planner_forced = False
+        forced_skill = False   # brain.skill: the forced place_at-style plan runs with planner.skill = "flip"
         # universal: the deterministic parser/synonym match (instruction.novel_objects) is consulted FIRST; when it names a
         # visible novel object and its bin, the classical loop acts on it and the brain is not asked at all.
         parser_first = bool((self.cfg.get("instruction") or {}).get("novel_objects", False)) and \
@@ -2399,9 +2400,10 @@ class ClassicalPolicy:
                     return ("relook", None, len(dets))
                 if kind in ("done", "stop"):
                     return ("none", None, len(dets))
-                if kind in ("pick", "place"):
+                if kind in ("pick", "place", "skill"):
                     cands = [d0] + [d for d in cands if d is not d0]
                     forced, planner_forced = (d0, b0, var, table_xy), True
+                    forced_skill = kind == "skill"
         elif self.brain is not None:
             brain_only_novel = bool(self._novel_brain_candidates)
             offered = [d for d in self._novel_brain_candidates if any(d is x for x in dets)]
@@ -2491,7 +2493,15 @@ class ClassicalPolicy:
                     ids_now = self._brain_ids(dets)
                     dmap_now = {ids_now[i]: obj for i, obj in enumerate(dets)}
                     oid_now = next((oid for oid, obj in dmap_now.items() if obj is d), None)
-                    ok_place, why_place, _ = self._planner_place_at(dmap_now, dets, oid_now, table_xy)
+                    skill_now = mine and forced_skill
+                    if skill_now:
+                        self.planner.skill = "flip"
+                        self.log(f"[skill] flip {d.color} -> back to ({float(table_xy[0]):.3f},{float(table_xy[1]):.3f})")
+                    try:
+                        ok_place, why_place, _ = self._planner_place_at(dmap_now, dets, oid_now, table_xy)
+                    finally:
+                        if skill_now:
+                            self.planner.skill = None
                     p = self._planner_place_cache.pop(
                         (id(d), round(float(table_xy[0]), 4), round(float(table_xy[1]), 4)), None)
                     if not ok_place or p is None:
@@ -3276,6 +3286,8 @@ class ClassicalPolicy:
                 if d is None:                       # scene changed after validation: skip, never improvise
                     self.plan_brain.mark("invalid", "object no longer in scene")
                     continue
+                if tool == "skill":   # brain.planner skill: pick, run the flip, put it back at its current xy
+                    return ("skill", d, None, None, np.asarray(d.top[:2], float))
                 if tool == "pick_place":
                     authority = self._lookup(d)     # a known target bin binds the planner (never overridden)
                     if authority is not None and a["bin"] != authority:
