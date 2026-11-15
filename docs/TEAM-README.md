@@ -9,7 +9,7 @@ Last consolidated: Fri 13 Nov 2026, 19:05 CET (20:05 Finnish).
 
 ## ⚠️ Read these two first
 
-**1. [`docs/rules.md`](docs/rules.md) — we cannot submit pre-existing code.**
+**1. [`docs/rules.md`](rules.md) — we cannot submit pre-existing code.**
 Junction: *"No code written before the event."* MLH: only new work is judged.
 **Warren cannot be our project.** The *idea* can be reworked; the code cannot be reused.
 Anything we submit must be written this weekend. Confirm with organizers in writing.
@@ -17,7 +17,7 @@ Anything we submit must be written this weekend. Confirm with organizers in writ
 **1b. Submitting a project for several challenges at once is explicitly allowed.** Verified
 on the platform guide. The tech-challenge stack below is sanctioned, not a loophole.
 
-**2. [`INFO_HACKATHON.md`](INFO_HACKATHON.md) — the clock.**
+**2. [`INFO_HACKATHON.md`](../INFO_HACKATHON.md) — the clock.**
 Hacking started Fri 19:30. **Preliminary submission Fri 23:59** (platform says 23:55 — aim
 for 23:50). Submissions open Sat 12:00. **Final Sun 10:00.** Peer review, then top 5 pitch to
 a 7-person grand jury. One submission per team. Everything open-sourced under MIT.
@@ -28,20 +28,20 @@ a 7-person grand jury. One submission per team. Everything open-sourced under MI
 
 | File | What's in it |
 |---|---|
-| [`INFO_HACKATHON.md`](INFO_HACKATHON.md) | Schedule, venue (Hype Areena, Espoo), the 7 grand-jury judges and what each says they look for, logistics, submission mechanics |
-| [`docs/rules.md`](docs/rules.md) | Eligibility. Pre-existing code. What's safe and what disqualifies |
-| [`docs/challenges.md`](docs/challenges.md) | **All 19 main challenges + all 19 tech challenges.** Per challenge: sponsor, what they actually ask, judging weights, prizes, resources |
-| [`docs/hackerpack.md`](docs/hackerpack.md) | **What we actually get.** All 20 hackerpacks: credits per person and per team, how to claim each one, the hardware on the 5th floor, and the four with extra qualification requirements |
-| [`docs/who-its-for.md`](docs/who-its-for.md) | **The user decision, and it drives everything else.** Self-hosted, for operators of their own servers. What it buys against the rubric, what it costs, and what it rules out |
-| [`docs/hostinger-decode-the-noise.md`](docs/hostinger-decode-the-noise.md) | **Our likely challenge, researched deep.** The verbatim brief, what the VPS can actually run, which datasets are reachable this weekend, the baseline numbers, the prior art and the GDPR/ToS limits |
-| [`docs/afterquery-harbor.md`](docs/afterquery-harbor.md) | How AfterQuery's harness really works, verified against Harbor source. The MCP contract, the verifier, and the one-agent-per-trial blocker |
-| [`docs/coordbench-sketch.md`](docs/coordbench-sketch.md) | A design sketch for the AfterQuery challenge: simulated teammates in the MCP sidecar, the reward formula and how it survives exploit-hunting. **Not a decision** |
-| [`docs/spread.md`](docs/spread.md) | The Bahn Express leaderboard challenge, assessed. API, kits, what's legal to exploit, honest hour estimate |
-| [`docs/entire.md`](docs/entire.md) | Entire CLI tested on this machine: what works, what the docs get wrong, and a public-repo warning before anyone runs `entire enable` |
-| [`docs/research-junction-2026.md`](docs/research-junction-2026.md) | Strategy research: past-winner patterns, Entire deep-dive, prize stacking. Older than `challenges.md` — where they disagree, `challenges.md` wins |
-| [`docs/sponsors-mlh.md`](docs/sponsors-mlh.md) | The MLH email that started this. Superseded by the tech-challenge section of `challenges.md` |
-| [`CLAUDE.md`](CLAUDE.md) | How the agents work: Warren, grokbot, worker sessions, Haiku subagent rules |
-| [`hub/`](hub/) | The Warren hub (docker + tailscale funnel). Our tooling, **not** our submission |
+| [`INFO_HACKATHON.md`](../INFO_HACKATHON.md) | Schedule, venue (Hype Areena, Espoo), the 7 grand-jury judges and what each says they look for, logistics, submission mechanics |
+| [`docs/rules.md`](rules.md) | Eligibility. Pre-existing code. What's safe and what disqualifies |
+| [`docs/challenges.md`](challenges.md) | **All 19 main challenges + all 19 tech challenges.** Per challenge: sponsor, what they actually ask, judging weights, prizes, resources |
+| [`docs/hackerpack.md`](hackerpack.md) | **What we actually get.** All 20 hackerpacks: credits per person and per team, how to claim each one, the hardware on the 5th floor, and the four with extra qualification requirements |
+| [`docs/who-its-for.md`](who-its-for.md) | **The user decision, and it drives everything else.** Self-hosted, for operators of their own servers. What it buys against the rubric, what it costs, and what it rules out |
+| `docs/hostinger-decode-the-noise.md` | **Our likely challenge, researched deep.** The verbatim brief, what the VPS can actually run, which datasets are reachable this weekend, the baseline numbers, the prior art and the GDPR/ToS limits |
+| [`docs/afterquery-harbor.md`](afterquery-harbor.md) | How AfterQuery's harness really works, verified against Harbor source. The MCP contract, the verifier, and the one-agent-per-trial blocker |
+| [`docs/coordbench-sketch.md`](coordbench-sketch.md) | A design sketch for the AfterQuery challenge: simulated teammates in the MCP sidecar, the reward formula and how it survives exploit-hunting. **Not a decision** |
+| [`docs/spread.md`](spread.md) | The Bahn Express leaderboard challenge, assessed. API, kits, what's legal to exploit, honest hour estimate |
+| [`docs/entire.md`](entire.md) | Entire CLI tested on this machine: what works, what the docs get wrong, and a public-repo warning before anyone runs `entire enable` |
+| [`docs/research-junction-2026.md`](research-junction-2026.md) | Strategy research: past-winner patterns, Entire deep-dive, prize stacking. Older than `challenges.md` — where they disagree, `challenges.md` wins |
+| [`docs/sponsors-mlh.md`](sponsors-mlh.md) | The MLH email that started this. Superseded by the tech-challenge section of `challenges.md` |
+| [`CLAUDE.md`](../CLAUDE.md) | How the agents work: Warren, grokbot, worker sessions, Haiku subagent rules |
+| `hub/` | The Warren hub (docker + tailscale funnel). Our tooling, **not** our submission |
 
 ---
 
@@ -53,7 +53,7 @@ a 7-person grand jury. One submission per team. Everything open-sourced under MI
 
 Prizes are deliberately not here. They don't vary enough to decide anything, and every
 challenge is won the same way: build the thing the brief asks for, well enough to demo.
-Prizes are recorded in [`docs/challenges.md`](docs/challenges.md) if anyone needs them.
+Prizes are recorded in [`docs/challenges.md`](challenges.md) if anyone needs them.
 
 **Agentic AI (6)** — six briefs, so the most competition
 | Challenge | Build this |
@@ -96,8 +96,8 @@ require it to drive the demo visibly, not sit on the side) · Cloudinary (images
 separate form) · Nemotron · Arduino UNO Q · Atech · ElevenLabs · Tiger Data · MongoDB ·
 Vultr · Solana.
 
-Full list with requirements: [`docs/challenges.md`](docs/challenges.md).
-What each sponsor hands us to build with: [`docs/hackerpack.md`](docs/hackerpack.md).
+Full list with requirements: [`docs/challenges.md`](challenges.md).
+What each sponsor hands us to build with: [`docs/hackerpack.md`](hackerpack.md).
 
 ---
 
@@ -107,11 +107,11 @@ What each sponsor hands us to build with: [`docs/hackerpack.md`](docs/hackerpack
 - Every recent Junction overall winner **first won or placed in a partner challenge**. Junction 2025 was won by a GPU radio-wave simulator with **no AI at all**.
 - Peer review rewards a demo people grasp instantly. **A dev tool is the hardest format for that** — if we build one, the visualisation *is* the demo, not a bonus.
 - Judges across briefs want reproducible, source-shown, false-positive-honest work. AfterQuery reruns your eval and spends 15 minutes trying to break your reward; Exa types its own live queries; Hostinger wants your precision and FP rate; AstraZeneca wants a source per claim; Stoa wants the drawing location per answer.
-- AfterQuery's harness **runs one agent per trial** — no multi-agent mode. A team must be simulated inside the environment. See [`docs/afterquery-harbor.md`](docs/afterquery-harbor.md).
+- AfterQuery's harness **runs one agent per trial** — no multi-agent mode. A team must be simulated inside the environment. See [`docs/afterquery-harbor.md`](afterquery-harbor.md).
 - **Compute is not our constraint.** CRACI gives every team €1000, Verda €200 and Modal $100
   per person, and two sponsors ship MCP servers we can use today. The OpenAI $100 is Codex/ChatGPT
   usage only, **not** API credits — and it's the one code the platform issues directly, still
-  unclaimed. See [`docs/hackerpack.md`](docs/hackerpack.md).
+  unclaimed. See [`docs/hackerpack.md`](hackerpack.md).
 - Spread is **not** a cheap parallel win: 15–25 h, one person, awake at 07:30 Sunday.
 
 ## Still open
@@ -119,7 +119,7 @@ What each sponsor hands us to build with: [`docs/hackerpack.md`](docs/hackerpack
 - [ ] **Do the 2026 rules match the 2024 rules page?** Ask organizers in writing — `participants@hackjunction.com` or Discord. This decides how much we can lean on anything pre-existing.
 - [ ] Can a multi-agent setup inside the MCP sidecar pass AfterQuery's standard-harness rerun? Ask Daksh Raghuwanshi or Ved Vedere on site.
 - [ ] **What are we building?** Leaning **Hostinger — Decode the Noise**; researched in
-  [`docs/hostinger-decode-the-noise.md`](docs/hostinger-decode-the-noise.md). Not committed yet.
+  `docs/hostinger-decode-the-noise.md`. Not committed yet.
 - [ ] Do MLH prizes need a separate submission on mlh.com? Ask the MLH coach.
 - [ ] Are all submissions really MIT-licensed this year? Secondhand claim, unverified, and it
   matters for anything meant to outlive the weekend.
