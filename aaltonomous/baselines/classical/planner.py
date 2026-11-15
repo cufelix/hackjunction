@@ -336,7 +336,20 @@ class Planner:
                 c = bin_geometry(self.scene, self.bin_shift, n)["centre_pelvis"]
                 q = M[:3, :3] @ np.array([c[0], c[1], self.scene.counter_z]) + M[:3, 3]
                 sh[n] = np.asarray(sh.get(n, (0.0, 0.0)), float) + (q[:2] - np.asarray(c, float))
+        fx = (self.cfg.get("bin") or {}).get("fallback_centre_x")
+        if fx is not None and shift is None:   # bin.fallback_centre_x (real): an unvoted bin sits where the real boxes stand
+            sh = dict(sh)
+            lo_conf = float((self.cfg["bin"].get("fallback") or {}).get("max_conf", 0.75))
+            for n in ([name] if name is not None else self.scene.bin_names):
+                if float((self.bin_conf or {}).get(n, 0.0)) < lo_conf:   # no vote / prior only / disagreement
+                    cx = float(bin_geometry(self.scene, sh, n)["centre_pelvis"][0])
+                    s = np.asarray(sh.get(n, (0.0, 0.0)), float)
+                    sh[n] = s + np.array([float(fx) - cx, 0.0])
         return bin_geometry(self.scene, sh, name)
+
+    def _bin_unvoted(self, name):
+        lo = float(((self.cfg.get("bin") or {}).get("fallback") or {}).get("max_conf", 0.75))
+        return float((self.bin_conf or {}).get(name, 0.0)) < lo
 
     def bin_xy(self, name):
         return self.bin_geometry(name)["centre_pelvis"]
@@ -1453,6 +1466,9 @@ class Planner:
         z_drop = zc + self._wall(sc.rim_wall(bin_name)) + H / 2 + g["drop_above_rim"]
         if self.drop_extra.get(bin_name):  # bin.vote low-confidence bin: release higher, never above the carry height
             z_drop = min(z_drop + self.drop_extra[bin_name], z_carry)
+        fz = (self.cfg.get("bin") or {}).get("fallback_drop_z")
+        if fz is not None and bin_name is not None and self._bin_unvoted(bin_name):   # reach at the rim needs a higher arm
+            z_drop = max(z_drop, float(fz))
         if place_xy is not None:  # relocation / place_at: put it down on the counter (release just above the grasp height)
             bxy, z_drop = np.asarray(place_xy, float), z + 0.005   # bin_name may be None here
         elif drop_slot is None:  # stock: one release point per bin (#6 off)
