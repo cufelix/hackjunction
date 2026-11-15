@@ -251,6 +251,7 @@ class Planner:
         self._lying = False    # grasp.lying_prism: the pick being planned is a lying prism (grasp height / posture)
         self._carry_hint = None   # policy.retry_vary_grasp: (hint, weight) for carry/lower/retreat of a heading variant
         self.object_speed_scale = None  # policy.first_object_speed_scale: arm phase speed x this (a copy, per plan)
+        self.skill = None  # "flip": insert the pan-toss phase after the lift (see _flip_waypoints); None = stock pick
         self.height = float(cfg["perception"].get("object_height") or scene.object_height())
         self.mapping = mapping or dict(FIXED_MAPPING)  # sort_fixed: fixed colour -> bin position
         self.bin_shift = {}    # bin.vote: bin name -> xy shift (m) added to bin_xy/drop_xy/drop_slots; {} = nominal
@@ -1460,6 +1461,8 @@ class Planner:
             move("lift", up[k:], scale=cs)
         else:
             move("lift", up, scale=cs)
+        if self.skill == "flip":
+            move("flip", self._flip_waypoints(side, cur_a), scale=cs)
         move("carry", carry + lower, scale=cs)
         rw = g.get("release_wait_s")  # grasp.release_wait_s: the retreat starts >= this long after the open command
         hand("open", hand_rel, mo["open_hold_s"] if rw is None else max(mo["open_hold_s"], float(rw)))  # widest posture: `open` alone left the cube wedged in the sim
@@ -1537,6 +1540,26 @@ class Planner:
             return plan
         plan.ok = True
         return plan
+
+    def _flip_waypoints(self, side, q):
+        """grasp.flip: pan-toss choreography from the lift pose q (14,). Per cycle: toss (elbow -elbow_rad, wrist
+        pitch +toss_wrist_rad) then catch (elbow back, wrist pitch -catch_wrist_rad). Each cycle's pitch offset
+        accumulates (toss - catch), so the sweep grows and the pitch range stays >= 0.4 rad. Ends exactly at q.
+        Clipped to the planner's joint limits (kin.lo / kin.hi)."""
+        f = self.cfg["grasp"].get("flip") or {}
+        cycles = int(f.get("cycles", 3))
+        toss, catch = float(f.get("toss_wrist_rad", 0.30)), float(f.get("catch_wrist_rad", 0.20))
+        elbow = float(f.get("elbow_rad", 0.15))
+        ip = self.spec.arm_names.index(f"{side}_wrist_pitch_joint")
+        ie = self.spec.arm_names.index(f"{side}_elbow_joint")
+        out, acc = [], 0.0
+        for _ in range(cycles):
+            up = q.copy(); up[ie] -= elbow; up[ip] += acc + toss
+            down = q.copy(); down[ip] += acc + toss - catch
+            acc += toss - catch
+            out += [up, down]
+        out.append(q.copy())
+        return [np.clip(w, self.kin.lo, self.kin.hi) for w in out]
 
     def dry_run_safety(self, arm_q, hand_q, arm, hand):
         f = SafetyFilter(self.spec, self.safety)
