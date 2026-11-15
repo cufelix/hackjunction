@@ -104,4 +104,4 @@ flags:
   policy.novel_obstacles: true
   grasp.novel_near_rim_retry: true              # novel R22  failed novel drop retries once at the near rim (no inset)
   perception.novel.max_area_px: 60000
-  perception.novel.fp_filter: true    # v2.1 bea7329: robot-ring/3-D near-arm + bottom-border keep
+  perception.novel.fp_filter: false   # off until the border/bin-band rework
