@@ -1,0 +1,22 @@
+[00:46:20] ckout=/data/work/oliver/ck_sha3_4af094c (nogit) overlay=finals_r23_universal variants=small_left image=hackjunction/policy:rc1-7a4168e-g port=8003
+00:46:27.305023 WARNING  [G1_29_ArmController] Waiting to         dds_utils.py:9
+                         subscribe dds...                                       
+00:46:27.859833 INFO      📷 Camera 'head_camera'          init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55555,                       
+                         request_bgr=True)                                      
+00:46:27.865369 INFO      📷 Camera 'left_wrist_camera'    init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55556,                       
+                         request_bgr=True)                                      
+00:46:27.868854 INFO      📷 Camera 'right_wrist_camera'   init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55557,                       
+                         request_bgr=True)                                      
+[DDSBackend] pacing on the sim clock (tcp://127.0.0.1:55581, sim t 62.52 s)
+policy: {'type': 'metadata', 'version': 1, 'name': 'classical-rung1', 'action_horizon': 10}  instruction: 'put the pan in the middle bin'  -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_004620
+rec_start {'ok': True, 'path': '/data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_004620/episode_000_small_left_show.mp4', 'showcam': True}
+rec_stop {'ok': True, 'frames': 875}
+small_left  verdict=no_lift  lift=0.0288 touched=False palm=None local=None center_bin=False end=done t=125.6s
+00:48:35.849215 INFO      📷 Camera 'head_camera'          closed. client.py:174
+00:48:35.849291 INFO      📷 Camera 'left_wrist_camera'    closed. client.py:174
+handle 0/1  disc 0/1  no_lift 1/1  in_center_bin 0/1  -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_004620/pan_results.json
+00:48:35.936446 INFO      📷 Camera 'right_wrist_camera'   closed. client.py:174
+[00:48:36] done -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_004620

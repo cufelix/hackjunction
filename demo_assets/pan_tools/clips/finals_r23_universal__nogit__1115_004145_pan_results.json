@@ -1,0 +1,97 @@
+[
+ {
+  "variant": "small_left",
+  "instruction": "put the pan in the middle bin",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.52,
+    "y": 0.18,
+    "yaw": 0.0,
+    "z": 0.0125
+   },
+   {
+    "color": "yellow",
+    "shape": "cube",
+    "x": 0.2,
+    "y": 0.13,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 44.4,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 435,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.0087,
+  "touched": false,
+  "min_palm_dist_m": 0.0959,
+  "verdict": "no_lift",
+  "in_center_bin": false,
+  "final_pos": [
+   0.3157,
+   0.0779,
+   0.0225
+  ],
+  "closest": {
+   "left": {
+    "pinch_mid_to_handle_mm": 259,
+    "t": 15.67,
+    "links_mm": {
+     "palm_link": [
+      -221,
+      -54,
+      175
+     ],
+     "thumb_2_link": [
+      -165,
+      -64,
+      159
+     ],
+     "index_1_link": [
+      -168,
+      40,
+      236
+     ],
+     "middle_1_link": [
+      -178,
+      63,
+      185
+     ]
+    }
+   },
+   "right": {
+    "pinch_mid_to_handle_mm": 55,
+    "t": 14.47,
+    "links_mm": {
+     "palm_link": [
+      105,
+      -11,
+      86
+     ],
+     "thumb_2_link": [
+      91,
+      7,
+      22
+     ],
+     "index_1_link": [
+      -15,
+      -21,
+      57
+     ],
+     "middle_1_link": [
+      -10,
+      34,
+      71
+     ]
+    }
+   }
+  }
+ }
+]

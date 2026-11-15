@@ -1,0 +1,56 @@
+[
+ {
+  "variant": "right_in",
+  "instruction": "put the pan in the middle bin",
+  "layout": [
+   {
+    "color": "grey",
+    "shape": "pan",
+    "x": 0.33,
+    "y": 0.13,
+    "yaw": -3.14159,
+    "z": 0.015
+   },
+   {
+    "color": "red",
+    "shape": "cube",
+    "x": 0.67,
+    "y": 0.13,
+    "yaw": -1.5708
+   },
+   {
+    "color": "blue",
+    "shape": "cylinder",
+    "x": 0.12,
+    "y": 0.16,
+    "yaw": -1.5708
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 4.7,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 40,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "lift_m": 0.8,
+  "touched": false,
+  "min_palm_dist_m": 0.1608,
+  "verdict": "disc",
+  "palm": "right_hand_palm_link",
+  "palm_in_pan_frame": [
+   -0.0602,
+   0.0519,
+   0.1758
+  ],
+  "in_center_bin": false,
+  "final_pos": [
+   0.27,
+   -0.12,
+   0.025
+  ]
+ }
+]

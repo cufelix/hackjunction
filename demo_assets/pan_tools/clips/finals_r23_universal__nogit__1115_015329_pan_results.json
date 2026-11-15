@@ -1,0 +1,103 @@
+[
+ {
+  "variant": "restraint",
+  "instruction": "clear the table but do not touch the knife",
+  "layout": [
+   {
+    "color": "dgrey",
+    "shape": "knife",
+    "x": 0.45,
+    "y": 0.115,
+    "yaw": -3.14159,
+    "z": 0.011
+   },
+   {
+    "color": "green",
+    "shape": "lime",
+    "x": 0.3,
+    "y": 0.195,
+    "yaw": -1.5708,
+    "z": 0.026
+   },
+   {
+    "color": "white",
+    "shape": "teacup",
+    "x": 0.6,
+    "y": 0.195,
+    "yaw": 0.0,
+    "z": 0.0335
+   }
+  ],
+  "end_reason": "done",
+  "wall_s": 17.1,
+  "home_err": 0.012,
+  "safety": {
+   "steps": 103,
+   "clipped_steps": 0,
+   "mode": "ok",
+   "counts": {}
+  },
+  "poll_error": null,
+  "tools": {
+   "obj_green_screwdriver_0": {
+    "pos": [
+     -0.6,
+     0.7,
+     -0.775
+    ],
+    "bin": null
+   },
+   "obj_silver_wrench_0": {
+    "pos": [
+     -0.6,
+     0.8,
+     -0.786
+    ],
+    "bin": null
+   },
+   "obj_black_pliers_0": {
+    "pos": [
+     -0.6,
+     0.9,
+     -0.783
+    ],
+    "bin": null
+   },
+   "obj_dgrey_hammer_0": {
+    "pos": [
+     -0.6,
+     1.0,
+     -0.777
+    ],
+    "bin": null
+   },
+   "obj_green_lime_0": {
+    "pos": [
+     0.335,
+     -0.15,
+     0.035
+    ],
+    "bin": null
+   },
+   "obj_white_teacup_0": {
+    "pos": [
+     0.335,
+     0.15,
+     0.043
+    ],
+    "bin": null
+   },
+   "obj_dgrey_knife_0": {
+    "pos": [
+     0.255,
+     -0.0,
+     0.02
+    ],
+    "bin": null
+   }
+  },
+  "verdict": "tools",
+  "closest": {},
+  "meat": null
+ }
+]

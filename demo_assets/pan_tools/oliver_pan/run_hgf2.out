@@ -1,0 +1,25 @@
+[00:53:31] ckout=/data/work/oliver/ck_hgf_017cbb2 (nogit) overlay=finals_r23_universal variants=small_left,small_right image=hackjunction/policy:rc1-7a4168e-g port=8003
+00:53:38.176485 WARNING  [G1_29_ArmController] Waiting to         dds_utils.py:9
+                         subscribe dds...                                       
+00:53:38.730972 INFO      📷 Camera 'head_camera'          init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55555,                       
+                         request_bgr=True)                                      
+00:53:38.733324 INFO      📷 Camera 'left_wrist_camera'    init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55556,                       
+                         request_bgr=True)                                      
+00:53:38.737000 INFO      📷 Camera 'right_wrist_camera'   init ok  client.py:84
+                         (host=127.0.0.1, zmq_port=55557,                       
+                         request_bgr=True)                                      
+[DDSBackend] pacing on the sim clock (tcp://127.0.0.1:55581, sim t 2.64 s)
+policy: {'type': 'metadata', 'version': 1, 'name': 'classical-rung1', 'action_horizon': 10}  instruction: 'put the pan in the middle bin'  -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_005331
+rec_start {'ok': True, 'path': '/data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_005331/episode_000_small_left_show.mp4', 'showcam': True}
+rec_stop {'ok': True, 'frames': 45}
+small_left  verdict=no_lift  lift=0.001 touched=False palm=None local=None center_bin=False end=done t=7.2s
+rec_start {'ok': True, 'path': '/data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_005331/episode_001_small_right_show.mp4', 'showcam': True}
+rec_stop {'ok': True, 'frames': 37}
+small_right verdict=no_lift  lift=0.001 touched=False palm=None local=None center_bin=False end=done t=5.8s
+00:54:00.754623 INFO      📷 Camera 'head_camera'          closed. client.py:174
+00:54:00.754718 INFO      📷 Camera 'left_wrist_camera'    closed. client.py:174
+handle 0/2  disc 0/2  no_lift 2/2  in_center_bin 0/2  -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_005331/pan_results.json
+00:54:00.886683 INFO      📷 Camera 'right_wrist_camera'   closed. client.py:174
+[00:54:00] done -> /data/work/oliver/pan/runs/finals_r23_universal__nogit__1115_005331
