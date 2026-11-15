@@ -291,10 +291,26 @@ class Planner:
             self.generic_hand_opening = max(
                 0.0, measured - float(cfg["grasp"].get("generic_opening_margin_m", 0.012)))
 
+    frame_src = None   # perception.plan_frame=nominal: the Perception whose plan_frame_M() maps fitted-camera -> arm (nominal) frame
+
+    def _frame_M(self):
+        src = self.frame_src
+        return src.plan_frame_M() if (src is not None and getattr(src, "plan_nominal", False)) else None
+
+    @property
+    def _cz(self):
+        """Table height in the ARM frame the planner works in: the measured (fitted-frame) counter z, mapped by M at the reach
+        centre (0.35 m); == scene.counter_z unless perception.plan_frame=nominal and a table fit is installed."""
+        z = self.scene.counter_z
+        M = self._frame_M()
+        if M is None:
+            return z
+        return float((M[:3, :3] @ np.array([0.35, 0.0, z]) + M[:3, 3])[2])
+
     @property
     def counter_keepout_z(self):
         """Planner-side table keepout source; one scene assignment updates every planner consumer atomically."""
-        return self.scene.counter_z
+        return self._cz
 
     def commit_counter_height(self, z):
         """Commit the accepted episode height before planning any motion (single shared source of truth)."""
@@ -312,7 +328,15 @@ class Planner:
 
     def bin_geometry(self, name=None, shift=None):
         """Runtime bin geometry (bin_vote.bin_geometry) of the planner's current bin_shift; `shift` overrides (tests)."""
-        return bin_geometry(self.scene, self.bin_shift if shift is None else shift, name)
+        sh = self.bin_shift if shift is None else shift
+        M = self._frame_M()
+        if M is not None and shift is None:   # plan_frame=nominal: the voted/nominal bins live in the fitted frame -> arm frame
+            sh = dict(sh)
+            for n in self.scene.bin_names:
+                c = bin_geometry(self.scene, self.bin_shift, n)["centre_pelvis"]
+                q = M[:3, :3] @ np.array([c[0], c[1], self.scene.counter_z]) + M[:3, 3]
+                sh[n] = np.asarray(sh.get(n, (0.0, 0.0)), float) + (q[:2] - np.asarray(c, float))
+        return bin_geometry(self.scene, sh, name)
 
     def bin_xy(self, name):
         return self.bin_geometry(name)["centre_pelvis"]
@@ -415,7 +439,7 @@ class Planner:
 
     def _rim(self, name):
         """Rim height (pelvis z) of one bin: measured or nominal, plus planner.bin_wall_extra_m."""
-        return self.scene.counter_z + self._wall(self.scene.rim_wall(name))
+        return self._cz + self._wall(self.scene.rim_wall(name))
 
     def bin_clearance(self, side, arm_q, hand_q, margin=0.01):
         """Lowest height (m) above the bin rims of the hand points over a bin's outer footprint (+margin), inf if none.
@@ -489,7 +513,7 @@ class Planner:
         over = self._over_counter(pts)
         if not over.any():
             return np.inf
-        return float((pts[over, 2] - self.scene.counter_z).min())
+        return float((pts[over, 2] - self._cz).min())
 
     def _route_pose_safe(self, arm_q, hand_q, sides, clearance, allowed_inside=None):
         """Equivalent planner-side runtime table/bin keepout used where interface/safety.py cannot be changed."""
@@ -883,10 +907,10 @@ class Planner:
         for spot in self.relocation_spots(det, bin_name, obstacles):
             if getattr(det, "novel", False):
                 d2 = copy.copy(det)   # preserve opt-in dynamic novel geometry fields
-                d2.top = np.r_[spot, self.scene.counter_z + H]
+                d2.top = np.r_[spot, self._cz + H]
             else:
                 from dataclasses import replace
-                d2 = replace(det, top=np.r_[spot, self.scene.counter_z + H])
+                d2 = replace(det, top=np.r_[spot, self._cz + H])
             by = self.bin_xy(bin_name)[1]
             fin_side = "left" if (by if abs(by) > 0.1 else spot[1]) > 0 else "right"
             fin = self._plan_side_hints(d2, fin_side, bin_name, self.home.copy(), self.post["open"].copy(),
@@ -1177,7 +1201,7 @@ class Planner:
     def _object_height(self, det):
         """Measured height for accepted generic geometry; configured height otherwise."""
         if self._generic_on(det):
-            return float(getattr(det, "height", det.top[2] - self.scene.counter_z))
+            return float(getattr(det, "height", det.top[2] - self._cz))
         return self.height
 
     def _plan_side_generic(self, det, side, bin_name, arm_q, hand_q, **kw):
@@ -1363,7 +1387,7 @@ class Planner:
     def _plan_side_inner(self, det, side, bin_name, arm_q, hand_q, place_xy=None, drop_slot=None, source_bin=None,
                          clearance_obstacles=()):
         cfg, g, mo = self.cfg, self.cfg["grasp"], self.cfg["motion"]
-        sc, zc = self.scene, self.scene.counter_z
+        sc, zc = self.scene, self._cz
         plan = Plan(False, side=side, color=det.color, target_bin=bin_name if place_xy is None else "counter",
                     source_bin=source_bin, drop_slot=drop_slot if place_xy is None else None,
                     corrective=source_bin is not None)

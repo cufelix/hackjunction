@@ -75,6 +75,13 @@ calib:
     counter_z_prior_m: null   # wide_counter_window: absolute pelvis z used while the height is unmeasured (null = none: workspace rule fails open)
     wide_lo_m: 0.08           # wide_counter_window: counter z window below nominal
     wide_hi_m: 0.22           # wide_counter_window: counter z window above nominal (estimate outside = rejected)
+    robust_height: false      # FLAG (table z, real): measured dominant-plane table height, +-robust_max_dz_m; never nominal when a measurement exists
+    robust_max_dz_m: 0.30     # robust_height: clamp |z - nominal| (apply_height's max_dz_m stays 0.20 when the flag is off)
+    robust_max_tilt_deg: 25.0 # robust_height: plane normal must be within this of vertical in the current frame (walls/rims rejected)
+    robust_min_ratio: 0.30    # robust_height: inliers / ROI points (the table is the dominant surface)
+    robust_inlier_m: 0.008    # robust_height: RANSAC inlier distance
+    robust_max_rms_m: 0.006   # robust_height: plane RMS gate
+    robust_agree_m: 0.03      # robust_height: legacy fit kept when it agrees with the robust plane within this
     window_m: 0.40            # coarse z window around nominal for the first pass (then 0.03 around that pass's plane)
   wide_counter_window: false  # FLAG (counter-z): estimation window nominal -wide_lo_m .. +wide_hi_m, runtime height estimated (also without apply_height), mat z follows it; see COUNTERZ.md
   fk_xcheck: false            # FLAG (B2, log-only): RGB head-pose residual vs Dex3 hand FK (fk_xcheck.py)
@@ -296,6 +303,7 @@ perception:
                            rim_z_m: 0.0}   # hint: expose the rim-line bin distance as bin_rim_hint (planner/geometry hint)
   prism_speckle_floor: false  # FLAG: orange/red blob with a triangular outline gets a lower color_gate speckle floor
   prism_speckle_floor_params: {area_frac: 0.08, min_fill: 0.75, min_solidity: 0.85, max_aspect: 2.0, min_short_px: 22, min_px: 60}
+  plan_frame: fitted          # FLAG (table z, real): fitted | nominal; nominal maps detections to the calibration.yaml camera frame for the planner
   real_border_partial: false  # FLAG (real only): lower color_gate speckle floor for blobs cut by the image border
   real_border_partial_params: {area_frac: 0.12, margin_px: 3}
   bin_bottom_first_run: false  # FLAG (real only): observed bin-bottom row = first vertical warm run per column (orange objects on the mat are not bin mass)

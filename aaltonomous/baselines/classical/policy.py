@@ -238,6 +238,7 @@ class ClassicalPolicy:
         if self.cfg["perception"].get("neutral_obstacles", False):
             self.planner.log = log or print
             self.planner.neutral_src = self.perception   # perception.neutral_obstacles: the planner reads the latest obstacles
+        self.planner.frame_src = self.perception   # perception.plan_frame
         self.perception.bin_shift_src = self.planner   # perception.color_gate.live_bins reads planner.bin_shift (bin.vote)
         self.perception.geometry_runtime = bool((self.cfg.get("bin") or {}).get("geometry_runtime"))   # perception follows the shift without bin.vote/live_bins gates
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))   # bin footprints follow the shift
@@ -308,6 +309,7 @@ class ClassicalPolicy:
         if "counter_z_runtime" in state:
             scene.counter_z_runtime = state["counter_z_runtime"]
         self.perception.bin_shift_src = self.planner
+        self.planner.frame_src = self.perception
         self.perception.geometry_runtime = bool((self.cfg.get("bin") or {}).get("geometry_runtime"))
         self.perception.bin_vote_on = bool(((self.cfg.get("bin") or {}).get("vote") or {}).get("enabled"))
         if self.fk_xcheck_enabled:
@@ -810,7 +812,11 @@ class ClassicalPolicy:
                 self.perception._ah_done, self.perception._ah_committed = True, None
                 self.planner.commit_counter_height(None)
                 self._jobs.pop("counter_height", None)
-                self._note(t, f"runtime height fallback: pre-motion timeout ({timeout:.1f} s); nominal keepout")
+                if self.perception.ensure_table_height(obs.get("head_depth"), "[table_z/timeout]"):   # calib.plane.robust_height
+                    self._note(t, f"runtime height fallback: pre-motion timeout ({timeout:.1f} s); measured "
+                                  f"{self.scene.counter_z:.4f} m (not nominal)")
+                else:
+                    self._note(t, f"runtime height fallback: pre-motion timeout ({timeout:.1f} s); nominal keepout")
             else:
                 job = self._jobs.get("counter_height")
                 if job is None:
@@ -1691,6 +1697,7 @@ class ClassicalPolicy:
                 setattr(worker.perception, name, copy.deepcopy(getattr(self.perception, name)))
         worker.perception.scene = worker.scene
         worker.perception.bin_shift_src = worker.planner
+        worker.planner.frame_src = worker.perception
         logs = []
         worker.log = logs.append
         worker.perception.log = logs.append

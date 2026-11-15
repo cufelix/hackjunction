@@ -265,6 +265,9 @@ class Perception:
         scene.counter_z_prior = (cfg.get("scene") or {}).get("counter_z_prior")   # None = nominal
         self.ah = (cfg.get("calib") or {}).get("plane") or {}   # calib.plane.apply_height (FLAG, default OFF)
         self._ah_est, self._ah_tries = [], 0
+        self.plan_nominal = self.cfg.get("plan_frame", "fitted") == "nominal"   # perception.plan_frame (FLAG, real only)
+        self.robust_h = bool(self.ah.get("robust_height", False))   # calib.plane.robust_height (FLAG, default OFF, real overlay)
+        self._robust_logged = False
         # calib.wide_counter_window (FLAG, default OFF): estimation window nominal -wide_lo .. +wide_hi, runtime height
         # estimated even without apply_height, mat z follows the runtime counter (see COUNTERZ.md)
         self.wide = bool(((cfg.get("calib") or {}).get("wide_counter_window", False)))
@@ -439,6 +442,7 @@ class Perception:
         """Restore the configured fallback at the start of every episode."""
         self.scene.counter_z_runtime = None
         self._ah_est, self._ah_tries = [], 0
+        self._robust_logged = False
         self._ah_done = not self._ah_on()
         self._ah_committed = None
         self.camera_pose_selected = False
@@ -1061,6 +1065,153 @@ class Perception:
         return None
 
     def _plane_height(self, depth, a):
+        """(z at the mat centre, tilt deg, n inliers, None) from the existing counter-plane fit, or (nan, tilt, n, why).
+        calib.plane.robust_height: the legacy fit (nominal-centred, tilt/window gated) is kept whenever it is clean AND agrees
+        with the dominant-plane RANSAC fit; otherwise (fails, or disagrees by > robust_agree_m: it locked on a wrong layer) the
+        robust measured table height is returned instead of nothing."""
+        legacy = self._plane_height_legacy(depth, a)
+        if not self.robust_h:
+            return legacy
+        try:
+            rob = self._robust_table_z(depth, a)
+        except Exception as exc:    # never let the estimator take the policy down
+            rob = (float("nan"), float("nan"), 0, f"robust {type(exc).__name__}")
+        if legacy[3] is None and np.isfinite(legacy[0]):
+            if rob[3] is not None or abs(legacy[0] - rob[0]) <= float(a.get("robust_agree_m", 0.03)):
+                return legacy
+        return rob if rob[3] is None else legacy
+
+    def _table_roi_points(self, depth, a):
+        """Optical-frame points (n,3) of the lower-centre table ROI of `depth` (same crop as table_pitch_calibration: bins
+        above, robot hands in the side/bottom bands), stride-subsampled."""
+        c = (self.cfg.get("table_pitch_calibration") or {})
+        dlo, dhi = self.cfg["depth_range_mm"]
+        depth = np.nan_to_num(np.asarray(depth, float), nan=0.0, posinf=0.0, neginf=0.0)
+        h, w = depth.shape
+        u0, u1 = int(float(c.get("roi_left_frac", 0.12)) * w), int(float(c.get("roi_right_frac", 0.88)) * w)
+        v0, v1 = int(float(c.get("roi_top_frac", 0.55)) * h), int(float(c.get("roi_bottom_frac", 0.92)) * h)
+        stride = max(1, int(c.get("pixel_stride", 3)))
+        sub = depth[v0:v1:stride, u0:u1:stride]
+        vv, uu = np.nonzero((sub >= dlo) & (sub <= dhi))
+        vv, uu = vv * stride + v0, uu * stride + u0
+        return self.cal.deproject(self.cam, uu, vv, depth[vv, uu])
+
+    def _robust_table_z(self, depth, a):
+        """calib.plane.robust_height: pelvis z of the table from the DOMINANT near-horizontal plane of the lower-centre ROI
+        (RANSAC in the camera frame, deterministic), independent of the nominal counter height and of whether the pitch
+        calibration was accepted. (z, tilt deg, n inliers, None) or (nan, tilt, n, why).
+        Gates (keep bin rims / hands / objects from being taken as the table): the plane normal must be within
+        robust_max_tilt_deg of vertical in the CURRENT pelvis frame (walls are rejected), >= min_inliers, >= robust_min_ratio of
+        the ROI points (the table is the dominant surface; objects/hands are minorities), RMS <= robust_max_rms_m, the camera
+        must be above it. Height: the plane at the mat-centre xy when the (pitch-corrected) frame sees it level (<= 3 deg);
+        otherwise camera z minus the perpendicular plane distance (rotation-invariant: survives a rejected pitch fit).
+        Falls back to the z-histogram dominant layer when the RANSAC plane is not accepted."""
+        nan = float("nan")
+        if depth is None or np.ndim(depth) != 2 or np.size(depth) == 0:
+            return nan, nan, 0, "no depth"
+        Q = self._table_roi_points(depth, a)
+        n_min = int(a.get("min_inliers", 500))
+        if len(Q) < n_min:
+            return nan, nan, len(Q), "robust: roi too small"
+        T = np.asarray(self._T(), float)
+        up = T[:3, :3].T @ np.array([0.0, 0.0, 1.0])            # world up in the optical frame
+        rng = np.random.default_rng(0)
+        if len(Q) > 4000:
+            Q = Q[rng.choice(len(Q), 4000, replace=False)]
+        thr = float(a.get("robust_inlier_m", 0.008))
+        cos_min = float(np.cos(np.radians(float(a.get("robust_max_tilt_deg", 25.0)))))
+        idx = rng.integers(0, len(Q), size=(300, 3))
+        A, B, C = Q[idx[:, 0]], Q[idx[:, 1]], Q[idx[:, 2]]
+        nrm = np.cross(B - A, C - A)
+        ln = np.linalg.norm(nrm, axis=1)
+        good = ln > 1e-9
+        nrm = nrm[good] / ln[good, None]
+        nrm = nrm * np.where(nrm @ up < 0.0, -1.0, 1.0)[:, None]
+        A = A[good]
+        good2 = (nrm @ up) >= cos_min                           # near-horizontal only (walls / bin sides rejected)
+        nrm, A = nrm[good2], A[good2]
+        if len(nrm) == 0:
+            return self._hist_table_z(Q, T, a, "robust: no horizontal candidate")
+        d0 = np.einsum("ij,ij->i", nrm, A)
+        cnt = (np.abs(Q @ nrm.T - d0[None, :]) <= thr).sum(axis=0)
+        k = int(np.argmax(cnt))
+        n, d = nrm[k], float(d0[k])
+        inl = np.abs(Q @ n - d) <= thr
+        for _ in range(2):
+            if inl.sum() < 3:
+                break
+            q = Q[inl]
+            ctr = q.mean(axis=0)
+            w, v = np.linalg.eigh((q - ctr).T @ (q - ctr))
+            n = v[:, 0] * (1.0 if v[:, 0] @ up >= 0 else -1.0)
+            d = float(n @ ctr)
+            inl = np.abs(Q @ n - d) <= thr
+        n_in = int(inl.sum())
+        rms = float(np.sqrt(np.mean((Q[inl] @ n - d) ** 2))) if n_in else float("inf")
+        tilt = float(np.degrees(np.arccos(np.clip(n @ up, -1.0, 1.0))))
+        if (n_in < n_min or n_in / float(len(Q)) < float(a.get("robust_min_ratio", 0.30))
+                or rms > float(a.get("robust_max_rms_m", 0.006)) or tilt > float(a.get("robust_max_tilt_deg", 25.0))):
+            return self._hist_table_z(Q, T, a, f"robust: plane rejected (n={n_in}/{len(Q)} rms={rms*1e3:.1f}mm tilt={tilt:.1f})")
+        # plane in the pelvis frame: n_p . x = d_p
+        n_p = T[:3, :3] @ n
+        d_p = d + float(n_p @ T[:3, 3])
+        if tilt <= 3.0 and abs(n_p[2]) > 1e-6:
+            xy = self.scene.mat_to_pelvis([*(np.asarray(self.scene.cfg["counter"]["mat_size"], float) / 2), 0.0])[:2]
+            z = float((d_p - n_p[0] * xy[0] - n_p[1] * xy[1]) / n_p[2])
+        else:
+            z = float(T[2, 3]) + d          # camera z minus perpendicular distance (n points up, so d = n.x < 0 for the table below) (rotation about the camera is harmless)
+        if z > T[2, 3] - 0.05:
+            return nan, tilt, n_in, "robust: plane not below the camera"
+        return z, tilt, n_in, None
+
+    def _hist_table_z(self, Q, T, a, why):
+        """Last-resort dominant-layer height: lowest well-populated 1 cm layer of the ROI points' pelvis z (in the current
+        frame), at least robust_min_ratio of the points (a wall / ramp spreads over many layers and is refused). (z, nan, n, None) or (nan, nan, 0, why)."""
+        z = (Q @ T[:3, :3].T + T[:3, 3])[:, 2]
+        if len(z) < int(a.get("min_inliers", 500)):
+            return float("nan"), float("nan"), 0, why
+        edges = np.arange(z.min() - 0.005, z.max() + 0.015, 0.01)
+        h = np.histogram(z, bins=edges)[0].astype(float)
+        sm = h + np.r_[0.0, h[:-1]] + np.r_[h[1:], 0.0]
+        need = max(float(a.get("min_inliers", 500)), float(a.get("robust_min_ratio", 0.30)) * len(z))
+        for i in np.nonzero(sm >= max(need, 0.6 * sm.max()))[0]:
+            if (i == 0 or sm[i] >= sm[i - 1]) and (i == len(sm) - 1 or sm[i] >= sm[i + 1]):
+                sel = z[(z >= edges[max(i - 1, 0)]) & (z <= edges[min(i + 2, len(edges) - 1)])]
+                return float(np.median(sel)), float("nan"), int(len(sel)), None
+        return float("nan"), float("nan"), 0, why
+
+    def ensure_table_height(self, depth, log_prefix="[table_z]"):
+        """calib.plane.robust_height: when NO runtime counter height was committed (apply_height gate exhausted / timed out /
+        inconsistent / pitch guard), measure it from this frame instead of falling back to the nominal/prior height: objects are
+        judged against the table that is actually in the image. True if a runtime height is (now) set."""
+        if not self.robust_h or self.scene.counter_z_runtime is not None:
+            return self.scene.counter_z_runtime is not None
+        if self._ah_on() and not self._ah_done:
+            return False                                     # the pre-motion estimator is still collecting looks
+        a = self.ah
+        try:
+            if self._ah_est:                                  # inconsistent looks: their median still beats the nominal table
+                z, src = float(np.median(self._ah_est)), "median of the apply_height looks"
+            else:
+                z, tilt, n, why = self._robust_table_z(depth, a)
+                src = f"robust plane n={n} tilt={tilt:.1f}deg"
+                if why is not None:
+                    self.log(f"{log_prefix} no table estimate ({why}); counter stays at the prior/nominal")
+                    return False
+        except Exception as exc:
+            self.log(f"{log_prefix} estimator error {type(exc).__name__}; counter stays at the prior/nominal")
+            return False
+        lim = float(a.get("robust_max_dz_m", 0.30))
+        nom = self.scene.nominal_counter_z
+        z = float(np.clip(z, nom - lim, nom + lim))
+        self.scene.counter_z_runtime = z
+        self._ah_committed = z
+        if not self._robust_logged:
+            self._robust_logged = True
+            self.log(f"{log_prefix} runtime counter z={z:.4f} m from {src} (apply_height had no committed height)")
+        return True
+
+    def _plane_height_legacy(self, depth, a):
         """(z at the mat centre, tilt deg, n inliers, None) from the existing counter-plane fit, or (nan, tilt, n, why)."""
         nan = float("nan")
         if depth is None or np.ndim(depth) != 2 or np.size(depth) == 0:
@@ -1127,7 +1278,7 @@ class Perception:
         applied = None
         fallback = sample.reason or "collecting"
         if consistent:
-            nom, lim = self.scene.nominal_counter_z, float(a.get("max_dz_m", 0.20))
+            nom, lim = self.scene.nominal_counter_z, float(a.get("robust_max_dz_m", 0.30) if self.robust_h else a.get("max_dz_m", 0.20))
             lo, hi = (nom - self.wide_lo, nom + self.wide_hi) if self.wide else (nom - lim, nom + lim)
             applied = float(np.clip(est, lo, hi))
             self._ah_done, self._ah_committed = True, applied
@@ -1139,6 +1290,13 @@ class Perception:
         if not self._ah_done and self._ah_tries >= 3 * n_looks:
             self._ah_done, self._ah_committed = True, None
             fallback = "sample_gate_exhausted"
+            if self.robust_h and self._ah_est:      # measured but not mutually consistent: the median still beats nominal
+                nom, lim = self.scene.nominal_counter_z, float(a.get("robust_max_dz_m", 0.30))
+                applied = float(np.clip(float(np.median(self._ah_est[-n_looks:])), nom - lim, nom + lim))
+                self._ah_committed = applied
+                if commit_scene:
+                    self.scene.counter_z_runtime = applied
+                fallback = "sample_gate_exhausted_median"
         if self.wide and not self._ah_est and commit_scene:   # unmeasured: the configured prior, never the nominal scene value
             prior = self.counter_z_prior()
             if prior is not None:
@@ -1478,8 +1636,44 @@ class Perception:
             return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q, calibration_frame,
                                       still_frame)
         with self.use_frame_transform(frame):
-            return self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q, calibration_frame,
-                                      still_frame)
+            out = self._detect_frame(rgb, depth, debug, include_bins, arm_clear, robot_q, calibration_frame,
+                                     still_frame)
+            if self.plan_nominal:
+                dets = out[0] if debug else out
+                self._to_nominal_frame(dets)
+            return out
+
+    def plan_frame_M(self):
+        """perception.plan_frame=nominal: 4x4 M = T0 @ inv(T_fit) (fitted-camera pelvis frame -> the nominal-camera frame the arms
+        and the scene use), or None when no fit is installed. The table-pitch fit rotates the camera about itself to level the
+        table: right for segmentation / heights (kept), wrong as a camera->arm transform (the arms are rigid to the pelvis
+        like the nominal head pose is; on drop_3 the fitted frame puts the arm FK points ~10 cm off)."""
+        Tf = np.asarray(self._T(), float)
+        T0 = np.asarray(self.cal_nominal._T(self.cam), float)
+        if np.allclose(Tf, T0, atol=1e-9):
+            return None
+        return T0 @ np.linalg.inv(Tf)
+
+    def _to_nominal_frame(self, dets):
+        """Map every pelvis-frame position / heading of the detections from the fitted frame to the nominal-camera frame (in place)."""
+        M = self.plan_frame_M()
+        if M is None or not dets:
+            return
+        R, t = M[:3, :3], M[:3, 3]
+        ang = lambda a: None if a is None else float(np.arctan2(*(R @ np.array([np.cos(a), np.sin(a), 0.0]))[1::-1]))
+        for d in dets:
+            if getattr(d, "_plan_nominal", False):
+                continue
+            d.top = R @ np.asarray(d.top, float) + t
+            for k in ("yaw", "apex_yaw", "vertex_yaw", "ridge_yaw"):
+                if getattr(d, k, None) is not None:
+                    setattr(d, k, ang(getattr(d, k)))
+            if d.prism_xy is not None:
+                q = R @ np.array([d.prism_xy[0], d.prism_xy[1], float(d.top[2])]) + t
+                d.prism_xy = (float(q[0]), float(q[1]))
+            if d.shape_diag and d.shape_diag.get("top_xy"):
+                d.shape_diag["top_xy"] = [list((R @ np.array([x, y, 0.0]) + t)[:2]) for x, y in d.shape_diag["top_xy"]]
+            d._plan_nominal = True
 
     def _detect_frame(self, rgb, depth, debug=False, include_bins=False, arm_clear=True, robot_q=None,
                       calibration_frame=None, still_frame=False):
@@ -1497,6 +1691,7 @@ class Perception:
         self.color_gate_degraded = False
         self.bare_stats = {"glare_px": 0, "reflection": 0, "local_bg": 0}   # last detect(): diagnostics only
         self.update_counter_height(depth, calibration_frame)    # inert when its flags are off
+        self.ensure_table_height(depth)      # calib.plane.robust_height (inert when off): never judge objects against a nominal table
         self.update_rim_z(depth)             # perception.rim_z_from_depth (inert when off)
         self._image_bin_gate_active = False
         self._below_bin_row = None

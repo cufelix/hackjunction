@@ -44,6 +44,8 @@ FLAGS = {
     "brain.find": ("brain", False, "brain tool find(query): VLM grounding of a phrase onto our detections (information only)"),
     "brain.enabled": ("brain", False, "closed-set tool choice by a planner backend (stub = classical choice), EV-gated"),
     "calib.plane.apply_height": ("P0 table", False, "pre-motion runtime counter_z from N mutually consistent head-depth plane fits (spread/MAD gated, once per episode, clamped to +-max_dz_m); atomically shared by scene and planner keepouts before a checked staging route"),
+    "calib.plane.robust_height": ("table z", False, "real: runtime counter z from the dominant near-horizontal plane (RANSAC, tilt/inlier/ratio/RMS gated) even when far (+-0.30 m) from nominal, kept alongside the legacy fit only when they agree (3 cm); pitch-guard rejection, inconsistent looks and the pre-motion timeout still yield a measured height (median of looks / robust plane / z-histogram layer) instead of nominal; detect() measures the table when none was committed"),
+    "perception.plan_frame": ("table z", "fitted", "real: 'nominal' = detections handed to the planner are mapped fitted-camera frame -> calibration.yaml camera frame (M = T0 inv(T_fit)); the table-fitted pose stays for segmentation, heights and the plane; 'fitted' = legacy"),
     "scene.counter_z_prior": ("prior", None, "null | table height in the pelvis frame (m, 0..0.3) used while no depth plane fit is available (apply_height overrides); null = nominal scene.yaml z"),
     "calib.hand_icp_primary": ("finals calibration", False,
                                "hold at the episode start and fit the full head-camera extrinsic from FK arm surfaces before motion"),

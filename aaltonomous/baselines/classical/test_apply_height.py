@@ -155,5 +155,88 @@ class TestApplyHeight(unittest.TestCase):
             self.assertAlmostEqual(wp[NOM + dz][k][2] - wp[NOM][k][2], dz, delta=0.005, msg=k)
 
 
+
+ROB = {"calib.plane.apply_height": True, "calib.plane.robust_height": True, "perception.online_pitch_cal": "table"}
+
+
+def _rperc(on=True):
+    sc, logs = Scene.load(), []
+    p = Perception(load_config(overrides=ROB if on else ON), sc, CAL, log=logs.append)
+    return p, sc, logs
+
+
+class TestRobustHeight(unittest.TestCase):
+    """calib.plane.robust_height: the runtime table height comes from the measured dominant plane, far from nominal too."""
+
+    def test_flag_default_off(self):
+        self.assertFalse(load_config()["calib"]["plane"]["robust_height"])
+        p, sc, _ = _rperc(on=False)
+        self.assertFalse(p.robust_h)
+        _looks(p, _depth(NOM - 0.25))
+        self.assertAlmostEqual(sc.counter_z, NOM - 0.20, delta=1e-6)    # legacy: clamped at -0.20 (and the plane is not even found)
+
+    def test_far_tables_are_measured(self):
+        for dz in (-0.25, -0.16, -0.10, 0.10, 0.16, 0.25):
+            p, sc, logs = _rperc()
+            _looks(p, _depth(NOM + dz, patch=0.045))
+            self.assertAlmostEqual(sc.counter_z, NOM + dz, delta=0.01, msg=f"dz={dz} {logs[-1:]}")
+
+    def test_beyond_clamp_is_clamped_to_30cm_not_20(self):
+        p, sc, logs = _rperc()
+        _looks(p, _depth(NOM - 0.38))
+        self.assertAlmostEqual(sc.counter_z, NOM - 0.30, delta=1e-6)
+        self.assertIn("fallback=clamped", logs[-1])
+
+    def test_tilted_plane_pitch_guard_case_still_measured(self):
+        """The pitch fit was rejected (nominal pitch, table appears tilted): legacy gives 'tilt' -> nominal; robust gives a height."""
+        p, sc, logs = _rperc(on=False)
+        _looks(p, _depth(NOM - 0.14, tilt_deg=12.0))
+        self.assertEqual(sc.counter_z, NOM)
+        p, sc, logs = _rperc()
+        _looks(p, _depth(NOM - 0.14, tilt_deg=12.0))
+        self.assertLess(sc.counter_z, NOM - 0.08, logs[-3:])
+        self.assertGreater(sc.counter_z, NOM - 0.20)
+
+    def test_exhausted_inconsistent_looks_commit_the_median_not_nominal(self):
+        p, sc, logs = _rperc()
+        for z in (NOM - 0.20, NOM - 0.12, NOM - 0.16) * 3:
+            p.accept_counter_height_sample(CounterHeightSample(z, 0.0, 1000, None))
+        self.assertTrue(p._ah_done)
+        self.assertAlmostEqual(sc.counter_z, NOM - 0.16, delta=0.045)
+        self.assertNotEqual(sc.counter_z, NOM)
+        self.assertIn("sample_gate_exhausted_median", logs[-1])
+
+    def test_no_commit_detect_measures_the_table(self):
+        """apply_height timed out (done, nothing committed): detect() measures the table instead of using the prior/nominal."""
+        p, sc, logs = _rperc()
+        p._ah_done, p._ah_committed = True, None
+        d = _depth(NOM - 0.15, patch=0.045)
+        self.assertEqual(sc.counter_z, NOM)
+        p.detect(np.zeros((480, 640, 3), np.uint8), d)
+        self.assertAlmostEqual(sc.counter_z, NOM - 0.15, delta=0.01)
+        self.assertTrue(any("[table_z] runtime counter z" in l for l in logs))
+        self.assertTrue(p.ensure_table_height(d))
+
+    def test_unmeasurable_frame_keeps_nominal(self):
+        for bad in (None, np.zeros((480, 640), np.uint16), np.full((480, 640), 0.0)):
+            p, sc, _ = _rperc()
+            p._ah_done = True
+            self.assertFalse(p.ensure_table_height(bad))
+            self.assertEqual(sc.counter_z, NOM)
+
+    def test_legacy_clean_fit_is_kept_when_it_agrees(self):
+        p, sc, logs = _rperc()
+        d = _depth(NOM + 0.10)
+        z_legacy = p._plane_height_legacy(d, p.ah)[0]
+        z_new = p._plane_height(d, p.ah)[0]
+        self.assertEqual(z_legacy, z_new)
+
+    def test_wall_is_not_the_table(self):
+        """A vertical wall filling the ROI is not a near-horizontal plane: rejected, never committed as the table."""
+        p, sc, _ = _rperc()
+        d = np.full((480, 640), 600.0)
+        self.assertIsNotNone(p._robust_table_z(d, p.ah)[3])
+
+
 if __name__ == "__main__":
     unittest.main()
