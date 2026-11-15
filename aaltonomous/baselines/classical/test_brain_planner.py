@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from .brain import PlanLayer, PlannerBackend, instruction_needs_plan, validate_plan
+from .brain.planner import plan_gbnf
 
 
 WORLD = {
@@ -93,6 +94,35 @@ class TestValidation(unittest.TestCase):
                      "if a star exists put it right, otherwise wait"):
             self.assertTrue(instruction_needs_plan(text), text)
         self.assertFalse(instruction_needs_plan("red goes left"))
+
+
+class TestSkill(unittest.TestCase):
+    """The closed-set 'skill' tool (flip): validator, grammar and prompt example."""
+    WORLD_SKILL = dict(WORLD, instruction="take the pan and pretend you are making pancakes")
+
+    def test_validator_accepts_skill_for_a_known_object(self):
+        raw = [{"tool": "skill", "args": {"obj_id": "o0", "skill": "flip"}}, {"tool": "done", "args": {}}]
+        steps, errors = validate_plan(raw, self.WORLD_SKILL, classical_has_work=False)
+        self.assertFalse(errors, errors)
+        self.assertEqual([s["tool"] for s in steps], ["skill", "done"])
+        self.assertTrue(steps[0]["valid"])
+
+    def test_validator_rejects_unknown_skill_name(self):
+        raw = [{"tool": "skill", "args": {"obj_id": "o0", "skill": "spin"}}]
+        steps, errors = validate_plan(raw, self.WORLD_SKILL, classical_has_work=False)
+        self.assertFalse(steps[0]["valid"])
+        self.assertTrue(any("skill 'spin'" in e for e in errors), errors)
+
+    def test_validator_rejects_unknown_object(self):
+        raw = [{"tool": "skill", "args": {"obj_id": "o9", "skill": "flip"}}]
+        steps, errors = validate_plan(raw, self.WORLD_SKILL, classical_has_work=False)
+        self.assertFalse(steps[0]["valid"])
+        self.assertTrue(any("not in scene" in e for e in errors), errors)
+
+    def test_grammar_can_emit_skill(self):
+        grammar = plan_gbnf()
+        self.assertIn("skill", grammar)
+        self.assertIn('"\\"flip\\""', grammar)
 
 
 class TestAsyncFallback(unittest.TestCase):

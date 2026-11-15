@@ -14,7 +14,8 @@ import re
 from .core import AsyncRequest, BackendWorker, make_backend, world_to_json
 from .registry import BINS
 
-PLAN_TOOLS = ("pick_place", "place_at", "find", "skip", "wait", "done")
+PLAN_TOOLS = ("pick_place", "place_at", "find", "skip", "wait", "done", "skill")
+SKILLS = ("flip",)   # closed set of motion skills; the policy sets planner.skill from it while planning
 MAX_PLAN_STEPS = 32
 
 _COMPLEX = re.compile(
@@ -50,26 +51,33 @@ def plan_json_schema():
                 "tool": {"enum": list(PLAN_TOOLS)},
                 "args": {"type": "object"},
             },
+            "if": {"properties": {"tool": {"const": "skill"}}},
+            "then": {"properties": {"args": {"type": "object", "additionalProperties": False,
+                                             "required": ["obj_id", "skill"],
+                                             "properties": {"obj_id": {"type": "string"},
+                                                            "skill": {"enum": list(SKILLS)}}}}},
         },
     }
 
 
 def plan_gbnf():
     """llama.cpp grammar for the six primitives, with exact key order and JSON-only output."""
-    return r'''root ::= ws "[" ws (step (ws "," ws step)*)? ws "]" ws
-step ::= pick | place | find | skip | wait | done
+    return (r'''root ::= ws "[" ws (step (ws "," ws step)*)? ws "]" ws
+step ::= pick | place | find | skip | wait | done | skill
 pick ::= "{" ws "\"tool\"" ws ":" ws "\"pick_place\"" ws "," ws "\"args\"" ws ":" ws "{" ws "\"obj_id\"" ws ":" ws string ws "," ws "\"bin\"" ws ":" ws bin ws "}" ws "}"
 place ::= "{" ws "\"tool\"" ws ":" ws "\"place_at\"" ws "," ws "\"args\"" ws ":" ws "{" ws "\"obj_id\"" ws ":" ws string ws "," ws "\"table_xy\"" ws ":" ws "[" ws number ws "," ws number ws "]" ws "}" ws "}"
 find ::= "{" ws "\"tool\"" ws ":" ws "\"find\"" ws "," ws "\"args\"" ws ":" ws "{" ws "\"description\"" ws ":" ws string ws "}" ws "}"
 skip ::= "{" ws "\"tool\"" ws ":" ws "\"skip\"" ws "," ws "\"args\"" ws ":" ws "{" ws "\"obj_id\"" ws ":" ws string ws "}" ws "}"
 wait ::= "{" ws "\"tool\"" ws ":" ws "\"wait\"" ws "," ws "\"args\"" ws ":" ws "{" ws "}" ws "}"
 done ::= "{" ws "\"tool\"" ws ":" ws "\"done\"" ws "," ws "\"args\"" ws ":" ws "{" ws "}" ws "}"
+skill ::= "{" ws "\"tool\"" ws ":" ws "\"skill\"" ws "," ws "\"args\"" ws ":" ws "{" ws "\"obj_id\"" ws ":" ws string ws "," ws "\"skill\"" ws ":" ws skillname ws "}" ws "}"
 bin ::= "\"left\"" | "\"center\"" | "\"right\""
 number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)?
 string ::= "\"" chars "\""
 chars ::= ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F]{4}))*
 ws ::= [ \t\n\r]*
 '''
+    + "skillname ::= " + " | ".join(f'"\\"{s}\\""' for s in SKILLS) + "\n")
 
 
 def plan_prompt(req):
@@ -90,6 +98,8 @@ def plan_prompt(req):
          '[{"tool":"find","args":{"description":"striped object"}},{"tool":"wait","args":{}}]'),
         ('swap the two objects using a clear table spot',
          '[{"tool":"place_at","args":{"obj_id":"o0","table_xy":[0.30,0.15]}},{"tool":"place_at","args":{"obj_id":"o1","table_xy":[0.29,-0.12]}},{"tool":"place_at","args":{"obj_id":"o0","table_xy":[0.30,0.06]}},{"tool":"done","args":{}}]'),
+        ('take the pan and pretend you are making pancakes',
+         '[{"tool":"skill","args":{"obj_id":"o0","skill":"flip"}},{"tool":"done","args":{}}]'),
     ]
     shots = "\n".join(f"Instruction: {i}\nPlan: {p}" for i, p in examples)
     failure = req.get("failure")
@@ -102,7 +112,7 @@ def plan_prompt(req):
                   "is not in Scene, call find(description) then wait.\nExecuted so far:\n" + hist)
     return (
         "You are a safe robot task planner. Return ONLY a JSON array. Use ONLY these primitives: "
-        "pick_place(obj_id,bin), place_at(obj_id,table_xy), find(description), skip(obj_id), wait, done. "
+        "pick_place(obj_id,bin), place_at(obj_id,table_xy), find(description), skip(obj_id), skill(obj_id,skill), wait, done. "
         "Never invent ids/bins, never output joints, poses, code, or extra keys. table_xy is pelvis-frame metres. "
         "Prefer skip/wait when uncertain. done is legal only after the instruction is satisfied.\n"
         + ("This instruction names things you cannot see in Scene: call find(description) first, wait, and pick_place ONLY "
@@ -289,14 +299,15 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
             err.append("args must be an object")
             args = {}
         spec = {"pick_place": {"obj_id", "bin"}, "place_at": {"obj_id", "table_xy"},
-                "find": {"description"}, "skip": {"obj_id"}, "wait": set(), "done": set()}.get(
+                "find": {"description"}, "skip": {"obj_id"}, "skill": {"obj_id", "skill"},
+                "wait": set(), "done": set()}.get(
                     tool if isinstance(tool, str) else None)
         if spec is not None and set(args) != spec:
             err.append(f"args must be exactly {sorted(spec)}")
         oid = args.get("obj_id")
         if not isinstance(oid, str):           # unhashable / non-string ids: never a dict key
             oid = None
-        if tool in ("pick_place", "place_at", "skip") and oid not in objects:
+        if tool in ("pick_place", "place_at", "skip", "skill") and oid not in objects:
             err.append(f"obj_id {oid!r} not in scene")
         if tool == "pick_place" and oid in objects:
             bin_name = args.get("bin")
@@ -313,9 +324,9 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
             grounded = {g for ids in ((world or {}).get("found") or {}).values() for g in (ids or [])}
             if oid not in grounded:
                 err.append(f"{oid} was not located by find(): an open-vocabulary pick must be visually grounded")
-        if tool in ("pick_place", "place_at") and oid in objects and objects[oid].get("graspable") is False:
+        if tool in ("pick_place", "place_at", "skill") and oid in objects and objects[oid].get("graspable") is False:
             err.append(f"{oid} is ungraspable (too wide / flat): left on the counter")
-        if tool in ("pick_place", "place_at") and oid in protected:
+        if tool in ("pick_place", "place_at", "skill") and oid in protected:
             err.append(f"{oid} is protected by the instruction (leave / do not move)")
         if tool in ("pick_place", "place_at") and limit is not None and \
                 sum(s["tool"] in ("pick_place", "place_at") for s in valid_prefix) >= limit:
@@ -340,6 +351,8 @@ def validate_plan(raw, world, *, reach_fn=None, place_fn=None, find_enabled=True
                     err.append(f"unsafe place_at: {why}")
                 elif margin is None or float(margin) < 0.02:
                     err.append("place_at IK/region margin is below 2 cm")
+        if tool == "skill" and args.get("skill") not in SKILLS:
+            err.append(f"skill {args.get('skill')!r} not in {SKILLS}")
         if tool == "find":
             desc = args.get("description")
             if not find_enabled:
