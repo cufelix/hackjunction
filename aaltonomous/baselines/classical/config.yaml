@@ -465,6 +465,13 @@ grasp:
   yaw_phi_deg: 105            # sim grasp_test (left arm, n=6 per phi): 105 4/6, 90 ~3/6, 60 and 0 worst
   yaw_hint_weight: 3.0        # IK weight of that finger direction (stock 0.3 is a weak preference)
   yaw_tol_deg: 12.0
+  # grasp.face_align (FLAG, default off): cubes only, sides in face_align_sides. Finger heading chosen so the pinch line (index
+  # tip -> thumb tip, from FK) is perpendicular to a pair of cube faces (Detection.yaw = top-face minAreaRect mod 90).
+  # The heading nearest the arm's natural one wins; the plan counts if the achieved heading is within face_align_tol_deg, else
+  # the stock heading path runs. Cylinders / triangles unchanged.
+  face_align: false
+  face_align_sides: [left]
+  face_align_tol_deg: 8.0
   yaw_ref_deg: 25.0           # natural finger direction: forward, this far inward
   yaw_max_dev_deg: 75.0       # candidates further from it are not tried
   yaw_max_hints: 2

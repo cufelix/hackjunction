@@ -924,7 +924,71 @@ class Planner:
             p = self._plan_side_yaw(det, side, bin_name, arm_q, hand_q, **kw)
             if p is not None:
                 return p
+        if self._face_align_on(det, side) and kw.get("place_xy") is None:
+            p = self._plan_side_face(det, side, bin_name, arm_q, hand_q, **kw)
+            if p is not None:
+                return p
         return self._plan_side_legacy(det, side, bin_name, arm_q, hand_q, **kw)
+
+    # ------------------------------------------------------------------ face-aligned cube grasp (grasp.face_align)
+    def _face_align_on(self, det, side):
+        g = self.cfg["grasp"]
+        if not g.get("face_align", False) or getattr(det, "shape", None) != "cube":
+            return False
+        if side not in (g.get("face_align_sides") or ["left"]):
+            return False
+        y = getattr(det, "yaw", None)
+        return y is not None and bool(np.isfinite(y))
+
+    def pinch_offset(self, side):
+        """Angle (rad, world xy) of the pinch line (index tip -> thumb tip, closing posture) relative to
+        the finger heading (palm x axis), from FK, with the palm approach axis pointing down. Cached per side."""
+        c = self.__dict__.setdefault("_pinch_off", {})
+        if side not in c:
+            g = self.cfg["grasp"]
+            t = self.kin.tips_in_palm(side, self.post[g.get("close_posture", "closed")])
+            v = t[2] - t[0]                                 # palm frame: index tip -> thumb tip
+            ex = np.array([1.0, 0.0, 0.0])
+            a = np.asarray(self.kin.axis[side], float)
+            e2 = a - (a @ ex) * ex
+            e2 /= np.linalg.norm(e2)
+            E = np.column_stack([ex, e2, np.cross(ex, e2)])           # palm basis (columns)
+            W = np.column_stack([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], np.cross([1.0, 0.0, 0.0], [0.0, 0.0, -1.0])])  # heading 0
+            w = W @ E.T @ v
+            c[side] = float((np.arctan2(w[1], w[0]) + np.pi / 2) % np.pi - np.pi / 2)   # undirected line
+        return c[side]
+
+    def face_headings(self, cube_yaw, side):
+        """Candidate finger headings (pelvis rad), best first: the pinch line (heading + pinch_offset) perpendicular to a pair
+        of cube faces, i.e. heading = yaw + pinch_offset' + k*90 deg (the line is undirected), nearest the arm's natural
+        heading (-+yaw_ref_deg) first, within yaw_max_dev_deg."""
+        g = self.cfg["grasp"]
+        s = 1.0 if side == "left" else -1.0
+        ref = -s * np.radians(float(g.get("yaw_ref_deg", 25.0)))
+        base = float(cube_yaw) - self.pinch_offset(side)
+        out = []
+        for k in range(4):
+            a = base + k * np.pi / 2
+            da = abs((a - ref + np.pi) % (2 * np.pi) - np.pi)
+            if da <= np.radians(float(g.get("yaw_max_dev_deg", 75.0))):
+                out.append((da, (a + np.pi) % (2 * np.pi) - np.pi))
+        return [a for _, a in sorted(out)][: int(g.get("yaw_max_hints", 2))]
+
+    def _plan_side_face(self, det, side, bin_name, arm_q, hand_q, **kw):
+        """First Plan whose achieved finger heading is within face_align_tol_deg of a face-aligned heading, else None
+        (-> stock heading path, i.e. the IK-feasibility fallback)."""
+        g = self.cfg["grasp"]
+        saved_tol = g.get("yaw_tol_deg", 12.0)
+        for a in self.face_headings(det.yaw, side):
+            try:
+                g["yaw_tol_deg"] = float(g.get("face_align_tol_deg", 8.0))
+                p = self._plan_side_heading(det, side, bin_name, arm_q, hand_q, a, **kw)
+            finally:
+                g["yaw_tol_deg"] = saved_tol
+            if p.ok:
+                p.reason = f"face-aligned ({np.degrees(a):.0f} deg)"
+                return p
+        return None
 
     def _plan_side_legacy(self, det, side, bin_name, arm_q, hand_q, **kw):
         hints = self.cfg["grasp"].get("finger_hints") or [self.cfg["grasp"].get("finger_hint", [1.0, 0.0, 0.0])]
