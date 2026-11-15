@@ -26,3 +26,5 @@ slips out of the hand during the carry and lands tipped next to the centre bin (
 dump_frames.py format (rgb, depth, arm_q, hand_q, t) on 017cbb2. The 18 cm body does not fit the visible strip
 (image bottom edge ~pelvis x 0.23, bin band x 0.37): blob truncated -> 'elongated' / 'wider than the hand'.
 For checking felix/pan-edge locally.
+
+Demo mass 80 g; at 150 g the one-hand pinch slips during carry (F_egg15_4c2b055 is the honest 150 g run).
