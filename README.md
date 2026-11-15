@@ -4,6 +4,14 @@ Starter code for the **Aaltonomous Humanoid** challenge: make Väiski, a Unitree
 coloured objects into bins fully autonomously. Develop in sim, hand in a Docker policy server, the best teams run on
 the real robot in the finals.
 
+## Demo
+
+[![Demo: the policy sorting objects and lifting an unseen frying pan by its handle (simulation)](docs/media/demo_poster.jpg)](https://github.com/cufelix/hackjunction/releases/download/v1.0-submission/larp_interns_demo.mp4)
+
+55 s of simulation footage from unedited runs of our policy: grasps, places, and an unseen frying pan lifted by its
+handle. [Download the video](https://github.com/cufelix/hackjunction/releases/download/v1.0-submission/larp_interns_demo.mp4).
+The submitted code is tagged [`v1.0-submission`](https://github.com/cufelix/hackjunction/releases/tag/v1.0-submission).
+
 ## Our solution: a classical sorter with a gated brain
 
 Scoring drives the design. A wrong drop costs -1 and no drop costs 0, so every stage would rather hold or abstain than
