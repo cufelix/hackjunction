@@ -313,6 +313,8 @@ perception:
   real_merge_split_params: {area_factor: 0.9, min_part_frac: 0.3}
   bin_size_guard: false       # FLAG (real only, hotfix): reject a colour blob that is bin-sized (area / footprint) or bin-tall, before split_blobs
   bin_size_guard_params: {max_area_factor: 4.0, max_top_m: 0.075, max_extent_m: 0.13, min_point_height_m: 0.01}
+  bin_image_guard: false      # FLAG (real only, venue replay): reject a colour blob lying on a bin-sized dark-warm image component (bin wall in shade), before split_blobs; no depth needed
+  bin_image_guard_params: {h_max: 17, s_min: 77, v_min: 50, object_v_min: 150, open_px: 5, min_frac: 0.5, min_side_objects: 1.8}
   look_summary: false         # FLAG (fsm, passive). per-look colour-blob / rejection summary for the policy's [look0] 0-detection line
   reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
   still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
