@@ -269,6 +269,8 @@ FLAGS = {
     "bin.vote.max_shift_m": ("bin vote", 0.10, "a bin vote result further than this from the prior is discarded (prior kept); real venue bins measure +8..+15 cm vs nominal"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "bin.vote.signed_rim_fit": ("C3", False, "fit physical rim displacement with its signed +x/+y direction"),
+    "bin.vote.tape_body_reject": ("venue", False, "bin.vote: a tape-coloured blob larger than bin.vote.tape_max_px is a paper-wrapped bin body (venue: 8-19k px), not tape: it casts no tape vote (else the body, lifted to rim height, disagrees with prior and rim -> conf 0.3)"),
+    "grasp.wrong_object_recovery": ("venue", False, "real: (a) the post-lift finger read must clear grasp.wrong_object_recovery_params.lift_margin_mult x threshold (and optionally lift_min_ratio x the close read) else open + retreat + blacklist the spot (bin wall mistaken for a cube); (b) a failed release_confirm opens fully, goes home and keeps picking (max_recoveries per episode) instead of stopping"),
     "bin.vote.async_extract": ("H5", False, "extract bin votes in the low-priority look worker; act only polls/holds"),
     "bin.vote.frame_transform_snapshot": ("H4", False, "one immutable camera transform per frame shared by rim and tape"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
@@ -464,7 +466,7 @@ def check_flag_values(cfg):
     if not isinstance(mc, int) or isinstance(mc, bool) or mc < 0:
         raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")
     for key in ("safety.nan_guard", "policy.generation_workers", "grasp.held_calibration.enabled",
-                "grasp.drop_slot_grid"):
+                "grasp.drop_slot_grid", "bin.vote.tape_body_reject", "grasp.wrong_object_recovery"):
         if not isinstance(_get(cfg, key), bool):
             raise ValueError(f"{key}: want true or false")
     cb = _get(cfg, "planner.candidate_budget")

@@ -47,3 +47,4 @@ aaltonomous.data.test_to_lerobot
 aaltonomous.sim.aalto_task.test_layout
 tools.brain.test_policy_server_sigterm
 tools.test_guard_eval_args
+aaltonomous.baselines.classical.test_wrong_object_recovery

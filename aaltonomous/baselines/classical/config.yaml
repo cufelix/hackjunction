@@ -414,6 +414,8 @@ bin:
     min_rim_points: 180
     min_tape_px: 60
     tape_hsv: [[3, 150, 70], [8, 255, 180]]
+    tape_body_reject: false   # FLAG (venue). tape-coloured blobs above tape_max_px are a paper-wrapped bin body, not tape: no tape vote
+    tape_max_px: 3000         # tape_body_reject: venue bin faces measure 8-19k px in the head image; a tape strip is far smaller
 
 grasp:
   hold_s: 3.0         # skill "hold": seconds the hand stays closed with the arm still, right after the lift
@@ -438,6 +440,12 @@ grasp:
   held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
   release_wait_s: null        # FLAG (lag R44): null = today (open_hold_s); s = hold >= this after the open command before the retreat starts
   release_confirm: false      # FLAG (lag R49): after open + wait the finger state must read empty (held detector); not empty -> re-open once, then home and stop picking
+  wrong_object_recovery: false  # FLAG (venue). lift-time held margin + bounded recovery after a failed release_confirm (params below)
+  wrong_object_recovery_params:
+    lift_margin_mult: 2.0     # lift finger_sum must reach threshold x this (venue bin wall: 0.046 / 0.088 vs 0.045 passed the plain threshold)
+    lift_min_ratio: 0.0       # >0: the lift read must also keep this fraction of the close read (a slipping grip falls off); 0 = off
+    max_recoveries: 2         # failed release_confirm -> open, home, re-look; at most this many per episode, then stop as before
+    bad_radius_m: 0.06        # pelvis xy radius around a rejected grasp point that is never planned again this episode
   release_confirm_s: 1.5      # release_confirm: how long to poll for an empty hand after each open (Dex3 lag 0.3-0.4 s)
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
   held_calibration:           # M3 FLAG: an empty close at home supplies e0; invalid/unfinished calibration disables abort
