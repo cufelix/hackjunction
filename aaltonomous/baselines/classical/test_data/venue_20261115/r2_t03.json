@@ -1,0 +1,89 @@
+{
+ "frame": "r2_t03.png",
+ "run": "larp-interns_20261115_091958",
+ "t_s": 3,
+ "arm_visible": true,
+ "note": "hands at home visible; orange cylinder partly out of view at the bottom",
+ "objects": [
+  {
+   "colour": "blue",
+   "shape": "cube",
+   "box": [
+    237,
+    322,
+    318,
+    415
+   ]
+  },
+  {
+   "colour": "orange",
+   "shape": "cube",
+   "box": [
+    333,
+    272,
+    412,
+    358
+   ]
+  },
+  {
+   "colour": "yellow",
+   "shape": "cube",
+   "box": [
+    463,
+    308,
+    552,
+    398
+   ]
+  },
+  {
+   "colour": "yellow",
+   "shape": "triangular_prism",
+   "box": [
+    262,
+    420,
+    328,
+    480
+   ]
+  },
+  {
+   "colour": "orange",
+   "shape": "cylinder",
+   "box": [
+    377,
+    435,
+    445,
+    480
+   ]
+  }
+ ],
+ "bins": [
+  {
+   "name": "left",
+   "box": [
+    0,
+    62,
+    230,
+    265
+   ]
+  },
+  {
+   "name": "middle",
+   "box": [
+    215,
+    68,
+    445,
+    282
+   ]
+  },
+  {
+   "name": "right",
+   "box": [
+    455,
+    72,
+    640,
+    285
+   ]
+  }
+ ],
+ "boxes": "[x0,y0,x1,y1] pixels in the 640x480 frame, hand-labelled (approximate, +-8 px); bin boxes cover the whole box incl. rim and the displaced/lifted bin"
+}
