@@ -18,6 +18,9 @@ Schema (all ranges [lo, hi], sampled uniformly; *_scale are multiplicative on th
   pose:     {xy_jitter: m (per object, uniform in a disc), yaw_jitter_deg}
   camera:   {rgb_noise_std: 0-255 units, rgb_gain: [lo, hi], depth_noise_mm, depth_noise_rel (x depth),
              depth_hole_frac, pose_jitter_m, pose_jitter_deg}
+  venue:    optional (venue twin, dr/venue_20261115.yaml; absent = nothing changes): ABSOLUTE sRGB 0-255 colours
+            {srgb, table_rgb, bin_outer_rgb, bin_inner_rgb, object_rgb: {<class>: rgb}, rgb_jitter, brightness,
+            bin_outer_brightness} that replace the scene.yaml colours; hooks.py applies them.
 """
 from __future__ import annotations
 
@@ -104,7 +107,49 @@ def sample(cfg, seed, object_names=(), bin_names=()):
         "rot_offset_rad": [float(rc.uniform(-aj, aj)) if aj else 0.0 for _ in range(3)],
         "stream_seed": int(rc.integers(2 ** 31)),
     }
+    if cfg.get("venue"):
+        out["venue"] = _sample_venue(cfg["venue"], np.random.default_rng(ss.spawn(1)[0]), object_names, bin_names)
     return out
+
+
+def _sample_venue(V, rng, object_names, bin_names):
+    """Per-surface RGB multipliers (rgb_jitter x brightness); drawn from a 6th child stream so the other sections'
+    draws for a seed are unchanged."""
+    def mult(bright):
+        return [float(j * b) for j, b in zip(_rgb_jit(rng, V.get("rgb_jitter")), [_u(rng, bright)] * 3)]
+    return {
+        "table": mult(V.get("brightness")),
+        "bins": {b: {"outer": mult(V.get("bin_outer_brightness", V.get("brightness"))),
+                     "inner": mult(V.get("brightness"))} for b in bin_names},
+        "objects": {n: mult(V.get("brightness")) for n in object_names},
+    }
+
+
+def venue_color(rgb255, mult=(1.0, 1.0, 1.0), srgb=True):
+    """sampled sRGB 0-255 x multipliers -> diffuseColor 0..1 (linear if srgb), clipped."""
+    c = np.clip(np.asarray(rgb255, float) / 255.0 * np.asarray(mult, float), 0.0, 1.0)
+    if srgb:
+        c = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    return [float(v) for v in c]
+
+
+LINER_EPS = 0.0006      # m, thickness of the visual-only inner liner
+
+
+def bin_liner_specs(bins_cfg):
+    """Visual-only inner-face liners for the 4 walls of a bin (the walls are single 3 mm boxes, so one material
+    cannot be 'orange outside, cardboard inside'). Axis-aligned, in the wall's own frame (= pelvis axes, the wall
+    prims are unrotated): {part: {"center": (x, y, z), "size": (x, y, z)}}, relative to the wall prim centre.
+    Mat x -> pelvis y, mat y -> pelvis x (Scene.mat_to_pelvis)."""
+    ox, oy = bins_cfg["outer_size"]
+    t, h, e = bins_cfg["wall_thickness"], bins_cfg["wall_height"], LINER_EPS
+    s = t / 2 + e / 2
+    return {
+        "wall_xlo": {"center": (0.0, +s, 0.0), "size": (oy, e, h)},
+        "wall_xhi": {"center": (0.0, -s, 0.0), "size": (oy, e, h)},
+        "wall_ylo": {"center": (+s, 0.0, 0.0), "size": (e, ox - 2 * t, h)},
+        "wall_yhi": {"center": (-s, 0.0, 0.0), "size": (e, ox - 2 * t, h)},
+    }
 
 
 def jitter_layout(layout, params):
