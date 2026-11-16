@@ -296,7 +296,8 @@ perception:
   tape_value_cut_params: {min_s: 140, min_v: 140, min_core_frac: 0.20, min_aspect: 3.0, max_thickness_px: 18}
   gate_below_bins: false      # FLAG: untrusted live bins use the observed bin/tape mass instead of nominal projected geometry
   gate_below_bins_params: {h_max: 17, s_min: 77, v_min: 50, object_s_min: 140, object_v_min: 150,
-                           open_px: 5, min_component_px: 2000, min_mass_px: 18000, margin_px: 3, trusted_bin_conf: 0.5}
+                           open_px: 5, min_component_px: 2000, min_mass_px: 18000, margin_px: 3, trusted_bin_conf: 0.5,
+                           first_run_top_frac: 0.45}
   bins_from_image: false      # FLAG: find the taped bin rims in the image (rim_detect); image bin masks replace the nominal
                               # projected hull / in_bin when the runtime bin poses are untrusted, tape is never a target
   bins_from_image_params: {hint: false, with_depth: true, hint_max_m: 0.25, hint_max_resid_px: 6.0, crosscheck_px: 12.0,

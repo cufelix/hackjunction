@@ -35,7 +35,11 @@ if ROOT not in sys.path:
 DATA = os.path.join(ROOT, "aaltonomous", "baselines", "classical", "test_data", "venue_20261115")
 # policy colour class of each physical object colour (orange cube / cylinder are the policy's "red" class)
 POLICY_CLASS = {"blue": "blue", "orange": "red", "yellow": "yellow"}
-CONFIGS = {
+# finals_r25_gen now SHIPS bin_image_guard + first_run_top_frac 0.55; the named configs below pin the pre-fix values
+# first, so each still means what its name says. "shipping" = the overlay exactly as baked.
+_PRE_FIX = {"perception.bin_image_guard": False, "perception.gate_below_bins_params.first_run_top_frac": 0.45}
+_RAW_CONFIGS = {
+    "shipping": None,
     "legacy": {"perception.bin_size_guard": False},
     "guard": {"perception.bin_size_guard": True},
     "guard+bin_image": {"perception.bin_size_guard": True, "perception.bin_image_guard": True},
@@ -47,6 +51,8 @@ CONFIGS = {
     "guard+rowmed61_only": {"perception.bin_size_guard": True, "perception.gate_below_bins_params.row_median_px": 61},
     "guard+first_run_0.55": {"perception.bin_size_guard": True, "perception.gate_below_bins_params.first_run_top_frac": 0.55},
 }
+CONFIGS = {k: (None if v is None else {**_PRE_FIX, **v}) for k, v in _RAW_CONFIGS.items()}
+CONFIGS["shipping"] = {}
 
 
 def load_frames(names=None):

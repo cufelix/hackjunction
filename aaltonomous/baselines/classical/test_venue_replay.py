@@ -80,8 +80,17 @@ class TestVenueReplay(unittest.TestCase):
 
     def test_flag_default_off_and_no_depth_needed(self):
         from .config import load_config
-        for overlay in ("none", "finals_r25_gen"):
-            self.assertFalse(load_config(overlay=overlay)["perception"]["bin_image_guard"])
+        self.assertFalse(load_config(overlay="none")["perception"]["bin_image_guard"])
+
+    def test_shipping_overlay_has_the_fix_on_and_it_holds(self):
+        from .config import load_config
+        p = load_config(overlay="finals_r25_gen")["perception"]
+        self.assertTrue(p["bin_image_guard"])
+        self.assertEqual(p["gate_below_bins_params"]["first_run_top_frac"], 0.55)
+        for f, r in _clean(_res("shipping")).items():
+            self.assertEqual(r["on_bin"], [], f)
+        for f, r in _res("shipping").items():
+            self.assertEqual(r["missed"], [], f)
 
 
 if __name__ == "__main__":

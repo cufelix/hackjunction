@@ -3119,7 +3119,7 @@ class Perception:
             return "off_mat"
         bm = c["bin_exclusion_margin"]
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + bm
-        if not self._image_bin_gate_active:
+        if not self._image_bin_gate_active or self.bin_image_guard:   # bin_image_guard: defence in depth, nominal in_bin stays on under the image gate
             for name, ctr in self._bin_centres_mat().items():
                 if np.all(np.abs(pm[:2] - ctr) <= half):
                     return f"in_bin:{name}"
@@ -3319,7 +3319,7 @@ class Perception:
     def _color_gate_bin(self, det, g):
         """Rule 2, 3D in the mat frame (nominal footprint, no margin). Inside a bin -> in_bin. Within edge_m outside
         one -> kept only as a depth top face edge_h above the counter (a bin rim), else bin_edge. Else keep."""
-        if self._image_bin_gate_active:
+        if self._image_bin_gate_active:   # deliberately NOT re-enabled by bin_image_guard: its hedged footprint (max_shift_m 0.18 towards the robot) rejected real cubes at pelvis x ~0.30 in the venue replay
             return None
         sc = self.scene
         pm = sc.pelvis_to_mat(det.top)[:2]

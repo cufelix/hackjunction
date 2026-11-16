@@ -105,10 +105,13 @@ class ClassicalServerPolicy(Policy):
         if task not in (None, "sort_fixed"):
             log.warning("task %r: the classical baseline only does rung 1 (colour = bin from scene.yaml)", task)
         info = {"instruction": instruction, "task": task, "seed": seed}
-        if task == "sort_fixed":
+        fixed_first = bool((self.pol.cfg.get("policy") or {}).get("fixed_instruction_first", False))
+        if task == "sort_fixed" and not fixed_first:
             # The server reset is the episode contract: only the fixed task receives fixed mapping. The optional
             # finals venue order is explicit scene metadata in policy.fixed_mapping; language tasks never inherit it.
             info["mapping"] = dict(self.pol.fixed_mapping)
+        # policy.fixed_instruction_first: no injected mapping; ClassicalPolicy._episode_mapping applies the instruction's
+        # full mapping when it parses, else falls back to policy.fixed_mapping itself (sort_fixed only).
         self.pol.reset(info)   # task id: language/fixed/insert routing; seed: skills
         log.info("reset task=%s seed=%s instruction=%r", task, seed, instruction)
 

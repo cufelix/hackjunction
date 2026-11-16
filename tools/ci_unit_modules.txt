@@ -2,6 +2,8 @@
 # third_party/ (URDFs, sim) is not in git, so the other modules need the sim image.
 aaltonomous.baselines.classical.test_arm_vel_cap
 aaltonomous.baselines.classical.test_bare_table
+aaltonomous.baselines.classical.test_bin_gate_defence
+aaltonomous.baselines.classical.test_bin_size_guard
 aaltonomous.baselines.classical.test_bin_vote_perception
 aaltonomous.baselines.classical.test_brain_planner
 aaltonomous.baselines.classical.test_color_gate
@@ -37,6 +39,7 @@ aaltonomous.baselines.classical.test_reviewfix_a
 aaltonomous.baselines.classical.test_sat_floor
 aaltonomous.baselines.classical.test_shape_synonyms
 aaltonomous.baselines.classical.test_skill_memory
+aaltonomous.baselines.classical.test_venue_replay
 aaltonomous.baselines.classical.test_venue_veto
 aaltonomous.data.test_record
 aaltonomous.data.test_to_groot

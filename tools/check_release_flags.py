@@ -91,7 +91,8 @@ GEN_FINAL_FLAGS = frozenset({"grasp.arm_xy_offset", "motion.output_hold_on_late"
                              "policy.shape_rule_guard", "motion.arm_tau_ff", "motion.sag_comp", "perception.bin_bottom_first_run",
                              "perception.fk_colour_rescue", "calib.plane.robust_height", "perception.plan_frame",
                              "calib.plane.robust_agree_m", "perception.height_range", "bin.fallback_centre_x", "bin.fallback_drop_z", "bin.reach_x_max", "bin.reach_drop_z", "planner.budget_escalate",
-                             "perception.bin_size_guard", "perception.bin_image_guard"})
+                             "perception.bin_size_guard", "perception.bin_image_guard",
+                             "perception.gate_below_bins_params.first_run_top_frac"})
 R25_FLAGS = frozenset({"brain.known_task_hard_off", "planner.candidate_budget", "profile_auto.second_cue"})
 # fsm layer (real-only dead-time / failure-mode fixes; false in profile_auto.sim_overrides), finals_r25_gen only
 FSM_FLAGS = frozenset({"policy.zero_det_relook", "policy.startup_overlap", "policy.contact_start_unblock", "perception.look_summary"})
