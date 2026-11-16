@@ -119,7 +119,7 @@ flags:
   perception.fk_colour_rescue: true             # realperc-final (real-only; sim_overrides false): FK silhouette off by ~80 px on real frames; height-judge instead
   perception.bin_size_guard: true              # hotfix (real only; sim_overrides false): bin-sized/bin-tall colour blob is never a candidate (venue: robot picked an orange bin)
   bin.vote.tape_body_reject: true               # venue fix: paper-wrapped bin bodies (8-19k px) matched tape_hsv and voted a bogus rim position (conf 0.3 in both runs)
-  grasp.wrong_object_recovery: true             # venue fix: lift-time held margin (bin wall passed at 0.046 vs 0.045) + bounded re-look after a failed release_confirm (stopped with 80 s left)
+  grasp.wrong_object_recovery: false            # UNVALIDATED, kept OFF: needs post-lift finger_sum >= 2.0 x 0.045 = 0.09 but no genuine-grasp lift value was ever measured (only the venue bin wall: 0.046 / 0.088); enabling could reject real picks. Flag + tests remain.
   perception.bin_image_guard: true            # venue fix (ON in sim too, perception-only): dark-warm bin-sized image component is never a candidate; also keeps the nominal in_bin reject active under the image gate_below_bins
   perception.gate_below_bins_params.first_run_top_frac: 0.55   # venue fix: 0.45 cut off the shaded bin wall at the venue (robot grabbed the bin); sim bins unaffected
   perception.real_border_partial: false          # realperc-r23 (real-only)

@@ -110,7 +110,7 @@ class TestVoterLogging(unittest.TestCase):
 
 def _pol(**params):
     pol = ClassicalPolicy.__new__(ClassicalPolicy)
-    cfg = load_config(overlay="finals_r25_gen")
+    cfg = load_config(overlay="finals_r25_gen", overrides={"grasp.wrong_object_recovery": True})   # overlay has it OFF (unvalidated)
     cfg["grasp"]["wrong_object_recovery_params"].update(params)
     pol.cfg = cfg
     pol.logs = []
@@ -128,9 +128,9 @@ def _g(side="right", close=None):
 
 
 class TestLiftMargin(unittest.TestCase):
-    def test_flag_default_off_enabled_in_gen_overlay(self):
+    def test_flag_default_off_and_off_in_gen_overlay_unvalidated(self):
         self.assertFalse(load_config(overlay="none")["grasp"]["wrong_object_recovery"])
-        self.assertTrue(load_config(overlay="finals_r25_gen")["grasp"]["wrong_object_recovery"])
+        self.assertFalse(load_config(overlay="finals_r25_gen")["grasp"]["wrong_object_recovery"])  # genuine lift finger_sum never measured
         with self.assertRaises(ValueError):
             load_config(overrides={"grasp.wrong_object_recovery": 1})
 

@@ -114,6 +114,99 @@ All three fixes are real-only. The sim/real detector switches them on, and the s
 - **The brain has not been tested on the robot.** End-to-end runs with the real llama.cpp server take place on a GPU
   simulator box. The unit tests cover only a server that is down or late.
 
+## Real-robot postmortem
+
+In the finals the policy scored 0 points in both real runs (`sort_fixed`, seed 0, 15 Nov 2026). In simulation the same
+code scored 478 of 527 objects over 128 episodes (64 seeds x 2 tasks), with 2 objects placed in the wrong bin. This
+section records what happened on the robot, the cause, and what we changed afterwards. The brain never ran on the
+real robot.
+
+### What happened
+
+The bins at the venue were wrapped in red-orange paper. In the simulator they are plain orange-yellow cardboard. In both
+runs the colour gate kept 8 of 9 candidates, the policy picked "red", and the right arm went to a grasp point on the
+right bin. The hand closed on the lower edge of the bin's front wall and dragged the bin out of position. The held
+check passed, the release check failed twice, and the policy stopped at about 39 s of a 120 s run. No object was moved.
+
+![Head camera at t = 11 s. Green marks the pixels the colour gate still accepted as red: three of the five objects, and a block on the right bin's front wall.](docs/postmortem/gate_overlay.jpg)
+
+![Run 1, t = 11 to 35 s. The right hand reaches the right bin's front wall and the bin slides out of position.](docs/postmortem/bin_dragged_sequence.jpg)
+
+### Cause
+
+1. **Gate row cutoff.** The image gate (`gate_below_bins`) only counted bin runs starting above row 216
+   (`first_run_top_frac` 0.45 of 480). The right bin's front face starts at rows 215 to 222, so the gate put its
+   bottom edge near row 89 instead of about 277 and let the wall through.
+2. **Defences skipped while the gate is on.** With the gate active, the 3D footprint cut, the `in_bin` reject and the
+   colour gate's workspace and bin rules were bypassed. The gate was meant as an extra layer and acted as a switch
+   for the others.
+3. **Blob splitting.** `split_blobs` cut the wall strip into cube-sized pieces before the `too_big` check ran. Colour
+   could not separate them: robust red covers hue 0 to 16, the paper sits at 4 to 8 and the orange objects at 11 to 12.
+4. **Hard-coded mapping.** `policy_server.py` always injected the venue colour-to-bin mapping for `sort_fixed`, so the
+   instruction-first path was never reached. The instruction said red goes left, the mapping said right.
+5. **`bin.vote` disagreed** in both runs (confidence 0.3), so live bin positions were not trusted. The real bins were
+   8 to 15 cm from the nominal footprint. The logs do not show why the vote disagreed.
+6. **Held detector and early stop.** Finger sum was 0.266 at close and 0.046 at lift against a 0.045 threshold, so a
+   bin wall counted as held. After two failed release checks the policy stopped picking with 80 s left.
+
+The hackathon hotfix (`bin_size_guard`) did not help: the surviving strip was below its size thresholds.
+
+### Offline replay
+
+`tools/venue_replay.py` runs perception on 11 labelled frames from the two real runs (RGB only, no depth, no GPU) and
+counts accepted colour candidates that lie on a bin.
+
+| Config | Candidates on a bin (11 frames) | Objects found |
+|---|---|---|
+| As run on the robot | 20 | 55/55 |
+| As run + hotfix `bin_size_guard` | 20 | 55/55 |
+| After the fix | 2 | 55/55 |
+
+The two remaining candidates are the robot's own fingers, which the arm mask removes on the robot. On the frame the
+robot used to choose its target, the old code ranks the right bin's wall first as "red"; the fix ranks the orange
+cube first.
+
+### Simulation check: inconclusive
+
+We built a venue-twin scene (`aaltonomous/sim/VENUE_TWIN.md`: paper-coloured bin walls, brown bin interiors, venue
+table and object colours sampled from the run video) and ran an A/B in Isaac Sim on `sort_fixed`, seeds 1000 to 1003:
+the submitted code and the fix, each on the venue twin and on the nominal scene.
+
+| Arm | Scene | Objects correct / total | Clips | Rate |
+|---|---|---|---|---|
+| submitted | nominal | 0 / 15 | 0 | ~30 Hz |
+| submitted | venue twin | 0 / 15 | 0 | ~30 Hz |
+| fix | nominal | 0 / 15 | 0 | ~30 Hz |
+| fix | venue twin | 0 / 15 | 0 | ~30 Hz |
+
+All four arms scored zero. The images were built with the real profile forced (`PROFILE_MODE=real`), and that profile
+does not sort in simulation at all, so this run neither reproduces the failure nor validates the fix. No
+`[grasp_diag]` lift values were captured. The only validation of the fix is the offline replay above.
+
+### The fix and what it does not cover
+
+The fix turns on `bin_image_guard` (rejects dark-warm components of bin size in the image), raises
+`first_run_top_frac` to 0.55, keeps the `in_bin` defence active while the gate is on, and makes the `sort_fixed`
+mapping instruction-first. `bin.vote` now logs its voters, and `bin.vote.tape_body_reject` ignores paper-wrapped bin
+bodies (7.9k to 19k px in the replay frames) when looking for tape. Unit tests cover each piece.
+
+Not covered:
+- Not validated on real depth or on the robot.
+- `grasp.wrong_object_recovery` (a stricter post-lift finger check and a bounded re-look after a failed release) is
+  implemented but **off**: it needs a lift finger sum of at least 0.09, and only the venue bin wall (0.046 and 0.088)
+  has ever been measured, never a genuine grasp.
+- The reason `bin.vote` disagreed is unknown, and the organisers' colour-to-bin mapping is unconfirmed.
+
+### Lessons
+
+- Colour thresholds tuned on sim materials did not transfer: bin paper, orange objects and the red range overlapped.
+- A guard that disables the footprint, `in_bin` and `too_big` checks turns three independent layers into one.
+- Eleven frames and an RGB-only replay reproduced the failure offline. We had no venue-coloured data in the loop
+  before the finals.
+- The abstain rules in the resolver never fired because perception handed over a confident wrong candidate, and the
+  held detector then confirmed it.
+- Two failed release checks ended a 120 s run at 39 s. A bounded retry would have given a second attempt.
+
 ## Build the submitted image
 
 To run it without building, pull the submitted image. It is a byte-identical, digest-pinned copy published by
