@@ -296,7 +296,8 @@ perception:
   tape_value_cut_params: {min_s: 140, min_v: 140, min_core_frac: 0.20, min_aspect: 3.0, max_thickness_px: 18}
   gate_below_bins: false      # FLAG: untrusted live bins use the observed bin/tape mass instead of nominal projected geometry
   gate_below_bins_params: {h_max: 17, s_min: 77, v_min: 50, object_s_min: 140, object_v_min: 150,
-                           open_px: 5, min_component_px: 2000, min_mass_px: 18000, margin_px: 3, trusted_bin_conf: 0.5}
+                           open_px: 5, min_component_px: 2000, min_mass_px: 18000, margin_px: 3, trusted_bin_conf: 0.5,
+                           first_run_top_frac: 0.45}
   bins_from_image: false      # FLAG: find the taped bin rims in the image (rim_detect); image bin masks replace the nominal
                               # projected hull / in_bin when the runtime bin poses are untrusted, tape is never a target
   bins_from_image_params: {hint: false, with_depth: true, hint_max_m: 0.25, hint_max_resid_px: 6.0, crosscheck_px: 12.0,
@@ -311,6 +312,10 @@ perception:
   fk_colour_rescue_params: {min_overlap_frac: 0.02, min_area_px: 1200, z_above_counter_m: [0.034, 0.056]}
   real_merge_split: false     # FLAG (real only): split merged same-colour neighbours (cube+cylinder) from a lower area factor
   real_merge_split_params: {area_factor: 0.9, min_part_frac: 0.3}
+  bin_size_guard: false       # FLAG (real only, hotfix): reject a colour blob that is bin-sized (area / footprint) or bin-tall, before split_blobs
+  bin_size_guard_params: {max_area_factor: 4.0, max_top_m: 0.075, max_extent_m: 0.13, min_point_height_m: 0.01}
+  bin_image_guard: false      # FLAG (real only, venue replay): reject a colour blob lying on a bin-sized dark-warm image component (bin wall in shade), before split_blobs; no depth needed
+  bin_image_guard_params: {h_max: 17, s_min: 77, v_min: 50, object_v_min: 150, open_px: 5, min_frac: 0.5, min_side_objects: 1.8}
   look_summary: false         # FLAG (fsm, passive). per-look colour-blob / rejection summary for the policy's [look0] 0-detection line
   reject_log: false           # FLAG: per-frame log plus cumulative per-colour rejected-stage tally
   still_vote: false           # FLAG: one detect per still frame; publish tracks seen in min_hits of the last n_frames
@@ -409,6 +414,8 @@ bin:
     min_rim_points: 180
     min_tape_px: 60
     tape_hsv: [[3, 150, 70], [8, 255, 180]]
+    tape_body_reject: false   # FLAG (venue). tape-coloured blobs above tape_max_px are a paper-wrapped bin body, not tape: no tape vote
+    tape_max_px: 3000         # tape_body_reject: venue bin faces measure 8-19k px in the head image; a tape strip is far smaller
 
 grasp:
   hold_s: 3.0         # skill "hold": seconds the hand stays closed with the arm still, right after the lift
@@ -433,6 +440,12 @@ grasp:
   held_detector: stall        # FLAG: stall = legacy max |cmd-q|; finger_sum = real-Dex3 bias-corrected finger pairs
   release_wait_s: null        # FLAG (lag R44): null = today (open_hold_s); s = hold >= this after the open command before the retreat starts
   release_confirm: false      # FLAG (lag R49): after open + wait the finger state must read empty (held detector); not empty -> re-open once, then home and stop picking
+  wrong_object_recovery: false  # FLAG (venue). lift-time held margin + bounded recovery after a failed release_confirm (params below)
+  wrong_object_recovery_params:
+    lift_margin_mult: 2.0     # lift finger_sum must reach threshold x this (venue bin wall: 0.046 / 0.088 vs 0.045 passed the plain threshold)
+    lift_min_ratio: 0.0       # >0: the lift read must also keep this fraction of the close read (a slipping grip falls off); 0 = off
+    max_recoveries: 2         # failed release_confirm -> open, home, re-look; at most this many per episode, then stop as before
+    bad_radius_m: 0.06        # pelvis xy radius around a rejected grasp point that is never planned again this episode
   release_confirm_s: 1.5      # release_confirm: how long to poll for an empty hand after each open (Dex3 lag 0.3-0.4 s)
   held_threshold_rad: 0.045   # finger_sum: held when max(index j0+j1, middle j0+j1), above the open reference, reaches this
   held_calibration:           # M3 FLAG: an empty close at home supplies e0; invalid/unfinished calibration disables abort

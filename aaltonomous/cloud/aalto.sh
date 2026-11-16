@@ -58,7 +58,7 @@ snap)
     python aaltonomous/cloud/snap.py "$@" ;;
 test)
     python -m unittest aaltonomous/interface/test_safety.py aaltonomous/interface/test_env.py \
-        aaltonomous/scene/test_scene.py aaltonomous/deploy/test_deploy.py aaltonomous/sim/aalto_task/test_layout.py ;;
+        aaltonomous/scene/test_scene.py aaltonomous/deploy/test_deploy.py aaltonomous/sim/aalto_task/test_layout.py aaltonomous/sim/aalto_task/test_venue.py ;;
 py)
     exec python "$@" ;;
 *)

@@ -301,7 +301,10 @@ def _apply_dr(env, rt, P):
         ok["lighting"] = f"{type(e).__name__}: {e}"
     try:
         T, O = P["textures"], P["objects"]
-        for k, lst in base["colors"].items():
+        if P.get("venue"):          # venue twin (dr/venue_20261115.yaml): absolute colours replace the nominal ones
+            _apply_venue(stage, rt, P["venue"], rt.dr_cfg["venue"], base)
+            T = None
+        for k, lst in ({} if T is None else base["colors"]).items():
             for sh, rgb in lst:
                 if k == "Counter":
                     new = [c * j for c, j in zip(rgb, T["counter_rgb"])]
@@ -312,7 +315,7 @@ def _apply_dr(env, rt, P):
                     new = dr.jitter_color(rgb, o["dh"], o["s"], o["v"])
                 sh.GetInput("diffuseColor").Set(Gf.Vec3f(*[float(min(max(c, 0.0), 1.0)) for c in new]))
         tex = stage.GetPrimAtPath("/World/envs/env_0/Mat/material/texture")
-        if tex.IsValid():
+        if T is not None and tex.IsValid():
             from pxr import UsdShade
             sh = UsdShade.Shader(tex)
             s, bias = T["mat_scale"], T["mat_bias"]
@@ -350,6 +353,66 @@ def _apply_dr(env, rt, P):
     except Exception as e:
         ok["camera_pose"] = f"{type(e).__name__}: {e}"
     return ok
+
+
+def _set_color(sh, rgb):
+    from pxr import Gf
+    sh.GetInput("diffuseColor").Set(Gf.Vec3f(*[float(c) for c in rgb]))
+
+
+def _apply_venue(stage, rt, V, Vcfg, base):
+    """Venue twin colours (override hook, only reached when the DR config has a `venue` section): table, bin outer
+    paper (wall boxes), bin inner cardboard (floor + visual-only liners inside the walls), object classes."""
+    from pxr import Gf, Sdf, UsdGeom, UsdShade
+    from .layout import parse_name
+    srgb = bool(Vcfg.get("srgb", True))
+    col = lambda rgb, m: dr.venue_color(rgb, m, srgb)
+    # table: counter box + the printed mat (its texture is replaced by the flat colour)
+    for sh, _ in base["colors"].get("Counter", []):
+        _set_color(sh, col(Vcfg["table_rgb"], V["table"]))
+    mat = _shaders(stage, "/World/envs/env_0/Mat/material", "diffuseColor")
+    for sh in mat:
+        inp = sh.GetInput("diffuseColor")
+        try:
+            inp.ClearSources()
+        except Exception:
+            inp.DisconnectSource()
+        _set_color(sh, col(Vcfg["table_rgb"], V["table"]))
+    # bins
+    specs = dr.bin_liner_specs(rt.sc.cfg["bins"])
+    for bn in rt.sc.bin_names:
+        outer, inner = col(Vcfg["bin_outer_rgb"], V["bins"][bn]["outer"]), col(Vcfg["bin_inner_rgb"], V["bins"][bn]["inner"])
+        for part in ("floor", "wall_xlo", "wall_xhi", "wall_ylo", "wall_yhi"):
+            for sh, _ in base["colors"].get(f"bin:{bn}:{part}", []):
+                _set_color(sh, inner if part == "floor" else outer)
+            if part == "floor":
+                continue
+            root = f"/World/envs/env_0/Bin_{bn}_{part}"
+            liner = root + "/inner_liner"
+            if not stage.GetPrimAtPath(liner).IsValid():
+                sp = specs[part]
+                cube = UsdGeom.Cube.Define(stage, liner)
+                cube.GetSizeAttr().Set(1.0)
+                xf = UsdGeom.Xformable(cube)
+                xf.AddTranslateOp().Set(Gf.Vec3d(*sp["center"]))
+                xf.AddScaleOp().Set(Gf.Vec3f(*sp["size"]))
+                mt = UsdShade.Material.Define(stage, liner + "/material")
+                sh = UsdShade.Shader.Define(stage, liner + "/material/surface")
+                sh.CreateIdAttr("UsdPreviewSurface")
+                sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.9)
+                sh.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+                sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*inner))
+                mt.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
+                UsdShade.MaterialBindingAPI.Apply(cube.GetPrim()).Bind(mt)
+            else:
+                for sh in _shaders(stage, liner, "diffuseColor"):
+                    _set_color(sh, inner)
+    # objects: venue colour per class (red = the venue's orange parts)
+    for n in rt.names:
+        c = parse_name(n)[0]
+        if c in Vcfg["object_rgb"]:
+            for sh, _ in base["colors"].get(f"obj:{n}", []):
+                _set_color(sh, col(Vcfg["object_rgb"][c], V["objects"][n]))
 
 
 def runtime(env):

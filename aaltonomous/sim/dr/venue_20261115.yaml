@@ -1,0 +1,37 @@
+# "Venue twin" of the Junction 2026 finals table (real-robot run larp-interns_20261115_091835, head camera).
+# Opt-in: AALTO_DR=venue_20261115 aalto sim   (docs: aaltonomous/sim/VENUE_TWIN.md). Default sim is untouched.
+# The `venue` section sets ABSOLUTE colours (sRGB 0-255, sampled from the video, see VENUE_TWIN.md) instead of
+# jittering the scene.yaml colours; everything else is the usual DR schema (aalto_task/dr.py).
+name: venue_20261115
+venue:
+  srgb: true                            # values are sRGB as seen by the camera -> converted to linear for the shaders
+  table_rgb: [141, 136, 132]            # counter + printed mat (mat texture replaced by this flat colour)
+  bin_outer_rgb: [172, 68, 47]          # red-orange paper on the OUTSIDE (and rim) of all three boxes
+  bin_inner_rgb: [126, 113, 99]         # plain cardboard on the inside faces + floor (thin visual-only liner)
+  object_rgb:                           # per scene.yaml class; "red" = the venue's ORANGE parts
+    red: [244, 147, 81]
+    yellow: [232, 205, 95]
+    blue: [84, 134, 226]
+  rgb_jitter: 0.04                      # +-4 % per channel, per surface
+  brightness: [0.9, 1.1]                # one factor per surface
+  bin_outer_brightness: [0.65, 1.1]     # paper looked 0.6x darker on camera-facing faces than on lit side faces
+lighting:                               # bright venue light, shadows from the arm (hard key light)
+  key_intensity_scale: [0.9, 1.5]
+  key_pos_jitter: [0.4, 0.4, 0.3]
+  key_rgb_jitter: 0.04
+  dome_intensity_scale: [0.8, 1.2]
+  dome_rgb_jitter: 0.03
+objects:
+  mass_scale: [0.7, 1.5]
+  friction_scale: [0.75, 1.1]
+pose:
+  xy_jitter: 0.005
+  yaw_jitter_deg: 5
+camera:
+  rgb_noise_std: 3.0
+  rgb_gain: [0.9, 1.1]
+  depth_noise_mm: 1.0
+  depth_noise_rel: 0.002
+  depth_hole_frac: 0.01
+  pose_jitter_m: 0.01
+  pose_jitter_deg: 1.0

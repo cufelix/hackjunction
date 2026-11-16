@@ -406,6 +406,12 @@ class Perception:
         self.fk_rescue_cfg = dict(self.cfg.get("fk_colour_rescue_params") or {})
         self.real_merge_split = bool(self.cfg.get("real_merge_split", False))
         self.real_merge_cfg = dict(self.cfg.get("real_merge_split_params") or {})
+        # hotfix (real only): a bin-sized / bin-tall colour blob is a bin, never a pick candidate (checked BEFORE split_blobs,
+        # which otherwise slices one 21 cm orange bin wall into up to 3 cube-sized parts)
+        self.bin_size_guard = bool(self.cfg.get("bin_size_guard", False))
+        self.bin_size_cfg = dict(self.cfg.get("bin_size_guard_params") or {})
+        self.bin_image_guard = bool(self.cfg.get("bin_image_guard", False))
+        self.bin_image_cfg = dict(self.cfg.get("bin_image_guard_params") or {})
         self.partial_ok_near_hand = bool(self.cfg.get("partial_ok_near_hand", False))
         self.partial_near_hand_cfg = dict(self.cfg.get("partial_ok_near_hand_params") or {})
         # perception.neutral_obstacles (FLAG, default OFF): non-target dark / grey blobs are never detections; they
@@ -1750,7 +1756,8 @@ class Perception:
         # either is on, share one RGB->HSV conversion.
         need_hsv = (self.place_gate or self.colour_kmeans or self.hue_guard or self.hue_guard_yellow_fix or self.sat_floor or self.sat_floor_adaptive
                     or self.depth_blob_recover or self.tape_value_cut or self.split_by_solidity or self.gate_below_bins
-                    or self.glare_reject or self.reflection_reject or self.local_bg or self.neutral_on or self.bins_from_image)
+                    or self.glare_reject or self.reflection_reject or self.local_bg or self.neutral_on or self.bins_from_image
+                    or self.bin_image_guard)
         self._neutral_new = [] if (self.neutral_on and not include_bins) else None
         hsv = early_hsv if early_hsv is not None else (
             cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV) if need_hsv else None)
@@ -1783,6 +1790,7 @@ class Perception:
             items = ((color, mask) for color, mask in masks.items() if color not in ("red", "yellow"))
         else:
             items = masks.items()
+        bin_img = self._bin_image_components(hsv) if (self.bin_image_guard and hsv is not None) else None
         _ls = {"raw_px": {}, "mask_px": {}, "blobs": {}, "min_area": 0, "blob_hsv": []} if self.look_summary else None
         _ls_hsv = None
         if _ls is not None:
@@ -1828,6 +1836,16 @@ class Perception:
                     continue
                 if all_masks is not None and self._local_bg_reject(blob, hsv, all_masks):
                     continue
+                if self.bin_size_guard:
+                    why_bin = self._bin_sized_blob(blob, area, cent[i], depth)
+                    if why_bin is not None:
+                        rejected.append((self._blob_placeholder(color, area, cent[i]), why_bin))
+                        continue
+                if bin_img is not None:
+                    why_bin = self._bin_image_blob(blob, area, cent[i], depth, bin_img)
+                    if why_bin is not None:
+                        rejected.append((self._blob_placeholder(color, area, cent[i]), why_bin))
+                        continue
                 parts = [(blob, area, cent[i])]
                 if self.split_by_solidity:
                     lo, hi = self.split_solidity_cfg.get("area_px", [520, 15500])
@@ -2109,6 +2127,11 @@ class Perception:
         rows[supported] = keep.shape[0] - 1 - np.argmax(keep[::-1, supported], axis=0)
         fallback = float(np.nanmedian(rows))
         rows[~np.isfinite(rows)] = fallback
+        w = int(p.get("row_median_px", 0))   # 0 = off. Rolling column median: one bin's missing front-face columns follow its neighbours
+        if w > 1 and self.bin_bottom_first_run:
+            pad = w // 2
+            ext = np.r_[np.full(pad, rows[0]), rows, np.full(pad, rows[-1])]
+            rows = np.array([np.median(ext[i:i + 2 * pad + 1]) for i in range(len(rows))])
         return rows
 
     @staticmethod
@@ -2436,6 +2459,85 @@ class Perception:
             rejected.append((det, why))
         else:
             dets.append(det)
+
+    def _bin_sized_blob(self, blob, area, centroid, depth):
+        """perception.bin_size_guard: rejection reason when one colour blob is bin-sized, else None. Objects are ~4.5 cm
+        (two touching ~9 cm); a bin is ~21 x 21 cm with a 6-12 cm rim. Checks (any one rejects):
+          area   > max_area_factor x the expected single-object pixel area (works without depth),
+          top    (92nd percentile z) > max_top_m above the counter,
+          extent of the points above the counter (5..95 percentile along the principal axes) > max_extent_m.
+        Never raises: on any error the blob is kept (fail open = the pre-hotfix behaviour)."""
+        try:
+            p = self.bin_size_cfg
+            exp = float(self.expected_area_px(blob, centroid, depth) or 0.0)
+            if exp > 0 and area > float(p.get("max_area_factor", 4.0)) * exp:
+                return "bin_size:area"
+            if depth is None:
+                return None
+            c = self.cfg
+            dlo, dhi = c["depth_range_mm"]
+            ys, xs = np.nonzero(blob)
+            d = depth[ys, xs].astype(float)
+            ok = (d >= dlo) & (d <= dhi)
+            if int(ok.sum()) < int(c["min_valid_depth_px"]):
+                return None
+            P = self._pixel_to_pelvis(xs[ok], ys[ok], d[ok])
+            P = P[np.all(np.isfinite(P), axis=1)]
+            if len(P) < int(c["min_valid_depth_px"]):
+                return None
+            zc = float(self.scene.counter_z)
+            if float(np.percentile(P[:, 2], c["top_percentile"])) - zc > float(p.get("max_top_m", 0.075)):
+                return "bin_size:top"
+            Q = P[P[:, 2] > zc + float(p.get("min_point_height_m", 0.01)), :2]
+            if len(Q) < 10:
+                return None
+            Q = Q - Q.mean(axis=0)
+            _, vecs = np.linalg.eigh(np.cov(Q.T))
+            proj = Q @ vecs
+            ext = np.percentile(proj, 95, axis=0) - np.percentile(proj, 5, axis=0)
+            if float(ext.max()) > float(p.get("max_extent_m", 0.13)):
+                return "bin_size:extent"
+        except Exception as exc:   # never raise into act()
+            self.log(f"[bin_size_guard] failed: {type(exc).__name__}: {exc}")
+        return None
+
+    def _bin_image_components(self, hsv):
+        """perception.bin_image_guard: (labels, stats) of the image-space bin mass, or None. Bin mass = dark warm pixels
+        (cardboard / paper wall in shade: H <= h_max or >= 170, S >= s_min, v_min <= V < object_v_min), opened. Foam
+        objects are lit and bright (V ~ 230-250), the venue bin walls sit at V ~ 80-125. Needs no depth."""
+        p = self.bin_image_cfg
+        h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+        m = (((h <= int(p.get("h_max", 17))) | (h >= 170)) & (s >= int(p.get("s_min", 77))) &
+             (v >= int(p.get("v_min", 50))) & (v < int(p.get("object_v_min", 150)))).astype(np.uint8)
+        k = int(p.get("open_px", 5))
+        if k > 0:
+            m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+        return (lab, stats) if n > 1 else None
+
+    def _bin_image_blob(self, blob, area, centroid, depth, bin_img):
+        """perception.bin_image_guard: 'bin_image:wall' when >= min_frac of the blob lies on one dark-warm image component
+        that is bin-sized (both bbox sides > min_side_objects x the expected single-object side, i.e. a bin face, not an
+        object in shadow or two touching ones), else None. Never raises (fail open)."""
+        try:
+            lab, stats = bin_img
+            p = self.bin_image_cfg
+            ids = lab[blob > 0]
+            ids = ids[ids > 0]
+            if len(ids) < float(p.get("min_frac", 0.5)) * area:
+                return None
+            cid = int(np.bincount(ids).argmax())
+            if int(np.count_nonzero(ids == cid)) < float(p.get("min_frac", 0.5)) * area:
+                return None
+            exp = float(self.expected_area_px(blob, centroid, depth) or 0.0)
+            coef = float((self.cfg.get("split") or {}).get("area_coef", 1.2))
+            side = (exp / max(coef, 1e-9)) ** 0.5
+            w, hh = int(stats[cid, cv2.CC_STAT_WIDTH]), int(stats[cid, cv2.CC_STAT_HEIGHT])
+            if side > 0 and min(w, hh) > float(p.get("min_side_objects", 1.8)) * side:
+                return "bin_image:wall"
+        except Exception as exc:   # never raise into act()
+            self.log(f"[bin_image_guard] failed: {type(exc).__name__}: {exc}")
+        return None
 
     def _fk_rescue_reject(self, det, blob, area):
         """perception.fk_colour_rescue: a blob that overlaps the FK arm silhouette is the robot's own hand / forearm
@@ -3017,7 +3119,7 @@ class Perception:
             return "off_mat"
         bm = c["bin_exclusion_margin"]
         half = np.asarray(sc.cfg["bins"]["outer_size"], float) / 2 + bm
-        if not self._image_bin_gate_active:
+        if not self._image_bin_gate_active or self.bin_image_guard:   # bin_image_guard: defence in depth, nominal in_bin stays on under the image gate
             for name, ctr in self._bin_centres_mat().items():
                 if np.all(np.abs(pm[:2] - ctr) <= half):
                     return f"in_bin:{name}"
@@ -3217,7 +3319,7 @@ class Perception:
     def _color_gate_bin(self, det, g):
         """Rule 2, 3D in the mat frame (nominal footprint, no margin). Inside a bin -> in_bin. Within edge_m outside
         one -> kept only as a depth top face edge_h above the counter (a bin rim), else bin_edge. Else keep."""
-        if self._image_bin_gate_active:
+        if self._image_bin_gate_active:   # deliberately NOT re-enabled by bin_image_guard: its hedged footprint (max_shift_m 0.18 towards the robot) rejected real cubes at pelvis x ~0.30 in the venue replay
             return None
         sc = self.scene
         pm = sc.pelvis_to_mat(det.top)[:2]

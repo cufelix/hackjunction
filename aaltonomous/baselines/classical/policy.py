@@ -729,6 +729,8 @@ class ClassicalPolicy:
         self._exec = None           # D2 T-8 s: the plan being executed {"plan", "n", "cut", "t8"}
         self._rel = None            # grasp.release_confirm: the plan's release watcher
         self._rel_fail = False      # release_confirm: the hand never read empty -> stop picking
+        self._bad_grasp = []        # grasp.wrong_object_recovery: pelvis xy of grasps rejected as the wrong object (never replanned)
+        self._wor_recoveries = 0    # grasp.wrong_object_recovery: failed-release recoveries used this episode
         self._ig = None             # insert.reach_gated: the plan's pre-release gate {"plan", "n", "stops", "i", "t0"}
         self._cap_logged = set()
         self._dec_warned = set()    # F7: decision helpers that already fell back to stock this episode
@@ -2679,6 +2681,8 @@ class ClassicalPolicy:
             if self._target_guarded(d, float(obs.get("t", 0.0))):
                 continue
             if any(np.linalg.norm(xy - f) < self.cfg["policy"]["same_object_radius"] for f in self.failed):
+                continue
+            if self._bad_grasp_near(xy):
                 continue
             if pol.get("place_gate", False):
                 gs = self._tracked_here(self.gate_skipped, d.color, xy)
@@ -4876,6 +4880,51 @@ class ClassicalPolicy:
             return not det.held(g["plan"].side, hc, hq, margin)[0]
         return not det.held(g["plan"].side, hc, hq)[0]
 
+    def _wor_params(self):
+        """grasp.wrong_object_recovery params when the flag is on, else None."""
+        g = self.cfg["grasp"]
+        if not g.get("wrong_object_recovery", False):
+            return None
+        return g.get("wrong_object_recovery_params") or {}
+
+    def _bad_grasp_near(self, xy):
+        """True when xy lies within bad_radius_m of a grasp rejected by the lift-time held check (flag off: never)."""
+        if not self._bad_grasp:
+            return False
+        p = self._wor_params() or {}
+        rad = float(p.get("bad_radius_m", 0.06))
+        return any(np.linalg.norm(np.asarray(xy, float)[:2] - f) < rad for f in self._bad_grasp)
+
+    def _lift_margin_fail(self, g, hq, hc):
+        """grasp.wrong_object_recovery (a): the post-lift finger_sum must clear lift_margin_mult x the held threshold (and,
+        if lift_min_ratio > 0, keep that fraction of the close read). Plain finger_sum mode only; unsure (no bias
+        reference, bad data, soft detector) is never a failure. A failure blacklists the grasp point for the episode."""
+        p = self._wor_params()
+        det = self.held_detector
+        if p is None or det.mode != "finger_sum" or det.soft is not None or not det.ready:
+            return False
+        if hq.shape != (14,) or hc.shape != (14,) or not (np.all(np.isfinite(hq)) and np.all(np.isfinite(hc))):
+            return False
+        side = g["plan"].side
+        lift = float(det.held(side, hc, hq)[1]["finger_sum"])
+        need = det.threshold_rad * float(p.get("lift_margin_mult", 2.0))
+        why = None
+        if lift < need:
+            why = f"lift finger_sum {lift:.3f} < {need:.3f} (threshold {det.threshold_rad:.3f} x {float(p.get('lift_margin_mult', 2.0)):g})"
+        ratio = float(p.get("lift_min_ratio", 0.0))
+        close = g["samples"].get("close")
+        if why is None and ratio > 0.0 and close is not None:
+            c_fs = float(det.held(side, np.asarray(close[2], float), np.asarray(close[1], float))[1]["finger_sum"])
+            if c_fs > 0.0 and lift < ratio * c_fs:
+                why = f"lift finger_sum {lift:.3f} < {ratio:g} x close {c_fs:.3f}"
+        if why is None:
+            return False
+        xy = np.asarray(g["plan"].waypoints["grasp"][:2], float).copy()
+        self._bad_grasp.append(xy)
+        self.log(f"[wrong_object] t={g['t']:.1f} {g['plan'].color} {side}: {why}: not held (bin wall / wrong object?); "
+                 f"open, retreat, blacklist ({xy[0]:+.2f},{xy[1]:+.2f}) r={float(p.get('bad_radius_m', 0.06)):g} m")
+        return True
+
     def _abort_empty_grasp(self, g, sample="close"):
         """Cancel carry and request a proved open -> vertical lift -> home recovery in a worker."""
         plan = g["plan"]
@@ -4978,12 +5027,20 @@ class ClassicalPolicy:
             self._enqueue(np.repeat(arm[None], len(h), 0), h)
             self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: hand still not empty -> re-open once")
             return self._pop()
-        self._rel, self._rel_fail = None, True
+        wp = self._wor_params()
+        recover = wp is not None and self._wor_recoveries < int(wp.get("max_recoveries", 2))
+        self._rel, self._rel_fail = None, not recover
         home = arm.copy()
         home[ArmKinematics.sl(side)] = self.home[ArmKinematics.sl(side)]
         a, h = self.planner.go_to(arm, self.hand_cmd, home, self.post["open"])
         self._enqueue(a, h)
-        self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: still not empty after the re-open -> home, stop")
+        if recover:   # grasp.wrong_object_recovery (b): same open + home path, then the normal settle -> look continues
+            self._wor_recoveries += 1
+            self._bad_grasp.append(np.asarray(r["plan"].waypoints["grasp"][:2], float).copy())
+            self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: still not empty after the re-open -> open, home, "
+                     f"re-look and continue (recovery {self._wor_recoveries}/{int(wp.get('max_recoveries', 2))})")
+        else:
+            self.log(f"[release_confirm] t={t:.1f} {r['plan'].color} {side}: still not empty after the re-open -> home, stop")
         return self._pop()
 
     def _insert_gate(self, obs, t):
@@ -5197,6 +5254,11 @@ class ClassicalPolicy:
                     if key == "close" and not g.get("skill_only") \
                             and self._held_abort_due(g, np.asarray(q, float), np.asarray(cmd, float)):
                         self._abort_empty_grasp(g)   # queue replaced; _act pops it on this same tick
+                        self._log_aborted_diag(g)
+                        return
+                    if key == "lift" and not g.get("skill_only") \
+                            and self._lift_margin_fail(g, np.asarray(q, float), np.asarray(cmd, float)):
+                        self._abort_empty_grasp(g, "lift-margin")
                         self._log_aborted_diag(g)
                         return
                     if key == "lift" and (read_through or g.get("lift_check")) and not g.get("skill_only") \

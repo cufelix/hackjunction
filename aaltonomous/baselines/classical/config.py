@@ -147,6 +147,9 @@ FLAGS = {
     "perception.prism_speckle_floor": ("prism floor", False, "color_gate speckle floor: orange/red blobs with a triangular outline (minEnclosingTriangle fill) use prism_speckle_floor_params.area_frac instead of color_gate.area_frac"),
     "perception.real_border_partial": ("real perc", False, "real only: color_gate speckle floor uses real_border_partial_params.area_frac for blobs cut by the left/right/bottom image border"),
     "perception.bin_bottom_first_run": ("real perc", False, "real only: gate_below_bins observed bin-bottom row = first vertical warm run per column (a shadowed orange object on the mat is not bin mass)"),
+    "perception.bin_size_guard": ("real perc", False, "real only (hotfix): a colour blob that is bin-sized (area / 3D footprint) or bin-tall is rejected before split_blobs (bin_size_guard_params)"),
+    "perception.bin_image_guard": ("real perc", False, "real only (venue replay): a colour blob that lies on a bin-sized dark-warm image component (bin wall in shade, V < 150) is rejected before split_blobs; needs no depth (bin_image_guard_params). Also keeps the nominal in_bin reject active while the image gate_below_bins is on"),
+    "perception.gate_below_bins_params.first_run_top_frac": ("real perc", 0.45, "gate_below_bins + bin_bottom_first_run: a warm run counts as bin wall only if it starts in the top this-fraction of the frame (venue: 0.45 cut the shaded bin wall; finals_r25_gen 0.55)"),
     "perception.fk_colour_rescue": ("real perc", False, "real only: colour pixels inside the FK arm mask stay candidates; detections overlapping the mask must sit at object height (fk_colour_rescue_params.z_above_counter_m)"),
     "perception.real_merge_split": ("real perc", False, "real only: split_blob tries merged same-colour pairs from real_merge_split_params.area_factor x expected area (default 0.9 instead of 1.5)"),
     "perception.gate_below_bins": ("gate fix", False, "when live bins are untrusted, gate candidates below observed bin mass in image space"),
@@ -266,6 +269,8 @@ FLAGS = {
     "bin.vote.max_shift_m": ("bin vote", 0.10, "a bin vote result further than this from the prior is discarded (prior kept); real venue bins measure +8..+15 cm vs nominal"),
     "bin.vote.enabled": ("bin vote", False, "per-bin position from 3 votes (depth rim, tape, prior) over the first frames"),
     "bin.vote.signed_rim_fit": ("C3", False, "fit physical rim displacement with its signed +x/+y direction"),
+    "bin.vote.tape_body_reject": ("venue", False, "bin.vote: a tape-coloured blob larger than bin.vote.tape_max_px is a paper-wrapped bin body (venue: 8-19k px), not tape: it casts no tape vote (else the body, lifted to rim height, disagrees with prior and rim -> conf 0.3)"),
+    "grasp.wrong_object_recovery": ("venue", False, "real: (a) the post-lift finger read must clear grasp.wrong_object_recovery_params.lift_margin_mult x threshold (and optionally lift_min_ratio x the close read) else open + retreat + blacklist the spot (bin wall mistaken for a cube); (b) a failed release_confirm opens fully, goes home and keeps picking (max_recoveries per episode) instead of stopping"),
     "bin.vote.async_extract": ("H5", False, "extract bin votes in the low-priority look worker; act only polls/holds"),
     "bin.vote.frame_transform_snapshot": ("H4", False, "one immutable camera transform per frame shared by rim and tape"),
     "hand.closed_tight": ("pinch fix", STOCK, "the closed_tight posture (LEFT DDS order, right mirrored)"),
@@ -461,7 +466,7 @@ def check_flag_values(cfg):
     if not isinstance(mc, int) or isinstance(mc, bool) or mc < 0:
         raise ValueError(f"instruction.max_chars = {mc!r}: want an int >= 0 (0 = off)")
     for key in ("safety.nan_guard", "policy.generation_workers", "grasp.held_calibration.enabled",
-                "grasp.drop_slot_grid"):
+                "grasp.drop_slot_grid", "bin.vote.tape_body_reject", "grasp.wrong_object_recovery"):
         if not isinstance(_get(cfg, key), bool):
             raise ValueError(f"{key}: want true or false")
     cb = _get(cfg, "planner.candidate_budget")
@@ -489,7 +494,7 @@ def check_flag_values(cfg):
     p = cfg.get("perception") or {}
     for key in ("sim_center_principal_point", "split_by_solidity", "tape_value_cut", "gate_below_bins",
                 "bins_from_image", "reject_log", "still_vote", "prism_speckle_floor", "real_border_partial", "real_merge_split",
-                "bin_bottom_first_run", "fk_colour_rescue"):
+                "bin_bottom_first_run", "fk_colour_rescue", "bin_size_guard", "bin_image_guard"):
         if not isinstance(p.get(key), bool):
             raise ValueError(f"perception.{key}: want true or false")
     aim = p.get("aim_z_frac", 0.25)

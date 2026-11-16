@@ -108,6 +108,34 @@ class TestFixedMapping(unittest.TestCase):
         self.assertEqual(mapping("submission", STOCK, task="sort_fixed", logs=logs), FIXED_MAPPING)
         self.assertFalse([l for l in logs if "conflict" in l], logs)
 
+    def test_finals_overlay_uses_venue_instruction_mapping_not_the_venue_map(self):
+        # venue sentence: red left, yellow center, blue right (differs from the overlay's fixed_mapping on purpose)
+        m = mapping("finals_r25_gen", STOCK, task="sort_fixed")
+        self.assertEqual(m, {"red": "left", "yellow": "center", "blue": "right"})
+
+    def test_finals_overlay_falls_back_to_fixed_mapping_when_instruction_is_unclear(self):
+        for ins in ("", None, "sort the blocks", "Put the red objects in the left bin."):
+            self.assertEqual(mapping("finals_r25_gen", ins, task="sort_fixed"), REAL, ins)
+
+    def test_server_does_not_inject_the_venue_map_when_instruction_first(self):
+        from .policy_server import ClassicalServerPolicy
+
+        class Stub:
+            _job = None
+            cfg = {"policy": {"fixed_instruction_first": True}}
+            fixed_mapping = REAL
+
+            def reset(self, info):
+                self.info = info
+
+        server = ClassicalServerPolicy.__new__(ClassicalServerPolicy)
+        server._auto_buf, server._pending_reset, server.probe_cfg = None, None, None
+        server.pol = Stub()
+        server.reset(STOCK, task="sort_fixed", seed=7)
+        self.assertNotIn("mapping", server.pol.info)
+        self.assertEqual(server.pol.info["task"], "sort_fixed")
+        self.assertEqual(server.pol.info["instruction"], STOCK)
+
     def test_bad_values_raise(self):
         bad = ({"red": "left", "yellow": "center"}, {"red": "left", "yellow": "left", "blue": "right"},
                {"red": "left", "yellow": "center", "blue": "up"}, {"red": "left", "yellow": "center", "green": "right"},

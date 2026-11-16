@@ -98,13 +98,15 @@ def _box_edge_dist(Q, ctr, half):
     return np.abs(sd)
 
 
-def rim_votes(perception, depth, centers, v, transform_snapshot=None):
+def rim_votes(perception, depth, centers, v, transform_snapshot=None, diag=None):
     """{bin: xy|None}: per-bin fit of the outer+inner rim rectangles to elevated depth points, +-search_m window."""
     sc, cfg = perception.scene, perception.cfg
     c = cfg.get("self_calibration") or {}
     b = sc.cfg["bins"]
     out = {n: None for n in centers}
+    diag = {} if diag is None else diag
     if depth is None or np.ndim(depth) != 2:
+        diag["why"] = "no depth"
         return out
     clean_depth = np.nan_to_num(np.asarray(depth, float), nan=0.0)
     if transform_snapshot is None:
@@ -112,6 +114,7 @@ def rim_votes(perception, depth, centers, v, transform_snapshot=None):
     else:
         P, coef, why = perception._counter_plane(clean_depth, c, transform_snapshot=transform_snapshot)
     if why:
+        diag["why"] = f"plane: {why}"
         return out
     height = P[:, 2] - (np.c_[P[:, :2], np.ones(len(P))] @ coef)
     keep = (height >= float(c.get("min_wall_height_m", 0.008))) & (height <= float(b["wall_height"]) + 0.015)
@@ -122,6 +125,7 @@ def rim_votes(perception, depth, centers, v, transform_snapshot=None):
     trunc = 0.015
     for n, Q in _nearest_bin_points(P, centers, outer, search).items():
         if len(Q) < int(v["min_rim_points"]):
+            diag[n] = f"{len(Q)} pts < min {int(v['min_rim_points'])}"
             continue
         Q = Q[np.linspace(0, len(Q) - 1, min(len(Q), 1500)).astype(int)]
         signed = bool(v.get("signed_rim_fit", False))
@@ -142,7 +146,10 @@ def rim_votes(perception, depth, centers, v, transform_snapshot=None):
         off = search_grid(off, 0.002, 0.0005)
         fit = Q - off if signed else Q + off
         d = np.minimum(_box_edge_dist(fit, centers[n], outer), _box_edge_dist(fit, centers[n], inner))
-        if float(np.mean(d <= 0.006)) < 0.35:
+        inl = float(np.mean(d <= 0.006))
+        diag[n] = f"{len(Q)} pts, inlier={inl:.2f}, off=({1000 * off[0]:+.0f},{1000 * off[1]:+.0f})mm"
+        if inl < 0.35:
+            diag[n] += " REJECTED (inlier < 0.35)"
             continue
         out[n] = np.asarray(centers[n], float) + off
     return out
@@ -178,7 +185,7 @@ def _bin_blob_vote(blobs, elong):
     return _blob_vote(blobs[0], elong)
 
 
-def tape_votes(perception, rgb, depth, centers, v, transform_snapshot=None):
+def tape_votes(perception, rgb, depth, centers, v, transform_snapshot=None, diag=None):
     """{bin: xy|None}: per orange-tape blob near the bin's rim (8-connected in the image), lifted via depth or via the
     rim-height plane where depth is missing; the blob votes its centroid, or its inner end when elongated (see
     _blob_vote). Ambiguous or missing -> None. # ponytail: no per-edge tape layout model; upgrade once the real
@@ -186,7 +193,9 @@ def tape_votes(perception, rgb, depth, centers, v, transform_snapshot=None):
     import cv2
     sc = perception.scene
     out = {n: None for n in centers}
+    diag = {} if diag is None else diag
     if rgb is None or np.ndim(rgb) != 3:
+        diag["why"] = "no rgb"
         return out
     hsv = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2HSV)
     lo, hi = v["tape_hsv"]
@@ -194,9 +203,19 @@ def tape_votes(perception, rgb, depth, centers, v, transform_snapshot=None):
     mask[int(mask.shape[0] * TAPE_V_MAX_FRAC):] = 0
     vv, uu = np.nonzero(mask)
     if len(vv) < int(v["min_tape_px"]):
+        diag["why"] = f"{len(vv)} tape-coloured px < min"
         return out
     labels = cv2.connectedComponents(mask, connectivity=8)[1]
     lab = labels[vv, uu]
+    sizes = np.bincount(lab)
+    diag["blob_px"] = sorted((int(x) for x in sizes[1:] if x >= int(v["min_tape_px"])), reverse=True)[:8]
+    max_px = int(v.get("tape_max_px", 0) or 0) if v.get("tape_body_reject", False) else 0
+    if max_px > 0:   # venue: the red-orange paper-wrapped bin body (8-19k px) matches tape_hsv; real tape is a thin strip
+        big = sizes[lab] > max_px
+        diag["rejected_body_px"] = sorted((int(x) for x in np.unique(sizes[lab[big]])), reverse=True)
+        vv, uu, lab = vv[~big], uu[~big], lab[~big]
+        if len(vv) < int(v["min_tape_px"]):
+            return out
     rim_z = sc.counter_z + float(sc.cfg["bins"]["wall_height"])
     d = np.zeros(len(vv))
     if depth is not None and np.ndim(depth) == 2:
@@ -241,6 +260,7 @@ def tape_votes(perception, rgb, depth, centers, v, transform_snapshot=None):
             per_bin[names[k]].append(B)
     for n in names:
         out[n] = _bin_blob_vote(per_bin[n], float(v["tape_elong_aspect"]))
+    diag["blobs_per_bin"] = {n: [len(b) for b in per_bin[n]] for n in names}
     return out
 
 
@@ -249,26 +269,50 @@ def _med(frames, n):
     return np.median(xs, axis=0) if xs else None
 
 
+def _fmt(x):
+    return "none" if x is None else f"({x[0]:.3f},{x[1]:.3f})"
+
+
+def _log_voters(log, names, priors, rim, tape, diags):
+    """[bin.vote.voters]: every voter's estimate (pelvis xy, m) + distance to the prior + why a voter was missing, so a
+    disagreement (conf 0.3) is explained by the next real run's log. Never raises."""
+    try:
+        for n in names:
+            parts = []
+            for k, est in (("rim", rim[n]), ("tape", tape[n])):
+                dist = "" if est is None else f" d_prior={1000 * float(np.linalg.norm(np.asarray(est) - priors[n])):.0f}mm"
+                parts.append(f"{k}={_fmt(est)}{dist}")
+            log(f"[bin.vote.voters] {n}: prior={_fmt(priors[n])} " + " ".join(parts))
+        rd, td = diags[0]
+        log(f"[bin.vote.voters] frame0 rim: {dict(rd)}")
+        log(f"[bin.vote.voters] frame0 tape: {dict(td)}")
+    except Exception as exc:
+        log(f"[bin.vote.voters] log failed ({type(exc).__name__})")
+
+
 def vote_bins(perception, planner, frames, cfg, log=print):
     """frames: [{"head_rgb", "head_depth"}]. -> (shift, drop_extra, conf). Never raises (prior on any error)."""
     v = cfg["bin"]["vote"]
     names = list(planner.scene.bin_names)
     priors = {n: np.asarray(planner.bin_xy(n), float) for n in names}
     try:
-        rims, tapes = [], []
+        rims, tapes, diags = [], [], []
         for f in frames:
+            rd, td = {}, {}
+            diags.append((rd, td))
             if v.get("frame_transform_snapshot", False):
                 T = f["transform_snapshot"]
-                rims.append(rim_votes(perception, f.get("head_depth"), priors, v, T))
-                tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v, T))
+                rims.append(rim_votes(perception, f.get("head_depth"), priors, v, T, diag=rd))
+                tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v, T, diag=td))
             else:
                 frame = f.get("transform") or perception.frame_transform()
                 with perception.use_frame_transform(frame):
-                    rims.append(rim_votes(perception, f.get("head_depth"), priors, v))
-                    tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v))
+                    rims.append(rim_votes(perception, f.get("head_depth"), priors, v, diag=rd))
+                    tapes.append(tape_votes(perception, f.get("head_rgb"), f.get("head_depth"), priors, v, diag=td))
         rim = {n: _med(rims, n) for n in names}
         tape = {n: _med(tapes, n) for n in names}
         shift, extra, info = resolve(priors, rim, tape, v)
+        _log_voters(log, names, priors, rim, tape, diags)
     except Exception as exc:  # optional feature: never terminate the control loop
         log(f"[bin.vote] failed ({type(exc).__name__}: {exc}); prior positions")
         return {}, {n: float(v["low_conf_extra_m"]) for n in names}, {n: CONF_PRIOR for n in names}
